@@ -1,55 +1,18 @@
 <configuration>
   <modules>
 
-    <module name="dce-umip">
-      <source type="mercurial">
-	<attribute name="url" value="http://code.nsnam.org/thehajime/ns-3-dce-umip"/>
- 	<attribute name="module_directory" value="dce-umip/"/>
-      </source>
-       <depends_on name="dce-linux" optional="False"/>
-       <depends_on name="dce-quagga" optional="False"/>
-       <depends_on name="umip" optional="False"/>
-      <depends_on name="ns-3-dev-dce-umip" optional="False"/>
-      <build type="waf" objdir="build">
-	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR"/>
-     </build>
-    </module>
-
-   <module name="ns-3-dev-dce-umip">
-      <source type="none">
- 	<attribute name="module_directory" value="ns-3-dev-dce/"/>
-      </source>
-      <depends_on name="ns-3-dev-dce" optional="False"/>
-      <build type="waf" objdir="yes">
-	<attribute name="patch" value="$SRCDIR/../dce-umip/utils/ipv6-opt-header.patch"/>
-	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR --enable-tests"/>
-      </build>
-    </module>
-
-    <module name="dce-quagga">
-      <source type="mercurial">
-	<attribute name="url" value="http://code.nsnam.org/thehajime/ns-3-dce-quagga"/>
- 	<attribute name="module_directory" value="dce-quagga/"/>
-      </source>
-       <depends_on name="dce-ns3" optional="False"/>
-       <depends_on name="quagga" optional="False"/>
-       <depends_on name="iputils" optional="False"/>
-      <build type="waf" objdir="build">
-	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR"/>
-     </build>
-    </module>
-
     <module name="dce-ns3">
       <source type="mercurial">
 	<attribute name="url" value="http://code.nsnam.org/furbani/ns-3-dce"/>
-	<attribute name="module_directory" value="dce"/>
+ 	<attribute name="module_directory" value="dce"/>
       </source>
        <depends_on name="ns-3-dev-dce" optional="False"/>
        <depends_on name="elf-loader" optional="False"/>
        <depends_on name="iperf" optional="True"/>
        <depends_on name="ccnx" optional="True"/>
       <build type="waf" objdir="build">
-	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR"/>
+	<attribute name="configure_arguments" value="configure --with-ns3=$INSTALLDIR --with-elf-loader=$INSTALLDIR/lib --prefix=$INSTALLDIR"/>
+	<attribute name="post_installation" value="cd $SRCDIR; ./waf --run ns3test-dce"/>
      </build>
     </module>
 
@@ -62,8 +25,8 @@
        <depends_on name="iproute" optional="False"/>
        <depends_on name="ns-3-dev-dce" optional="False"/>
       <build type="waf" objdir="yes" sourcedir="dce">
-	<!-- FIXME -->
-	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR --enable-kernel-stack=$SRCDIR/../../../../../"/>
+	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR --with-ns3=$INSTALLDIR --with-elf-loader=$INSTALLDIR/lib --enable-kernel-stack=$SRCDIR/../../../../../"/>
+	<attribute name="post_installation" value="cd $SRCDIR; ./waf --run ns3test-dce"/>
       </build>
     </module>
 
@@ -90,84 +53,20 @@
       </build>
      </module>
 
-    <module name="libdb4-dev">
-      <source type="system_dependency">
-	<attribute name="dependency_test" value="(libdb4-dev)"/>
-	<attribute name="try_to_install" value="True"/>
-	<!--attribute name="name_yum" value="qt4-devel"/-->
-	<attribute name="name_apt-get" value="libdb4.8-dev"/>
-	<attribute name="more_information" value=""/>
-      </source>
-      <build type="none" objdir="no">
-      </build>
-    </module>
-
      <module name="iproute">
       <source type="archive">
 	<attribute name="url" value="http://www.linuxgrill.com/anonymous/iproute2/NEW-OSDL/iproute2-2.6.38.tar.bz2"/>
       </source>
-      <depends_on name="libdb4-dev" optional="False"/>
       <build type="make" objdir="yes">
 	<attribute name="pre_installation" value="$SRCDIR/configure"/>
+	<attribute name="LDFLAGS" value="-pie"/>
 	<attribute name="ignore_predefined_flags" value="True"/>
-	<attribute name="build_arguments" value="CCOPTS=-fpic CCOPTS+=-D_GNU_SOURCE CCOPTS+=-O0 CCOPTS+=-U_FORTIFY_SOURCE LDFLAGS=-pie"/>
-        <attribute name="install_arguments" value="DESTDIR=$INSTALLDIR" />
+         <attribute name="install_arguments" value="DESTDIR=$INSTALLDIR" />
+	<attribute name="build_arguments" value="CCOPTS+=-fpic CCOPTS+=-D_GNU_SOURCE CCOPTS+=-O0 CCOPTS+=-U_FORTIFY_SOURCE LDFLAGS=-pie"/>
       </build>
      </module>
 
-     <module name="quagga">
-      <source type="archive">
-	<!-- some of mirror sever of gnu.org isn't available.. -->
-	<!-- attribute name="url" value="http://download.savannah.gnu.org/releases/quagga/quagga-0.99.20.tar.gz"/ -->
-	<attribute name="url" value="http://pkgs.fedoraproject.org/lookaside/pkgs/quagga/quagga-0.99.20.tar.gz/64cc29394eb8a4e24649d19dac868f64/quagga-0.99.20.tar.gz"/>
-	<attribute name="extract_directory" value="quagga-0.99.20"/>
-      </source>
-      <build type="make" objdir="yes">
-	<attribute name="pre_installation" value="cd $SRCDIR; CFLAGS='-fPIC -g' LDFLAGS=-pie ./configure --disable-shared --enable-static --disable-user --disable-group --disable-capabilities --prefix=$INSTALLDIR"/>
-        <attribute name="install_arguments" value="-n" />
-        <attribute name="post_installation" value="cd $SRCDIR; /bin/cp zebra/zebra $INSTALLDIR/bin_dce;/bin/cp ripd/ripd $INSTALLDIR/bin_dce;/bin/cp ripngd/ripngd $INSTALLDIR/bin_dce;/bin/cp ospfd/ospfd $INSTALLDIR/bin_dce;/bin/cp ospf6d/ospf6d $INSTALLDIR/bin_dce;/bin/cp bgpd/bgpd $INSTALLDIR/bin_dce"/>
-      </build>
-     </module>
-
-     <module name="iputils">
-      <source type="archive">
-	<attribute name="url" value="http://www.skbuff.net/iputils/iputils-s20101006.tar.bz2"/>
-      </source>
-      <!-- note: iputils does not have 'make install' -->
-      <build type="inline"  classname="IputilsModuleBuild">
-	<attribute name="supported_os" value="linux;linux2"/>
-	<code>class IputilsModuleBuild(InlineModuleBuild):
-    def __init__(self):
-        InlineModuleBuild.__init__(self)
-    def build(self, env, jobs):
-        env.run(['patch', '-p1', '-f', '-i', env.srcdir + '/../dce-quagga/utils/iputils-ping6.patch'],
-                directory=env.srcdir)
-        env.run(['make', 'CFLAGS=-fpic', 'CFLAGS+=-D_GNU_SOURCE', 'CFLAGS+=-g',
-                'CFLAGS+=-Wstrict-prototypes', 'CFLAGS+=-Wall', 'LDFLAGS=-pie', 
-                'ping', 'ping6', '-j', str(jobs)],
-                directory=env.srcdir)
-        env.run(['cp', 'ping', 'ping6', env.installdir + '/bin_dce'],
-                directory=env.srcdir)
-    def clean(self, env):
-        env.run(['make', 'clean'], directory=env.srcdir)
-    def check_version(self, env):
-        return True</code>
-      </build>
-     </module>
-
-     <module name="umip">
-      <source type="git">
-        <attribute name="url" value="git://git.umip.org/umip.git"/>
-      </source>
-      <build type="autotools" objdir="no">
-        <attribute name="maintainer" value="yes" />
-        <attribute name="configure_arguments" value="./configure CFLAGS=-fPIC  LDFLAGS=-pie --prefix=$INSTALLDIR --enable-vt --with-builtin-crypto"/>
-        <attribute name="install_arguments" value="-n" />
-        <attribute name="post_installation" value="cd $SRCDIR; /bin/cp -f src/mip6d  $INSTALLDIR/bin_dce"/>
-      </build>
-     </module>
-
-   <module name="ns-3-dev-dce">
+    <module name="ns-3-dev-dce">
       <source type="mercurial">
 	<attribute name="url" value="http://code.nsnam.org/ns-3-dev"/>
       </source>
@@ -175,6 +74,100 @@
 	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR --enable-tests"/>
       </build>
     </module>
+
+     <module name="iputils">
+       <source type="archive">
+	 <attribute name="url" value="http://www.skbuff.net/iputils/iputils-s20101006.tar.bz2"/>
+       </source>
+       <!-- note: iputils does not have 'make install' -->
+       <build type="inline"  classname="IputilsModuleBuild">
+	 <attribute name="supported_os" value="linux;linux2"/>
+	 <code>class IputilsModuleBuild(InlineModuleBuild):
+    def __init__(self):
+        InlineModuleBuild.__init__(self)
+    def build(self, env, jobs):
+           env.run(['patch', '-p1', '-f', '-i', env.srcdir + '/../dce-quagga/utils/iputils-ping6.patch'],
+           directory=env.srcdir)
+           env.run(['make', 'CFLAGS=-fpic', 'CFLAGS+=-D_GNU_SOURCE', 'CFLAGS+=-g',
+           'CFLAGS+=-Wstrict-prototypes', 'CFLAGS+=-Wall', 'LDFLAGS=-pie', 
+           'ping', 'ping6', '-j', str(jobs)],
+           directory=env.srcdir)
+           env.run(['mkdir', '-p' , env.installdir + '/bin_dce/'],
+           directory=env.srcdir)
+           env.run(['cp', 'ping', 'ping6', env.installdir + '/bin_dce'],
+           directory=env.srcdir)
+    def clean(self, env):
+           env.run(['make', 'clean'], directory=env.srcdir)
+    def check_version(self, env):
+           return True</code>
+       </build>
+     </module>
+
+     <!-- umip related modules -->
+     <module name="dce-umip">
+       <source type="mercurial">
+	 <attribute name="url" value="http://code.nsnam.org/thehajime/ns-3-dce-umip"/>
+	 <attribute name="module_directory" value="dce-umip/"/>
+       </source>
+       <depends_on name="dce-linux" optional="False"/>
+       <depends_on name="dce-quagga" optional="False"/>
+       <depends_on name="umip" optional="False"/>
+       <depends_on name="ns-3-dev-dce-umip" optional="False"/>
+       <build type="waf" objdir="build">
+	 <attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR"/>
+       </build>
+     </module>
+
+     <module name="ns-3-dev-dce-umip">
+       <source type="none">
+ 	 <attribute name="module_directory" value="ns-3-dev-dce/"/>
+       </source>
+       <depends_on name="ns-3-dev-dce" optional="False"/>
+       <build type="waf" objdir="yes">
+	 <attribute name="patch" value="$SRCDIR/../dce-umip/utils/ipv6-opt-header.patch"/>
+	 <attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR --enable-tests"/>
+       </build>
+     </module>
+
+     <module name="umip">
+       <source type="git">
+         <attribute name="url" value="git://git.umip.org/umip.git"/>
+       </source>
+       <build type="autotools" objdir="no">
+         <attribute name="maintainer" value="yes" />
+         <attribute name="configure_arguments" value="./configure CFLAGS=-fPIC  LDFLAGS=-pie --prefix=$INSTALLDIR --enable-vt --with-builtin-crypto"/>
+         <attribute name="install_arguments" value="-n" />
+         <attribute name="post_installation" value="cd $SRCDIR; mkdir $INSTALLDIR/bin_dce; /bin/cp -f src/mip6d  $INSTALLDIR/bin_dce"/>
+       </build>
+     </module>
+
+    <!-- quagga related modules -->
+    <module name="dce-quagga">
+      <source type="mercurial">
+	<attribute name="url" value="http://code.nsnam.org/thehajime/ns-3-dce-quagga"/>
+ 	<attribute name="module_directory" value="dce-quagga/"/>
+      </source>
+       <depends_on name="dce-linux" optional="False"/>
+       <depends_on name="quagga" optional="False"/>
+       <depends_on name="iputils" optional="False"/>
+      <build type="waf" objdir="build">
+	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR"/>
+     </build>
+    </module>
+
+     <module name="quagga">
+       <source type="archive">
+	<!-- some of mirror sever of gnu.org isn't available.. -->
+	<!-- attribute name="url" value="http://download.savannah.gnu.org/releases/quagga/quagga-0.99.20.tar.gz"/ -->
+	<attribute name="url" value="http://pkgs.fedoraproject.org/lookaside/pkgs/quagga/quagga-0.99.20.tar.gz/64cc29394eb8a4e24649d19dac868f64/quagga-0.99.20.tar.gz"/>
+	<attribute name="extract_directory" value="quagga-0.99.20"/>
+       </source>
+       <build type="make" objdir="yes">
+	 <attribute name="pre_installation" value="cd $SRCDIR; CFLAGS='-fPIC -g' LDFLAGS=-pie ./configure --disable-shared --enable-static --disable-user --disable-group --disable-capabilities --prefix=$INSTALLDIR"/>
+         <attribute name="install_arguments" value="-n" />
+         <attribute name="post_installation" value="cd $SRCDIR; mkdir $INSTALLDIR/bin_dce; /bin/cp zebra/zebra $INSTALLDIR/bin_dce;/bin/cp ripd/ripd $INSTALLDIR/bin_dce;/bin/cp ripngd/ripngd $INSTALLDIR/bin_dce;/bin/cp ospfd/ospfd $INSTALLDIR/bin_dce;/bin/cp ospf6d/ospf6d $INSTALLDIR/bin_dce;/bin/cp bgpd/bgpd $INSTALLDIR/bin_dce"/>
+       </build>
+     </module>
 
     <module name="click">
       <source type="git">
@@ -184,6 +177,7 @@
       </source>
       <build type="autotools" objdir="yes">
 	<attribute name="configure_arguments" value="../configure --prefix=$INSTALLDIR --exec-prefix=$INSTALLDIR -enable-userlevel --disable-linuxmodule --enable-nsclick --enable-wifi"/>
+	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/."/> 
       </build>
     </module>
 
@@ -254,10 +248,21 @@
     def __init__(self):
         InlineModuleBuild.__init__(self)
     def build(self, env, jobs):
+        import os
+        import shutil
 
         env.run(['python', os.path.join(env.srcdir, 'scons.py'), 
                  '-j', str(jobs), 'prefix=' + env.installdir, 'install'],
-                directory=env.srcdir)
+                directory=env.srcdir )
+        srcLib = os.path.join(env.srcdir, 'lib')
+        files = os.listdir(srcLib)
+        destination = os.path.join(env.installdir, 'lib')
+        for file in files:
+             try:
+                 shutil.copy2(os.path.join(srcLib, file), destination)
+             except Exception as e:
+                 print ("   > Error executing copy : " + str(e) + "\n")
+       
     def clean(self, env):
         env.run(['python', os.path.join(env.srcdir, 'scons.py'), '-c'],
                 directory=env.srcdir)
@@ -285,11 +290,11 @@
       </source>
       <build type="make" objdir="no">
 	<attribute name="configure_arguments" value="vdl-config.h"/>
-        <attribute name="install_arguments" value="PREFIX=$INSTALLDIR"/>
+	<attribute name="install_arguments" value="PREFIX=$INSTALLDIR"/>
       </build>
     </module>
 
-    <module name="net_anim">
+    <module name="netanim">
       <source type="mercurial">
 	<attribute name="url" value="http://code.nsnam.org/netanim"/>
       </source>
@@ -303,7 +308,7 @@
       <source type="mercurial">
 	<attribute name="url" value="http://code.nsnam.org/ns-3-dev"/>
       </source>
-      <depends_on name="net_anim" optional="True"/>
+      <depends_on name="netanim" optional="True"/>
       <depends_on name="nsc" optional="True"/>
       <depends_on name="pybindgen" optional="True"/>
       <depends_on name="click" optional="True"/>
@@ -322,19 +327,21 @@
       </build>
   </module>
 
+<!--
   <module name="ns-3-16">
       <source type="mercurial">
 	<attribute name="url" value="http://code.nsnam.org/ns-3.16"/>
       </source>
-      <depends_on name="net_anim" optional="True"/>
+      <depends_on name="netanim" optional="True"/>
       <depends_on name="nsc" optional="True"/>
       <depends_on name="pybindgen" optional="True"/>
       <depends_on name="click" optional="True"/>
       <depends_on name="openflow-ns3" optional="True"/>
       <build type="waf" objdir="yes">
-	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR --enable-examples --enable-tests --with-nsclick=$SRCDIR/click --with-pybindgen=$SRCDIR/pybindgen --with-openflow=$SRCDIR/openflow-ns3 --with-nsc=$SRCDIR/nsc"/>
+	<attribute name="configure_arguments" value="configure \-\-prefix=$INSTALLDIR \-\-enable-examples \-\-enable-tests \-\-with-nsclick=$SRCDIR/click \-\-with-pybindgen=$SRCDIR/pybindgen \-\-with-openflow=$SRCDIR/openflow-ns3 \-\-with-nsc=$SRCDIR/nsc"/>
       </build>
   </module>
+-->
 
   </modules>
 
