@@ -23,6 +23,7 @@ struct SimTask *sim_task_create (void *private, unsigned long pid)
 {
   struct SimTask *task = sim_malloc (sizeof (struct SimTask));
   if (!task) return NULL;
+  memset (task, 0, sizeof (struct SimTask));
   struct cred *cred = sim_malloc (sizeof (struct cred));
   if (!cred) return NULL;
   // XXX: we could optimize away this allocation by sharing it for all tasks
