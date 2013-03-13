@@ -225,11 +225,10 @@ static inline struct mlx4_en_filter *
 mlx4_en_filter_find(struct mlx4_en_priv *priv, __be32 src_ip, __be32 dst_ip,
 		    __be16 src_port, __be16 dst_port)
 {
-	struct hlist_node *elem;
 	struct mlx4_en_filter *filter;
 	struct mlx4_en_filter *ret = NULL;
 
-	hlist_for_each_entry(filter, elem,
+	hlist_for_each_entry(filter,
 			     filter_hash_bucket(priv, src_ip, dst_ip,
 						src_port, dst_port),
 			     filter_chain) {
@@ -566,34 +565,38 @@ static void mlx4_en_put_qp(struct mlx4_en_priv *priv)
 	struct mlx4_en_dev *mdev = priv->mdev;
 	struct mlx4_dev *dev = mdev->dev;
 	int qpn = priv->base_qpn;
-	u64 mac = mlx4_en_mac_to_u64(priv->dev->dev_addr);
+	u64 mac;
 
-	en_dbg(DRV, priv, "Registering MAC: %pM for deleting\n",
-	       priv->dev->dev_addr);
-	mlx4_unregister_mac(dev, priv->port, mac);
-
-	if (dev->caps.steering_mode != MLX4_STEERING_MODE_A0) {
+	if (dev->caps.steering_mode == MLX4_STEERING_MODE_A0) {
+		mac = mlx4_en_mac_to_u64(priv->dev->dev_addr);
+		en_dbg(DRV, priv, "Registering MAC: %pM for deleting\n",
+		       priv->dev->dev_addr);
+		mlx4_unregister_mac(dev, priv->port, mac);
+	} else {
 		struct mlx4_mac_entry *entry;
-		struct hlist_node *n, *tmp;
+		struct hlist_node *tmp;
 		struct hlist_head *bucket;
-		unsigned int mac_hash;
+		unsigned int i;
 
-		mac_hash = priv->dev->dev_addr[MLX4_EN_MAC_HASH_IDX];
-		bucket = &priv->mac_hash[mac_hash];
-		hlist_for_each_entry_safe(entry, n, tmp, bucket, hlist) {
-			if (ether_addr_equal_64bits(entry->mac,
-						    priv->dev->dev_addr)) {
-				en_dbg(DRV, priv, "Releasing qp: port %d, MAC %pM, qpn %d\n",
-				       priv->port, priv->dev->dev_addr, qpn);
+		for (i = 0; i < MLX4_EN_MAC_HASH_SIZE; ++i) {
+			bucket = &priv->mac_hash[i];
+			hlist_for_each_entry_safe(entry, tmp, bucket, hlist) {
+				mac = mlx4_en_mac_to_u64(entry->mac);
+				en_dbg(DRV, priv, "Registering MAC: %pM for deleting\n",
+				       entry->mac);
 				mlx4_en_uc_steer_release(priv, entry->mac,
 							 qpn, entry->reg_id);
-				mlx4_qp_release_range(dev, qpn, 1);
 
+				mlx4_unregister_mac(dev, priv->port, mac);
 				hlist_del_rcu(&entry->hlist);
 				kfree_rcu(entry, rcu);
-				break;
 			}
 		}
+
+		en_dbg(DRV, priv, "Releasing qp: port %d, qpn %d\n",
+		       priv->port, qpn);
+		mlx4_qp_release_range(dev, qpn, 1);
+		priv->flags &= ~MLX4_EN_FLAG_FORCE_PROMISC;
 	}
 }
 
@@ -609,11 +612,11 @@ static int mlx4_en_replace_mac(struct mlx4_en_priv *priv, int qpn,
 		struct hlist_head *bucket;
 		unsigned int mac_hash;
 		struct mlx4_mac_entry *entry;
-		struct hlist_node *n, *tmp;
+		struct hlist_node *tmp;
 		u64 prev_mac_u64 = mlx4_en_mac_to_u64(prev_mac);
 
 		bucket = &priv->mac_hash[prev_mac[MLX4_EN_MAC_HASH_IDX]];
-		hlist_for_each_entry_safe(entry, n, tmp, bucket, hlist) {
+		hlist_for_each_entry_safe(entry, tmp, bucket, hlist) {
 			if (ether_addr_equal_64bits(entry->mac, prev_mac)) {
 				mlx4_en_uc_steer_release(priv, entry->mac,
 							 qpn, entry->reg_id);
@@ -651,28 +654,10 @@ u64 mlx4_en_mac_to_u64(u8 *addr)
 	return mac;
 }
 
-static int mlx4_en_set_mac(struct net_device *dev, void *addr)
+static int mlx4_en_do_set_mac(struct mlx4_en_priv *priv)
 {
-	struct mlx4_en_priv *priv = netdev_priv(dev);
-	struct mlx4_en_dev *mdev = priv->mdev;
-	struct sockaddr *saddr = addr;
-
-	if (!is_valid_ether_addr(saddr->sa_data))
-		return -EADDRNOTAVAIL;
-
-	memcpy(dev->dev_addr, saddr->sa_data, ETH_ALEN);
-	queue_work(mdev->workqueue, &priv->mac_task);
-	return 0;
-}
-
-static void mlx4_en_do_set_mac(struct work_struct *work)
-{
-	struct mlx4_en_priv *priv = container_of(work, struct mlx4_en_priv,
-						 mac_task);
-	struct mlx4_en_dev *mdev = priv->mdev;
 	int err = 0;
 
-	mutex_lock(&mdev->state_lock);
 	if (priv->port_up) {
 		/* Remove old MAC and insert the new one */
 		err = mlx4_en_replace_mac(priv, priv->base_qpn,
@@ -684,7 +669,26 @@ static void mlx4_en_do_set_mac(struct work_struct *work)
 	} else
 		en_dbg(HW, priv, "Port is down while registering mac, exiting...\n");
 
+	return err;
+}
+
+static int mlx4_en_set_mac(struct net_device *dev, void *addr)
+{
+	struct mlx4_en_priv *priv = netdev_priv(dev);
+	struct mlx4_en_dev *mdev = priv->mdev;
+	struct sockaddr *saddr = addr;
+	int err;
+
+	if (!is_valid_ether_addr(saddr->sa_data))
+		return -EADDRNOTAVAIL;
+
+	memcpy(dev->dev_addr, saddr->sa_data, ETH_ALEN);
+
+	mutex_lock(&mdev->state_lock);
+	err = mlx4_en_do_set_mac(priv);
 	mutex_unlock(&mdev->state_lock);
+
+	return err;
 }
 
 static void mlx4_en_clear_list(struct net_device *dev)
@@ -1019,7 +1023,7 @@ static void mlx4_en_do_uc_filter(struct mlx4_en_priv *priv,
 {
 	struct netdev_hw_addr *ha;
 	struct mlx4_mac_entry *entry;
-	struct hlist_node *n, *tmp;
+	struct hlist_node *tmp;
 	bool found;
 	u64 mac;
 	int err = 0;
@@ -1035,7 +1039,7 @@ static void mlx4_en_do_uc_filter(struct mlx4_en_priv *priv,
 	/* find what to remove */
 	for (i = 0; i < MLX4_EN_MAC_HASH_SIZE; ++i) {
 		bucket = &priv->mac_hash[i];
-		hlist_for_each_entry_safe(entry, n, tmp, bucket, hlist) {
+		hlist_for_each_entry_safe(entry, tmp, bucket, hlist) {
 			found = false;
 			netdev_for_each_uc_addr(ha, dev) {
 				if (ether_addr_equal_64bits(entry->mac,
@@ -1078,7 +1082,7 @@ static void mlx4_en_do_uc_filter(struct mlx4_en_priv *priv,
 	netdev_for_each_uc_addr(ha, dev) {
 		found = false;
 		bucket = &priv->mac_hash[ha->addr[MLX4_EN_MAC_HASH_IDX]];
-		hlist_for_each_entry(entry, n, bucket, hlist) {
+		hlist_for_each_entry(entry, bucket, hlist) {
 			if (ether_addr_equal_64bits(entry->mac, ha->addr)) {
 				found = true;
 				break;
@@ -1349,7 +1353,7 @@ static void mlx4_en_do_get_stats(struct work_struct *work)
 		queue_delayed_work(mdev->workqueue, &priv->stats_task, STATS_DELAY);
 	}
 	if (mdev->mac_removed[MLX4_MAX_PORTS + 1 - priv->port]) {
-		queue_work(mdev->workqueue, &priv->mac_task);
+		mlx4_en_do_set_mac(priv);
 		mdev->mac_removed[MLX4_MAX_PORTS + 1 - priv->port] = 0;
 	}
 	mutex_unlock(&mdev->state_lock);
@@ -1829,9 +1833,11 @@ int mlx4_en_alloc_resources(struct mlx4_en_priv *priv)
 	}
 
 #ifdef CONFIG_RFS_ACCEL
-	priv->dev->rx_cpu_rmap = alloc_irq_cpu_rmap(priv->rx_ring_num);
-	if (!priv->dev->rx_cpu_rmap)
-		goto err;
+	if (priv->mdev->dev->caps.comp_pool) {
+		priv->dev->rx_cpu_rmap = alloc_irq_cpu_rmap(priv->mdev->dev->caps.comp_pool);
+		if (!priv->dev->rx_cpu_rmap)
+			goto err;
+	}
 #endif
 
 	return 0;
@@ -1925,79 +1931,6 @@ static int mlx4_en_set_features(struct net_device *netdev,
 
 }
 
-static int mlx4_en_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
-			   struct net_device *dev,
-			   const unsigned char *addr, u16 flags)
-{
-	struct mlx4_en_priv *priv = netdev_priv(dev);
-	struct mlx4_dev *mdev = priv->mdev->dev;
-	int err;
-
-	if (!mlx4_is_mfunc(mdev))
-		return -EOPNOTSUPP;
-
-	/* Hardware does not support aging addresses, allow only
-	 * permanent addresses if ndm_state is given
-	 */
-	if (ndm->ndm_state && !(ndm->ndm_state & NUD_PERMANENT)) {
-		en_info(priv, "Add FDB only supports static addresses\n");
-		return -EINVAL;
-	}
-
-	if (is_unicast_ether_addr(addr) || is_link_local_ether_addr(addr))
-		err = dev_uc_add_excl(dev, addr);
-	else if (is_multicast_ether_addr(addr))
-		err = dev_mc_add_excl(dev, addr);
-	else
-		err = -EINVAL;
-
-	/* Only return duplicate errors if NLM_F_EXCL is set */
-	if (err == -EEXIST && !(flags & NLM_F_EXCL))
-		err = 0;
-
-	return err;
-}
-
-static int mlx4_en_fdb_del(struct ndmsg *ndm,
-			   struct nlattr *tb[],
-			   struct net_device *dev,
-			   const unsigned char *addr)
-{
-	struct mlx4_en_priv *priv = netdev_priv(dev);
-	struct mlx4_dev *mdev = priv->mdev->dev;
-	int err;
-
-	if (!mlx4_is_mfunc(mdev))
-		return -EOPNOTSUPP;
-
-	if (ndm->ndm_state && !(ndm->ndm_state & NUD_PERMANENT)) {
-		en_info(priv, "Del FDB only supports static addresses\n");
-		return -EINVAL;
-	}
-
-	if (is_unicast_ether_addr(addr) || is_link_local_ether_addr(addr))
-		err = dev_uc_del(dev, addr);
-	else if (is_multicast_ether_addr(addr))
-		err = dev_mc_del(dev, addr);
-	else
-		err = -EINVAL;
-
-	return err;
-}
-
-static int mlx4_en_fdb_dump(struct sk_buff *skb,
-			    struct netlink_callback *cb,
-			    struct net_device *dev, int idx)
-{
-	struct mlx4_en_priv *priv = netdev_priv(dev);
-	struct mlx4_dev *mdev = priv->mdev->dev;
-
-	if (mlx4_is_mfunc(mdev))
-		idx = ndo_dflt_fdb_dump(skb, cb, dev, idx);
-
-	return idx;
-}
-
 static const struct net_device_ops mlx4_netdev_ops = {
 	.ndo_open		= mlx4_en_open,
 	.ndo_stop		= mlx4_en_close,
@@ -2019,9 +1952,6 @@ static const struct net_device_ops mlx4_netdev_ops = {
 #ifdef CONFIG_RFS_ACCEL
 	.ndo_rx_flow_steer	= mlx4_en_filter_rfs,
 #endif
-	.ndo_fdb_add		= mlx4_en_fdb_add,
-	.ndo_fdb_del		= mlx4_en_fdb_del,
-	.ndo_fdb_dump		= mlx4_en_fdb_dump,
 };
 
 int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
@@ -2067,7 +1997,7 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
 		err = -ENOMEM;
 		goto out;
 	}
-	priv->tx_cq = kzalloc(sizeof(struct mlx4_en_cq) * MAX_RX_RINGS,
+	priv->tx_cq = kzalloc(sizeof(struct mlx4_en_cq) * MAX_TX_RINGS,
 			      GFP_KERNEL);
 	if (!priv->tx_cq) {
 		err = -ENOMEM;
@@ -2079,7 +2009,6 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
 	priv->msg_enable = MLX4_EN_MSG_LEVEL;
 	spin_lock_init(&priv->stats_lock);
 	INIT_WORK(&priv->rx_mode_task, mlx4_en_do_set_rx_mode);
-	INIT_WORK(&priv->mac_task, mlx4_en_do_set_mac);
 	INIT_WORK(&priv->watchdog_task, mlx4_en_restart);
 	INIT_WORK(&priv->linkstate_task, mlx4_en_linkstate);
 	INIT_DELAYED_WORK(&priv->stats_task, mlx4_en_do_get_stats);

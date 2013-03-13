@@ -20,6 +20,8 @@
  * Copyright (C) 2007-2008 Marvell Semiconductor
  *			   Lennert Buytenhek <buytenh@marvell.com>
  *
+ * Copyright (C) 2013 Michael Stapelberg <michael@stapelberg.de>
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2
@@ -1081,6 +1083,45 @@ static void txq_set_fixed_prio_mode(struct tx_queue *txq)
 
 
 /* mii management interface *************************************************/
+static void mv643xx_adjust_pscr(struct mv643xx_eth_private *mp)
+{
+	u32 pscr = rdlp(mp, PORT_SERIAL_CONTROL);
+	u32 autoneg_disable = FORCE_LINK_PASS |
+	             DISABLE_AUTO_NEG_SPEED_GMII |
+		     DISABLE_AUTO_NEG_FOR_FLOW_CTRL |
+		     DISABLE_AUTO_NEG_FOR_DUPLEX;
+
+	if (mp->phy->autoneg == AUTONEG_ENABLE) {
+		/* enable auto negotiation */
+		pscr &= ~autoneg_disable;
+		goto out_write;
+	}
+
+	pscr |= autoneg_disable;
+
+	if (mp->phy->speed == SPEED_1000) {
+		/* force gigabit, half duplex not supported */
+		pscr |= SET_GMII_SPEED_TO_1000;
+		pscr |= SET_FULL_DUPLEX_MODE;
+		goto out_write;
+	}
+
+	pscr &= ~SET_GMII_SPEED_TO_1000;
+
+	if (mp->phy->speed == SPEED_100)
+		pscr |= SET_MII_SPEED_TO_100;
+	else
+		pscr &= ~SET_MII_SPEED_TO_100;
+
+	if (mp->phy->duplex == DUPLEX_FULL)
+		pscr |= SET_FULL_DUPLEX_MODE;
+	else
+		pscr &= ~SET_FULL_DUPLEX_MODE;
+
+out_write:
+	wrlp(mp, PORT_SERIAL_CONTROL, pscr);
+}
+
 static irqreturn_t mv643xx_eth_err_irq(int irq, void *dev_id)
 {
 	struct mv643xx_eth_shared_private *msp = dev_id;
@@ -1484,6 +1525,34 @@ mv643xx_eth_get_settings_phyless(struct mv643xx_eth_private *mp,
 	return 0;
 }
 
+static void
+mv643xx_eth_get_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+	wol->supported = 0;
+	wol->wolopts = 0;
+	if (mp->phy)
+		phy_ethtool_get_wol(mp->phy, wol);
+}
+
+static int
+mv643xx_eth_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+	int err;
+
+	if (mp->phy == NULL)
+		return -EOPNOTSUPP;
+
+	err = phy_ethtool_set_wol(mp->phy, wol);
+	/* Given that mv643xx_eth works without the marvell-specific PHY driver,
+	 * this debugging hint is useful to have.
+	 */
+	if (err == -EOPNOTSUPP)
+		netdev_info(dev, "The PHY does not support set_wol, was CONFIG_MARVELL_PHY enabled?\n");
+	return err;
+}
+
 static int
 mv643xx_eth_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
@@ -1499,6 +1568,7 @@ static int
 mv643xx_eth_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
 	struct mv643xx_eth_private *mp = netdev_priv(dev);
+	int ret;
 
 	if (mp->phy == NULL)
 		return -EINVAL;
@@ -1508,7 +1578,10 @@ mv643xx_eth_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 	 */
 	cmd->advertising &= ~ADVERTISED_1000baseT_Half;
 
-	return phy_ethtool_sset(mp->phy, cmd);
+	ret = phy_ethtool_sset(mp->phy, cmd);
+	if (!ret)
+		mv643xx_adjust_pscr(mp);
+	return ret;
 }
 
 static void mv643xx_eth_get_drvinfo(struct net_device *dev,
@@ -1665,6 +1738,8 @@ static const struct ethtool_ops mv643xx_eth_ethtool_ops = {
 	.get_ethtool_stats	= mv643xx_eth_get_ethtool_stats,
 	.get_sset_count		= mv643xx_eth_get_sset_count,
 	.get_ts_info		= ethtool_op_get_ts_info,
+	.get_wol                = mv643xx_eth_get_wol,
+	.set_wol                = mv643xx_eth_set_wol,
 };
 
 
@@ -2442,11 +2517,15 @@ static int mv643xx_eth_stop(struct net_device *dev)
 static int mv643xx_eth_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
 	struct mv643xx_eth_private *mp = netdev_priv(dev);
+	int ret;
 
-	if (mp->phy != NULL)
-		return phy_mii_ioctl(mp->phy, ifr, cmd);
+	if (mp->phy == NULL)
+		return -ENOTSUPP;
 
-	return -EOPNOTSUPP;
+	ret = phy_mii_ioctl(mp->phy, ifr, cmd);
+	if (!ret)
+		mv643xx_adjust_pscr(mp);
+	return ret;
 }
 
 static int mv643xx_eth_change_mtu(struct net_device *dev, int new_mtu)

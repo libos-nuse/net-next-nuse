@@ -51,13 +51,10 @@ struct ip_tunnel_prl_entry {
 static inline void iptunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	int err;
-	struct iphdr *iph = ip_hdr(skb);
 	int pkt_len = skb->len - skb_transport_offset(skb);
 	struct pcpu_tstats *tstats = this_cpu_ptr(dev->tstats);
 
 	nf_reset(skb);
-	skb->ip_summed = CHECKSUM_NONE;
-	ip_select_ident(iph, skb_dst(skb), NULL);
 
 	err = ip_local_out(skb);
 	if (likely(net_xmit_eval(err) == 0)) {
@@ -71,4 +68,21 @@ static inline void iptunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 }
 
+static inline void tunnel_ip_select_ident(struct sk_buff *skb,
+					  const struct iphdr  *old_iph,
+					  struct dst_entry *dst)
+{
+	struct iphdr *iph = ip_hdr(skb);
+
+	if (iph->frag_off & htons(IP_DF))
+		iph->id	= 0;
+	else {
+		/* Use inner packet iph-id if possible. */
+		if (skb->protocol == htons(ETH_P_IP) && old_iph->id)
+			iph->id	= old_iph->id;
+		else
+			__ip_select_ident(iph, dst,
+					  (skb_shinfo(skb)->gso_segs ?: 1) - 1);
+	}
+}
 #endif

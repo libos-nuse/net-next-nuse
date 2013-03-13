@@ -735,7 +735,7 @@ drop:
 	return 0;
 }
 
-static struct sk_buff *handle_offloads(struct sk_buff *skb)
+static struct sk_buff *handle_offloads(struct ip_tunnel *tunnel, struct sk_buff *skb)
 {
 	int err;
 
@@ -745,8 +745,12 @@ static struct sk_buff *handle_offloads(struct sk_buff *skb)
 			goto error;
 		skb_shinfo(skb)->gso_type |= SKB_GSO_GRE;
 		return skb;
-	}
-	if (skb->ip_summed != CHECKSUM_PARTIAL)
+	} else if (skb->ip_summed == CHECKSUM_PARTIAL &&
+		   tunnel->parms.o_flags&GRE_CSUM) {
+		err = skb_checksum_help(skb);
+		if (unlikely(err))
+			goto error;
+	} else if (skb->ip_summed != CHECKSUM_PARTIAL)
 		skb->ip_summed = CHECKSUM_NONE;
 
 	return skb;
@@ -758,7 +762,6 @@ error:
 
 static netdev_tx_t ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	struct pcpu_tstats *tstats = this_cpu_ptr(dev->tstats);
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	const struct iphdr  *old_iph;
 	const struct iphdr  *tiph;
@@ -774,9 +777,8 @@ static netdev_tx_t ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev
 	int    mtu;
 	u8     ttl;
 	int    err;
-	int    pkt_len;
 
-	skb = handle_offloads(skb);
+	skb = handle_offloads(tunnel, skb);
 	if (IS_ERR(skb)) {
 		dev->stats.tx_dropped++;
 		return NETDEV_TX_OK;
@@ -970,7 +972,8 @@ static netdev_tx_t ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev
 	iph->daddr		=	fl4.daddr;
 	iph->saddr		=	fl4.saddr;
 	iph->ttl		=	ttl;
-	iph->id			=	0;
+
+	tunnel_ip_select_ident(skb, old_iph, &rt->dst);
 
 	if (ttl == 0) {
 		if (skb->protocol == htons(ETH_P_IP))
@@ -1006,10 +1009,8 @@ static netdev_tx_t ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev
 
 			if (skb_has_shared_frag(skb)) {
 				err = __skb_linearize(skb);
-				if (err) {
-					ip_rt_put(rt);
+				if (err)
 					goto tx_error;
-				}
 			}
 
 			*ptr = 0;
@@ -1019,19 +1020,7 @@ static netdev_tx_t ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev
 		}
 	}
 
-	nf_reset(skb);
-
-	pkt_len = skb->len - skb_transport_offset(skb);
-	err = ip_local_out(skb);
-	if (likely(net_xmit_eval(err) == 0)) {
-		u64_stats_update_begin(&tstats->syncp);
-		tstats->tx_bytes += pkt_len;
-		tstats->tx_packets++;
-		u64_stats_update_end(&tstats->syncp);
-	} else {
-		dev->stats.tx_errors++;
-		dev->stats.tx_aborted_errors++;
-	}
+	iptunnel_xmit(skb, dev);
 	return NETDEV_TX_OK;
 
 #if IS_ENABLED(CONFIG_IPV6)
@@ -1103,14 +1092,8 @@ static int ipgre_tunnel_bind_dev(struct net_device *dev)
 	tunnel->hlen = addend;
 	/* TCP offload with GRE SEQ is not supported. */
 	if (!(tunnel->parms.o_flags & GRE_SEQ)) {
-		/* device supports enc gso offload*/
-		if (tdev->hw_enc_features & NETIF_F_GRE_GSO) {
-			dev->features		|= NETIF_F_TSO;
-			dev->hw_features	|= NETIF_F_TSO;
-		} else {
-			dev->features		|= NETIF_F_GSO_SOFTWARE;
-			dev->hw_features	|= NETIF_F_GSO_SOFTWARE;
-		}
+		dev->features		|= NETIF_F_GSO_SOFTWARE;
+		dev->hw_features	|= NETIF_F_GSO_SOFTWARE;
 	}
 
 	return mtu;

@@ -15,6 +15,7 @@
 
 #include <linux/ipv6.h>
 #include <linux/hardirq.h>
+#include <linux/jhash.h>
 #include <net/if_inet6.h>
 #include <net/ndisc.h>
 #include <net/flow.h>
@@ -216,7 +217,7 @@ struct ipv6_txoptions {
 };
 
 struct ip6_flowlabel {
-	struct ip6_flowlabel	*next;
+	struct ip6_flowlabel __rcu *next;
 	__be32			label;
 	atomic_t		users;
 	struct in6_addr		dst;
@@ -237,9 +238,9 @@ struct ip6_flowlabel {
 #define IPV6_FLOWLABEL_MASK	cpu_to_be32(0x000FFFFF)
 
 struct ipv6_fl_socklist {
-	struct ipv6_fl_socklist	*next;
-	struct ip6_flowlabel	*fl;
-	struct rcu_head		rcu;
+	struct ipv6_fl_socklist	__rcu	*next;
+	struct ip6_flowlabel		*fl;
+	struct rcu_head			rcu;
 };
 
 extern struct ip6_flowlabel	*fl6_sock_lookup(struct sock *sk, __be32 label);
@@ -317,6 +318,18 @@ static inline int __ipv6_addr_src_scope(int type)
 static inline int ipv6_addr_src_scope(const struct in6_addr *addr)
 {
 	return __ipv6_addr_src_scope(__ipv6_addr_type(addr));
+}
+
+static inline bool __ipv6_addr_needs_scope_id(int type)
+{
+	return type & IPV6_ADDR_LINKLOCAL ||
+	       (type & IPV6_ADDR_MULTICAST &&
+		(type & (IPV6_ADDR_LOOPBACK|IPV6_ADDR_LINKLOCAL)));
+}
+
+static inline __u32 ipv6_iface_scope_id(const struct in6_addr *addr, int iface)
+{
+	return __ipv6_addr_needs_scope_id(__ipv6_addr_type(addr)) ? iface : 0;
 }
 
 static inline int ipv6_addr_cmp(const struct in6_addr *a1, const struct in6_addr *a2)
@@ -512,6 +525,17 @@ static inline u32 ipv6_addr_hash(const struct in6_addr *a)
 	return (__force u32)(a->s6_addr32[0] ^ a->s6_addr32[1] ^
 			     a->s6_addr32[2] ^ a->s6_addr32[3]);
 #endif
+}
+
+/* more secured version of ipv6_addr_hash() */
+static inline u32 ipv6_addr_jhash(const struct in6_addr *a)
+{
+	u32 v = (__force u32)a->s6_addr32[0] ^ (__force u32)a->s6_addr32[1];
+
+	return jhash_3words(v,
+			    (__force u32)a->s6_addr32[2],
+			    (__force u32)a->s6_addr32[3],
+			    ipv6_hash_secret);
 }
 
 static inline bool ipv6_addr_loopback(const struct in6_addr *a)

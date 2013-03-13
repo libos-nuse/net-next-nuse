@@ -149,7 +149,8 @@ static const char qlcnic_gstrings_test[][ETH_GSTRING_LEN] = {
 
 static inline int qlcnic_82xx_statistics(void)
 {
-	return QLCNIC_STATS_LEN + ARRAY_SIZE(qlcnic_83xx_mac_stats_strings);
+	return ARRAY_SIZE(qlcnic_device_gstrings_stats) +
+	       ARRAY_SIZE(qlcnic_83xx_mac_stats_strings);
 }
 
 static inline int qlcnic_83xx_statistics(void)
@@ -1070,8 +1071,7 @@ qlcnic_get_strings(struct net_device *dev, u32 stringset, u8 *data)
 	}
 }
 
-static void
-qlcnic_fill_stats(u64 *data, void *stats, int type)
+static u64 *qlcnic_fill_stats(u64 *data, void *stats, int type)
 {
 	if (type == QLCNIC_MAC_STATS) {
 		struct qlcnic_mac_statistics *mac_stats =
@@ -1120,6 +1120,7 @@ qlcnic_fill_stats(u64 *data, void *stats, int type)
 		*data++ = QLCNIC_FILL_STATS(esw_stats->local_frames);
 		*data++ = QLCNIC_FILL_STATS(esw_stats->numbytes);
 	}
+	return data;
 }
 
 static void qlcnic_get_ethtool_stats(struct net_device *dev,
@@ -1147,7 +1148,7 @@ static void qlcnic_get_ethtool_stats(struct net_device *dev,
 		/* Retrieve MAC statistics from firmware */
 		memset(&mac_stats, 0, sizeof(struct qlcnic_mac_statistics));
 		qlcnic_get_mac_stats(adapter, &mac_stats);
-		qlcnic_fill_stats(data, &mac_stats, QLCNIC_MAC_STATS);
+		data = qlcnic_fill_stats(data, &mac_stats, QLCNIC_MAC_STATS);
 	}
 
 	if (!(adapter->flags & QLCNIC_ESWITCH_ENABLED))
@@ -1159,7 +1160,7 @@ static void qlcnic_get_ethtool_stats(struct net_device *dev,
 	if (ret)
 		return;
 
-	qlcnic_fill_stats(data, &port_stats.rx, QLCNIC_ESW_STATS);
+	data = qlcnic_fill_stats(data, &port_stats.rx, QLCNIC_ESW_STATS);
 	ret = qlcnic_get_port_stats(adapter, adapter->ahw->pci_func,
 			QLCNIC_QUERY_TX_COUNTER, &port_stats.tx);
 	if (ret)
@@ -1176,7 +1177,8 @@ static int qlcnic_set_led(struct net_device *dev,
 	int err = -EIO, active = 1;
 
 	if (qlcnic_83xx_check(adapter))
-		return -EOPNOTSUPP;
+		return qlcnic_83xx_set_led(dev, state);
+
 	if (adapter->ahw->op_mode == QLCNIC_NON_PRIV_FUNC) {
 		netdev_warn(dev, "LED test not supported for non "
 				"privilege function\n");

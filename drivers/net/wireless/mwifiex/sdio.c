@@ -161,7 +161,6 @@ static int mwifiex_sdio_suspend(struct device *dev)
 	struct sdio_mmc_card *card;
 	struct mwifiex_adapter *adapter;
 	mmc_pm_flag_t pm_flag = 0;
-	int i;
 	int ret = 0;
 
 	if (func) {
@@ -198,9 +197,6 @@ static int mwifiex_sdio_suspend(struct device *dev)
 	/* Indicate device suspended */
 	adapter->is_suspended = true;
 
-	for (i = 0; i < adapter->priv_num; i++)
-		netif_carrier_off(adapter->priv[i]->netdev);
-
 	return ret;
 }
 
@@ -220,7 +216,6 @@ static int mwifiex_sdio_resume(struct device *dev)
 	struct sdio_mmc_card *card;
 	struct mwifiex_adapter *adapter;
 	mmc_pm_flag_t pm_flag = 0;
-	int i;
 
 	if (func) {
 		pm_flag = sdio_get_host_pm_caps(func);
@@ -242,10 +237,6 @@ static int mwifiex_sdio_resume(struct device *dev)
 	}
 
 	adapter->is_suspended = false;
-
-	for (i = 0; i < adapter->priv_num; i++)
-		if (adapter->priv[i]->media_connected)
-			netif_carrier_on(adapter->priv[i]->netdev);
 
 	/* Disable Host Sleep */
 	mwifiex_cancel_hs(mwifiex_get_priv(adapter, MWIFIEX_BSS_ROLE_STA),
@@ -1743,6 +1734,8 @@ mwifiex_update_mp_end_port(struct mwifiex_adapter *adapter, u16 port)
 static struct mmc_host *reset_host;
 static void sdio_card_reset_worker(struct work_struct *work)
 {
+	struct mmc_host *target = reset_host;
+
 	/* The actual reset operation must be run outside of driver thread.
 	 * This is because mmc_remove_host() will cause the device to be
 	 * instantly destroyed, and the driver then needs to end its thread,
@@ -1752,10 +1745,10 @@ static void sdio_card_reset_worker(struct work_struct *work)
 	 */
 
 	pr_err("Resetting card...\n");
-	mmc_remove_host(reset_host);
+	mmc_remove_host(target);
 	/* 20ms delay is based on experiment with sdhci controller */
 	mdelay(20);
-	mmc_add_host(reset_host);
+	mmc_add_host(target);
 }
 static DECLARE_WORK(card_reset_work, sdio_card_reset_worker);
 
@@ -1763,9 +1756,6 @@ static DECLARE_WORK(card_reset_work, sdio_card_reset_worker);
 static void mwifiex_sdio_card_reset(struct mwifiex_adapter *adapter)
 {
 	struct sdio_mmc_card *card = adapter->card;
-
-	if (work_pending(&card_reset_work))
-		return;
 
 	reset_host = card->func->card->host;
 	schedule_work(&card_reset_work);

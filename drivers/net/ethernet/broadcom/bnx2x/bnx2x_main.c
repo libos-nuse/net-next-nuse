@@ -75,8 +75,6 @@
 #define FW_FILE_NAME_E1H	"bnx2x/bnx2x-e1h-" FW_FILE_VERSION ".fw"
 #define FW_FILE_NAME_E2		"bnx2x/bnx2x-e2-" FW_FILE_VERSION ".fw"
 
-#define MAC_LEADING_ZERO_CNT (ALIGN(ETH_ALEN, sizeof(u32)) - ETH_ALEN)
-
 /* Time in jiffies before concluding the transmitter is hung */
 #define TX_TIMEOUT		(5*HZ)
 
@@ -2955,14 +2953,15 @@ static unsigned long bnx2x_get_common_flags(struct bnx2x *bp,
 	__set_bit(BNX2X_Q_FLG_ACTIVE, &flags);
 
 	/* tx only connections collect statistics (on the same index as the
-	 *  parent connection). The statistics are zeroed when the parent
-	 *  connection is initialized.
+	 * parent connection). The statistics are zeroed when the parent
+	 * connection is initialized.
 	 */
 
 	__set_bit(BNX2X_Q_FLG_STATS, &flags);
 	if (zero_stats)
 		__set_bit(BNX2X_Q_FLG_ZERO_STATS, &flags);
 
+	__set_bit(BNX2X_Q_FLG_PCSUM_ON_PKT, &flags);
 
 #ifdef BNX2X_STOP_ON_ERROR
 	__set_bit(BNX2X_Q_FLG_TX_SEC, &flags);
@@ -3227,16 +3226,29 @@ static void bnx2x_drv_info_ether_stat(struct bnx2x *bp)
 {
 	struct eth_stats_info *ether_stat =
 		&bp->slowpath->drv_info_to_mcp.ether_stat;
+	struct bnx2x_vlan_mac_obj *mac_obj =
+		&bp->sp_objs->mac_obj;
+	int i;
 
 	strlcpy(ether_stat->version, DRV_MODULE_VERSION,
 		ETH_STAT_INFO_VERSION_LEN);
 
-	bp->sp_objs[0].mac_obj.get_n_elements(bp, &bp->sp_objs[0].mac_obj,
-					DRV_INFO_ETH_STAT_NUM_MACS_REQUIRED,
-					ether_stat->mac_local);
-
+	/* get DRV_INFO_ETH_STAT_NUM_MACS_REQUIRED macs, placing them in the
+	 * mac_local field in ether_stat struct. The base address is offset by 2
+	 * bytes to account for the field being 8 bytes but a mac address is
+	 * only 6 bytes. Likewise, the stride for the get_n_elements function is
+	 * 2 bytes to compensate from the 6 bytes of a mac to the 8 bytes
+	 * allocated by the ether_stat struct, so the macs will land in their
+	 * proper positions.
+	 */
+	for (i = 0; i < DRV_INFO_ETH_STAT_NUM_MACS_REQUIRED; i++)
+		memset(ether_stat->mac_local + i, 0,
+		       sizeof(ether_stat->mac_local[0]));
+	mac_obj->get_n_elements(bp, &bp->sp_objs[0].mac_obj,
+				DRV_INFO_ETH_STAT_NUM_MACS_REQUIRED,
+				ether_stat->mac_local + MAC_PAD, MAC_PAD,
+				ETH_ALEN);
 	ether_stat->mtu_size = bp->dev->mtu;
-
 	if (bp->dev->features & NETIF_F_RXCSUM)
 		ether_stat->feature_flags |= FEATURE_ETH_CHKSUM_OFFLOAD_MASK;
 	if (bp->dev->features & NETIF_F_TSO)
@@ -3258,8 +3270,7 @@ static void bnx2x_drv_info_fcoe_stat(struct bnx2x *bp)
 	if (!CNIC_LOADED(bp))
 		return;
 
-	memcpy(fcoe_stat->mac_local + MAC_LEADING_ZERO_CNT,
-	       bp->fip_mac, ETH_ALEN);
+	memcpy(fcoe_stat->mac_local + MAC_PAD, bp->fip_mac, ETH_ALEN);
 
 	fcoe_stat->qos_priority =
 		app->traffic_type_priority[LLFC_TRAFFIC_TYPE_FCOE];
@@ -3361,8 +3372,8 @@ static void bnx2x_drv_info_iscsi_stat(struct bnx2x *bp)
 	if (!CNIC_LOADED(bp))
 		return;
 
-	memcpy(iscsi_stat->mac_local + MAC_LEADING_ZERO_CNT,
-	       bp->cnic_eth_dev.iscsi_mac, ETH_ALEN);
+	memcpy(iscsi_stat->mac_local + MAC_PAD, bp->cnic_eth_dev.iscsi_mac,
+	       ETH_ALEN);
 
 	iscsi_stat->qos_priority =
 		app->traffic_type_priority[LLFC_TRAFFIC_TYPE_ISCSI];
@@ -8843,7 +8854,7 @@ static void bnx2x_set_234_gates(struct bnx2x *bp, bool close)
 		       (!close) ? (val | HC_CONFIG_0_REG_BLOCK_DISABLE_0) :
 		       (val & ~(u32)HC_CONFIG_0_REG_BLOCK_DISABLE_0));
 	} else {
-		/* Prevent incomming interrupts in IGU */
+		/* Prevent incoming interrupts in IGU */
 		val = REG_RD(bp, IGU_REG_BLOCK_CONFIGURATION);
 
 		REG_WR(bp, IGU_REG_BLOCK_CONFIGURATION,
@@ -9525,6 +9536,10 @@ sp_rtnl_not_reset:
 		bnx2x_vfpf_storm_rx_mode(bp);
 	}
 
+	if (test_and_clear_bit(BNX2X_SP_RTNL_HYPERVISOR_VLAN,
+			       &bp->sp_rtnl_state))
+		bnx2x_pf_set_vfs_vlan(bp);
+
 	/* work which needs rtnl lock not-taken (as it takes the lock itself and
 	 * can be called from other contexts as well)
 	 */
@@ -9532,8 +9547,10 @@ sp_rtnl_not_reset:
 
 	/* enable SR-IOV if applicable */
 	if (IS_SRIOV(bp) && test_and_clear_bit(BNX2X_SP_RTNL_ENABLE_SRIOV,
-					       &bp->sp_rtnl_state))
+					       &bp->sp_rtnl_state)) {
+		bnx2x_disable_sriov(bp);
 		bnx2x_enable_sriov(bp);
+	}
 }
 
 static void bnx2x_period_task(struct work_struct *work)
@@ -10034,8 +10051,12 @@ static void bnx2x_get_common_hwinfo(struct bnx2x *bp)
 	id = ((val & 0xffff) << 16);
 	val = REG_RD(bp, MISC_REG_CHIP_REV);
 	id |= ((val & 0xf) << 12);
-	val = REG_RD(bp, MISC_REG_CHIP_METAL);
-	id |= ((val & 0xff) << 4);
+
+	/* Metal is read from PCI regs, but we can't access >=0x400 from
+	 * the configuration space (so we need to reg_rd)
+	 */
+	val = REG_RD(bp, PCICFG_OFFSET + PCI_ID_VAL3);
+	id |= (((val >> 24) & 0xf) << 4);
 	val = REG_RD(bp, MISC_REG_BOND_ID);
 	id |= (val & 0xf);
 	bp->common.chip_id = id;
@@ -10812,14 +10833,12 @@ static void bnx2x_get_cnic_mac_hwinfo(struct bnx2x *bp)
 			}
 		}
 
-		if (IS_MF_STORAGE_SD(bp))
-			/* Zero primary MAC configuration */
-			memset(bp->dev->dev_addr, 0, ETH_ALEN);
-
-		if (IS_MF_FCOE_AFEX(bp) || IS_MF_FCOE_SD(bp))
-			/* use FIP MAC as primary MAC */
+		/* If this is a storage-only interface, use SAN mac as
+		 * primary MAC. Notice that for SD this is already the case,
+		 * as the SAN mac was copied from the primary MAC.
+		 */
+		if (IS_MF_FCOE_AFEX(bp))
 			memcpy(bp->dev->dev_addr, fip_mac, ETH_ALEN);
-
 	} else {
 		val2 = SHMEM_RD(bp, dev_info.port_hw_config[port].
 				iscsi_mac_upper);
@@ -11055,6 +11074,9 @@ static int bnx2x_get_hwinfo(struct bnx2x *bp)
 						func_mf_config[func].config);
 				} else
 					BNX2X_DEV_INFO("illegal OV for SD\n");
+				break;
+			case SHARED_FEAT_CFG_FORCE_SF_MODE_FORCED_SF:
+				bp->mf_config[vn] = 0;
 				break;
 			default:
 				/* Unknown configuration: reset mf_config */
@@ -11401,26 +11423,6 @@ static int bnx2x_init_bp(struct bnx2x *bp)
 /*
  * net_device service functions
  */
-
-static int bnx2x_open_epilog(struct bnx2x *bp)
-{
-	/* Enable sriov via delayed work. This must be done via delayed work
-	 * because it causes the probe of the vf devices to be run, which invoke
-	 * register_netdevice which must have rtnl lock taken. As we are holding
-	 * the lock right now, that could only work if the probe would not take
-	 * the lock. However, as the probe of the vf may be called from other
-	 * contexts as well (such as passthrough to vm failes) it can't assume
-	 * the lock is being held for it. Using delayed work here allows the
-	 * probe code to simply take the lock (i.e. wait for it to be released
-	 * if it is being held).
-	 */
-	smp_mb__before_clear_bit();
-	set_bit(BNX2X_SP_RTNL_ENABLE_SRIOV, &bp->sp_rtnl_state);
-	smp_mb__after_clear_bit();
-	schedule_delayed_work(&bp->sp_rtnl_task, 0);
-
-	return 0;
-}
 
 /* called with rtnl_lock */
 static int bnx2x_open(struct net_device *dev)
@@ -11791,6 +11793,8 @@ static const struct net_device_ops bnx2x_netdev_ops = {
 	.ndo_setup_tc		= bnx2x_setup_tc,
 #ifdef CONFIG_BNX2X_SRIOV
 	.ndo_set_vf_mac		= bnx2x_set_vf_mac,
+	.ndo_set_vf_vlan        = bnx2x_set_vf_vlan,
+	.ndo_get_vf_config	= bnx2x_get_vf_config,
 #endif
 #ifdef NETDEV_FCOE_WWNN
 	.ndo_fcoe_get_wwn	= bnx2x_fcoe_get_wwn,
@@ -11953,7 +11957,7 @@ static int bnx2x_init_dev(struct bnx2x *bp, struct pci_dev *pdev,
 	dev->watchdog_timeo = TX_TIMEOUT;
 
 	dev->netdev_ops = &bnx2x_netdev_ops;
-	bnx2x_set_ethtool_ops(dev);
+	bnx2x_set_ethtool_ops(bp, dev);
 
 	dev->priv_flags |= IFF_UNICAST_FLT;
 
@@ -12475,13 +12479,8 @@ static int bnx2x_init_one(struct pci_dev *pdev,
 			goto init_one_exit;
 	}
 
-	/* Enable SRIOV if capability found in configuration space.
-	 * Once the generic SR-IOV framework makes it in from the
-	 * pci tree this will be revised, to allow dynamic control
-	 * over the number of VFs. Right now, change the num of vfs
-	 * param below to enable SR-IOV.
-	 */
-	rc = bnx2x_iov_init_one(bp, int_mode, 0/*num vfs*/);
+	/* Enable SRIOV if capability found in configuration space */
+	rc = bnx2x_iov_init_one(bp, int_mode, BNX2X_MAX_NUM_OF_VFS);
 	if (rc)
 		goto init_one_exit;
 
@@ -12492,16 +12491,6 @@ static int bnx2x_init_one(struct pci_dev *pdev,
 	/* disable FCOE L2 queue for E1x*/
 	if (CHIP_IS_E1x(bp))
 		bp->flags |= NO_FCOE_FLAG;
-
-	/* disable FCOE for 57840 device, until FW supports it */
-	switch (ent->driver_data) {
-	case BCM57840_O:
-	case BCM57840_4_10:
-	case BCM57840_2_20:
-	case BCM57840_MFO:
-	case BCM57840_MF:
-		bp->flags |= NO_FCOE_FLAG;
-	}
 
 	/* Set bp->num_queues for MSI-X mode*/
 	bnx2x_set_num_queues(bp);
@@ -12797,6 +12786,9 @@ static struct pci_driver bnx2x_pci_driver = {
 	.suspend     = bnx2x_suspend,
 	.resume      = bnx2x_resume,
 	.err_handler = &bnx2x_err_handler,
+#ifdef CONFIG_BNX2X_SRIOV
+	.sriov_configure = bnx2x_sriov_configure,
+#endif
 };
 
 static int __init bnx2x_init(void)

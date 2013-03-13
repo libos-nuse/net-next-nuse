@@ -281,6 +281,8 @@ static int bnx2x_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 			cmd->lp_advertising |= ADVERTISED_2500baseX_Full;
 		if (status & LINK_STATUS_LINK_PARTNER_10GXFD_CAPABLE)
 			cmd->lp_advertising |= ADVERTISED_10000baseT_Full;
+		if (status & LINK_STATUS_LINK_PARTNER_20GXFD_CAPABLE)
+			cmd->lp_advertising |= ADVERTISED_20000baseKR2_Full;
 	}
 
 	cmd->maxtxpkt = 0;
@@ -463,6 +465,10 @@ static int bnx2x_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 						ADVERTISED_10000baseKR_Full))
 				bp->link_params.speed_cap_mask[cfg_idx] |=
 					PORT_HW_CFG_SPEED_CAPABILITY_D0_10G;
+
+			if (cmd->advertising & ADVERTISED_20000baseKR2_Full)
+				bp->link_params.speed_cap_mask[cfg_idx] |=
+					PORT_HW_CFG_SPEED_CAPABILITY_D0_20G;
 		}
 	} else { /* forced speed */
 		/* advertise the requested speed and duplex if supported */
@@ -3226,7 +3232,32 @@ static const struct ethtool_ops bnx2x_ethtool_ops = {
 	.get_ts_info		= ethtool_op_get_ts_info,
 };
 
-void bnx2x_set_ethtool_ops(struct net_device *netdev)
+static const struct ethtool_ops bnx2x_vf_ethtool_ops = {
+	.get_settings		= bnx2x_get_settings,
+	.set_settings		= bnx2x_set_settings,
+	.get_drvinfo		= bnx2x_get_drvinfo,
+	.get_msglevel		= bnx2x_get_msglevel,
+	.set_msglevel		= bnx2x_set_msglevel,
+	.get_link		= bnx2x_get_link,
+	.get_coalesce		= bnx2x_get_coalesce,
+	.get_ringparam		= bnx2x_get_ringparam,
+	.set_ringparam		= bnx2x_set_ringparam,
+	.get_sset_count		= bnx2x_get_sset_count,
+	.get_strings		= bnx2x_get_strings,
+	.get_ethtool_stats	= bnx2x_get_ethtool_stats,
+	.get_rxnfc		= bnx2x_get_rxnfc,
+	.set_rxnfc		= bnx2x_set_rxnfc,
+	.get_rxfh_indir_size	= bnx2x_get_rxfh_indir_size,
+	.get_rxfh_indir		= bnx2x_get_rxfh_indir,
+	.set_rxfh_indir		= bnx2x_set_rxfh_indir,
+	.get_channels		= bnx2x_get_channels,
+	.set_channels		= bnx2x_set_channels,
+};
+
+void bnx2x_set_ethtool_ops(struct bnx2x *bp, struct net_device *netdev)
 {
-	SET_ETHTOOL_OPS(netdev, &bnx2x_ethtool_ops);
+	if (IS_PF(bp))
+		SET_ETHTOOL_OPS(netdev, &bnx2x_ethtool_ops);
+	else /* vf */
+		SET_ETHTOOL_OPS(netdev, &bnx2x_vf_ethtool_ops);
 }

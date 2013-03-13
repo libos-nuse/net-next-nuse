@@ -209,7 +209,6 @@ static void at91ether_rx(struct net_device *dev)
 			netif_rx(skb);
 		} else {
 			lp->stats.rx_dropped++;
-			netdev_notice(dev, "Memory squeeze, dropping packet.\n");
 		}
 
 		if (lp->rx_ring[lp->rx_tail].ctrl & MACB_BIT(RX_MHASH_MATCH))
@@ -519,18 +518,7 @@ static struct platform_driver at91ether_driver = {
 	},
 };
 
-static int __init at91ether_init(void)
-{
-	return platform_driver_probe(&at91ether_driver, at91ether_probe);
-}
-
-static void __exit at91ether_exit(void)
-{
-	platform_driver_unregister(&at91ether_driver);
-}
-
-module_init(at91ether_init)
-module_exit(at91ether_exit)
+module_platform_driver_probe(at91ether_driver, at91ether_probe);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("AT91RM9200 EMAC Ethernet driver");

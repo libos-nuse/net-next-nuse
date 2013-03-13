@@ -33,6 +33,7 @@
 #include <net/arp.h>
 #include <net/ndisc.h>
 #include <net/ip.h>
+#include <net/ipip.h>
 #include <net/icmp.h>
 #include <net/udp.h>
 #include <net/rtnetlink.h>
@@ -144,9 +145,8 @@ static inline struct hlist_head *vni_head(struct net *net, u32 id)
 static struct vxlan_dev *vxlan_find_vni(struct net *net, u32 id)
 {
 	struct vxlan_dev *vxlan;
-	struct hlist_node *node;
 
-	hlist_for_each_entry_rcu(vxlan, node, vni_head(net, id), hlist) {
+	hlist_for_each_entry_rcu(vxlan, vni_head(net, id), hlist) {
 		if (vxlan->vni == id)
 			return vxlan;
 	}
@@ -291,9 +291,8 @@ static struct vxlan_fdb *vxlan_find_mac(struct vxlan_dev *vxlan,
 {
 	struct hlist_head *head = vxlan_fdb_head(vxlan, mac);
 	struct vxlan_fdb *f;
-	struct hlist_node *node;
 
-	hlist_for_each_entry_rcu(f, node, head, hlist) {
+	hlist_for_each_entry_rcu(f, head, hlist) {
 		if (compare_ether_addr(mac, f->eth_addr) == 0)
 			return f;
 	}
@@ -421,10 +420,9 @@ static int vxlan_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb,
 
 	for (h = 0; h < FDB_HASH_SIZE; ++h) {
 		struct vxlan_fdb *f;
-		struct hlist_node *n;
 		int err;
 
-		hlist_for_each_entry_rcu(f, n, &vxlan->fdb_head[h], hlist) {
+		hlist_for_each_entry_rcu(f, &vxlan->fdb_head[h], hlist) {
 			if (idx < cb->args[0])
 				goto skip;
 
@@ -482,11 +480,10 @@ static bool vxlan_group_used(struct vxlan_net *vn,
 			     const struct vxlan_dev *this)
 {
 	const struct vxlan_dev *vxlan;
-	struct hlist_node *node;
 	unsigned h;
 
 	for (h = 0; h < VNI_HASH_SIZE; ++h)
-		hlist_for_each_entry(vxlan, node, &vn->vni_list[h], hlist) {
+		hlist_for_each_entry(vxlan, &vn->vni_list[h], hlist) {
 			if (vxlan == this)
 				continue;
 
@@ -823,6 +820,20 @@ static u16 vxlan_src_port(const struct vxlan_dev *vxlan, struct sk_buff *skb)
 	return (((u64) hash * range) >> 32) + vxlan->port_min;
 }
 
+static int handle_offloads(struct sk_buff *skb)
+{
+	if (skb_is_gso(skb)) {
+		int err = skb_unclone(skb, GFP_ATOMIC);
+		if (unlikely(err))
+			return err;
+
+		skb_shinfo(skb)->gso_type |= (SKB_GSO_UDP_TUNNEL | SKB_GSO_UDP);
+	} else if (skb->ip_summed != CHECKSUM_PARTIAL)
+		skb->ip_summed = CHECKSUM_NONE;
+
+	return 0;
+}
+
 /* Transmit local packets over Vxlan
  *
  * Outer IP header inherits ECN and DF from inner header.
@@ -844,7 +855,6 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	__u16 src_port;
 	__be16 df = 0;
 	__u8 tos, ttl;
-	int err;
 	bool did_rsc = false;
 	const struct vxlan_fdb *f;
 
@@ -962,26 +972,16 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	iph->daddr	= dst;
 	iph->saddr	= fl4.saddr;
 	iph->ttl	= ttl ? : ip4_dst_hoplimit(&rt->dst);
+	tunnel_ip_select_ident(skb, old_iph, &rt->dst);
+
+	nf_reset(skb);
 
 	vxlan_set_owner(dev, skb);
 
-	/* See iptunnel_xmit() */
-	if (skb->ip_summed != CHECKSUM_PARTIAL)
-		skb->ip_summed = CHECKSUM_NONE;
-	ip_select_ident(iph, &rt->dst, NULL);
+	if (handle_offloads(skb))
+		goto drop;
 
-	err = ip_local_out(skb);
-	if (likely(net_xmit_eval(err) == 0)) {
-		struct vxlan_stats *stats = this_cpu_ptr(vxlan->stats);
-
-		u64_stats_update_begin(&stats->syncp);
-		stats->tx_packets++;
-		stats->tx_bytes += pkt_len;
-		u64_stats_update_end(&stats->syncp);
-	} else {
-		dev->stats.tx_errors++;
-		dev->stats.tx_aborted_errors++;
-	}
+	iptunnel_xmit(skb, dev);
 	return NETDEV_TX_OK;
 
 drop:
@@ -1190,8 +1190,10 @@ static void vxlan_setup(struct net_device *dev)
 	dev->features	|= NETIF_F_NETNS_LOCAL;
 	dev->features	|= NETIF_F_SG | NETIF_F_HW_CSUM;
 	dev->features   |= NETIF_F_RXCSUM;
+	dev->features   |= NETIF_F_GSO_SOFTWARE;
 
 	dev->hw_features |= NETIF_F_SG | NETIF_F_HW_CSUM | NETIF_F_RXCSUM;
+	dev->hw_features |= NETIF_F_GSO_SOFTWARE;
 	dev->priv_flags	&= ~IFF_XMIT_DST_RELEASE;
 	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 
@@ -1507,6 +1509,14 @@ static __net_init int vxlan_init_net(struct net *net)
 static __net_exit void vxlan_exit_net(struct net *net)
 {
 	struct vxlan_net *vn = net_generic(net, vxlan_net_id);
+	struct vxlan_dev *vxlan;
+	unsigned h;
+
+	rtnl_lock();
+	for (h = 0; h < VNI_HASH_SIZE; ++h)
+		hlist_for_each_entry(vxlan, &vn->vni_list[h], hlist)
+			dev_close(vxlan->dev);
+	rtnl_unlock();
 
 	if (vn->sock) {
 		sk_release_kernel(vn->sock->sk);

@@ -492,7 +492,6 @@ enum bnx2x_tpa_mode_t {
 struct bnx2x_fastpath {
 	struct bnx2x		*bp; /* parent */
 
-#define BNX2X_NAPI_WEIGHT       128
 	struct napi_struct	napi;
 	union host_hc_status_block	status_blk;
 	/* chip independed shortcuts into sb structure */
@@ -730,7 +729,7 @@ struct bnx2x_fastpath {
 #define SKB_CS(skb)		(*(u16 *)(skb_transport_header(skb) + \
 					  skb->csum_offset))
 
-#define pbd_tcp_flags(skb)	(ntohl(tcp_flag_word(tcp_hdr(skb)))>>16 & 0xff)
+#define pbd_tcp_flags(tcp_hdr)	(ntohl(tcp_flag_word(tcp_hdr))>>16 & 0xff)
 
 #define XMIT_PLAIN			0
 #define XMIT_CSUM_V4			0x1
@@ -1215,6 +1214,7 @@ enum {
 	BNX2X_SP_RTNL_ENABLE_SRIOV,
 	BNX2X_SP_RTNL_VFPF_MCAST,
 	BNX2X_SP_RTNL_VFPF_STORM_RX_MODE,
+	BNX2X_SP_RTNL_HYPERVISOR_VLAN,
 };
 
 
@@ -1281,6 +1281,8 @@ struct bnx2x {
 	dma_addr_t		pf2vf_bulletin_mapping;
 
 	struct pf_vf_bulletin_content	old_bulletin;
+
+	u16 requested_nr_virtfn;
 #endif /* CONFIG_BNX2X_SRIOV */
 
 	struct net_device	*dev;
@@ -2286,7 +2288,7 @@ static const u32 dmae_reg_go_c[] = {
 	DMAE_REG_GO_C12, DMAE_REG_GO_C13, DMAE_REG_GO_C14, DMAE_REG_GO_C15
 };
 
-void bnx2x_set_ethtool_ops(struct net_device *netdev);
+void bnx2x_set_ethtool_ops(struct bnx2x *bp, struct net_device *netdev);
 void bnx2x_notify_link_changed(struct bnx2x *bp);
 
 #define BNX2X_MF_SD_PROTOCOL(bp) \

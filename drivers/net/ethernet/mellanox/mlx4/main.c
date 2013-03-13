@@ -1431,6 +1431,10 @@ static int mlx4_init_hca(struct mlx4_dev *dev)
 
 		init_hca.log_uar_sz = ilog2(dev->caps.num_uars);
 		init_hca.uar_page_sz = PAGE_SHIFT - 12;
+		init_hca.mw_enabled = 0;
+		if (dev->caps.flags & MLX4_DEV_CAP_FLAG_MEM_WINDOW ||
+		    dev->caps.bmme_flags & MLX4_BMME_FLAG_TYPE_2_WIN)
+			init_hca.mw_enabled = INIT_HCA_TPT_MW_ENABLE;
 
 		err = mlx4_init_icm(dev, &dev_cap, &init_hca, icm_size);
 		if (err)
@@ -1551,7 +1555,7 @@ void __mlx4_counter_free(struct mlx4_dev *dev, u32 idx)
 
 void mlx4_counter_free(struct mlx4_dev *dev, u32 idx)
 {
-	u64 in_param;
+	u64 in_param = 0;
 
 	if (mlx4_is_mfunc(dev)) {
 		set_param_l(&in_param, idx);
