@@ -3,7 +3,7 @@
 
     <module name="dce-ns3">
       <source type="mercurial">
-	<attribute name="url" value="http://code.nsnam.org/furbani/ns-3-dce"/>
+	<attribute name="url" value="http://code.nsnam.org/ns-3-dce"/>
  	<attribute name="module_directory" value="dce"/>
       </source>
        <depends_on name="ns-3-dev-dce" optional="False"/>
@@ -12,21 +12,23 @@
        <depends_on name="ccnx" optional="True"/>
       <build type="waf" objdir="build">
 	<attribute name="configure_arguments" value="configure --with-ns3=$INSTALLDIR --with-elf-loader=$INSTALLDIR/lib --prefix=$INSTALLDIR"/>
-	<attribute name="post_installation" value="cd $SRCDIR; ./waf --run ns3test-dce"/>
+	<!-- attribute name="post_installation" value="cd $SRCDIR; ./test.py" -->
      </build>
     </module>
 
     <module name="dce-linux">
       <source type="mercurial">
-	<attribute name="url" value="http://code.nsnam.org/furbani/ns-3-dce"/>
+	<attribute name="url" value="http://code.nsnam.org/ns-3-dce"/>
  	<attribute name="module_directory" value="dce"/>
      </source>
        <depends_on name="elf-loader" optional="False"/>
        <depends_on name="iproute" optional="False"/>
+       <depends_on name="iperf" optional="True"/>
+       <depends_on name="ccnx" optional="True"/>
        <depends_on name="ns-3-dev-dce" optional="False"/>
       <build type="waf" objdir="yes" sourcedir="dce">
 	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR --with-ns3=$INSTALLDIR --with-elf-loader=$INSTALLDIR/lib --enable-kernel-stack=$SRCDIR/../../../../../"/>
-	<attribute name="post_installation" value="cd $SRCDIR; ./waf --run ns3test-dce"/>
+	<!-- attribute name="post_installation" value="cd $SRCDIR; ./test.py"/ -->
       </build>
     </module>
 
@@ -86,7 +88,7 @@
     def __init__(self):
         InlineModuleBuild.__init__(self)
     def build(self, env, jobs):
-           env.run(['patch', '-p1', '-f', '-i', env.srcdir + '/../dce-quagga/utils/iputils-ping6.patch'],
+           env.run(['patch', '-p1', '-f', '-i', env.srcdir + '/../dce/myscripts/ns-3-dce-quagga/utils/iputils-ping6.patch'],
            directory=env.srcdir)
            env.run(['make', 'CFLAGS=-fpic', 'CFLAGS+=-D_GNU_SOURCE', 'CFLAGS+=-g',
            'CFLAGS+=-Wstrict-prototypes', 'CFLAGS+=-Wall', 'LDFLAGS=-pie', 
@@ -107,14 +109,14 @@
      <module name="dce-umip">
        <source type="mercurial">
 	 <attribute name="url" value="http://code.nsnam.org/thehajime/ns-3-dce-umip"/>
-	 <attribute name="module_directory" value="dce-umip/"/>
+	 <attribute name="module_directory" value="dce/myscripts/ns-3-dce-umip/"/>
        </source>
        <depends_on name="dce-linux" optional="False"/>
        <depends_on name="dce-quagga" optional="False"/>
        <depends_on name="umip" optional="False"/>
        <depends_on name="ns-3-dev-dce-umip" optional="False"/>
-       <build type="waf" objdir="build">
-	 <attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR"/>
+       <build type="none">
+	 <!-- attribute name="configure_arguments" value="configure -prefix=$INSTALLDIR"/ -->
        </build>
      </module>
 
@@ -124,7 +126,7 @@
        </source>
        <depends_on name="ns-3-dev-dce" optional="False"/>
        <build type="waf" objdir="yes">
-	 <attribute name="patch" value="$SRCDIR/../dce-umip/utils/ipv6-opt-header.patch"/>
+	 <attribute name="patch" value="$SRCDIR/../dce/myscripts/ns-3-dce-umip/utils/ipv6-opt-header.patch"/>
 	 <attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR --enable-tests"/>
        </build>
      </module>
@@ -145,13 +147,13 @@
     <module name="dce-quagga">
       <source type="mercurial">
 	<attribute name="url" value="http://code.nsnam.org/thehajime/ns-3-dce-quagga"/>
- 	<attribute name="module_directory" value="dce-quagga/"/>
+ 	<attribute name="module_directory" value="dce/myscripts/ns-3-dce-quagga/"/>
       </source>
        <depends_on name="dce-linux" optional="False"/>
        <depends_on name="quagga" optional="False"/>
        <depends_on name="iputils" optional="False"/>
-      <build type="waf" objdir="build">
-	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR"/>
+      <build type="none">
+	<!-- attribute name="configure_arguments" value="configure -prefix=$INSTALLDIR"/ -->
      </build>
     </module>
 

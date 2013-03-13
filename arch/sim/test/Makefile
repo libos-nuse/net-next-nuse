@@ -2,7 +2,7 @@
 all: test
 
 bake:
-	hg clone http://code.nsnam.org/thehajime/bake-outgoing bake
+	hg clone http://code.nsnam.org/bake
 
 testbin: bake
 	@mkdir -p buildtop/build/bin_dce
@@ -20,7 +20,7 @@ test-fault-injection:
 	@./test.sh -f
 
 clean:
-	@rm -rf buildtop
+#	@rm -rf buildtop
 	@rm -f *.pcap
 	@rm -rf files-*
 	@rm -f exitprocs
