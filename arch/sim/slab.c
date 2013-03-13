@@ -1,5 +1,6 @@
 #include "sim.h"
 #include "sim-assert.h"
+#include <linux/page-flags.h>
 #include <linux/types.h>
 #include <linux/slab.h>
 

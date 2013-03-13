@@ -88,7 +88,8 @@ $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config
 $(AUTOCONF): $(ARCH_DIR)/generate-autoconf.py $(srctree)/.config $(ARCH_DIR)/timeconst.h
 	$(ARCH_DIR)/generate-autoconf.py $(srctree)/.config > $@
 $(ARCH_DIR)/timeconst.h: $(srctree)/.config
-	perl $(srctree)/kernel/timeconst.pl $(CONFIG_HZ) > $@
+	echo "hz=$(CONFIG_HZ)" > $(srctree)/arch/sim/hz.bc
+	bc $(srctree)/arch/sim/hz.bc kernel/timeconst.bc > $@
 $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	ld -shared --verbose | ./$^ > $@
 

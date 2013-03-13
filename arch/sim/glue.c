@@ -87,9 +87,10 @@ unsigned long long nr_context_switches(void)
 }
 
 
-int get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
-		   unsigned long start, int nr_pages, int write, int force,
-		   struct page **pages, struct vm_area_struct **vmas)
+long get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+		   unsigned long start, unsigned long nr_pages,
+		   int write, int force, struct page **pages, 
+		   struct vm_area_struct **vmas)
 {
   // in practice, this function is never called. It's linked in because
   // we link in get_user_pages_fast which is included only because it
@@ -291,7 +292,7 @@ unsigned long get_taint(void)
   // never tainted.
   return 0;
 }
-void add_taint(unsigned flag)
+void add_taint(unsigned flag, enum lockdep_ok lockdep_ok)
 {}
 struct pid *cad_pid = 0;
 

@@ -147,14 +147,13 @@ struct super_block *sget(struct file_system_type *type,
 			int flags, void *data)
 {
 	struct super_block *s = NULL;
-	struct hlist_node *node;
 	struct super_block *old;
 	int err;
 
 retry:
 	spin_lock(&sb_lock);
 	if (test) {
-		hlist_for_each_entry(old, node, &type->fs_supers, s_instances) {
+		hlist_for_each_entry(old, &type->fs_supers, s_instances) {
 			if (!test(old, data))
 				continue;
 			if (!grab_super(old))
