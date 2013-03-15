@@ -2,3 +2,4 @@ linker.lds
 autoconf.h
 objs.mk
 timeconst.h
+hz.bc
