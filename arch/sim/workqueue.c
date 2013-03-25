@@ -3,14 +3,6 @@
 #include "sim.h"
 #include "sim-assert.h"
 
-/**
- * All these functions work on the global per-cpu workqueue.
- * Since we model only a single cpu, we have a single 
- * global workqueue.
- */
-
-static LIST_HEAD(g_work);
-
 struct wq_barrier {
   struct work_struct  work;
   struct SimTask      *waiter;
@@ -55,12 +47,13 @@ static void workqueue_barrier_fn (struct work_struct *work)
 static void
 workqueue_function (void *context)
 {
+  struct workqueue_struct *wq = context;
   while (true)
     {
       sim_task_wait ();
-      while (!list_empty (&g_work))
+      while (!list_empty (&wq->list))
        {
-         struct work_struct *work = list_first_entry(&g_work,
+         struct work_struct *work = list_first_entry(&wq->list,
                                                      struct work_struct, entry);
          work_func_t f = work->func;
          __list_del (work->entry.prev, work->entry.next);
@@ -70,28 +63,28 @@ workqueue_function (void *context)
     }
 }
 
-static struct SimTask *workqueue_task (void)
+static struct SimTask *workqueue_task (struct workqueue_struct *wq)
 {
   static struct SimTask *g_task = 0;
   if (g_task == 0)
     {
-      g_task = sim_task_start (&workqueue_function, 0);
+      g_task = sim_task_start (&workqueue_function, wq);
     }
   return g_task;
 }
 
-static int flush_entry (struct list_head *prev)
+static int flush_entry (struct workqueue_struct *wq, struct list_head *prev)
 {
   struct wq_barrier barr;
   int active = 0;
 
-  if (!list_empty(&g_work))
+  if (!list_empty(&wq->list))
     {
       active = 1;
       INIT_WORK_ONSTACK(&barr.work, &workqueue_barrier_fn);
       __set_bit(WORK_STRUCT_PENDING, work_data_bits(&barr.work));
       list_add(&barr.work.entry, prev);
-      sim_task_wakeup (workqueue_task ());
+      sim_task_wakeup (workqueue_task (wq));
       sim_task_wait ();
     }
 
@@ -106,6 +99,18 @@ void delayed_work_timer_fn(unsigned long data)
   schedule_work (work);
 }
 
+bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
+{
+  int ret = 0;
+
+  if (!test_and_set_bit (WORK_STRUCT_PENDING, work_data_bits(work))) {
+      list_add_tail (&work->entry, &wq->list);
+      sim_task_wakeup (workqueue_task (wq));
+      ret = 1;
+  }
+  return ret;
+}
+
 /**
  * @work: work to queue
  *
@@ -116,22 +121,15 @@ void delayed_work_timer_fn(unsigned long data)
  */
 bool schedule_work(struct work_struct *work)
 {
-  int ret = 0;
-
-  if (!test_and_set_bit (WORK_STRUCT_PENDING, work_data_bits(work))) {
-      list_add_tail (&work->entry, &g_work);
-      sim_task_wakeup (workqueue_task ());
-      ret = 1;
-  }
-  return ret;
+  return queue_work(system_wq, work);
 }
 void flush_scheduled_work(void)
 {
-  flush_entry (g_work.prev);
+  flush_entry (system_wq, system_wq->list.prev);
 }
 bool flush_work(struct work_struct *work)
 {
-  return flush_entry (&work->entry);
+  return flush_entry (system_wq, &work->entry);
 }
 bool cancel_work_sync(struct work_struct *work)
 {
@@ -180,7 +178,6 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 {
 	va_list args, args1;
 	struct workqueue_struct *wq;
-	unsigned int cpu;
 	size_t namelen;
 
 	/* determine namelen, allocate wq and format name */
@@ -204,9 +201,6 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 		flags |= WQ_RESCUER;
 
 	max_active = max_active ?: WQ_DFL_ACTIVE;
-#if 0
-	max_active = wq_clamp_max_active(max_active, flags, wq->name);
-#endif
 	/* init wq */
 	wq->flags = flags;
 	wq->saved_max_active = max_active;
@@ -218,66 +212,9 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	lockdep_init_map(&wq->lockdep_map, lock_name, key, 0);
 	INIT_LIST_HEAD(&wq->list);
 
-#if 0
-	if (alloc_cwqs(wq) < 0)
-		goto err;
-
-	for_each_cwq_cpu(cpu, wq) {
-		struct cpu_workqueue_struct *cwq = get_cwq(cpu, wq);
-		struct global_cwq *gcwq = get_gcwq(cpu);
-		int pool_idx = (bool)(flags & WQ_HIGHPRI);
-
-		BUG_ON((unsigned long)cwq & WORK_STRUCT_FLAG_MASK);
-		cwq->pool = &gcwq->pools[pool_idx];
-		cwq->wq = wq;
-		cwq->flush_color = -1;
-		cwq->max_active = max_active;
-		INIT_LIST_HEAD(&cwq->delayed_works);
-	}
-
-	if (flags & WQ_RESCUER) {
-		struct worker *rescuer;
-
-		if (!alloc_mayday_mask(&wq->mayday_mask, GFP_KERNEL))
-			goto err;
-
-		wq->rescuer = rescuer = alloc_worker();
-		if (!rescuer)
-			goto err;
-
-		rescuer->task = kthread_create(rescuer_thread, wq, "%s",
-					       wq->name);
-		if (IS_ERR(rescuer->task))
-			goto err;
-
-		rescuer->task->flags |= PF_THREAD_BOUND;
-		wake_up_process(rescuer->task);
-	}
-
-	/*
-	 * workqueue_lock protects global freeze state and workqueues
-	 * list.  Grab it, set max_active accordingly and add the new
-	 * workqueue to workqueues list.
-	 */
-	spin_lock(&workqueue_lock);
-
-	if (workqueue_freezing && wq->flags & WQ_FREEZABLE)
-		for_each_cwq_cpu(cpu, wq)
-			get_cwq(cpu, wq)->max_active = 0;
-
-	list_add(&wq->list, &workqueues);
-
-	spin_unlock(&workqueue_lock);
-#endif
-
 	return wq;
 err:
 	if (wq) {
-#if 0
-		free_cwqs(wq);
-		free_mayday_mask(wq->mayday_mask);
-#endif
-		kfree(wq->rescuer);
 		kfree(wq);
 	}
 	return NULL;
@@ -287,4 +224,6 @@ struct workqueue_struct *system_wq __read_mostly;
 static int __init init_workqueues(void)
 {
   system_wq = alloc_workqueue("events", 0, 0);
+  return 0;
 }
+fs_initcall(init_workqueues);
