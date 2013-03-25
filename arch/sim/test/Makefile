@@ -8,8 +8,9 @@ testbin: bake
 	@mkdir -p buildtop/build/bin_dce
 	cd buildtop ; \
 	../bake/bake.py configure -c ../bakeconf.xml -e dce-umip ; \
+	../bake/bake.py download ; \
 	../bake/bake.py update ; \
-	../bake/bake.py install
+	../bake/bake.py build 
 
 test:
 	@./test.sh
