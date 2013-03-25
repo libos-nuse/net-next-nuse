@@ -41,3 +41,4 @@ $(subdirs):
 	@$(MAKE) -s -f $(firstword $(MAKEFILE_LIST)) objdir=$(objdir)$@$(SEPARATOR) config=$(config) srcdir=$(srcdir)$@$(SEPARATOR) to_keep=$(to_keep) print 2>/dev/null
 
 .PHONY : core
+.NOTPARALLEL :
