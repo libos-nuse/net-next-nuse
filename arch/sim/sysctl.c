@@ -153,6 +153,12 @@ int pipe_proc_fn(struct ctl_table *table, int write, void __user *buf,
   return -1;
 }
 
+int pdflush_proc_obsolete(struct ctl_table *table, int write,
+                          void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+  return nr_pdflush_threads;
+}
+
 #include <linux/fs.h>
 
 /**

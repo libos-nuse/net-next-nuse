@@ -75,7 +75,8 @@ static int flush_entry (struct workqueue_struct *wq, struct list_head *prev)
     {
       active = 1;
       sim_task_wakeup (workqueue_task (wq));
-      sim_task_wait ();
+      // XXX: should wait for completion? but this will block and init won't return..
+      // sim_task_wait ();
     }
 
   return active;
@@ -86,7 +87,7 @@ void delayed_work_timer_fn(unsigned long data)
   struct delayed_work *dwork = (struct delayed_work *)data;
   struct work_struct *work = &dwork->work;
 
-  schedule_work (work);
+  queue_work (dwork->wq, work);
 }
 
 bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
@@ -121,6 +122,10 @@ bool flush_work(struct work_struct *work)
 {
   return flush_entry (system_wq, &work->entry);
 }
+void flush_workqueue(struct workqueue_struct *wq)
+{
+  flush_entry (wq, wq->list.prev);
+}
 bool cancel_work_sync(struct work_struct *work)
 {
   int retval = 0;
@@ -138,19 +143,21 @@ bool cancel_work_sync(struct work_struct *work)
     }
   return retval;
 }
-bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
+bool queue_delayed_work(struct workqueue_struct *wq,
+			struct delayed_work *dwork, unsigned long delay)
 {
   int ret = 0;
   struct timer_list *timer = &dwork->timer;
   struct work_struct *work = &dwork->work;
   if (delay == 0)
     {
-      return schedule_work (work);
+      return queue_work (wq, work);
     }
 
   if (!test_and_set_bit(WORK_STRUCT_PENDING, work_data_bits(work)))
     {
       sim_assert (!timer_pending (timer));
+      dwork->wq = wq;
       /* This stores cwq for the moment, for the timer_fn */
       timer->expires = jiffies + delay;
       timer->data = (unsigned long)dwork;
@@ -160,6 +167,28 @@ bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
     }
   return ret;
 }
+bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
+{
+  return queue_delayed_work(system_wq, dwork, delay);
+}
+bool mod_delayed_work_on(int cpu, struct workqueue_struct *wq,
+			 struct delayed_work *dwork, unsigned long delay)
+{
+  del_timer (&dwork->timer);
+  return queue_delayed_work(wq, dwork, delay);
+}
+bool mod_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
+                      unsigned long delay)
+{
+  return mod_delayed_work_on (WORK_CPU_UNBOUND, wq, dwork, delay);
+}
+bool cancel_delayed_work(struct delayed_work *dwork)
+{
+  del_timer (&dwork->timer);
+  cancel_work_sync (&dwork->work);
+  return true;
+}
+
 struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 					       unsigned int flags,
 					       int max_active,

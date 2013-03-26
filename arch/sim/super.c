@@ -134,6 +134,8 @@ void deactivate_locked_super(struct super_block *s)
 	}
 }
 
+/* from fs/super.c */
+DEFINE_SPINLOCK(sb_lock);
 /**
  *	sget	-	find or create a superblock
  *	@type:	filesystem type superblock should belong to

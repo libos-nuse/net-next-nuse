@@ -7,9 +7,11 @@
 #include <linux/backing-dev.h>
 #include <linux/pagemap.h>
 #include <linux/user_namespace.h>
+#include <linux/lglock.h>
 
 #include "sim-assert.h"
 
+DEFINE_BRLOCK(vfsmount_lock);
 struct super_block;
 
 struct backing_dev_info default_backing_dev_info = {

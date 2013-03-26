@@ -7,6 +7,7 @@
 #include <linux/utsname.h>
 #include <linux/binfmts.h>
 #include <linux/init_task.h>
+#include <linux/sched/rt.h>
 #include "sim-assert.h"
 #include "sim.h"
 #include <stdarg.h>
@@ -54,6 +55,15 @@ int overflowgid = 0;
 int overflowuid = 0;
 int fs_overflowgid = 0;
 int fs_overflowuid = 0;
+
+/* from kobject_uevent.c */
+char uevent_helper[UEVENT_HELPER_PATH_LEN] = "dummy-uevent";
+/* from ksysfs.c */
+int rcu_expedited;
+/* from rt.c */
+int sched_rr_timeslice = RR_TIMESLICE;
+/* from main.c */
+bool initcall_debug;
 
 unsigned long __raw_local_save_flags(void)
 {
@@ -296,3 +306,19 @@ void add_taint(unsigned flag, enum lockdep_ok lockdep_ok)
 {}
 struct pid *cad_pid = 0;
 
+void add_device_randomness(const void *buf, unsigned int size)
+{
+  return;
+}
+
+int kobject_uevent(struct kobject *kobj, enum kobject_action action)
+{
+  return 0;
+}
+
+int sched_rr_handler(struct ctl_table *table, int write,
+                     void __user *buffer, size_t *lenp,
+                     loff_t *ppos)
+{
+  return 0;
+}

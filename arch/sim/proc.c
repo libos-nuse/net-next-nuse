@@ -94,4 +94,8 @@ struct proc_dir_entry *proc_mkdir(const char *name,
   return proc_create_entry (name, S_IRUGO | S_IXUGO, parent);
 }
 
-
+int proc_alloc_inum(unsigned int *inum)
+{
+  *inum = 1;
+  return 0;
+}
