@@ -83,13 +83,14 @@
        </source>
        <!-- note: iputils does not have 'make install' -->
        <build type="inline"  classname="IputilsModuleBuild">
+         <attribute name="patch" value="$SRCDIR/../dce/myscripts/ns-3-dce-quagga/utils/iputils-ping6.patch"/>
 	 <attribute name="supported_os" value="linux;linux2"/>
 	 <code>class IputilsModuleBuild(InlineModuleBuild):
     def __init__(self):
         InlineModuleBuild.__init__(self)
     def build(self, env, jobs):
-           env.run(['patch', '-p1', '-f', '-i', env.srcdir + '/../dce/myscripts/ns-3-dce-quagga/utils/iputils-ping6.patch'],
-           directory=env.srcdir)
+           if self.attribute('patch').value != '':
+               self.threat_patch(env)
            env.run(['make', 'CFLAGS=-fpic', 'CFLAGS+=-D_GNU_SOURCE', 'CFLAGS+=-g',
            'CFLAGS+=-Wstrict-prototypes', 'CFLAGS+=-Wall', 'LDFLAGS=-pie', 
            'ping', 'ping6', '-j', str(jobs)],
