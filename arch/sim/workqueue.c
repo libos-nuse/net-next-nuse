@@ -245,6 +245,9 @@ err:
 }
 
 struct workqueue_struct *system_wq __read_mostly;
+/* from linux/workqueue.h */
+#define system_nrt_wq			__system_nrt_wq()
+
 static int __init init_workqueues(void)
 {
   system_wq = alloc_workqueue("events", 0, 0);
