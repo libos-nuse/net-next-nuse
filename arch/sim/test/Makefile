@@ -7,7 +7,7 @@ bake:
 testbin: bake
 	@mkdir -p buildtop/build/bin_dce
 	cd buildtop ; \
-	../bake/bake.py configure -c ../bakeconf.xml -e dce-umip ; \
+	../bake/bake.py configure -e dce-umip-inkernel ; \
 	../bake/bake.py download ; \
 	../bake/bake.py update ; \
 	../bake/bake.py build 
