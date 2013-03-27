@@ -74,14 +74,18 @@ fs/_to_keep=read_write.o libfs.o namei.o
 fs/proc/_to_keep=proc_sysctl.o
 
 
-$(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config
-	-for i in 1; do \
+quiet_cmd_objsmk = OBJS-MK   $@
+      cmd_objsmk = \
+	for i in 1; do \
 	$(foreach d,$(dirs), \
            $(MAKE) -i -s -f $< srcdir=$(srctree)/$(d) \
 	    objdir=$(srctree)/$(d) \
             config=$(srctree)/.config \
 	    to_keep=$(subst $(space),$(colon),$($(d)_to_keep)) print;) \
 	done > $@
+
+$(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config
+	$(call if_changed,objsmk)
 
 -include $(srctree)/.config
 
@@ -96,13 +100,21 @@ $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(SIM_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
 
+quiet_cmd_cc = CC   $@
+      cmd_cc = 	mkdir -p $(dir $@);	\
+		$(CC) $(CFLAGS) -c $^ -o $@
+quiet_cmd_linkko = KO   $@
+      cmd_linkko = $(CC) -shared -o $@ -nostdlib $^
+quiet_cmd_builtin = BUILTIN   $@
+      cmd_builtin = mkdir -p $(dir $@); if test -n "$($@)"; then for f in $($@); \
+		    do $(AR) Tcru $@ $$f; done; else $(AR) Tcru $@; fi
+
 %/builtin.o:
-	$(Q)mkdir -p $(dir $@); if test -n "$($@)"; then for f in $($@); do $(AR) Tcru $@ $$f; done; else $(AR) Tcru $@; fi
+	$(call if_changed,builtin)
 %.ko:%.o
-	$(Q)$(CC) -shared -o $@ -nostdlib $^
+	$(call if_changed,linkko)
 %.o:%.c
-	$(Q)mkdir -p $(dir $@)
-	$(Q)$(CC) $(CFLAGS) -c $^ -o $@
+	$(call if_changed,cc)
 
 library: $(KERNEL_LIB)
 modules: $(modules) 
@@ -116,16 +128,22 @@ install-dir:
 unpatch: 
 	CWD=`pwd` && cd $(srctree) && git reset --hard $(KERNEL_VERSION) && cd $$CWD && rm -f $(ARCH_DIR)/.patch.ts
 
+quiet_cmd_clean = CLEAN   $@
+      cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
+		  for f in $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean); do rm -f $$f; done 2>/dev/null ;\
+		  rm -rf $(ARCH_DIR)/linker.lds $(AUTOCONF) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null ;\
+		  $(MAKE) -C $(ARCH_DIR)/test clean
+
 ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
 archclean:
-	@for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done
-	@for f in $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean); do rm -f $$f; done 2>/dev/null
-	@rm -rf $(ARCH_DIR)/linker.lds $(AUTOCONF) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null
-	$(Q)$(MAKE) -C $(ARCH_DIR)/test clean
+	$(call if_changed,clean)
+
+quiet_cmd_linklib = LIB   $@
+      cmd_linklib = $(CC) $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@; \
+		    ln -s -f $(KERNEL_LIB) liblinux.so
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
-	$(CC) $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@
-	ln -s -f $(KERNEL_LIB) liblinux.so
+	$(call if_changed,linklib)
 
 test:
 	$(MAKE) -C $(ARCH_DIR)/test
