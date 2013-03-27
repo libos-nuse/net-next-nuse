@@ -18,9 +18,9 @@ struct kmem_cache *names_cachep __read_mostly;
 struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 {
 	struct dentry *dentry;
-	char *dname;
+	unsigned char *dname;
 
-	dentry =	dentry =  kmalloc(sizeof (struct dentry), GFP_KERNEL); //  kmem_cache_alloc(dentry_cache, GFP_KERNEL);
+	dentry = kmalloc(sizeof (struct dentry), GFP_KERNEL); //  kmem_cache_alloc(dentry_cache, GFP_KERNEL);
 	if (!dentry)
 		return NULL;
 
@@ -52,7 +52,7 @@ struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 	INIT_HLIST_BL_NODE(&dentry->d_hash);
 	INIT_LIST_HEAD(&dentry->d_lru);
 	INIT_LIST_HEAD(&dentry->d_subdirs);
-	INIT_LIST_HEAD(&dentry->d_alias);
+	INIT_HLIST_NODE(&dentry->d_alias);
 	INIT_LIST_HEAD(&dentry->d_u.d_child);
 	d_set_d_op(dentry, dentry->d_sb->s_d_op);
 

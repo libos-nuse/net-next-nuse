@@ -29,7 +29,7 @@ CFLAGS+= \
  $(opt_$(OPT)) -g3 -D__KERNEL__ -Wall -Wstrict-prototypes -Wno-trigraphs \
  -fno-inline -iwithprefix $(srctree)/include -DKBUILD_BASENAME=\"clnt\" \
  -fno-strict-aliasing -fno-common -fno-delete-null-pointer-checks \
- -fno-stack-protector \
+ -fno-stack-protector -Wno-unused -Wno-pointer-sign \
  -DKBUILD_MODNAME=\"nsc\" -DMODVERSIONS -DEXPORT_SYMTAB \
  -include $(srctree)/include/linux/kconfig.h \
  -U__FreeBSD__ -D__linux__=1 -Dlinux=1 -D__linux=1 \

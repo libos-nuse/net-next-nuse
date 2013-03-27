@@ -14,6 +14,10 @@
 #include <sim-assert.h>
 
 
+void put_super(struct super_block *sb);
+int grab_super(struct super_block *s);
+void destroy_super(struct super_block *s);
+
 int set_anon_super(struct super_block *s, void *data)
 {
 	  return 0;

@@ -5,6 +5,9 @@
 
 int dmesg_restrict = 1;
 
+/* from lib/vsprintf.c */
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list args);
+
 int printk(const char * fmt, ...)
 {
   va_list args;

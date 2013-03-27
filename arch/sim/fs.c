@@ -65,7 +65,7 @@ struct vfsmount *kern_mount_data(struct file_system_type *type, void *data)
 	if (!type)
 		return ERR_PTR(-ENODEV);
 	int flags = MS_KERNMOUNT;
-	char *name = type->name;
+	char *name = (char *)type->name;
 	if (flags & MS_KERNMOUNT)
 		mnt->mnt.mnt_flags = MNT_INTERNAL;
 

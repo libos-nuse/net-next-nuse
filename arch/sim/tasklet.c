@@ -17,7 +17,7 @@ void tasklet_kill(struct tasklet_struct *t)
   // theoretically, called from user context
   while (test_and_set_bit(TASKLET_STATE_SCHED, &t->state)) {
     do {
-      sim_current_yield ();
+      sim_task_yield ();
     } while (test_bit(TASKLET_STATE_SCHED, &t->state));
   }
   clear_bit(TASKLET_STATE_SCHED, &t->state);

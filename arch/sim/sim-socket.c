@@ -178,6 +178,7 @@ int sim_sock_getsockopt (struct SimSocket *socket, int level, int optname,
     err = sock->ops->getsockopt(sock, level, optname, optval, optlen);
   return err;
 }
+#ifdef NO_ONE_IS_USING_OMG
 // Wake Up DCE Waiter
 int sim_wake_function(wait_queue_t *wait, unsigned mode, int flags, void *key)
 {
@@ -210,6 +211,7 @@ void sim_sock_freepoll (struct SimSocket *socket, void *wait)
   remove_wait_queue (&sock->sk->sk_wq->wait, wait);
   sim_free (wait);
 }
+#endif  /* NO_ONE_IS_USING_OMG */
 
 int sim_sock_canrecv (struct SimSocket *socket)
 {

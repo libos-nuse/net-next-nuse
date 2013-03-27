@@ -293,7 +293,7 @@ int send_sigurg(struct fown_struct *fown)
 }
 int send_sig(int signal, struct task_struct *task, int x)
 {
-  sim_signal_raised (task, signal);
+  sim_signal_raised ((struct SimTask *)task, signal);
   //sim_assert (false);
   return 0;
 }

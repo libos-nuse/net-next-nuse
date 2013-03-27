@@ -47,7 +47,7 @@ proc_create_entry(const char *name,
   child->parent = parent;
   if (parent == 0)
     {
-      parent = &proc_root;
+      parent = proc_root;
     }
   child->next = parent->subdir;
   child->mode = mode;

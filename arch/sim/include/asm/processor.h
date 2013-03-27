@@ -4,6 +4,7 @@
 struct thread_struct {};
 
 #define cpu_relax() 
+#define KSTK_ESP(tsk)	(0)
 
 void *current_text_addr(void);
 
