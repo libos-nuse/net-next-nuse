@@ -109,8 +109,8 @@ extern void sim_proc_net_initialize(void);
 extern int devices_init (void);
 extern void idr_init_cache (void);
 extern void rcu_init (void);
-extern void rcu_enter_nohz (void);
-extern void rcu_exit_nohz (void);
+extern void rcu_idle_enter (void);
+extern void rcu_idle_exit (void);
 
 static struct SimKernel *g_kernel;
 
@@ -338,9 +338,9 @@ int sim_task_wakeup (struct SimTask *task)
 }
 void sim_task_yield (void)
 {
-  rcu_enter_nohz ();
+  rcu_idle_enter ();
   g_imported.task_yield (g_kernel);
-  rcu_exit_nohz ();
+  rcu_idle_exit ();
   sim_update_jiffies ();
 }
 
