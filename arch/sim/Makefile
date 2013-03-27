@@ -97,12 +97,12 @@ KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(SIM_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
 
 %/builtin.o:
-	mkdir -p $(dir $@); if test -n "$($@)"; then for f in $($@); do $(AR) Tcru $@ $$f; done; else $(AR) Tcru $@; fi
+	$(Q)mkdir -p $(dir $@); if test -n "$($@)"; then for f in $($@); do $(AR) Tcru $@ $$f; done; else $(AR) Tcru $@; fi
 %.ko:%.o
-	$(CC) -shared -o $@ -nostdlib $^
+	$(Q)$(CC) -shared -o $@ -nostdlib $^
 %.o:%.c
-	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $^ -o $@
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(CFLAGS) -c $^ -o $@
 
 library: $(KERNEL_LIB)
 modules: $(modules) 
@@ -121,7 +121,7 @@ archclean:
 	@for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done
 	@for f in $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean); do rm -f $$f; done 2>/dev/null
 	@rm -rf $(ARCH_DIR)/linker.lds $(AUTOCONF) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null
-	@$(MAKE) -C $(ARCH_DIR)/test clean
+	$(Q)$(MAKE) -C $(ARCH_DIR)/test clean
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(CC) $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@
