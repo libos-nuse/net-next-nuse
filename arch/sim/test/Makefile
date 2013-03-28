@@ -1,3 +1,4 @@
+ADD_PARAM?=
 
 all: test
 
@@ -13,13 +14,13 @@ testbin: bake
 	../bake/bake.py build 
 
 test:
-	@./test.sh
+	@./test.sh ADD_PARAM=$(ADD_PARAM)
 
 test-valgrind:
-	@./test.sh -g
+	@./test.sh -g ADD_PARAM=$(ADD_PARAM)
 
 test-fault-injection:
-	@./test.sh -f
+	@./test.sh -f ADD_PARAM=$(ADD_PARAM)
 
 clean:
 #	@rm -rf buildtop
