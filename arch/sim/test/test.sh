@@ -16,5 +16,5 @@ fi
 # FIXME
 export NS_ATTRIBUTE_DEFAULT='ns3::DceManagerHelper::LoaderFactory=ns3::DlmLoaderFactory[];ns3::TaskManager::FiberManagerType=UcontextFiberManager' 
 
-cd buildtop/source/dce
+cd buildtop/source/ns-3-dce
 LD_LIBRARY_PATH=${srctree} ./test.py -z test-runner-vdl -n ${VALGRIND} ${FAULT_INJECTION} ${VERBOSE} ${ADD_PARAM}
