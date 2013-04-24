@@ -7,7 +7,7 @@ bake:
 
 check_pkgs:
 	@./bake/bake.py check | grep Bazaar | grep OK || (echo "bzr is missing" && ./bake/bake.py check)
-	@./bake/bake.py check | grep Autotools | grep OK || (echo "autotools is missing" && ./bake/bake.py check && exit 1)
+	@./bake/bake.py check | grep autoreconf | grep OK || (echo "autotools is missing" && ./bake/bake.py check && exit 1)
 
 testbin: bake check_pkgs
 	@mkdir -p buildtop/build/bin_dce
