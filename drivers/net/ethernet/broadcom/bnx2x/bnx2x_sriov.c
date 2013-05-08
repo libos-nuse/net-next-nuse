@@ -1932,20 +1932,22 @@ int bnx2x_iov_init_one(struct bnx2x *bp, int int_mode_param,
 
 	/* SRIOV can be enabled only with MSIX */
 	if (int_mode_param == BNX2X_INT_MODE_MSI ||
-	    int_mode_param == BNX2X_INT_MODE_INTX)
+	    int_mode_param == BNX2X_INT_MODE_INTX) {
 		BNX2X_ERR("Forced MSI/INTx mode is incompatible with SRIOV\n");
+		return 0;
+	}
 
 	err = -EIO;
 	/* verify ari is enabled */
 	if (!bnx2x_ari_enabled(bp->pdev)) {
-		BNX2X_ERR("ARI not supported, SRIOV can not be enabled\n");
-		return err;
+		BNX2X_ERR("ARI not supported (check pci bridge ARI forwarding), SRIOV can not be enabled\n");
+		return 0;
 	}
 
 	/* verify igu is in normal mode */
 	if (CHIP_INT_MODE_IS_BC(bp)) {
 		BNX2X_ERR("IGU not normal mode,  SRIOV can not be enabled\n");
-		return err;
+		return 0;
 	}
 
 	/* allocate the vfs database */
@@ -2386,8 +2388,8 @@ int bnx2x_iov_eq_sp_event(struct bnx2x *bp, union event_ring_elem *elem)
 		goto get_vf;
 	case EVENT_RING_OPCODE_MALICIOUS_VF:
 		abs_vfid = elem->message.data.malicious_vf_event.vf_id;
-		DP(BNX2X_MSG_IOV, "Got VF MALICIOUS notification abs_vfid=%d\n",
-		   abs_vfid);
+		DP(BNX2X_MSG_IOV, "Got VF MALICIOUS notification abs_vfid=%d err_id=0x%x\n",
+		   abs_vfid, elem->message.data.malicious_vf_event.err_id);
 		goto get_vf;
 	default:
 		return 1;
@@ -2444,8 +2446,8 @@ get_vf:
 		/* Do nothing for now */
 		break;
 	case EVENT_RING_OPCODE_MALICIOUS_VF:
-		DP(BNX2X_MSG_IOV, "got VF [%d] MALICIOUS notification\n",
-		   vf->abs_vfid);
+		DP(BNX2X_MSG_IOV, "Got VF MALICIOUS notification abs_vfid=%d error id %x\n",
+		   abs_vfid, elem->message.data.malicious_vf_event.err_id);
 		/* Do nothing for now */
 		break;
 	}
@@ -3415,14 +3417,16 @@ enum sample_bulletin_result bnx2x_sample_bulletin(struct bnx2x *bp)
 	return PFVF_BULLETIN_UPDATED;
 }
 
-void bnx2x_vf_map_doorbells(struct bnx2x *bp)
+void __iomem *bnx2x_vf_doorbells(struct bnx2x *bp)
 {
 	/* vf doorbells are embedded within the regview */
-	bp->doorbells = bp->regview + PXP_VF_ADDR_DB_START;
+	return bp->regview + PXP_VF_ADDR_DB_START;
 }
 
 int bnx2x_vf_pci_alloc(struct bnx2x *bp)
 {
+	mutex_init(&bp->vf2pf_mutex);
+
 	/* allocate vf2pf mailbox for vf to pf channel */
 	BNX2X_PCI_ALLOC(bp->vf2pf_mbox, &bp->vf2pf_mbox_mapping,
 			sizeof(struct bnx2x_vf_mbx_msg));

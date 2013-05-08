@@ -1022,7 +1022,9 @@ xfs_buf_iodone_work(
 	bool			read = !!(bp->b_flags & XBF_READ);
 
 	bp->b_flags &= ~(XBF_READ | XBF_WRITE | XBF_READ_AHEAD);
-	if (read && bp->b_ops)
+
+	/* only validate buffers that were read without errors */
+	if (read && bp->b_ops && !bp->b_error && (bp->b_flags & XBF_DONE))
 		bp->b_ops->verify_read(bp);
 
 	if (bp->b_iodone)
@@ -1333,6 +1335,12 @@ _xfs_buf_ioapply(
 	int		offset;
 	int		size;
 	int		i;
+
+	/*
+	 * Make sure we capture only current IO errors rather than stale errors
+	 * left over from previous use of the buffer (e.g. failed readahead).
+	 */
+	bp->b_error = 0;
 
 	if (bp->b_flags & XBF_WRITE) {
 		if (bp->b_flags & XBF_SYNCIO)

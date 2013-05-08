@@ -55,7 +55,7 @@
 
 #define DRV_EXTRAVERSION "-k"
 
-#define DRV_VERSION "2.2.14" DRV_EXTRAVERSION
+#define DRV_VERSION "2.3.2" DRV_EXTRAVERSION
 char e1000e_driver_name[] = "e1000e";
 const char e1000e_driver_version[] = DRV_VERSION;
 
@@ -554,7 +554,7 @@ static void e1000_receive_skb(struct e1000_adapter *adapter,
 	skb->protocol = eth_type_trans(skb, netdev);
 
 	if (staterr & E1000_RXD_STAT_VP)
-		__vlan_hwaccel_put_tag(skb, tag);
+		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), tag);
 
 	napi_gro_receive(&adapter->napi, skb);
 }
@@ -846,11 +846,16 @@ check_page:
 			}
 		}
 
-		if (!buffer_info->dma)
+		if (!buffer_info->dma) {
 			buffer_info->dma = dma_map_page(&pdev->dev,
 							buffer_info->page, 0,
 							PAGE_SIZE,
 							DMA_FROM_DEVICE);
+			if (dma_mapping_error(&pdev->dev, buffer_info->dma)) {
+				adapter->alloc_rx_buff_failed++;
+				break;
+			}
+		}
 
 		rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
 		rx_desc->read.buffer_addr = cpu_to_le64(buffer_info->dma);
@@ -2667,7 +2672,8 @@ static int e1000e_poll(struct napi_struct *napi, int weight)
 	return work_done;
 }
 
-static int e1000_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
+static int e1000_vlan_rx_add_vid(struct net_device *netdev,
+				 __be16 proto, u16 vid)
 {
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
@@ -2692,7 +2698,8 @@ static int e1000_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
 	return 0;
 }
 
-static int e1000_vlan_rx_kill_vid(struct net_device *netdev, u16 vid)
+static int e1000_vlan_rx_kill_vid(struct net_device *netdev,
+				  __be16 proto, u16 vid)
 {
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
@@ -2736,7 +2743,8 @@ static void e1000e_vlan_filter_disable(struct e1000_adapter *adapter)
 		ew32(RCTL, rctl);
 
 		if (adapter->mng_vlan_id != (u16)E1000_MNG_VLAN_NONE) {
-			e1000_vlan_rx_kill_vid(netdev, adapter->mng_vlan_id);
+			e1000_vlan_rx_kill_vid(netdev, htons(ETH_P_8021Q),
+					       adapter->mng_vlan_id);
 			adapter->mng_vlan_id = E1000_MNG_VLAN_NONE;
 		}
 	}
@@ -2797,22 +2805,22 @@ static void e1000_update_mng_vlan(struct e1000_adapter *adapter)
 	u16 old_vid = adapter->mng_vlan_id;
 
 	if (adapter->hw.mng_cookie.status & E1000_MNG_DHCP_COOKIE_STATUS_VLAN) {
-		e1000_vlan_rx_add_vid(netdev, vid);
+		e1000_vlan_rx_add_vid(netdev, htons(ETH_P_8021Q), vid);
 		adapter->mng_vlan_id = vid;
 	}
 
 	if ((old_vid != (u16)E1000_MNG_VLAN_NONE) && (vid != old_vid))
-		e1000_vlan_rx_kill_vid(netdev, old_vid);
+		e1000_vlan_rx_kill_vid(netdev, htons(ETH_P_8021Q), old_vid);
 }
 
 static void e1000_restore_vlan(struct e1000_adapter *adapter)
 {
 	u16 vid;
 
-	e1000_vlan_rx_add_vid(adapter->netdev, 0);
+	e1000_vlan_rx_add_vid(adapter->netdev, htons(ETH_P_8021Q), 0);
 
 	for_each_set_bit(vid, adapter->active_vlans, VLAN_N_VID)
-	    e1000_vlan_rx_add_vid(adapter->netdev, vid);
+	    e1000_vlan_rx_add_vid(adapter->netdev, htons(ETH_P_8021Q), vid);
 }
 
 static void e1000_init_manageability_pt(struct e1000_adapter *adapter)
@@ -3368,7 +3376,7 @@ static void e1000e_set_rx_mode(struct net_device *netdev)
 
 	ew32(RCTL, rctl);
 
-	if (netdev->features & NETIF_F_HW_VLAN_RX)
+	if (netdev->features & NETIF_F_HW_VLAN_CTAG_RX)
 		e1000e_vlan_strip_enable(adapter);
 	else
 		e1000e_vlan_strip_disable(adapter);
@@ -3875,6 +3883,38 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	/* initialize systim and reset the ns time counter */
 	e1000e_config_hwtstamp(adapter);
 
+	/* Set EEE advertisement as appropriate */
+	if (adapter->flags2 & FLAG2_HAS_EEE) {
+		s32 ret_val;
+		u16 adv_addr;
+
+		switch (hw->phy.type) {
+		case e1000_phy_82579:
+			adv_addr = I82579_EEE_ADVERTISEMENT;
+			break;
+		case e1000_phy_i217:
+			adv_addr = I217_EEE_ADVERTISEMENT;
+			break;
+		default:
+			dev_err(&adapter->pdev->dev,
+				"Invalid PHY type setting EEE advertisement\n");
+			return;
+		}
+
+		ret_val = hw->phy.ops.acquire(hw);
+		if (ret_val) {
+			dev_err(&adapter->pdev->dev,
+				"EEE advertisement - unable to acquire PHY\n");
+			return;
+		}
+
+		e1000_write_emi_reg_locked(hw, adv_addr,
+					   hw->dev_spec.ich8lan.eee_disable ?
+					   0 : adapter->eee_advert);
+
+		hw->phy.ops.release(hw);
+	}
+
 	if (!netif_running(adapter->netdev) &&
 	    !test_bit(__E1000_TESTING, &adapter->state)) {
 		e1000_power_down_phy(adapter);
@@ -3975,6 +4015,8 @@ void e1000e_down(struct e1000_adapter *adapter)
 	usleep_range(10000, 20000);
 
 	e1000_irq_disable(adapter);
+
+	napi_synchronize(&adapter->napi);
 
 	del_timer_sync(&adapter->watchdog_timer);
 	del_timer_sync(&adapter->phy_info_timer);
@@ -4332,12 +4374,13 @@ static int e1000_close(struct net_device *netdev)
 
 	pm_runtime_get_sync(&pdev->dev);
 
-	napi_disable(&adapter->napi);
-
 	if (!test_bit(__E1000_DOWN, &adapter->state)) {
 		e1000e_down(adapter);
 		e1000_free_irq(adapter);
 	}
+
+	napi_disable(&adapter->napi);
+
 	e1000_power_down_phy(adapter);
 
 	e1000e_free_tx_resources(adapter->tx_ring);
@@ -4347,7 +4390,8 @@ static int e1000_close(struct net_device *netdev)
 	 * the same ID is registered on the host OS (let 8021q kill it)
 	 */
 	if (adapter->hw.mng_cookie.status & E1000_MNG_DHCP_COOKIE_STATUS_VLAN)
-		e1000_vlan_rx_kill_vid(netdev, adapter->mng_vlan_id);
+		e1000_vlan_rx_kill_vid(netdev, htons(ETH_P_8021Q),
+				       adapter->mng_vlan_id);
 
 	/* If AMT is enabled, let the firmware know that the network
 	 * interface is now closed
@@ -6381,7 +6425,7 @@ static int e1000_set_features(struct net_device *netdev,
 	if (changed & (NETIF_F_TSO | NETIF_F_TSO6))
 		adapter->flags |= FLAG_TSO_FORCE;
 
-	if (!(changed & (NETIF_F_HW_VLAN_RX | NETIF_F_HW_VLAN_TX |
+	if (!(changed & (NETIF_F_HW_VLAN_CTAG_RX | NETIF_F_HW_VLAN_CTAG_TX |
 			 NETIF_F_RXCSUM | NETIF_F_RXHASH | NETIF_F_RXFCS |
 			 NETIF_F_RXALL)))
 		return 0;
@@ -6540,6 +6584,10 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			goto err_flashmap;
 	}
 
+	/* Set default EEE advertisement */
+	if (adapter->flags2 & FLAG2_HAS_EEE)
+		adapter->eee_advert = MDIO_EEE_100TX | MDIO_EEE_1000T;
+
 	/* construct the net_device struct */
 	netdev->netdev_ops		= &e1000e_netdev_ops;
 	e1000e_set_ethtool_ops(netdev);
@@ -6588,8 +6636,8 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	/* Set initial default active device features */
 	netdev->features = (NETIF_F_SG |
-			    NETIF_F_HW_VLAN_RX |
-			    NETIF_F_HW_VLAN_TX |
+			    NETIF_F_HW_VLAN_CTAG_RX |
+			    NETIF_F_HW_VLAN_CTAG_TX |
 			    NETIF_F_TSO |
 			    NETIF_F_TSO6 |
 			    NETIF_F_RXHASH |
@@ -6603,7 +6651,7 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	netdev->hw_features |= NETIF_F_RXALL;
 
 	if (adapter->flags & FLAG_HAS_HW_VLAN_FILTER)
-		netdev->features |= NETIF_F_HW_VLAN_FILTER;
+		netdev->features |= NETIF_F_HW_VLAN_CTAG_FILTER;
 
 	netdev->vlan_features |= (NETIF_F_SG |
 				  NETIF_F_TSO |

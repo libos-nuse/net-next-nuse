@@ -536,7 +536,7 @@ struct in_ifaddr *inet_ifa_byprefix(struct in_device *in_dev, __be32 prefix,
 	return NULL;
 }
 
-static int inet_rtm_deladdr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
+static int inet_rtm_deladdr(struct sk_buff *skb, struct nlmsghdr *nlh)
 {
 	struct net *net = sock_net(skb->sk);
 	struct nlattr *tb[IFA_MAX+1];
@@ -587,13 +587,16 @@ static void check_lifetime(struct work_struct *work)
 {
 	unsigned long now, next, next_sec, next_sched;
 	struct in_ifaddr *ifa;
+	struct hlist_node *n;
 	int i;
 
 	now = jiffies;
 	next = round_jiffies_up(now + ADDR_CHECK_FREQUENCY);
 
-	rcu_read_lock();
 	for (i = 0; i < IN4_ADDR_HSIZE; i++) {
+		bool change_needed = false;
+
+		rcu_read_lock();
 		hlist_for_each_entry_rcu(ifa, &inet_addr_lst[i], hash) {
 			unsigned long age;
 
@@ -606,16 +609,7 @@ static void check_lifetime(struct work_struct *work)
 
 			if (ifa->ifa_valid_lft != INFINITY_LIFE_TIME &&
 			    age >= ifa->ifa_valid_lft) {
-				struct in_ifaddr **ifap ;
-
-				rtnl_lock();
-				for (ifap = &ifa->ifa_dev->ifa_list;
-				     *ifap != NULL; ifap = &ifa->ifa_next) {
-					if (*ifap == ifa)
-						inet_del_ifa(ifa->ifa_dev,
-							     ifap, 1);
-				}
-				rtnl_unlock();
+				change_needed = true;
 			} else if (ifa->ifa_preferred_lft ==
 				   INFINITY_LIFE_TIME) {
 				continue;
@@ -625,10 +619,8 @@ static void check_lifetime(struct work_struct *work)
 					next = ifa->ifa_tstamp +
 					       ifa->ifa_valid_lft * HZ;
 
-				if (!(ifa->ifa_flags & IFA_F_DEPRECATED)) {
-					ifa->ifa_flags |= IFA_F_DEPRECATED;
-					rtmsg_ifa(RTM_NEWADDR, ifa, NULL, 0);
-				}
+				if (!(ifa->ifa_flags & IFA_F_DEPRECATED))
+					change_needed = true;
 			} else if (time_before(ifa->ifa_tstamp +
 					       ifa->ifa_preferred_lft * HZ,
 					       next)) {
@@ -636,8 +628,42 @@ static void check_lifetime(struct work_struct *work)
 				       ifa->ifa_preferred_lft * HZ;
 			}
 		}
+		rcu_read_unlock();
+		if (!change_needed)
+			continue;
+		rtnl_lock();
+		hlist_for_each_entry_safe(ifa, n, &inet_addr_lst[i], hash) {
+			unsigned long age;
+
+			if (ifa->ifa_flags & IFA_F_PERMANENT)
+				continue;
+
+			/* We try to batch several events at once. */
+			age = (now - ifa->ifa_tstamp +
+			       ADDRCONF_TIMER_FUZZ_MINUS) / HZ;
+
+			if (ifa->ifa_valid_lft != INFINITY_LIFE_TIME &&
+			    age >= ifa->ifa_valid_lft) {
+				struct in_ifaddr **ifap;
+
+				for (ifap = &ifa->ifa_dev->ifa_list;
+				     *ifap != NULL; ifap = &(*ifap)->ifa_next) {
+					if (*ifap == ifa) {
+						inet_del_ifa(ifa->ifa_dev,
+							     ifap, 1);
+						break;
+					}
+				}
+			} else if (ifa->ifa_preferred_lft !=
+				   INFINITY_LIFE_TIME &&
+				   age >= ifa->ifa_preferred_lft &&
+				   !(ifa->ifa_flags & IFA_F_DEPRECATED)) {
+				ifa->ifa_flags |= IFA_F_DEPRECATED;
+				rtmsg_ifa(RTM_NEWADDR, ifa, NULL, 0);
+			}
+		}
+		rtnl_unlock();
 	}
-	rcu_read_unlock();
 
 	next_sec = round_jiffies_up(next);
 	next_sched = next;
@@ -775,7 +801,7 @@ static struct in_ifaddr *find_matching_ifa(struct in_ifaddr *ifa)
 	return NULL;
 }
 
-static int inet_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
+static int inet_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh)
 {
 	struct net *net = sock_net(skb->sk);
 	struct in_ifaddr *ifa;
@@ -802,8 +828,12 @@ static int inet_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg
 		if (nlh->nlmsg_flags & NLM_F_EXCL ||
 		    !(nlh->nlmsg_flags & NLM_F_REPLACE))
 			return -EEXIST;
-
-		set_ifa_lifetime(ifa_existing, valid_lft, prefered_lft);
+		ifa = ifa_existing;
+		set_ifa_lifetime(ifa, valid_lft, prefered_lft);
+		cancel_delayed_work(&check_lifetime_work);
+		schedule_delayed_work(&check_lifetime_work, 0);
+		rtmsg_ifa(RTM_NEWADDR, ifa, nlh, NETLINK_CB(skb).portid);
+		blocking_notifier_call_chain(&inetaddr_chain, NETDEV_UP, ifa);
 	}
 	return 0;
 }
@@ -1499,6 +1529,8 @@ static int inet_dump_ifaddr(struct sk_buff *skb, struct netlink_callback *cb)
 		idx = 0;
 		head = &net->dev_index_head[h];
 		rcu_read_lock();
+		cb->seq = atomic_read(&net->ipv4.dev_addr_genid) ^
+			  net->dev_base_seq;
 		hlist_for_each_entry_rcu(dev, head, index_hlist) {
 			if (idx < s_idx)
 				goto cont;
@@ -1519,6 +1551,7 @@ static int inet_dump_ifaddr(struct sk_buff *skb, struct netlink_callback *cb)
 					rcu_read_unlock();
 					goto done;
 				}
+				nl_dump_check_consistent(cb, nlmsg_hdr(skb));
 			}
 cont:
 			idx++;
@@ -1730,8 +1763,7 @@ static const struct nla_policy devconf_ipv4_policy[NETCONFA_MAX+1] = {
 };
 
 static int inet_netconf_get_devconf(struct sk_buff *in_skb,
-				    struct nlmsghdr *nlh,
-				    void *arg)
+				    struct nlmsghdr *nlh)
 {
 	struct net *net = sock_net(in_skb->sk);
 	struct nlattr *tb[NETCONFA_MAX+1];
@@ -1808,6 +1840,8 @@ static int inet_netconf_dump_devconf(struct sk_buff *skb,
 		idx = 0;
 		head = &net->dev_index_head[h];
 		rcu_read_lock();
+		cb->seq = atomic_read(&net->ipv4.dev_addr_genid) ^
+			  net->dev_base_seq;
 		hlist_for_each_entry_rcu(dev, head, index_hlist) {
 			if (idx < s_idx)
 				goto cont;
@@ -1825,6 +1859,7 @@ static int inet_netconf_dump_devconf(struct sk_buff *skb,
 				rcu_read_unlock();
 				goto done;
 			}
+			nl_dump_check_consistent(cb, nlmsg_hdr(skb));
 cont:
 			idx++;
 		}

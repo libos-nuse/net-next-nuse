@@ -291,7 +291,7 @@ static void ixgbevf_receive_skb(struct ixgbevf_q_vector *q_vector,
 	u16 tag = le16_to_cpu(rx_desc->wb.upper.vlan);
 
 	if (is_vlan && test_bit(tag & VLAN_VID_MASK, adapter->active_vlans))
-		__vlan_hwaccel_put_tag(skb, tag);
+		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), tag);
 
 	if (!(adapter->flags & IXGBE_FLAG_IN_NETPOLL))
 		napi_gro_receive(&q_vector->napi, skb);
@@ -950,9 +950,17 @@ free_queue_irqs:
 		free_irq(adapter->msix_entries[vector].vector,
 			 adapter->q_vector[vector]);
 	}
-	pci_disable_msix(adapter->pdev);
-	kfree(adapter->msix_entries);
-	adapter->msix_entries = NULL;
+	/* This failure is non-recoverable - it indicates the system is
+	 * out of MSIX vector resources and the VF driver cannot run
+	 * without them.  Set the number of msix vectors to zero
+	 * indicating that not enough can be allocated.  The error
+	 * will be returned to the user indicating device open failed.
+	 * Any further attempts to force the driver to open will also
+	 * fail.  The only way to recover is to unload the driver and
+	 * reload it again.  If the system has recovered some MSIX
+	 * vectors then it may succeed.
+	 */
+	adapter->num_msix_vectors = 0;
 	return err;
 }
 
@@ -1171,7 +1179,8 @@ static void ixgbevf_configure_rx(struct ixgbevf_adapter *adapter)
 	}
 }
 
-static int ixgbevf_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
+static int ixgbevf_vlan_rx_add_vid(struct net_device *netdev,
+				   __be16 proto, u16 vid)
 {
 	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
@@ -1196,7 +1205,8 @@ static int ixgbevf_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
 	return err;
 }
 
-static int ixgbevf_vlan_rx_kill_vid(struct net_device *netdev, u16 vid)
+static int ixgbevf_vlan_rx_kill_vid(struct net_device *netdev,
+				    __be16 proto, u16 vid)
 {
 	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
@@ -1219,7 +1229,8 @@ static void ixgbevf_restore_vlan(struct ixgbevf_adapter *adapter)
 	u16 vid;
 
 	for_each_set_bit(vid, adapter->active_vlans, VLAN_N_VID)
-		ixgbevf_vlan_rx_add_vid(adapter->netdev, vid);
+		ixgbevf_vlan_rx_add_vid(adapter->netdev,
+					htons(ETH_P_8021Q), vid);
 }
 
 static int ixgbevf_write_uc_addr_list(struct net_device *netdev)
@@ -2044,6 +2055,7 @@ static int ixgbevf_sw_init(struct ixgbevf_adapter *adapter)
 {
 	struct ixgbe_hw *hw = &adapter->hw;
 	struct pci_dev *pdev = adapter->pdev;
+	struct net_device *netdev = adapter->netdev;
 	int err;
 
 	/* PCI config space info */
@@ -2063,18 +2075,26 @@ static int ixgbevf_sw_init(struct ixgbevf_adapter *adapter)
 	err = hw->mac.ops.reset_hw(hw);
 	if (err) {
 		dev_info(&pdev->dev,
-		         "PF still in reset state, assigning new address\n");
-		eth_hw_addr_random(adapter->netdev);
-		memcpy(adapter->hw.mac.addr, adapter->netdev->dev_addr,
-			adapter->netdev->addr_len);
+			 "PF still in reset state.  Is the PF interface up?\n");
 	} else {
 		err = hw->mac.ops.init_hw(hw);
 		if (err) {
 			pr_err("init_shared_code failed: %d\n", err);
 			goto out;
 		}
-		memcpy(adapter->netdev->dev_addr, adapter->hw.mac.addr,
-		       adapter->netdev->addr_len);
+		err = hw->mac.ops.get_mac_addr(hw, hw->mac.addr);
+		if (err)
+			dev_info(&pdev->dev, "Error reading MAC address\n");
+		else if (is_zero_ether_addr(adapter->hw.mac.addr))
+			dev_info(&pdev->dev,
+				 "MAC address not assigned by administrator.\n");
+		memcpy(netdev->dev_addr, hw->mac.addr, netdev->addr_len);
+	}
+
+	if (!is_valid_ether_addr(netdev->dev_addr)) {
+		dev_info(&pdev->dev, "Assigning random MAC address\n");
+		eth_hw_addr_random(netdev);
+		memcpy(hw->mac.addr, netdev->dev_addr, netdev->addr_len);
 	}
 
 	/* lock to protect mailbox accesses */
@@ -2423,9 +2443,6 @@ int ixgbevf_setup_rx_resources(struct ixgbevf_adapter *adapter,
 					   &rx_ring->dma, GFP_KERNEL);
 
 	if (!rx_ring->desc) {
-		hw_dbg(&adapter->hw,
-		       "Unable to allocate memory for "
-		       "the receive descriptor ring\n");
 		vfree(rx_ring->rx_buffer_info);
 		rx_ring->rx_buffer_info = NULL;
 		goto alloc_failed;
@@ -2578,6 +2595,15 @@ static int ixgbevf_open(struct net_device *netdev)
 	struct ixgbe_hw *hw = &adapter->hw;
 	int err;
 
+	/* A previous failure to open the device because of a lack of
+	 * available MSIX vector resources may have reset the number
+	 * of msix vectors variable to zero.  The only way to recover
+	 * is to unload/reload the driver and hope that the system has
+	 * been able to recover some MSIX vector resources.
+	 */
+	if (!adapter->num_msix_vectors)
+		return -ENOMEM;
+
 	/* disallow open during test */
 	if (test_bit(__IXGBEVF_TESTING, &adapter->state))
 		return -EBUSY;
@@ -2634,7 +2660,6 @@ static int ixgbevf_open(struct net_device *netdev)
 
 err_req_irq:
 	ixgbevf_down(adapter);
-	ixgbevf_free_irq(adapter);
 err_setup_rx:
 	ixgbevf_free_all_rx_resources(adapter);
 err_setup_tx:
@@ -3388,9 +3413,9 @@ static int ixgbevf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			   NETIF_F_RXCSUM;
 
 	netdev->features = netdev->hw_features |
-			   NETIF_F_HW_VLAN_TX |
-			   NETIF_F_HW_VLAN_RX |
-			   NETIF_F_HW_VLAN_FILTER;
+			   NETIF_F_HW_VLAN_CTAG_TX |
+			   NETIF_F_HW_VLAN_CTAG_RX |
+			   NETIF_F_HW_VLAN_CTAG_FILTER;
 
 	netdev->vlan_features |= NETIF_F_TSO;
 	netdev->vlan_features |= NETIF_F_TSO6;

@@ -713,6 +713,7 @@ void bnx2x_add_tlv(struct bnx2x *bp, void *tlvs_list, u16 offset, u16 type,
 		   u16 length);
 void bnx2x_vfpf_prep(struct bnx2x *bp, struct vfpf_first_tlv *first_tlv,
 		     u16 type, u16 length);
+void bnx2x_vfpf_finalize(struct bnx2x *bp, struct vfpf_first_tlv *first_tlv);
 void bnx2x_dp_tlv_list(struct bnx2x *bp, void *tlvs_list);
 
 bool bnx2x_tlv_supported(u16 tlvtype);
@@ -732,7 +733,7 @@ int bnx2x_vfpf_init(struct bnx2x *bp);
 void bnx2x_vfpf_close_vf(struct bnx2x *bp);
 int bnx2x_vfpf_setup_q(struct bnx2x *bp, int fp_idx);
 int bnx2x_vfpf_teardown_queue(struct bnx2x *bp, int qidx);
-int bnx2x_vfpf_set_mac(struct bnx2x *bp);
+int bnx2x_vfpf_config_mac(struct bnx2x *bp, u8 *addr, u8 vf_qid, bool set);
 int bnx2x_vfpf_set_mcast(struct net_device *dev);
 int bnx2x_vfpf_storm_rx_mode(struct bnx2x *bp);
 
@@ -751,7 +752,7 @@ static inline int bnx2x_vf_ustorm_prods_offset(struct bnx2x *bp,
 }
 
 enum sample_bulletin_result bnx2x_sample_bulletin(struct bnx2x *bp);
-void bnx2x_vf_map_doorbells(struct bnx2x *bp);
+void __iomem *bnx2x_vf_doorbells(struct bnx2x *bp);
 int bnx2x_vf_pci_alloc(struct bnx2x *bp);
 int bnx2x_enable_sriov(struct bnx2x *bp);
 void bnx2x_disable_sriov(struct bnx2x *bp);
@@ -793,7 +794,8 @@ static inline int bnx2x_vfpf_init(struct bnx2x *bp) {return 0; }
 static inline void bnx2x_vfpf_close_vf(struct bnx2x *bp) {}
 static inline int bnx2x_vfpf_setup_q(struct bnx2x *bp, int fp_idx) {return 0; }
 static inline int bnx2x_vfpf_teardown_queue(struct bnx2x *bp, int qidx) {return 0; }
-static inline int bnx2x_vfpf_set_mac(struct bnx2x *bp) {return 0; }
+static inline int bnx2x_vfpf_config_mac(struct bnx2x *bp, u8 *addr,
+					u8 vf_qid, bool set) {return 0; }
 static inline int bnx2x_vfpf_set_mcast(struct net_device *dev) {return 0; }
 static inline int bnx2x_vfpf_storm_rx_mode(struct bnx2x *bp) {return 0; }
 static inline int bnx2x_iov_nic_init(struct bnx2x *bp) {return 0; }
@@ -808,7 +810,11 @@ static inline enum sample_bulletin_result bnx2x_sample_bulletin(struct bnx2x *bp
 	return PFVF_BULLETIN_UNCHANGED;
 }
 
-static inline int bnx2x_vf_map_doorbells(struct bnx2x *bp) {return 0; }
+static inline void __iomem *bnx2x_vf_doorbells(struct bnx2x *bp)
+{
+	return NULL;
+}
+
 static inline int bnx2x_vf_pci_alloc(struct bnx2x *bp) {return 0; }
 static inline void bnx2x_pf_set_vfs_vlan(struct bnx2x *bp) {}
 static inline int bnx2x_sriov_configure(struct pci_dev *dev, int num_vfs) {return 0; }

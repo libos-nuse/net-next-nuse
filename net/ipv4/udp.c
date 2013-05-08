@@ -902,9 +902,9 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	ipc.addr = inet->inet_saddr;
 
 	ipc.oif = sk->sk_bound_dev_if;
-	err = sock_tx_timestamp(sk, &ipc.tx_flags);
-	if (err)
-		return err;
+
+	sock_tx_timestamp(sk, &ipc.tx_flags);
+
 	if (msg->msg_controllen) {
 		err = ip_cmsg_send(sock_net(sk), msg, &ipc);
 		if (err)
@@ -1131,6 +1131,8 @@ static unsigned int first_packet_length(struct sock *sk)
 	spin_lock_bh(&rcvq->lock);
 	while ((skb = skb_peek(rcvq)) != NULL &&
 		udp_lib_checksum_complete(skb)) {
+		UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_CSUMERRORS,
+				 IS_UDPLITE(sk));
 		UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
 				 IS_UDPLITE(sk));
 		atomic_inc(&sk->sk_drops);
@@ -1286,8 +1288,10 @@ out:
 
 csum_copy_err:
 	slow = lock_sock_fast(sk);
-	if (!skb_kill_datagram(sk, skb, flags))
+	if (!skb_kill_datagram(sk, skb, flags)) {
+		UDP_INC_STATS_USER(sock_net(sk), UDP_MIB_CSUMERRORS, is_udplite);
 		UDP_INC_STATS_USER(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
+	}
 	unlock_sock_fast(sk, slow);
 
 	if (noblock)
@@ -1513,7 +1517,7 @@ int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 
 	if (rcu_access_pointer(sk->sk_filter) &&
 	    udp_lib_checksum_complete(skb))
-		goto drop;
+		goto csum_error;
 
 
 	if (sk_rcvqueues_full(sk, skb, sk->sk_rcvbuf))
@@ -1533,6 +1537,8 @@ int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 
 	return rc;
 
+csum_error:
+	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_CSUMERRORS, is_udplite);
 drop:
 	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
 	atomic_inc(&sk->sk_drops);
@@ -1749,6 +1755,7 @@ csum_error:
 		       proto == IPPROTO_UDPLITE ? "Lite" : "",
 		       &saddr, ntohs(uh->source), &daddr, ntohs(uh->dest),
 		       ulen);
+	UDP_INC_STATS_BH(net, UDP_MIB_CSUMERRORS, proto == IPPROTO_UDPLITE);
 drop:
 	UDP_INC_STATS_BH(net, UDP_MIB_INERRORS, proto == IPPROTO_UDPLITE);
 	kfree_skb(skb);
@@ -1762,9 +1769,16 @@ int udp_rcv(struct sk_buff *skb)
 
 void udp_destroy_sock(struct sock *sk)
 {
+	struct udp_sock *up = udp_sk(sk);
 	bool slow = lock_sock_fast(sk);
 	udp_flush_pending_frames(sk);
 	unlock_sock_fast(sk, slow);
+	if (static_key_false(&udp_encap_needed) && up->encap_type) {
+		void (*encap_destroy)(struct sock *sk);
+		encap_destroy = ACCESS_ONCE(up->encap_destroy);
+		if (encap_destroy)
+			encap_destroy(sk);
+	}
 }
 
 /*
@@ -2086,7 +2100,7 @@ static void udp_seq_stop(struct seq_file *seq, void *v)
 
 int udp_seq_open(struct inode *inode, struct file *file)
 {
-	struct udp_seq_afinfo *afinfo = PDE(inode)->data;
+	struct udp_seq_afinfo *afinfo = PDE_DATA(inode);
 	struct udp_iter_state *s;
 	int err;
 
@@ -2297,8 +2311,10 @@ static struct sk_buff *skb_udp_tunnel_segment(struct sk_buff *skb,
 	struct sk_buff *segs = ERR_PTR(-EINVAL);
 	int mac_len = skb->mac_len;
 	int tnl_hlen = skb_inner_mac_header(skb) - skb_transport_header(skb);
-	int outer_hlen;
+	struct ethhdr *inner_eth = (struct ethhdr *)skb_inner_mac_header(skb);
+	__be16 protocol = skb->protocol;
 	netdev_features_t enc_features;
+	int outer_hlen;
 
 	if (unlikely(!pskb_may_pull(skb, tnl_hlen)))
 		goto out;
@@ -2308,6 +2324,8 @@ static struct sk_buff *skb_udp_tunnel_segment(struct sk_buff *skb,
 	skb_reset_mac_header(skb);
 	skb_set_network_header(skb, skb_inner_network_offset(skb));
 	skb->mac_len = skb_inner_network_offset(skb);
+	inner_eth = (struct ethhdr *)skb_mac_header(skb);
+	skb->protocol = inner_eth->h_proto;
 
 	/* segment inner packet. */
 	enc_features = skb->dev->hw_enc_features & netif_skb_features(skb);
@@ -2344,6 +2362,7 @@ static struct sk_buff *skb_udp_tunnel_segment(struct sk_buff *skb,
 
 		}
 		skb->ip_summed = CHECKSUM_NONE;
+		skb->protocol = protocol;
 	} while ((skb = skb->next));
 out:
 	return segs;

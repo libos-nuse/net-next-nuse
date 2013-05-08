@@ -50,13 +50,13 @@ extern int int_mode;
 		} \
 	} while (0)
 
-#define BNX2X_PCI_ALLOC(x, y, size) \
-	do { \
-		x = dma_alloc_coherent(&bp->pdev->dev, size, y, GFP_KERNEL); \
-		if (x == NULL) \
-			goto alloc_mem_err; \
-		memset((void *)x, 0, size); \
-	} while (0)
+#define BNX2X_PCI_ALLOC(x, y, size)				\
+do {								\
+	x = dma_alloc_coherent(&bp->pdev->dev, size, y,		\
+			       GFP_KERNEL | __GFP_ZERO);	\
+	if (x == NULL)						\
+		goto alloc_mem_err;				\
+} while (0)
 
 #define BNX2X_ALLOC(x, size) \
 	do { \
@@ -295,16 +295,29 @@ void bnx2x_int_disable_sync(struct bnx2x *bp, int disable_hw);
 void bnx2x_nic_init_cnic(struct bnx2x *bp);
 
 /**
- * bnx2x_nic_init - init driver internals.
+ * bnx2x_preirq_nic_init - init driver internals.
  *
  * @bp:		driver handle
  *
  * Initializes:
- *  - rings
+ *  - fastpath object
+ *  - fastpath rings
+ *  etc.
+ */
+void bnx2x_pre_irq_nic_init(struct bnx2x *bp);
+
+/**
+ * bnx2x_postirq_nic_init - init driver internals.
+ *
+ * @bp:		driver handle
+ * @load_code:	COMMON, PORT or FUNCTION
+ *
+ * Initializes:
  *  - status blocks
+ *  - slowpath rings
  *  - etc.
  */
-void bnx2x_nic_init(struct bnx2x *bp, u32 load_code);
+void bnx2x_post_irq_nic_init(struct bnx2x *bp, u32 load_code);
 /**
  * bnx2x_alloc_mem_cnic - allocate driver's memory for cnic.
  *
@@ -973,6 +986,9 @@ static inline int bnx2x_func_start(struct bnx2x *bp)
 	else /* CHIP_IS_E1X */
 		start_params->network_cos_mode = FW_WRR;
 
+	start_params->gre_tunnel_mode = IPGRE_TUNNEL;
+	start_params->gre_tunnel_rss = GRE_INNER_HEADERS_RSS;
+
 	return bnx2x_func_state_change(bp, &func_params);
 }
 
@@ -1399,4 +1415,8 @@ static inline bool bnx2x_is_valid_ether_addr(struct bnx2x *bp, u8 *addr)
  *
  */
 void bnx2x_fill_fw_str(struct bnx2x *bp, char *buf, size_t buf_len);
+
+int bnx2x_drain_tx_queues(struct bnx2x *bp);
+void bnx2x_squeeze_objects(struct bnx2x *bp);
+
 #endif /* BNX2X_CMN_H */

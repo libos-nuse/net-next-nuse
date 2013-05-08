@@ -179,6 +179,33 @@ out:
  *
  */
 
+struct sk_buff *__alloc_skb_head(gfp_t gfp_mask, int node)
+{
+	struct sk_buff *skb;
+
+	/* Get the HEAD */
+	skb = kmem_cache_alloc_node(skbuff_head_cache,
+				    gfp_mask & ~__GFP_DMA, node);
+	if (!skb)
+		goto out;
+
+	/*
+	 * Only clear those fields we need to clear, not those that we will
+	 * actually initialise below. Hence, don't put any more fields after
+	 * the tail pointer in struct sk_buff!
+	 */
+	memset(skb, 0, offsetof(struct sk_buff, tail));
+	skb->data = NULL;
+	skb->truesize = sizeof(struct sk_buff);
+	atomic_set(&skb->users, 1);
+
+#ifdef NET_SKBUFF_DATA_USES_OFFSET
+	skb->mac_header = ~0U;
+#endif
+out:
+	return skb;
+}
+
 /**
  *	__alloc_skb	-	allocate a network buffer
  *	@size: size to allocate
@@ -584,7 +611,8 @@ static void skb_release_head_state(struct sk_buff *skb)
 static void skb_release_all(struct sk_buff *skb)
 {
 	skb_release_head_state(skb);
-	skb_release_data(skb);
+	if (likely(skb->data))
+		skb_release_data(skb);
 }
 
 /**
@@ -707,6 +735,7 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 	new->tc_verd		= old->tc_verd;
 #endif
 #endif
+	new->vlan_proto		= old->vlan_proto;
 	new->vlan_tci		= old->vlan_tci;
 
 	skb_copy_secmark(new, old);
@@ -3298,12 +3327,8 @@ void skb_tstamp_tx(struct sk_buff *orig_skb,
 	if (!sk)
 		return;
 
-	skb = skb_clone(orig_skb, GFP_ATOMIC);
-	if (!skb)
-		return;
-
 	if (hwtstamps) {
-		*skb_hwtstamps(skb) =
+		*skb_hwtstamps(orig_skb) =
 			*hwtstamps;
 	} else {
 		/*
@@ -3311,8 +3336,12 @@ void skb_tstamp_tx(struct sk_buff *orig_skb,
 		 * so keep the shared tx_flags and only
 		 * store software time stamp
 		 */
-		skb->tstamp = ktime_get_real();
+		orig_skb->tstamp = ktime_get_real();
 	}
+
+	skb = skb_clone(orig_skb, GFP_ATOMIC);
+	if (!skb)
+		return;
 
 	serr = SKB_EXT_ERR(skb);
 	memset(serr, 0, sizeof(*serr));
@@ -3370,6 +3399,7 @@ bool skb_partial_csum_set(struct sk_buff *skb, u16 start, u16 off)
 	skb->ip_summed = CHECKSUM_PARTIAL;
 	skb->csum_start = skb_headroom(skb) + start;
 	skb->csum_offset = off;
+	skb_set_transport_header(skb, start);
 	return true;
 }
 EXPORT_SYMBOL_GPL(skb_partial_csum_set);

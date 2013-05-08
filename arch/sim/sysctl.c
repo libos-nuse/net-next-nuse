@@ -146,6 +146,8 @@ char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
 unsigned int pipe_max_pages =  PIPE_DEF_BUFFERS * 16;
 unsigned int pipe_max_size = 1048576;
 unsigned int pipe_min_size = PAGE_SIZE;
+unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
+unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 
 int pipe_proc_fn(struct ctl_table *table, int write, void __user *buf,
                  size_t *lenp, loff_t *ppos)

@@ -111,10 +111,10 @@
 #include <net/sock.h>
 #include <net/raw.h>
 #include <net/icmp.h>
-#include <net/ipip.h>
 #include <net/inet_common.h>
 #include <net/xfrm.h>
 #include <net/net_namespace.h>
+#include <net/secure_seq.h>
 #ifdef CONFIG_IP_MROUTE
 #include <linux/mroute.h>
 #endif
@@ -263,8 +263,10 @@ void build_ehash_secret(void)
 		get_random_bytes(&rnd, sizeof(rnd));
 	} while (rnd == 0);
 
-	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0)
+	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0) {
 		get_random_bytes(&ipv6_hash_secret, sizeof(ipv6_hash_secret));
+		net_secret_init();
+	}
 }
 EXPORT_SYMBOL(build_ehash_secret);
 
@@ -1291,6 +1293,7 @@ static struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 		       SKB_GSO_DODGY |
 		       SKB_GSO_TCP_ECN |
 		       SKB_GSO_GRE |
+		       SKB_GSO_TCPV6 |
 		       SKB_GSO_UDP_TUNNEL |
 		       0)))
 		goto out;
@@ -1334,8 +1337,7 @@ static struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 				iph->frag_off |= htons(IP_MF);
 			offset += (skb->len - skb->mac_len - iph->ihl * 4);
 		} else  {
-			if (!(iph->frag_off & htons(IP_DF)))
-				iph->id = htons(id++);
+			iph->id = htons(id++);
 		}
 		iph->tot_len = htons(skb->len - skb->mac_len);
 		iph->check = 0;

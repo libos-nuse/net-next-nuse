@@ -90,7 +90,8 @@ void delayed_work_timer_fn(unsigned long data)
   queue_work (dwork->wq, work);
 }
 
-bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
+bool queue_work_on(int cpu, struct workqueue_struct *wq,
+                   struct work_struct *work)
 {
   int ret = 0;
 
@@ -102,18 +103,6 @@ bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
   return ret;
 }
 
-/**
- * @work: work to queue
- *
- * Returns 0 if @work was already on a queue, non-zero otherwise.
- *
- * We queue the work, the caller must ensure it
- * can't go away.
- */
-bool schedule_work(struct work_struct *work)
-{
-  return queue_work(system_wq, work);
-}
 void flush_scheduled_work(void)
 {
   flush_entry (system_wq, system_wq->list.prev);
@@ -143,8 +132,8 @@ bool cancel_work_sync(struct work_struct *work)
     }
   return retval;
 }
-bool queue_delayed_work(struct workqueue_struct *wq,
-			struct delayed_work *dwork, unsigned long delay)
+bool queue_delayed_work_on(int cpu, struct workqueue_struct *wq,
+                           struct delayed_work *dwork, unsigned long delay)
 {
   int ret = 0;
   struct timer_list *timer = &dwork->timer;
@@ -167,20 +156,11 @@ bool queue_delayed_work(struct workqueue_struct *wq,
     }
   return ret;
 }
-bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
-{
-  return queue_delayed_work(system_wq, dwork, delay);
-}
 bool mod_delayed_work_on(int cpu, struct workqueue_struct *wq,
 			 struct delayed_work *dwork, unsigned long delay)
 {
   del_timer (&dwork->timer);
   return queue_delayed_work(wq, dwork, delay);
-}
-bool mod_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
-                      unsigned long delay)
-{
-  return mod_delayed_work_on (WORK_CPU_UNBOUND, wq, dwork, delay);
 }
 bool cancel_delayed_work(struct delayed_work *dwork)
 {
@@ -214,13 +194,6 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	vsnprintf(wq->name, namelen, fmt, args1);
 	va_end(args);
 	va_end(args1);
-
-	/*
-	 * Workqueues which may be used during memory reclaim should
-	 * have a rescuer to guarantee forward progress.
-	 */
-	if (flags & WQ_MEM_RECLAIM)
-		flags |= WQ_RESCUER;
 
 	max_active = max_active ?: WQ_DFL_ACTIVE;
 	/* init wq */

@@ -6,20 +6,22 @@
 #include <net/net_namespace.h>
 #include "sim-types.h"
 #include "sim-assert.h"
+#include "fs/proc/internal.h"           /* XXX */
 
+struct proc_dir_entry;
 static char proc_root_data[sizeof(struct proc_dir_entry)+4];
 
-static struct proc_dir_entry *proc_root  = (struct proc_dir_entry *) proc_root_data;
+static struct proc_dir_entry *proc_root_sim  = (struct proc_dir_entry *) proc_root_data;
 
 void sim_proc_net_initialize(void)
 {
-  proc_root->parent = proc_root;
-  strcpy ( proc_root->name , "net");
-  proc_root->mode = S_IFDIR | S_IRUGO | S_IXUGO;
-  proc_root->next = 0;
-  proc_root->subdir = 0;
-  init_net.proc_net = proc_root;
-  init_net.proc_net_stat = proc_mkdir("stat", proc_root);
+  proc_root_sim->parent = proc_root_sim;
+  strcpy ( proc_root_sim->name , "net");
+  proc_root_sim->mode = S_IFDIR | S_IRUGO | S_IXUGO;
+  proc_root_sim->next = 0;
+  proc_root_sim->subdir = 0;
+  init_net.proc_net = proc_root_sim;
+  init_net.proc_net_stat = proc_mkdir("stat", proc_root_sim);
 }
 struct proc_dir_entry *
 proc_net_fops_create(struct net *net,
@@ -47,7 +49,7 @@ proc_create_entry(const char *name,
   child->parent = parent;
   if (parent == 0)
     {
-      parent = proc_root;
+      parent = proc_root_sim;
     }
   child->next = parent->subdir;
   child->mode = mode;
@@ -81,6 +83,11 @@ void remove_proc_entry(const char *name, struct proc_dir_entry *parent)
 void proc_net_remove(struct net *net, const char *name)
 {
   remove_proc_entry(name, net->proc_net);
+}
+void proc_remove(struct proc_dir_entry *de)
+{
+  /* XXX */
+  return;
 }
 int proc_nr_files(ctl_table *table, int write,
 		  void __user *buffer, size_t *lenp, loff_t *ppos)
