@@ -280,6 +280,8 @@ static __always_inline int kmalloc_index(size_t size)
 #include <linux/slab_def.h>
 #elif defined(CONFIG_SLUB)
 #include <linux/slub_def.h>
+#elif defined(CONFIG_SIM)
+#include <asm/slab.h>
 #else
 #error "Unknown slab allocator"
 #endif
