@@ -18,6 +18,13 @@ void get_random_bytes(void *buf, int nbytes)
 void srandom32(u32 entropy)
 {}
 
+u32 prandom_u32(void)
+{
+  return sim_random ();
+}
+void prandom_seed(u32 entropy)
+{}
+
 #include <linux/sysctl.h>
 
 static int nothing;
