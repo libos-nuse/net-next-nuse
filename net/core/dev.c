@@ -1629,7 +1629,6 @@ int dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
 		return NET_RX_DROP;
 	}
 	skb->skb_iif = 0;
-	skb->dev = dev;
 	skb_dst_drop(skb);
 	skb->tstamp.tv64 = 0;
 	skb->pkt_type = PACKET_HOST;
@@ -2212,6 +2211,17 @@ __be16 skb_network_protocol(struct sk_buff *skb)
 {
 	__be16 type = skb->protocol;
 	int vlan_depth = ETH_HLEN;
+
+	/* Tunnel gso handlers can set protocol to ethernet. */
+	if (type == htons(ETH_P_TEB)) {
+		struct ethhdr *eth;
+
+		if (unlikely(!pskb_may_pull(skb, sizeof(struct ethhdr))))
+			return 0;
+
+		eth = (struct ethhdr *)skb_mac_header(skb);
+		type = eth->h_proto;
+	}
 
 	while (type == htons(ETH_P_8021Q) || type == htons(ETH_P_8021AD)) {
 		struct vlan_hdr *vh;
@@ -3054,6 +3064,46 @@ static int rps_ipi_queued(struct softnet_data *sd)
 	return 0;
 }
 
+#ifdef CONFIG_NET_FLOW_LIMIT
+int netdev_flow_limit_table_len __read_mostly = (1 << 12);
+#endif
+
+static bool skb_flow_limit(struct sk_buff *skb, unsigned int qlen)
+{
+#ifdef CONFIG_NET_FLOW_LIMIT
+	struct sd_flow_limit *fl;
+	struct softnet_data *sd;
+	unsigned int old_flow, new_flow;
+
+	if (qlen < (netdev_max_backlog >> 1))
+		return false;
+
+	sd = &__get_cpu_var(softnet_data);
+
+	rcu_read_lock();
+	fl = rcu_dereference(sd->flow_limit);
+	if (fl) {
+		new_flow = skb_get_rxhash(skb) & (fl->num_buckets - 1);
+		old_flow = fl->history[fl->history_head];
+		fl->history[fl->history_head] = new_flow;
+
+		fl->history_head++;
+		fl->history_head &= FLOW_LIMIT_HISTORY - 1;
+
+		if (likely(fl->buckets[old_flow]))
+			fl->buckets[old_flow]--;
+
+		if (++fl->buckets[new_flow] > (FLOW_LIMIT_HISTORY >> 1)) {
+			fl->count++;
+			rcu_read_unlock();
+			return true;
+		}
+	}
+	rcu_read_unlock();
+#endif
+	return false;
+}
+
 /*
  * enqueue_to_backlog is called to queue an skb to a per CPU backlog
  * queue (may be a remote CPU queue).
@@ -3063,13 +3113,15 @@ static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
 {
 	struct softnet_data *sd;
 	unsigned long flags;
+	unsigned int qlen;
 
 	sd = &per_cpu(softnet_data, cpu);
 
 	local_irq_save(flags);
 
 	rps_lock(sd);
-	if (skb_queue_len(&sd->input_pkt_queue) <= netdev_max_backlog) {
+	qlen = skb_queue_len(&sd->input_pkt_queue);
+	if (qlen <= netdev_max_backlog && !skb_flow_limit(skb, qlen)) {
 		if (skb_queue_len(&sd->input_pkt_queue)) {
 enqueue:
 			__skb_queue_tail(&sd->input_pkt_queue, skb);
@@ -4359,7 +4411,7 @@ static int __netdev_upper_dev_link(struct net_device *dev,
 	else
 		list_add_tail_rcu(&upper->list, &dev->upper_dev_list);
 	dev_hold(upper_dev);
-
+	call_netdevice_notifiers(NETDEV_CHANGEUPPER, dev);
 	return 0;
 }
 
@@ -4419,6 +4471,7 @@ void netdev_upper_dev_unlink(struct net_device *dev,
 	list_del_rcu(&upper->list);
 	dev_put(upper_dev);
 	kfree_rcu(upper, rcu);
+	call_netdevice_notifiers(NETDEV_CHANGEUPPER, dev);
 }
 EXPORT_SYMBOL(netdev_upper_dev_unlink);
 
@@ -6259,6 +6312,10 @@ static int __init net_dev_init(void)
 		sd->backlog.weight = weight_p;
 		sd->backlog.gro_list = NULL;
 		sd->backlog.gro_count = 0;
+
+#ifdef CONFIG_NET_FLOW_LIMIT
+		sd->flow_limit = NULL;
+#endif
 	}
 
 	dev_boot_phase = 0;

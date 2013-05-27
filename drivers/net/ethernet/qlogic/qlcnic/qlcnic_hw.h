@@ -87,6 +87,7 @@ enum qlcnic_regs {
 #define	QLCNIC_CMD_CONFIG_VPORT			0x32
 #define QLCNIC_CMD_GET_MAC_STATS		0x37
 #define QLCNIC_CMD_SET_DRV_VER			0x38
+#define QLCNIC_CMD_GET_LED_STATUS		0x3C
 #define QLCNIC_CMD_CONFIGURE_RSS		0x41
 #define QLCNIC_CMD_CONFIG_INTR_COAL		0x43
 #define QLCNIC_CMD_CONFIGURE_LED		0x44
@@ -134,7 +135,7 @@ struct qlcnic_mailbox_metadata {
 
 #define QLCNIC_SET_OWNER        1
 #define QLCNIC_CLR_OWNER        0
-#define QLCNIC_MBX_TIMEOUT      10000
+#define QLCNIC_MBX_TIMEOUT      5000
 
 #define QLCNIC_MBX_RSP_OK	1
 #define QLCNIC_MBX_PORT_RSP_OK	0x1a

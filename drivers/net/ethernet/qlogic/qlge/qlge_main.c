@@ -1106,6 +1106,7 @@ static int ql_get_next_chunk(struct ql_adapter *qdev, struct rx_ring *rx_ring,
 		if (pci_dma_mapping_error(qdev->pdev, map)) {
 			__free_pages(rx_ring->pg_chunk.page,
 					qdev->lbq_buf_order);
+			rx_ring->pg_chunk.page = NULL;
 			netif_err(qdev, drv, qdev->ndev,
 				  "PCI mapping failed.\n");
 			return -ENOMEM;
@@ -2776,6 +2777,12 @@ static void ql_free_lbq_buffers(struct ql_adapter *qdev, struct rx_ring *rx_ring
 		if (++curr_idx == rx_ring->lbq_len)
 			curr_idx = 0;
 
+	}
+	if (rx_ring->pg_chunk.page) {
+		pci_unmap_page(qdev->pdev, rx_ring->pg_chunk.map,
+			ql_lbq_block_size(qdev), PCI_DMA_FROMDEVICE);
+		put_page(rx_ring->pg_chunk.page);
+		rx_ring->pg_chunk.page = NULL;
 	}
 }
 
@@ -4938,15 +4945,4 @@ static struct pci_driver qlge_driver = {
 	.err_handler = &qlge_err_handler
 };
 
-static int __init qlge_init_module(void)
-{
-	return pci_register_driver(&qlge_driver);
-}
-
-static void __exit qlge_exit(void)
-{
-	pci_unregister_driver(&qlge_driver);
-}
-
-module_init(qlge_init_module);
-module_exit(qlge_exit);
+module_pci_driver(qlge_driver);

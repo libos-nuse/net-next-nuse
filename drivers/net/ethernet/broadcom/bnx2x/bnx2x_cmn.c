@@ -2183,6 +2183,8 @@ alloc_mem_err:
 /* send load request to mcp and analyze response */
 static int bnx2x_nic_load_request(struct bnx2x *bp, u32 *load_code)
 {
+	u32 param;
+
 	/* init fw_seq */
 	bp->fw_seq =
 		(SHMEM_RD(bp, func_mb[BP_FW_MB_IDX(bp)].drv_mb_header) &
@@ -2195,9 +2197,13 @@ static int bnx2x_nic_load_request(struct bnx2x *bp, u32 *load_code)
 		 DRV_PULSE_SEQ_MASK);
 	BNX2X_DEV_INFO("drv_pulse 0x%x\n", bp->fw_drv_pulse_wr_seq);
 
+	param = DRV_MSG_CODE_LOAD_REQ_WITH_LFA;
+
+	if (IS_MF_SD(bp) && bnx2x_port_after_undi(bp))
+		param |= DRV_MSG_CODE_LOAD_REQ_FORCE_LFA;
+
 	/* load request */
-	(*load_code) = bnx2x_fw_command(bp, DRV_MSG_CODE_LOAD_REQ,
-					DRV_MSG_CODE_LOAD_REQ_WITH_LFA);
+	(*load_code) = bnx2x_fw_command(bp, DRV_MSG_CODE_LOAD_REQ, param);
 
 	/* if mcp fails to respond we must abort */
 	if (!(*load_code)) {
@@ -3313,6 +3319,7 @@ static void bnx2x_set_pbd_gso_e2(struct sk_buff *skb, u32 *parsing_data,
  */
 static void bnx2x_set_pbd_gso(struct sk_buff *skb,
 			      struct eth_tx_parse_bd_e1x *pbd,
+			      struct eth_tx_start_bd *tx_start_bd,
 			      u32 xmit_type)
 {
 	pbd->lso_mss = cpu_to_le16(skb_shinfo(skb)->gso_size);
@@ -3326,11 +3333,14 @@ static void bnx2x_set_pbd_gso(struct sk_buff *skb,
 						   ip_hdr(skb)->daddr,
 						   0, IPPROTO_TCP, 0));
 
-	} else
+		/* GSO on 57710/57711 needs FW to calculate IP checksum */
+		tx_start_bd->bd_flags.as_bitfield |= ETH_TX_BD_FLAGS_IP_CSUM;
+	} else {
 		pbd->tcp_pseudo_csum =
 			bswab16(~csum_ipv6_magic(&ipv6_hdr(skb)->saddr,
 						 &ipv6_hdr(skb)->daddr,
 						 0, IPPROTO_TCP, 0));
+	}
 
 	pbd->global_data |=
 		cpu_to_le16(ETH_TX_PARSE_BD_E1X_PSEUDO_CS_WITHOUT_LEN);
@@ -3814,7 +3824,8 @@ netdev_tx_t bnx2x_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			bnx2x_set_pbd_gso_e2(skb, &pbd_e2_parsing_data,
 					     xmit_type);
 		else
-			bnx2x_set_pbd_gso(skb, pbd_e1x, xmit_type);
+			bnx2x_set_pbd_gso(skb, pbd_e1x, tx_start_bd,
+					  xmit_type);
 	}
 
 	/* Set the PBD's parsing_data field if not zero
@@ -4599,6 +4610,7 @@ int bnx2x_set_features(struct net_device *dev, netdev_features_t features)
 {
 	struct bnx2x *bp = netdev_priv(dev);
 	u32 flags = bp->flags;
+	u32 changes;
 	bool bnx2x_reload = false;
 
 	if (features & NETIF_F_LRO)
@@ -4623,10 +4635,16 @@ int bnx2x_set_features(struct net_device *dev, netdev_features_t features)
 		}
 	}
 
-	if (flags ^ bp->flags) {
-		bp->flags = flags;
+	changes = flags ^ bp->flags;
+
+	/* if GRO is changed while LRO is enabled, dont force a reload */
+	if ((changes & GRO_ENABLE_FLAG) && (flags & TPA_ENABLE_FLAG))
+		changes &= ~GRO_ENABLE_FLAG;
+
+	if (changes)
 		bnx2x_reload = true;
-	}
+
+	bp->flags = flags;
 
 	if (bnx2x_reload) {
 		if (bp->recovery_state == BNX2X_RECOVERY_DONE)

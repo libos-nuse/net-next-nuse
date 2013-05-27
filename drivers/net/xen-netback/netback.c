@@ -47,6 +47,13 @@
 #include <asm/xen/hypercall.h>
 #include <asm/xen/page.h>
 
+/* Provide an option to disable split event channels at load time as
+ * event channels are limited resource. Split event channels are
+ * enabled by default.
+ */
+bool separate_tx_rx_irq = 1;
+module_param(separate_tx_rx_irq, bool, 0644);
+
 /*
  * This is the maximum slots a skb can have. If a guest sends a skb
  * which exceeds this limit it is considered malicious.
@@ -662,7 +669,7 @@ static void xen_netbk_rx_action(struct xen_netbk *netbk)
 {
 	struct xenvif *vif = NULL, *tmp;
 	s8 status;
-	u16 irq, flags;
+	u16 flags;
 	struct xen_netif_rx_response *resp;
 	struct sk_buff_head rxq;
 	struct sk_buff *skb;
@@ -771,7 +778,6 @@ static void xen_netbk_rx_action(struct xen_netbk *netbk)
 					 sco->meta_slots_used);
 
 		RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(&vif->rx, ret);
-		irq = vif->irq;
 		if (ret && list_empty(&vif->notify_list))
 			list_add_tail(&vif->notify_list, &notify);
 
@@ -783,7 +789,7 @@ static void xen_netbk_rx_action(struct xen_netbk *netbk)
 	}
 
 	list_for_each_entry_safe(vif, tmp, &notify, notify_list) {
-		notify_remote_via_irq(vif->irq);
+		notify_remote_via_irq(vif->rx_irq);
 		list_del_init(&vif->notify_list);
 	}
 
@@ -1762,7 +1768,7 @@ static void make_tx_response(struct xenvif *vif,
 	vif->tx.rsp_prod_pvt = ++i;
 	RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(&vif->tx, notify);
 	if (notify)
-		notify_remote_via_irq(vif->irq);
+		notify_remote_via_irq(vif->tx_irq);
 }
 
 static struct xen_netif_rx_response *make_rx_response(struct xenvif *vif,
@@ -1939,10 +1945,6 @@ static int __init netback_init(void)
 failed_init:
 	while (--group >= 0) {
 		struct xen_netbk *netbk = &xen_netbk[group];
-		for (i = 0; i < MAX_PENDING_REQS; i++) {
-			if (netbk->mmap_pages[i])
-				__free_page(netbk->mmap_pages[i]);
-		}
 		del_timer(&netbk->net_timer);
 		kthread_stop(netbk->task);
 	}
@@ -1952,6 +1954,26 @@ failed_init:
 }
 
 module_init(netback_init);
+
+static void __exit netback_fini(void)
+{
+	int i, j;
+
+	xenvif_xenbus_fini();
+
+	for (i = 0; i < xen_netbk_group_nr; i++) {
+		struct xen_netbk *netbk = &xen_netbk[i];
+		del_timer_sync(&netbk->net_timer);
+		kthread_stop(netbk->task);
+		for (j = 0; j < MAX_PENDING_REQS; j++) {
+			if (netbk->mmap_pages[i])
+				__free_page(netbk->mmap_pages[i]);
+		}
+	}
+
+	vfree(xen_netbk);
+}
+module_exit(netback_fini);
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_ALIAS("xen-backend:vif");

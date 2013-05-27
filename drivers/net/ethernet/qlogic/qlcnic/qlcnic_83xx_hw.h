@@ -314,6 +314,7 @@ struct qlc_83xx_idc {
 	u8		vnic_state;
 	u8		vnic_wait_limit;
 	u8		quiesce_req;
+	u8		delay_reset;
 	char		**name;
 };
 
@@ -603,7 +604,7 @@ int qlcnic_83xx_get_vnic_pf_info(struct qlcnic_adapter *, struct qlcnic_info *);
 
 void qlcnic_83xx_get_minidump_template(struct qlcnic_adapter *);
 void qlcnic_83xx_get_stats(struct qlcnic_adapter *adapter, u64 *data);
-int qlcnic_83xx_get_settings(struct qlcnic_adapter *);
+int qlcnic_83xx_get_settings(struct qlcnic_adapter *, struct ethtool_cmd *);
 int qlcnic_83xx_set_settings(struct qlcnic_adapter *, struct ethtool_cmd *);
 void qlcnic_83xx_get_pauseparam(struct qlcnic_adapter *,
 				struct ethtool_pauseparam *);
@@ -620,7 +621,7 @@ int qlcnic_83xx_flash_test(struct qlcnic_adapter *);
 int qlcnic_83xx_enable_flash_write(struct qlcnic_adapter *);
 int qlcnic_83xx_disable_flash_write(struct qlcnic_adapter *);
 u32 qlcnic_83xx_mac_rcode(struct qlcnic_adapter *);
-u32 qlcnic_83xx_mbx_poll(struct qlcnic_adapter *);
+u32 qlcnic_83xx_mbx_poll(struct qlcnic_adapter *, u32 *);
 void qlcnic_83xx_enable_mbx_poll(struct qlcnic_adapter *);
 void qlcnic_83xx_disable_mbx_poll(struct qlcnic_adapter *);
 #endif

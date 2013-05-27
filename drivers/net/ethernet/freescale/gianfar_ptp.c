@@ -519,11 +519,12 @@ static int gianfar_ptp_probe(struct platform_device *dev)
 	}
 	gfar_phc_index = ptp_clock_index(etsects->clock);
 
-	dev_set_drvdata(&dev->dev, etsects);
+	platform_set_drvdata(dev, etsects);
 
 	return 0;
 
 no_clock:
+	iounmap(etsects->regs);
 no_ioremap:
 	release_resource(etsects->rsrc);
 no_resource:
@@ -536,7 +537,7 @@ no_memory:
 
 static int gianfar_ptp_remove(struct platform_device *dev)
 {
-	struct etsects *etsects = dev_get_drvdata(&dev->dev);
+	struct etsects *etsects = platform_get_drvdata(dev);
 
 	gfar_write(&etsects->regs->tmr_temask, 0);
 	gfar_write(&etsects->regs->tmr_ctrl,   0);

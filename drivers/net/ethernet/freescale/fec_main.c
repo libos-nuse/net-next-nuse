@@ -53,7 +53,6 @@
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/of_net.h>
-#include <linux/pinctrl/consumer.h>
 #include <linux/regulator/consumer.h>
 
 #include <asm/cacheflush.h>
@@ -87,6 +86,8 @@
 #define FEC_QUIRK_HAS_GBIT		(1 << 3)
 /* Controller has extend desc buffer */
 #define FEC_QUIRK_HAS_BUFDESC_EX	(1 << 4)
+/* Controller has hardware checksum support */
+#define FEC_QUIRK_HAS_CSUM		(1 << 5)
 
 static struct platform_device_id fec_devtype[] = {
 	{
@@ -105,9 +106,9 @@ static struct platform_device_id fec_devtype[] = {
 	}, {
 		.name = "imx6q-fec",
 		.driver_data = FEC_QUIRK_ENET_MAC | FEC_QUIRK_HAS_GBIT |
-				FEC_QUIRK_HAS_BUFDESC_EX,
+				FEC_QUIRK_HAS_BUFDESC_EX | FEC_QUIRK_HAS_CSUM,
 	}, {
-		.name = "mvf-fec",
+		.name = "mvf600-fec",
 		.driver_data = FEC_QUIRK_ENET_MAC,
 	}, {
 		/* sentinel */
@@ -120,7 +121,7 @@ enum imx_fec_type {
 	IMX27_FEC,	/* runs on i.mx27/35/51 */
 	IMX28_FEC,
 	IMX6Q_FEC,
-	MVF_FEC,
+	MVF600_FEC,
 };
 
 static const struct of_device_id fec_dt_ids[] = {
@@ -128,7 +129,7 @@ static const struct of_device_id fec_dt_ids[] = {
 	{ .compatible = "fsl,imx27-fec", .data = &fec_devtype[IMX27_FEC], },
 	{ .compatible = "fsl,imx28-fec", .data = &fec_devtype[IMX28_FEC], },
 	{ .compatible = "fsl,imx6q-fec", .data = &fec_devtype[IMX6Q_FEC], },
-	{ .compatible = "fsl,mvf-fec", .data = &fec_devtype[MVF_FEC], },
+	{ .compatible = "fsl,mvf600-fec", .data = &fec_devtype[MVF600_FEC], },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, fec_dt_ids);
@@ -241,7 +242,7 @@ static void *swap_buffer(void *bufaddr, int len)
 	int i;
 	unsigned int *buf = bufaddr;
 
-	for (i = 0; i < (len + 3) / 4; i++, buf++)
+	for (i = 0; i < DIV_ROUND_UP(len, 4); i++, buf++)
 		*buf = cpu_to_be32(*buf);
 
 	return bufaddr;
@@ -445,6 +446,13 @@ fec_restart(struct net_device *ndev, int duplex)
 	u32 rcntl = OPT_FRAME_SIZE | 0x04;
 	u32 ecntl = 0x2; /* ETHEREN */
 
+	if (netif_running(ndev)) {
+		netif_device_detach(ndev);
+		napi_disable(&fep->napi);
+		netif_stop_queue(ndev);
+		netif_tx_lock_bh(ndev);
+	}
+
 	/* Whack a reset.  We should wait for this. */
 	writel(1, fep->hwp + FEC_ECNTRL);
 	udelay(10);
@@ -605,6 +613,13 @@ fec_restart(struct net_device *ndev, int duplex)
 
 	/* Enable interrupts we wish to service */
 	writel(FEC_DEFAULT_IMASK, fep->hwp + FEC_IMASK);
+
+	if (netif_running(ndev)) {
+		netif_tx_unlock_bh(ndev);
+		netif_wake_queue(ndev);
+		napi_enable(&fep->napi);
+		netif_device_attach(ndev);
+	}
 }
 
 static void
@@ -644,8 +659,22 @@ fec_timeout(struct net_device *ndev)
 
 	ndev->stats.tx_errors++;
 
-	fec_restart(ndev, fep->full_duplex);
-	netif_wake_queue(ndev);
+	fep->delay_work.timeout = true;
+	schedule_delayed_work(&(fep->delay_work.delay_work), 0);
+}
+
+static void fec_enet_work(struct work_struct *work)
+{
+	struct fec_enet_private *fep =
+		container_of(work,
+			     struct fec_enet_private,
+			     delay_work.delay_work.work);
+
+	if (fep->delay_work.timeout) {
+		fep->delay_work.timeout = false;
+		fec_restart(fep->netdev, fep->full_duplex);
+		netif_wake_queue(fep->netdev);
+	}
 }
 
 static void
@@ -1024,16 +1053,12 @@ static void fec_enet_adjust_link(struct net_device *ndev)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
 	struct phy_device *phy_dev = fep->phy_dev;
-	unsigned long flags;
-
 	int status_change = 0;
-
-	spin_lock_irqsave(&fep->hw_lock, flags);
 
 	/* Prevent a state halted on mii error */
 	if (fep->mii_timeout && phy_dev->state == PHY_HALTED) {
 		phy_dev->state = PHY_RESUMING;
-		goto spin_unlock;
+		return;
 	}
 
 	if (phy_dev->link) {
@@ -1060,9 +1085,6 @@ static void fec_enet_adjust_link(struct net_device *ndev)
 			status_change = 1;
 		}
 	}
-
-spin_unlock:
-	spin_unlock_irqrestore(&fep->hw_lock, flags);
 
 	if (status_change)
 		phy_print_status(phy_dev);
@@ -1723,6 +1745,8 @@ static const struct net_device_ops fec_netdev_ops = {
 static int fec_enet_init(struct net_device *ndev)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
+	const struct platform_device_id *id_entry =
+				platform_get_device_id(fep->pdev);
 	struct bufdesc *cbd_base;
 
 	/* Allocate memory for buffer descriptors. */
@@ -1732,7 +1756,6 @@ static int fec_enet_init(struct net_device *ndev)
 		return -ENOMEM;
 
 	memset(cbd_base, 0, PAGE_SIZE);
-	spin_lock_init(&fep->hw_lock);
 
 	fep->netdev = ndev;
 
@@ -1755,12 +1778,14 @@ static int fec_enet_init(struct net_device *ndev)
 	writel(FEC_RX_DISABLED_IMASK, fep->hwp + FEC_IMASK);
 	netif_napi_add(ndev, &fep->napi, fec_enet_rx_napi, FEC_NAPI_WEIGHT);
 
-	/* enable hw accelerator */
-	ndev->features |= (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM
-			| NETIF_F_RXCSUM);
-	ndev->hw_features |= (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM
-			| NETIF_F_RXCSUM);
-	fep->csum_flags |= FLAG_RX_CSUM_ENABLED;
+	if (id_entry->driver_data & FEC_QUIRK_HAS_CSUM) {
+		/* enable hw accelerator */
+		ndev->features |= (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM
+				| NETIF_F_RXCSUM);
+		ndev->hw_features |= (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM
+				| NETIF_F_RXCSUM);
+		fep->csum_flags |= FLAG_RX_CSUM_ENABLED;
+	}
 
 	fec_restart(ndev, 0);
 
@@ -1815,7 +1840,6 @@ fec_probe(struct platform_device *pdev)
 	struct resource *r;
 	const struct of_device_id *of_id;
 	static int dev_id;
-	struct pinctrl *pinctrl;
 	struct regulator *reg_phy;
 
 	of_id = of_match_device(fec_dt_ids, &pdev->dev);
@@ -1863,12 +1887,6 @@ fec_probe(struct platform_device *pdev)
 			fep->phy_interface = PHY_INTERFACE_MODE_MII;
 	} else {
 		fep->phy_interface = ret;
-	}
-
-	pinctrl = devm_pinctrl_get_select_default(&pdev->dev);
-	if (IS_ERR(pinctrl)) {
-		ret = PTR_ERR(pinctrl);
-		goto failed_pin;
 	}
 
 	fep->clk_ipg = devm_clk_get(&pdev->dev, "ipg");
@@ -1952,6 +1970,7 @@ fec_probe(struct platform_device *pdev)
 	if (fep->bufdesc_ex && fep->ptp_clock)
 		netdev_info(ndev, "registered PHC device %d\n", fep->dev_id);
 
+	INIT_DELAYED_WORK(&(fep->delay_work.delay_work), fec_enet_work);
 	return 0;
 
 failed_register:
@@ -1969,7 +1988,6 @@ failed_regulator:
 	clk_disable_unprepare(fep->clk_ipg);
 	clk_disable_unprepare(fep->clk_enet_out);
 	clk_disable_unprepare(fep->clk_ptp);
-failed_pin:
 failed_clk:
 failed_ioremap:
 	free_netdev(ndev);
@@ -1984,6 +2002,7 @@ fec_drv_remove(struct platform_device *pdev)
 	struct fec_enet_private *fep = netdev_priv(ndev);
 	int i;
 
+	cancel_delayed_work_sync(&(fep->delay_work.delay_work));
 	unregister_netdev(ndev);
 	fec_enet_mii_remove(fep);
 	del_timer_sync(&fep->time_keep);
