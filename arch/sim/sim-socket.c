@@ -289,12 +289,14 @@ static int sim_pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
 {
   struct sim_ptable_entry *entry = (struct sim_ptable_entry *) wait->private;
 
-  if ( ((int)key) & entry->eventMask)
-    { // Filter only wanted events
-      sim_poll_event((int)key, entry->opaque);
+  // Filter only wanted events
+  if (key && !((unsigned long)key & entry->eventMask))
+    {
+      return 0;
     }
 
-  return 0;
+  sim_poll_event((int)key, entry->opaque);
+  return 1;
 }
 
 static void sim_pollwait(struct file *filp, wait_queue_head_t *wait_address, poll_table *p)
