@@ -12,8 +12,11 @@ struct kmem_cache
   void (*ctor) (void *);
 };
 
-void *kmalloc(size_t size, gfp_t flags);
 void *__kmalloc(size_t size, gfp_t flags);
 void *kmem_cache_alloc(struct kmem_cache *, gfp_t);
+static __always_inline void *kmalloc(size_t size, gfp_t flags)
+{
+  return __kmalloc (size, flags);
+}
 
 #endif /* _ASM_SIM_SLAB_H */

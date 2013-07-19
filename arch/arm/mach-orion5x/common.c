@@ -199,13 +199,6 @@ void __init orion5x_init_early(void)
 
 	orion_time_set_base(TIMER_VIRT_BASE);
 
-	/*
-	 * Some Orion5x devices allocate their coherent buffers from atomic
-	 * context. Increase size of atomic coherent pool to make sure such
-	 * the allocations won't fail.
-	 */
-	init_dma_coherent_pool_size(SZ_1M);
-
 	/* Initialize the MBUS driver */
 	orion5x_pcie_id(&dev, &rev);
 	if (dev == MV88F5281_DEV_ID)
@@ -354,7 +347,7 @@ void __init orion5x_init(void)
 	orion5x_wdt_init();
 }
 
-void orion5x_restart(char mode, const char *cmd)
+void orion5x_restart(enum reboot_mode mode, const char *cmd)
 {
 	/*
 	 * Enable and issue soft reset

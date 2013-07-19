@@ -8,7 +8,11 @@
  * kind, whether express or implied.
  */
 
-/include/ "skeleton.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/pinctrl/omap.h>
+
+#include "skeleton.dtsi"
 
 / {
 	compatible = "ti,omap3430", "ti,omap3";
@@ -21,8 +25,13 @@
 	};
 
 	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
 		cpu@0 {
 			compatible = "arm,cortex-a8";
+			device_type = "cpu";
+			reg = <0x0>;
 		};
 	};
 
@@ -516,7 +525,7 @@
 		usb_otg_hs: usb_otg_hs@480ab000 {
 			compatible = "ti,omap3-musb";
 			reg = <0x480ab000 0x1000>;
-			interrupts = <0 92 0x4>, <0 93 0x4>;
+			interrupts = <92>, <93>;
 			interrupt-names = "mc", "dma";
 			ti,hwmods = "usb_otg_hs";
 			multipoint = <1>;

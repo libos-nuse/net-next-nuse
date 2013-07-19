@@ -130,7 +130,10 @@ extern void __iomem *at91_pmc_base;
 #define		AT91_PMC_USBS		(0x1 <<  0)		/* USB OHCI Input clock selection */
 #define			AT91_PMC_USBS_PLLA		(0 << 0)
 #define			AT91_PMC_USBS_UPLL		(1 << 0)
+#define			AT91_PMC_USBS_PLLB		(1 << 0)	/* [AT91SAMN12 only] */
 #define		AT91_PMC_OHCIUSBDIV	(0xF <<  8)		/* Divider for USB OHCI Clock */
+#define			AT91_PMC_OHCIUSBDIV_1	(0x0 <<  8)
+#define			AT91_PMC_OHCIUSBDIV_2	(0x1 <<  8)
 
 #define	AT91_PMC_SMD		0x3c			/* Soft Modem Clock Register [some SAM9 only] */
 #define		AT91_PMC_SMDS		(0x1  <<  0)		/* SMD input clock selection */
@@ -179,9 +182,9 @@ extern void __iomem *at91_pmc_base;
 #define		AT91_PMC_PCR_CMD	(0x1  <<  12)		/* Command (read=0, write=1) */
 #define		AT91_PMC_PCR_DIV(n)	((n)  <<  16)		/* Divisor Value */
 #define			AT91_PMC_PCR_DIV0	0x0			/* Peripheral clock is MCK */
-#define			AT91_PMC_PCR_DIV2	0x2			/* Peripheral clock is MCK/2 */
-#define			AT91_PMC_PCR_DIV4	0x4			/* Peripheral clock is MCK/4 */
-#define			AT91_PMC_PCR_DIV8	0x8			/* Peripheral clock is MCK/8 */
+#define			AT91_PMC_PCR_DIV2	0x1			/* Peripheral clock is MCK/2 */
+#define			AT91_PMC_PCR_DIV4	0x2			/* Peripheral clock is MCK/4 */
+#define			AT91_PMC_PCR_DIV8	0x3			/* Peripheral clock is MCK/8 */
 #define		AT91_PMC_PCR_EN		(0x1  <<  28)		/* Enable */
 
 #endif

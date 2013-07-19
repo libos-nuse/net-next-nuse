@@ -81,26 +81,31 @@ void flush_anon_page(struct vm_area_struct *vma,
 #endif	/* CONFIG_ARC_CACHE_VIPT_ALIASING */
 
 /*
+ * A new pagecache page has PG_arch_1 clear - thus dcache dirty by default
+ * This works around some PIO based drivers which don't call flush_dcache_page
+ * to record that they dirtied the dcache
+ */
+#define PG_dc_clean	PG_arch_1
+
+/*
  * Simple wrapper over config option
  * Bootup code ensures that hardware matches kernel configuration
  */
 static inline int cache_is_vipt_aliasing(void)
 {
-#ifdef CONFIG_ARC_CACHE_VIPT_ALIASING
-	return 1;
-#else
-	return 0;
-#endif
+	return IS_ENABLED(CONFIG_ARC_CACHE_VIPT_ALIASING);
 }
 
-#define CACHE_COLOR(addr)	(((unsigned long)(addr) >> (PAGE_SHIFT)) & 3)
+#define CACHE_COLOR(addr)	(((unsigned long)(addr) >> (PAGE_SHIFT)) & 1)
 
 /*
  * checks if two addresses (after page aligning) index into same cache set
  */
 #define addr_not_cache_congruent(addr1, addr2)				\
+({									\
 	cache_is_vipt_aliasing() ? 					\
-		(CACHE_COLOR(addr1) != CACHE_COLOR(addr2)) : 0		\
+		(CACHE_COLOR(addr1) != CACHE_COLOR(addr2)) : 0;		\
+})
 
 #define copy_to_user_page(vma, page, vaddr, dst, src, len)		\
 do {									\

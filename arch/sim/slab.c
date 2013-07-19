@@ -37,10 +37,6 @@ void *__kmalloc(size_t size, gfp_t flags)
   return (void*)(start + sizeof (size));
 }
 
-void *kmalloc(size_t size, gfp_t flags)
-{
-  return __kmalloc (size, flags);
-}
 void *__kmalloc_track_caller(size_t size, gfp_t flags, unsigned long caller)
 {
   return kmalloc (size, flags);

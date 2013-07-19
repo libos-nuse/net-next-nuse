@@ -22,6 +22,10 @@
 	model = "Marvell Armada XP family SoC";
 	compatible = "marvell,armadaxp", "marvell,armada-370-xp";
 
+	aliases {
+		eth2 = &eth2;
+	};
+
 	soc {
 		internal-regs {
 			L2: l2-cache {
@@ -31,7 +35,7 @@
 				wt-override;
 			};
 
-			mpic: interrupt-controller@20000 {
+			interrupt-controller@20000 {
 			      reg = <0x20a00 0x2d0>, <0x21070 0x58>;
 			};
 
@@ -86,9 +90,9 @@
 				reg = <0x18200 0x500>;
 			};
 
-			ethernet@30000 {
+			eth2: ethernet@30000 {
 				compatible = "marvell,armada-370-neta";
-				reg = <0x30000 0x2500>;
+				reg = <0x30000 0x4000>;
 				interrupts = <12>;
 				clocks = <&gateclk 2>;
 				status = "disabled";

@@ -33,19 +33,31 @@ static inline void acpi_pci_slot_init(void) { }
 void acpi_pci_root_init(void);
 void acpi_pci_link_init(void);
 void acpi_pci_root_hp_init(void);
+void acpi_processor_init(void);
 void acpi_platform_init(void);
 int acpi_sysfs_init(void);
-void acpi_csrt_init(void);
 #ifdef CONFIG_ACPI_CONTAINER
 void acpi_container_init(void);
 #else
 static inline void acpi_container_init(void) {}
+#endif
+#ifdef CONFIG_ACPI_DOCK
+void acpi_dock_init(void);
+#else
+static inline void acpi_dock_init(void) {}
 #endif
 #ifdef CONFIG_ACPI_HOTPLUG_MEMORY
 void acpi_memory_hotplug_init(void);
 #else
 static inline void acpi_memory_hotplug_init(void) {}
 #endif
+#ifdef CONFIG_X86
+void acpi_cmos_rtc_init(void);
+#else
+static inline void acpi_cmos_rtc_init(void) {}
+#endif
+
+extern bool acpi_force_hot_remove;
 
 void acpi_sysfs_add_hotplug_profile(struct acpi_hotplug_profile *hotplug,
 				    const char *name);
@@ -77,6 +89,8 @@ void acpi_init_device_object(struct acpi_device *device, acpi_handle handle,
 			     int type, unsigned long long sta);
 void acpi_device_add_finalize(struct acpi_device *device);
 void acpi_free_pnp_ids(struct acpi_device_pnp *pnp);
+int acpi_bind_one(struct device *dev, acpi_handle handle);
+int acpi_unbind_one(struct device *dev);
 
 /* --------------------------------------------------------------------------
                                   Power Resource

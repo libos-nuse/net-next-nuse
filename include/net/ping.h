@@ -38,7 +38,7 @@ struct pingv6_ops {
 	void (*ipv6_icmp_error)(struct sock *sk, struct sk_buff *skb, int err,
 				__be16 port, u32 info, u8 *payload);
 	int (*ipv6_chk_addr)(struct net *net, const struct in6_addr *addr,
-			     struct net_device *dev, int strict);
+			     const struct net_device *dev, int strict);
 };
 
 struct ping_table {
@@ -49,6 +49,7 @@ struct ping_table {
 struct ping_iter_state {
 	struct seq_net_private  p;
 	int			bucket;
+	sa_family_t		family;
 };
 
 extern struct proto ping_prot;
@@ -87,6 +88,21 @@ int  ping_queue_rcv_skb(struct sock *sk, struct sk_buff *skb);
 void ping_rcv(struct sk_buff *skb);
 
 #ifdef CONFIG_PROC_FS
+struct ping_seq_afinfo {
+	char				*name;
+	sa_family_t			family;
+	const struct file_operations	*seq_fops;
+	const struct seq_operations	seq_ops;
+};
+
+extern const struct file_operations ping_seq_fops;
+
+void *ping_seq_start(struct seq_file *seq, loff_t *pos, sa_family_t family);
+void *ping_seq_next(struct seq_file *seq, void *v, loff_t *pos);
+void ping_seq_stop(struct seq_file *seq, void *v);
+int ping_proc_register(struct net *net, struct ping_seq_afinfo *afinfo);
+void ping_proc_unregister(struct net *net, struct ping_seq_afinfo *afinfo);
+
 extern int __init ping_proc_init(void);
 extern void ping_proc_exit(void);
 #endif

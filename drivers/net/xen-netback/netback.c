@@ -778,12 +778,13 @@ static void xen_netbk_rx_action(struct xen_netbk *netbk)
 					 sco->meta_slots_used);
 
 		RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(&vif->rx, ret);
-		if (ret && list_empty(&vif->notify_list))
-			list_add_tail(&vif->notify_list, &notify);
 
 		xenvif_notify_tx_completion(vif);
 
-		xenvif_put(vif);
+		if (ret && list_empty(&vif->notify_list))
+			list_add_tail(&vif->notify_list, &notify);
+		else
+			xenvif_put(vif);
 		npo.meta_cons += sco->meta_slots_used;
 		dev_kfree_skb(skb);
 	}
@@ -791,6 +792,7 @@ static void xen_netbk_rx_action(struct xen_netbk *netbk)
 	list_for_each_entry_safe(vif, tmp, &notify, notify_list) {
 		notify_remote_via_irq(vif->rx_irq);
 		list_del_init(&vif->notify_list);
+		xenvif_put(vif);
 	}
 
 	/* More work to do? */
@@ -1888,9 +1890,8 @@ static int __init netback_init(void)
 		return -ENODEV;
 
 	if (fatal_skb_slots < XEN_NETBK_LEGACY_SLOTS_MAX) {
-		printk(KERN_INFO
-		       "xen-netback: fatal_skb_slots too small (%d), bump it to XEN_NETBK_LEGACY_SLOTS_MAX (%d)\n",
-		       fatal_skb_slots, XEN_NETBK_LEGACY_SLOTS_MAX);
+		pr_info("fatal_skb_slots too small (%d), bump it to XEN_NETBK_LEGACY_SLOTS_MAX (%d)\n",
+			fatal_skb_slots, XEN_NETBK_LEGACY_SLOTS_MAX);
 		fatal_skb_slots = XEN_NETBK_LEGACY_SLOTS_MAX;
 	}
 
@@ -1919,7 +1920,7 @@ static int __init netback_init(void)
 					     "netback/%u", group);
 
 		if (IS_ERR(netbk->task)) {
-			printk(KERN_ALERT "kthread_create() fails at netback\n");
+			pr_alert("kthread_create() fails at netback\n");
 			del_timer(&netbk->net_timer);
 			rc = PTR_ERR(netbk->task);
 			goto failed_init;
@@ -1966,8 +1967,8 @@ static void __exit netback_fini(void)
 		del_timer_sync(&netbk->net_timer);
 		kthread_stop(netbk->task);
 		for (j = 0; j < MAX_PENDING_REQS; j++) {
-			if (netbk->mmap_pages[i])
-				__free_page(netbk->mmap_pages[i]);
+			if (netbk->mmap_pages[j])
+				__free_page(netbk->mmap_pages[j]);
 		}
 	}
 

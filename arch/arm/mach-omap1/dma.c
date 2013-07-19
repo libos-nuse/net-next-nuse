@@ -30,8 +30,6 @@
 
 #include <mach/irqs.h>
 
-#include "dma.h"
-
 #define OMAP1_DMA_BASE			(0xfffed800)
 #define OMAP1_LOGICAL_DMA_CH_COUNT	17
 #define OMAP1_DMA_STRIDE		0x40
@@ -345,6 +343,7 @@ static int __init omap1_system_dma_init(void)
 		dev_err(&pdev->dev,
 			"%s: Memory allocation failed for d->chan!\n",
 			__func__);
+		ret = -ENOMEM;
 		goto exit_release_d;
 	}
 

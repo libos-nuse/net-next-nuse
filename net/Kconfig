@@ -5,6 +5,7 @@
 menuconfig NET
 	bool "Networking support"
 	select NLATTR
+	select GENERIC_NET_UTILS
 	---help---
 	  Unless you really know what you are doing, you should say Y here.
 	  The reason is that some programs need kernel networking support even
@@ -218,6 +219,7 @@ source "net/batman-adv/Kconfig"
 source "net/openvswitch/Kconfig"
 source "net/vmw_vsock/Kconfig"
 source "net/netlink/Kconfig"
+source "net/mpls/Kconfig"
 
 config RPS
 	boolean
@@ -241,6 +243,10 @@ config NETPRIO_CGROUP
 	---help---
 	  Cgroup subsystem for use in assigning processes to network priorities on
 	  a per-interface basis
+
+config NET_LL_RX_POLL
+	boolean
+	default y
 
 config BQL
 	boolean
