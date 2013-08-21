@@ -218,6 +218,14 @@ struct kmem_cache {
 #endif
 #endif
 
+#ifdef CONFIG_SIM
+#define KMALLOC_SHIFT_MAX	30
+#define KMALLOC_SHIFT_HIGH	PAGE_SHIFT
+#ifndef KMALLOC_SHIFT_LOW
+#define KMALLOC_SHIFT_LOW	3
+#endif
+#endif
+
 /* Maximum allocatable size */
 #define KMALLOC_MAX_SIZE	(1UL << KMALLOC_SHIFT_MAX)
 /* Maximum size for which we actually use a slab cache */
@@ -299,6 +307,10 @@ static __always_inline int kmalloc_index(size_t size)
 
 #ifdef CONFIG_SLOB
 #include <linux/slob_def.h>
+#endif
+
+#ifdef CONFIG_SIM
+#include <asm/slab.h>
 #endif
 
 /*

@@ -35,7 +35,7 @@ static struct ctl_table root_table[] = {
 	},
 	{ }
 };
-static struct ctl_table_root sysctl_table_root = {
+struct ctl_table_root sysctl_table_root = {
 	.default_set.dir.header = {
 		{{.count = 1,
 		  .nreg = 1,
@@ -61,7 +61,7 @@ static void sysctl_print_dir(struct ctl_dir *dir)
 	pr_cont("%s/", dir->header.ctl_table[0].procname);
 }
 
-static int namecmp(const char *name1, int len1, const char *name2, int len2)
+int namecmp(const char *name1, int len1, const char *name2, int len2)
 {
 	int minlen;
 	int cmp;
@@ -77,7 +77,7 @@ static int namecmp(const char *name1, int len1, const char *name2, int len2)
 }
 
 /* Called under sysctl_lock */
-static struct ctl_table *find_entry(struct ctl_table_header **phead,
+struct ctl_table *find_entry(struct ctl_table_header **phead,
 	struct ctl_dir *dir, const char *name, int namelen)
 {
 	struct ctl_table_header *head;
@@ -309,7 +309,7 @@ static struct ctl_table *lookup_entry(struct ctl_table_header **phead,
 	return entry;
 }
 
-static struct ctl_node *first_usable_entry(struct rb_node *node)
+struct ctl_node *first_usable_entry(struct rb_node *node)
 {
 	struct ctl_node *ctl_node;
 
@@ -321,7 +321,7 @@ static struct ctl_node *first_usable_entry(struct rb_node *node)
 	return NULL;
 }
 
-static void first_entry(struct ctl_dir *dir,
+void first_entry(struct ctl_dir *dir,
 	struct ctl_table_header **phead, struct ctl_table **pentry)
 {
 	struct ctl_table_header *head = NULL;
@@ -339,7 +339,7 @@ static void first_entry(struct ctl_dir *dir,
 	*pentry = entry;
 }
 
-static void next_entry(struct ctl_table_header **phead, struct ctl_table **pentry)
+void next_entry(struct ctl_table_header **phead, struct ctl_table **pentry)
 {
 	struct ctl_table_header *head = *phead;
 	struct ctl_table *entry = *pentry;
@@ -822,7 +822,7 @@ static const struct dentry_operations proc_sys_dentry_operations = {
 	.d_compare	= proc_sys_compare,
 };
 
-static struct ctl_dir *find_subdir(struct ctl_dir *dir,
+struct ctl_dir *find_subdir(struct ctl_dir *dir,
 				   const char *name, int namelen)
 {
 	struct ctl_table_header *head;
@@ -924,7 +924,7 @@ failed:
 	return subdir;
 }
 
-static struct ctl_dir *xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir)
+struct ctl_dir *xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir)
 {
 	struct ctl_dir *parent;
 	const char *procname;
