@@ -69,7 +69,7 @@ lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
 find_last_bit.o find_next_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
-div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o
+div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o
 fs/_to_keep=read_write.o libfs.o namei.o
 fs/proc/_to_keep=proc_sysctl.o
 

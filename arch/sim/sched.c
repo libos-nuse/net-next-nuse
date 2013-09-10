@@ -47,7 +47,7 @@ struct SimTask *sim_task_create (void *private, unsigned long pid)
   ns->uts_ns = 0;
   ns->ipc_ns = 0;
   ns->mnt_ns = 0;
-  ns->pid_ns = 0;
+  ns->pid_ns_for_children = 0;
   ns->net_ns = &init_net;
   task->kernel_task.cred = cred;
   task->kernel_task.pid = pid;

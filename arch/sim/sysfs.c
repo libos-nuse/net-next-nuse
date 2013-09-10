@@ -51,6 +51,11 @@ int __must_check sysfs_create_group(struct kobject *kobj,
 {
   return 0;
 }
+int sysfs_create_groups(struct kobject *kobj,
+			const struct attribute_group **groups)
+{
+  return 0;
+}
 int sysfs_schedule_callback(struct kobject *kobj,
 			    void (*func)(void *), void *data, struct module *owner)
 {
