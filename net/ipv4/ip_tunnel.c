@@ -461,8 +461,7 @@ int ip_tunnel_rcv(struct ip_tunnel *tunnel, struct sk_buff *skb,
 		skb->dev = tunnel->dev;
 	}
 
-	if (!net_eq(tunnel->net, dev_net(tunnel->dev)))
-		skb_scrub_packet(skb);
+	skb_scrub_packet(skb, !net_eq(tunnel->net, dev_net(tunnel->dev)));
 
 	gro_cells_receive(&tunnel->gro_cells, skb);
 	return 0;
@@ -614,9 +613,6 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 		goto tx_error;
 	}
 
-	if (!net_eq(tunnel->net, dev_net(dev)))
-		skb_scrub_packet(skb);
-
 	if (tunnel->err_count > 0) {
 		if (time_before(jiffies,
 				tunnel->err_time + IPTUNNEL_ERR_TIMEO)) {
@@ -654,9 +650,9 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 		}
 	}
 
-	err = iptunnel_xmit(tunnel->net, rt, skb,
-			    fl4.saddr, fl4.daddr, protocol,
-			    ip_tunnel_ecn_encap(tos, inner_iph, skb), ttl, df);
+	err = iptunnel_xmit(rt, skb, fl4.saddr, fl4.daddr, protocol,
+			    ip_tunnel_ecn_encap(tos, inner_iph, skb), ttl, df,
+			    !net_eq(tunnel->net, dev_net(dev)));
 	iptunnel_xmit_stats(err, &dev->stats, dev->tstats);
 
 	return;
@@ -854,16 +850,14 @@ int ip_tunnel_init_net(struct net *net, int ip_tnl_net_id,
 
 	rtnl_lock();
 	itn->fb_tunnel_dev = __ip_tunnel_create(net, ops, &parms);
-	rtnl_unlock();
-
-	if (IS_ERR(itn->fb_tunnel_dev))
-		return PTR_ERR(itn->fb_tunnel_dev);
 	/* FB netdevice is special: we have one, and only one per netns.
 	 * Allowing to move it to another netns is clearly unsafe.
 	 */
-	itn->fb_tunnel_dev->features |= NETIF_F_NETNS_LOCAL;
+	if (!IS_ERR(itn->fb_tunnel_dev))
+		itn->fb_tunnel_dev->features |= NETIF_F_NETNS_LOCAL;
+	rtnl_unlock();
 
-	return 0;
+	return PTR_RET(itn->fb_tunnel_dev);
 }
 EXPORT_SYMBOL_GPL(ip_tunnel_init_net);
 

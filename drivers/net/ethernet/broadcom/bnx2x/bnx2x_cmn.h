@@ -51,8 +51,7 @@ extern int int_mode;
 
 #define BNX2X_PCI_ALLOC(x, y, size) \
 	do { \
-		x = dma_alloc_coherent(&bp->pdev->dev, size, y, \
-				       GFP_KERNEL | __GFP_ZERO); \
+		x = dma_zalloc_coherent(&bp->pdev->dev, size, y, GFP_KERNEL); \
 		if (x == NULL) \
 			goto alloc_mem_err; \
 		DP(NETIF_MSG_HW, "BNX2X_PCI_ALLOC: Physical %Lx Virtual %p\n", \
@@ -106,9 +105,10 @@ void bnx2x_send_unload_done(struct bnx2x *bp, bool keep_link);
  * @rss_obj:		RSS object to use
  * @ind_table:		indirection table to configure
  * @config_hash:	re-configure RSS hash keys configuration
+ * @enable:		enabled or disabled configuration
  */
-int bnx2x_config_rss_pf(struct bnx2x *bp, struct bnx2x_rss_config_obj *rss_obj,
-			bool config_hash);
+int bnx2x_rss(struct bnx2x *bp, struct bnx2x_rss_config_obj *rss_obj,
+	      bool config_hash, bool enable);
 
 /**
  * bnx2x__init_func_obj - init function object
@@ -981,7 +981,7 @@ static inline int func_by_vn(struct bnx2x *bp, int vn)
 
 static inline int bnx2x_config_rss_eth(struct bnx2x *bp, bool config_hash)
 {
-	return bnx2x_config_rss_pf(bp, &bp->rss_conf_obj, config_hash);
+	return bnx2x_rss(bp, &bp->rss_conf_obj, config_hash, true);
 }
 
 /**

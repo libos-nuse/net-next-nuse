@@ -2261,6 +2261,23 @@ static void bnx2x_set_requested_fc(struct bnx2x *bp)
 		bp->link_params.req_fc_auto_adv = BNX2X_FLOW_CTRL_BOTH;
 }
 
+static void bnx2x_init_dropless_fc(struct bnx2x *bp)
+{
+	u32 pause_enabled = 0;
+
+	if (!CHIP_IS_E1(bp) && bp->dropless_fc && bp->link_vars.link_up) {
+		if (bp->link_vars.flow_ctrl & BNX2X_FLOW_CTRL_TX)
+			pause_enabled = 1;
+
+		REG_WR(bp, BAR_USTRORM_INTMEM +
+			   USTORM_ETH_PAUSE_ENABLED_OFFSET(BP_PORT(bp)),
+		       pause_enabled);
+	}
+
+	DP(NETIF_MSG_IFUP | NETIF_MSG_LINK, "dropless_fc is %s\n",
+	   pause_enabled ? "enabled" : "disabled");
+}
+
 int bnx2x_initial_phy_init(struct bnx2x *bp, int load_mode)
 {
 	int rc, cfx_idx = bnx2x_get_link_cfg_idx(bp);
@@ -2294,6 +2311,8 @@ int bnx2x_initial_phy_init(struct bnx2x *bp, int load_mode)
 
 		bnx2x_release_phy_lock(bp);
 
+		bnx2x_init_dropless_fc(bp);
+
 		bnx2x_calc_fc_adv(bp);
 
 		if (bp->link_vars.link_up) {
@@ -2314,6 +2333,8 @@ void bnx2x_link_set(struct bnx2x *bp)
 		bnx2x_acquire_phy_lock(bp);
 		bnx2x_phy_init(&bp->link_params, &bp->link_vars);
 		bnx2x_release_phy_lock(bp);
+
+		bnx2x_init_dropless_fc(bp);
 
 		bnx2x_calc_fc_adv(bp);
 	} else
@@ -2556,20 +2577,9 @@ static void bnx2x_link_attn(struct bnx2x *bp)
 
 	bnx2x_link_update(&bp->link_params, &bp->link_vars);
 
+	bnx2x_init_dropless_fc(bp);
+
 	if (bp->link_vars.link_up) {
-
-		/* dropless flow control */
-		if (!CHIP_IS_E1(bp) && bp->dropless_fc) {
-			int port = BP_PORT(bp);
-			u32 pause_enabled = 0;
-
-			if (bp->link_vars.flow_ctrl & BNX2X_FLOW_CTRL_TX)
-				pause_enabled = 1;
-
-			REG_WR(bp, BAR_USTRORM_INTMEM +
-			       USTORM_ETH_PAUSE_ENABLED_OFFSET(port),
-			       pause_enabled);
-		}
 
 		if (bp->link_vars.mac_type != MAC_TYPE_EMAC) {
 			struct host_port_stats *pstats;
@@ -6883,7 +6893,7 @@ static int bnx2x_init_hw_common(struct bnx2x *bp)
 		bnx2x_init_block(bp, BLOCK_TM, PHASE_COMMON);
 
 	bnx2x_init_block(bp, BLOCK_DORQ, PHASE_COMMON);
-	REG_WR(bp, DORQ_REG_DPM_CID_OFST, BNX2X_DB_SHIFT);
+
 	if (!CHIP_REV_IS_SLOW(bp))
 		/* enable hw interrupt from doorbell Q */
 		REG_WR(bp, DORQ_REG_DORQ_INT_MASK, 0);
@@ -7845,11 +7855,14 @@ void bnx2x_free_mem(struct bnx2x *bp)
 {
 	int i;
 
-	BNX2X_PCI_FREE(bp->def_status_blk, bp->def_status_blk_mapping,
-		       sizeof(struct host_sp_status_block));
-
 	BNX2X_PCI_FREE(bp->fw_stats, bp->fw_stats_mapping,
 		       bp->fw_stats_data_sz + bp->fw_stats_req_sz);
+
+	if (IS_VF(bp))
+		return;
+
+	BNX2X_PCI_FREE(bp->def_status_blk, bp->def_status_blk_mapping,
+		       sizeof(struct host_sp_status_block));
 
 	BNX2X_PCI_FREE(bp->slowpath, bp->slowpath_mapping,
 		       sizeof(struct bnx2x_slowpath));
@@ -8050,7 +8063,10 @@ int bnx2x_set_eth_mac(struct bnx2x *bp, bool set)
 
 int bnx2x_setup_leading(struct bnx2x *bp)
 {
-	return bnx2x_setup_queue(bp, &bp->fp[0], 1);
+	if (IS_PF(bp))
+		return bnx2x_setup_queue(bp, &bp->fp[0], true);
+	else /* VF */
+		return bnx2x_vfpf_setup_q(bp, &bp->fp[0], true);
 }
 
 /**
@@ -8064,8 +8080,10 @@ int bnx2x_set_int_mode(struct bnx2x *bp)
 {
 	int rc = 0;
 
-	if (IS_VF(bp) && int_mode != BNX2X_INT_MODE_MSIX)
+	if (IS_VF(bp) && int_mode != BNX2X_INT_MODE_MSIX) {
+		BNX2X_ERR("VF not loaded since interrupt mode not msix\n");
 		return -EINVAL;
+	}
 
 	switch (int_mode) {
 	case BNX2X_INT_MODE_MSIX:
@@ -9643,6 +9661,12 @@ sp_rtnl_not_reset:
 			       &bp->sp_rtnl_state))
 		bnx2x_pf_set_vfs_vlan(bp);
 
+	if (test_and_clear_bit(BNX2X_SP_RTNL_TX_STOP, &bp->sp_rtnl_state))
+		bnx2x_dcbx_stop_hw_tx(bp);
+
+	if (test_and_clear_bit(BNX2X_SP_RTNL_TX_RESUME, &bp->sp_rtnl_state))
+		bnx2x_dcbx_resume_hw_tx(bp);
+
 	/* work which needs rtnl lock not-taken (as it takes the lock itself and
 	 * can be called from other contexts as well)
 	 */
@@ -9939,8 +9963,6 @@ static int bnx2x_prev_mark_path(struct bnx2x *bp, bool after_undi)
 
 static int bnx2x_do_flr(struct bnx2x *bp)
 {
-	int i;
-	u16 status;
 	struct pci_dev *dev = bp->pdev;
 
 	if (CHIP_IS_E1x(bp)) {
@@ -9955,20 +9977,8 @@ static int bnx2x_do_flr(struct bnx2x *bp)
 		return -EINVAL;
 	}
 
-	/* Wait for Transaction Pending bit clean */
-	for (i = 0; i < 4; i++) {
-		if (i)
-			msleep((1 << (i - 1)) * 100);
-
-		pcie_capability_read_word(dev, PCI_EXP_DEVSTA, &status);
-		if (!(status & PCI_EXP_DEVSTA_TRPND))
-			goto clear;
-	}
-
-	dev_err(&dev->dev,
-		"transaction is not cleared; proceeding with reset anyway\n");
-
-clear:
+	if (!pci_wait_for_pending_transaction(dev))
+		dev_err(&dev->dev, "transaction is not cleared; proceeding with reset anyway\n");
 
 	BNX2X_DEV_INFO("Initiating FLR\n");
 	bnx2x_fw_command(bp, DRV_MSG_CODE_INITIATE_FLR, 0);
@@ -11145,6 +11155,9 @@ static bool bnx2x_get_dropless_info(struct bnx2x *bp)
 	int tmp;
 	u32 cfg;
 
+	if (IS_VF(bp))
+		return 0;
+
 	if (IS_MF(bp) && !CHIP_IS_E1x(bp)) {
 		/* Take function: tmp = func */
 		tmp = BP_ABS_FUNC(bp);
@@ -11639,9 +11652,11 @@ static int bnx2x_init_bp(struct bnx2x *bp)
 	 * second status block for the L2 queue, and a third status block for
 	 * CNIC if supported.
 	 */
-	if (CNIC_SUPPORT(bp))
+	if (IS_VF(bp))
+		bp->min_msix_vec_cnt = 1;
+	else if (CNIC_SUPPORT(bp))
 		bp->min_msix_vec_cnt = 3;
-	else
+	else /* PF w/o cnic */
 		bp->min_msix_vec_cnt = 2;
 	BNX2X_DEV_INFO("bp->min_msix_vec_cnt %d", bp->min_msix_vec_cnt);
 
@@ -12552,8 +12567,7 @@ static int bnx2x_set_qm_cid_count(struct bnx2x *bp)
  * @dev:	pci device
  *
  */
-static int bnx2x_get_num_non_def_sbs(struct pci_dev *pdev,
-				     int cnic_cnt, bool is_vf)
+static int bnx2x_get_num_non_def_sbs(struct pci_dev *pdev, int cnic_cnt)
 {
 	int index;
 	u16 control = 0;
@@ -12579,7 +12593,7 @@ static int bnx2x_get_num_non_def_sbs(struct pci_dev *pdev,
 
 	index = control & PCI_MSIX_FLAGS_QSIZE;
 
-	return is_vf ? index + 1 : index;
+	return index;
 }
 
 static int set_max_cos_est(int chip_id)
@@ -12659,10 +12673,13 @@ static int bnx2x_init_one(struct pci_dev *pdev,
 	is_vf = set_is_vf(ent->driver_data);
 	cnic_cnt = is_vf ? 0 : 1;
 
-	max_non_def_sbs = bnx2x_get_num_non_def_sbs(pdev, cnic_cnt, is_vf);
+	max_non_def_sbs = bnx2x_get_num_non_def_sbs(pdev, cnic_cnt);
+
+	/* add another SB for VF as it has no default SB */
+	max_non_def_sbs += is_vf ? 1 : 0;
 
 	/* Maximum number of RSS queues: one IGU SB goes to CNIC */
-	rss_count = is_vf ? 1 : max_non_def_sbs - cnic_cnt;
+	rss_count = max_non_def_sbs - cnic_cnt;
 
 	if (rss_count < 1)
 		return -EINVAL;

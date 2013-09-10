@@ -948,8 +948,7 @@ static int bcm_enet_open(struct net_device *dev)
 
 	/* allocate rx dma ring */
 	size = priv->rx_ring_size * sizeof(struct bcm_enet_desc);
-	p = dma_alloc_coherent(kdev, size, &priv->rx_desc_dma,
-			       GFP_KERNEL | __GFP_ZERO);
+	p = dma_zalloc_coherent(kdev, size, &priv->rx_desc_dma, GFP_KERNEL);
 	if (!p) {
 		ret = -ENOMEM;
 		goto out_freeirq_tx;
@@ -960,8 +959,7 @@ static int bcm_enet_open(struct net_device *dev)
 
 	/* allocate tx dma ring */
 	size = priv->tx_ring_size * sizeof(struct bcm_enet_desc);
-	p = dma_alloc_coherent(kdev, size, &priv->tx_desc_dma,
-			       GFP_KERNEL | __GFP_ZERO);
+	p = dma_zalloc_coherent(kdev, size, &priv->tx_desc_dma, GFP_KERNEL);
 	if (!p) {
 		ret = -ENOMEM;
 		goto out_free_rx_ring;
@@ -1800,7 +1798,7 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	priv->rx_ring_size = BCMENET_DEF_RX_DESC;
 	priv->tx_ring_size = BCMENET_DEF_TX_DESC;
 
-	pd = pdev->dev.platform_data;
+	pd = dev_get_platdata(&pdev->dev);
 	if (pd) {
 		memcpy(dev->dev_addr, pd->mac_addr, ETH_ALEN);
 		priv->has_phy = pd->has_phy;
@@ -1964,7 +1962,7 @@ static int bcm_enet_remove(struct platform_device *pdev)
 	} else {
 		struct bcm63xx_enet_platform_data *pd;
 
-		pd = pdev->dev.platform_data;
+		pd = dev_get_platdata(&pdev->dev);
 		if (pd && pd->mii_config)
 			pd->mii_config(dev, 0, bcm_enet_mdio_read_mii,
 				       bcm_enet_mdio_write_mii);
@@ -2742,7 +2740,7 @@ static int bcm_enetsw_probe(struct platform_device *pdev)
 	priv->tx_ring_size = BCMENET_DEF_TX_DESC;
 	priv->dma_maxburst = BCMENETSW_DMA_MAXBURST;
 
-	pd = pdev->dev.platform_data;
+	pd = dev_get_platdata(&pdev->dev);
 	if (pd) {
 		memcpy(dev->dev_addr, pd->mac_addr, ETH_ALEN);
 		memcpy(priv->used_ports, pd->used_ports,
@@ -2836,7 +2834,6 @@ static int bcm_enetsw_remove(struct platform_device *pdev)
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	release_mem_region(res->start, resource_size(res));
 
-	platform_set_drvdata(pdev, NULL);
 	free_netdev(dev);
 	return 0;
 }

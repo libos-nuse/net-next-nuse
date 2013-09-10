@@ -307,7 +307,7 @@ struct be_cmd_req_eq_create {
 struct be_cmd_resp_eq_create {
 	struct be_cmd_resp_hdr resp_hdr;
 	u16 eq_id;		/* sword */
-	u16 rsvd0;		/* sword */
+	u16 msix_idx;		/* available only in v2 */
 } __packed;
 
 /******************** Mac query ***************************/
@@ -1533,12 +1533,17 @@ struct be_cmd_req_set_mac_list {
 } __packed;
 
 /*********************** HSW Config ***********************/
+#define PORT_FWD_TYPE_VEPA		0x3
+#define PORT_FWD_TYPE_VEB		0x2
+
 struct amap_set_hsw_context {
 	u8 interface_id[16];
 	u8 rsvd0[14];
 	u8 pvid_valid;
-	u8 rsvd1;
-	u8 rsvd2[16];
+	u8 pport;
+	u8 rsvd1[6];
+	u8 port_fwd_type[3];
+	u8 rsvd2[7];
 	u8 pvid[16];
 	u8 rsvd3[32];
 	u8 rsvd4[32];
@@ -1563,7 +1568,9 @@ struct amap_get_hsw_req_context {
 } __packed;
 
 struct amap_get_hsw_resp_context {
-	u8 rsvd1[16];
+	u8 rsvd0[6];
+	u8 port_fwd_type[3];
+	u8 rsvd1[7];
 	u8 pvid[16];
 	u8 rsvd2[32];
 	u8 rsvd3[32];
@@ -1718,11 +1725,13 @@ struct be_cmd_req_set_ext_fat_caps {
 	struct be_fat_conf_params set_params;
 };
 
-#define RESOURCE_DESC_SIZE			88
+#define RESOURCE_DESC_SIZE_V0			72
+#define RESOURCE_DESC_SIZE_V1			88
+#define PCIE_RESOURCE_DESC_TYPE_V0		0x40
 #define NIC_RESOURCE_DESC_TYPE_V0		0x41
+#define PCIE_RESOURCE_DESC_TYPE_V1		0x50
 #define NIC_RESOURCE_DESC_TYPE_V1		0x51
-#define MAX_RESOURCE_DESC			4
-#define MAX_RESOURCE_DESC_V1			32
+#define MAX_RESOURCE_DESC			264
 
 /* QOS unit number */
 #define QUN					4
@@ -1731,9 +1740,30 @@ struct be_cmd_req_set_ext_fat_caps {
 /* No save */
 #define NOSV					7
 
-struct be_nic_resource_desc {
+struct be_res_desc_hdr {
 	u8 desc_type;
 	u8 desc_len;
+} __packed;
+
+struct be_pcie_res_desc {
+	struct be_res_desc_hdr hdr;
+	u8 rsvd0;
+	u8 flags;
+	u16 rsvd1;
+	u8 pf_num;
+	u8 rsvd2;
+	u32 rsvd3;
+	u8 sriov_state;
+	u8 pf_state;
+	u8 pf_type;
+	u8 rsvd4;
+	u16 num_vfs;
+	u16 rsvd5;
+	u32 rsvd6[17];
+} __packed;
+
+struct be_nic_res_desc {
+	struct be_res_desc_hdr hdr;
 	u8 rsvd1;
 	u8 flags;
 	u8 vf_num;
@@ -1762,7 +1792,7 @@ struct be_nic_resource_desc {
 	u8 wol_param;
 	u16 rsvd7;
 	u32 rsvd8[3];
-};
+} __packed;
 
 struct be_cmd_req_get_func_config {
 	struct be_cmd_req_hdr hdr;
@@ -1771,7 +1801,7 @@ struct be_cmd_req_get_func_config {
 struct be_cmd_resp_get_func_config {
 	struct be_cmd_resp_hdr hdr;
 	u32 desc_count;
-	u8 func_param[MAX_RESOURCE_DESC * RESOURCE_DESC_SIZE];
+	u8 func_param[MAX_RESOURCE_DESC * RESOURCE_DESC_SIZE_V1];
 };
 
 #define ACTIVE_PROFILE_TYPE			0x2
@@ -1783,26 +1813,20 @@ struct be_cmd_req_get_profile_config {
 };
 
 struct be_cmd_resp_get_profile_config {
-	struct be_cmd_req_hdr hdr;
+	struct be_cmd_resp_hdr hdr;
 	u32 desc_count;
-	u8 func_param[MAX_RESOURCE_DESC * RESOURCE_DESC_SIZE];
-};
-
-struct be_cmd_resp_get_profile_config_v1 {
-	struct be_cmd_req_hdr hdr;
-	u32 desc_count;
-	u8 func_param[MAX_RESOURCE_DESC_V1 * RESOURCE_DESC_SIZE];
+	u8 func_param[MAX_RESOURCE_DESC * RESOURCE_DESC_SIZE_V1];
 };
 
 struct be_cmd_req_set_profile_config {
 	struct be_cmd_req_hdr hdr;
 	u32 rsvd;
 	u32 desc_count;
-	struct be_nic_resource_desc nic_desc;
+	struct be_nic_res_desc nic_desc;
 };
 
 struct be_cmd_resp_set_profile_config {
-	struct be_cmd_req_hdr hdr;
+	struct be_cmd_resp_hdr hdr;
 };
 
 struct be_cmd_enable_disable_vf {
@@ -1851,8 +1875,7 @@ extern int be_cmd_if_create(struct be_adapter *adapter, u32 cap_flags,
 			    u32 en_flags, u32 *if_handle, u32 domain);
 extern int be_cmd_if_destroy(struct be_adapter *adapter, int if_handle,
 			u32 domain);
-extern int be_cmd_eq_create(struct be_adapter *adapter,
-			struct be_queue_info *eq, int eq_delay);
+extern int be_cmd_eq_create(struct be_adapter *adapter, struct be_eq_obj *eqo);
 extern int be_cmd_cq_create(struct be_adapter *adapter,
 			struct be_queue_info *cq, struct be_queue_info *eq,
 			bool no_delay, int num_cqe_dma_coalesce);
@@ -1949,9 +1972,9 @@ extern int be_cmd_set_mac_list(struct be_adapter *adapter, u8 *mac_array,
 extern int be_cmd_set_mac(struct be_adapter *adapter, u8 *mac, int if_id,
 			  u32 dom);
 extern int be_cmd_set_hsw_config(struct be_adapter *adapter, u16 pvid,
-			u32 domain, u16 intf_id);
+				 u32 domain, u16 intf_id, u16 hsw_mode);
 extern int be_cmd_get_hsw_config(struct be_adapter *adapter, u16 *pvid,
-			u32 domain, u16 intf_id);
+				 u32 domain, u16 intf_id, u8 *mode);
 extern int be_cmd_get_acpi_wol_cap(struct be_adapter *adapter);
 extern int be_cmd_get_ext_fat_capabilites(struct be_adapter *adapter,
 					  struct be_dma_mem *cmd);
@@ -1964,10 +1987,10 @@ extern int lancer_initiate_dump(struct be_adapter *adapter);
 extern bool dump_present(struct be_adapter *adapter);
 extern int lancer_test_and_set_rdy_state(struct be_adapter *adapter);
 extern int be_cmd_query_port_name(struct be_adapter *adapter, u8 *port_name);
-extern int be_cmd_get_func_config(struct be_adapter *adapter);
-extern int be_cmd_get_profile_config(struct be_adapter *adapter, u32 *cap_flags,
-				     u16 *txq_count, u8 domain);
-
+int be_cmd_get_func_config(struct be_adapter *adapter,
+			   struct be_resources *res);
+int be_cmd_get_profile_config(struct be_adapter *adapter,
+			      struct be_resources *res, u8 domain);
 extern int be_cmd_set_profile_config(struct be_adapter *adapter, u32 bps,
 				     u8 domain);
 extern int be_cmd_get_if_id(struct be_adapter *adapter,

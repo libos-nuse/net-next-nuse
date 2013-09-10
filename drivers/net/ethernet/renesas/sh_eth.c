@@ -416,6 +416,7 @@ static struct sh_eth_cpu_data r8a7790_data = {
 	.tpauser	= 1,
 	.hw_swap	= 1,
 	.rmiimode	= 1,
+	.shift_rd0	= 1,
 };
 
 static void sh_eth_set_rate_sh7724(struct net_device *ndev)
@@ -1342,9 +1343,12 @@ static int sh_eth_rx(struct net_device *ndev, u32 intr_status, int *quota)
 			mdp->rx_skbuff[entry] = NULL;
 			if (mdp->cd->rpadir)
 				skb_reserve(skb, NET_IP_ALIGN);
+			dma_sync_single_for_cpu(&ndev->dev, rxdesc->addr,
+						mdp->rx_buf_sz,
+						DMA_FROM_DEVICE);
 			skb_put(skb, pkt_len);
 			skb->protocol = eth_type_trans(skb, ndev);
-			netif_rx(skb);
+			netif_receive_skb(skb);
 			ndev->stats.rx_packets++;
 			ndev->stats.rx_bytes += pkt_len;
 		}
@@ -1902,11 +1906,13 @@ static int sh_eth_open(struct net_device *ndev)
 
 	pm_runtime_get_sync(&mdp->pdev->dev);
 
+	napi_enable(&mdp->napi);
+
 	ret = request_irq(ndev->irq, sh_eth_interrupt,
 			  mdp->cd->irq_flags, ndev->name, ndev);
 	if (ret) {
 		dev_err(&ndev->dev, "Can not assign IRQ number\n");
-		return ret;
+		goto out_napi_off;
 	}
 
 	/* Descriptor set */
@@ -1924,12 +1930,12 @@ static int sh_eth_open(struct net_device *ndev)
 	if (ret)
 		goto out_free_irq;
 
-	napi_enable(&mdp->napi);
-
 	return ret;
 
 out_free_irq:
 	free_irq(ndev->irq, ndev);
+out_napi_off:
+	napi_disable(&mdp->napi);
 	pm_runtime_put_sync(&mdp->pdev->dev);
 	return ret;
 }
@@ -2021,8 +2027,6 @@ static int sh_eth_close(struct net_device *ndev)
 {
 	struct sh_eth_private *mdp = netdev_priv(ndev);
 
-	napi_disable(&mdp->napi);
-
 	netif_stop_queue(ndev);
 
 	/* Disable interrupts by clearing the interrupt mask. */
@@ -2039,6 +2043,8 @@ static int sh_eth_close(struct net_device *ndev)
 	}
 
 	free_irq(ndev->irq, ndev);
+
+	napi_disable(&mdp->napi);
 
 	/* Free all the skbuffs in the Rx queue. */
 	sh_eth_ring_free(ndev);
@@ -2606,7 +2612,7 @@ static int sh_eth_drv_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct net_device *ndev = NULL;
 	struct sh_eth_private *mdp = NULL;
-	struct sh_eth_plat_data *pd = pdev->dev.platform_data;
+	struct sh_eth_plat_data *pd = dev_get_platdata(&pdev->dev);
 	const struct platform_device_id *id = platform_get_device_id(pdev);
 
 	/* get base addr */
@@ -2638,9 +2644,6 @@ static int sh_eth_drv_probe(struct platform_device *pdev)
 	ndev->irq = ret;
 
 	SET_NETDEV_DEV(ndev, &pdev->dev);
-
-	/* Fill in the fields of the device structure with ethernet values. */
-	ether_setup(ndev);
 
 	mdp = netdev_priv(ndev);
 	mdp->num_tx_ring = TX_RING_SIZE;

@@ -398,14 +398,10 @@ int qlcnic_sriov_get_vf_vport_info(struct qlcnic_adapter *adapter,
 }
 
 static int qlcnic_sriov_set_pvid_mode(struct qlcnic_adapter *adapter,
-				      struct qlcnic_cmd_args *cmd, u32 cap)
+				      struct qlcnic_cmd_args *cmd)
 {
-	if (cap & QLC_83XX_PVID_STRIP_CAPABILITY) {
-		adapter->rx_pvid = 0;
-	} else {
-		adapter->rx_pvid = (cmd->rsp.arg[1] >> 16) & 0xffff;
-		adapter->flags &= ~QLCNIC_TAGGING_ENABLED;
-	}
+	adapter->rx_pvid = MSW(cmd->rsp.arg[1]) & 0xffff;
+	adapter->flags &= ~QLCNIC_TAGGING_ENABLED;
 	return 0;
 }
 
@@ -441,9 +437,8 @@ static int qlcnic_sriov_get_vf_acl(struct qlcnic_adapter *adapter,
 {
 	struct qlcnic_sriov *sriov = adapter->ahw->sriov;
 	struct qlcnic_cmd_args cmd;
-	int ret, cap;
+	int ret = 0;
 
-	cap = info->capabilities;
 	ret = qlcnic_sriov_alloc_bc_mbx_args(&cmd, QLCNIC_BC_CMD_GET_ACL);
 	if (ret)
 		return ret;
@@ -459,7 +454,7 @@ static int qlcnic_sriov_get_vf_acl(struct qlcnic_adapter *adapter,
 			ret = qlcnic_sriov_set_guest_vlan_mode(adapter, &cmd);
 			break;
 		case QLC_PVID_MODE:
-			ret = qlcnic_sriov_set_pvid_mode(adapter, &cmd, cap);
+			ret = qlcnic_sriov_set_pvid_mode(adapter, &cmd);
 			break;
 		}
 	}
@@ -512,7 +507,7 @@ static int qlcnic_sriov_setup_vf(struct qlcnic_adapter *adapter,
 		dev_warn(&adapter->pdev->dev,
 			 "Device does not support MSI interrupts\n");
 
-	err = qlcnic_setup_intr(adapter, 1);
+	err = qlcnic_setup_intr(adapter, 1, 0);
 	if (err) {
 		dev_err(&adapter->pdev->dev, "Failed to setup interrupt\n");
 		goto err_out_disable_msi;
@@ -538,6 +533,9 @@ static int qlcnic_sriov_setup_vf(struct qlcnic_adapter *adapter,
 	if (err)
 		goto err_out_send_channel_term;
 
+	if (adapter->dcb && qlcnic_dcb_attach(adapter))
+		qlcnic_clear_dcb_ops(adapter);
+
 	err = qlcnic_setup_netdev(adapter, adapter->netdev, pci_using_dac);
 	if (err)
 		goto err_out_send_channel_term;
@@ -545,6 +543,7 @@ static int qlcnic_sriov_setup_vf(struct qlcnic_adapter *adapter,
 	pci_set_drvdata(adapter->pdev, adapter);
 	dev_info(&adapter->pdev->dev, "%s: XGbE port initialized\n",
 		 adapter->netdev->name);
+
 	qlcnic_schedule_work(adapter, qlcnic_sriov_vf_poll_dev_state,
 			     adapter->ahw->idc.delay);
 	return 0;
@@ -1576,6 +1575,8 @@ static int qlcnic_sriov_vf_reinit_driver(struct qlcnic_adapter *adapter)
 	err = qlcnic_sriov_vf_init_driver(adapter);
 	if (err)
 		goto err_out_term_channel;
+
+	qlcnic_dcb_get_info(adapter);
 
 	return 0;
 

@@ -41,6 +41,7 @@
 #include <linux/netfilter_ipv6.h>
 #include <linux/slab.h>
 #include <linux/hash.h>
+#include <linux/etherdevice.h>
 
 #include <asm/uaccess.h>
 #include <linux/atomic.h>
@@ -801,14 +802,12 @@ static int ip6_tnl_rcv(struct sk_buff *skb, __u16 protocol,
 			rcu_read_unlock();
 			goto discard;
 		}
-		secpath_reset(skb);
 		skb->mac_header = skb->network_header;
 		skb_reset_network_header(skb);
 		skb->protocol = htons(protocol);
-		skb->pkt_type = PACKET_HOST;
 		memset(skb->cb, 0, sizeof(struct inet6_skb_parm));
 
-		__skb_tunnel_rx(skb, t->dev);
+		__skb_tunnel_rx(skb, t->dev, t->net);
 
 		err = dscp_ecn_decapsulate(t, ipv6h, skb);
 		if (unlikely(err)) {
@@ -827,9 +826,6 @@ static int ip6_tnl_rcv(struct sk_buff *skb, __u16 protocol,
 		tstats = this_cpu_ptr(t->dev->tstats);
 		tstats->rx_packets++;
 		tstats->rx_bytes += skb->len;
-
-		if (!net_eq(t->net, dev_net(t->dev)))
-			skb_scrub_packet(skb);
 
 		netif_rx(skb);
 
@@ -1000,8 +996,7 @@ static int ip6_tnl_xmit2(struct sk_buff *skb,
 		goto tx_err_dst_release;
 	}
 
-	if (!net_eq(t->net, dev_net(dev)))
-		skb_scrub_packet(skb);
+	skb_scrub_packet(skb, !net_eq(t->net, dev_net(dev)));
 
 	/*
 	 * Okay, now see if we can stuff it in the buffer as-is.
@@ -1020,7 +1015,6 @@ static int ip6_tnl_xmit2(struct sk_buff *skb,
 		consume_skb(skb);
 		skb = new_skb;
 	}
-	skb_dst_drop(skb);
 	if (fl6->flowi6_mark) {
 		skb_dst_set(skb, dst);
 		ndst = NULL;
@@ -1034,6 +1028,12 @@ static int ip6_tnl_xmit2(struct sk_buff *skb,
 		init_tel_txopt(&opt, encap_limit);
 		ipv6_push_nfrag_opts(skb, &opt.ops, &proto, NULL);
 	}
+
+	if (likely(!skb->encapsulation)) {
+		skb_reset_inner_headers(skb);
+		skb->encapsulation = 1;
+	}
+
 	skb_push(skb, sizeof(struct ipv6hdr));
 	skb_reset_network_header(skb);
 	ipv6h = ipv6_hdr(skb);
@@ -1471,6 +1471,9 @@ static void ip6_tnl_dev_setup(struct net_device *dev)
 	dev->flags |= IFF_NOARP;
 	dev->addr_len = sizeof(struct in6_addr);
 	dev->priv_flags &= ~IFF_XMIT_DST_RELEASE;
+	/* This perm addr will be used as interface identifier by IPv6 */
+	dev->addr_assign_type = NET_ADDR_RANDOM;
+	eth_random_addr(dev->perm_addr);
 }
 
 

@@ -482,6 +482,15 @@ tcp_syn_retries - INTEGER
 tcp_timestamps - BOOLEAN
 	Enable timestamps as defined in RFC1323.
 
+tcp_min_tso_segs - INTEGER
+	Minimal number of segments per TSO frame.
+	Since linux-3.12, TCP does an automatic sizing of TSO frames,
+	depending on flow rate, instead of filling 64Kbytes packets.
+	For specific usages, it's possible to force TCP to build big
+	TSO frames. Note that TCP stack might split too big TSO packets
+	if available window is too small.
+	Default: 2
+
 tcp_tso_win_divisor - INTEGER
 	This allows control over what percentage of the congestion window
 	can be consumed by a single TSO frame.
@@ -1348,6 +1357,17 @@ mldv2_unsolicited_report_interval - INTEGER
 	The interval in milliseconds in which the next unsolicited
 	MLDv2 report retransmit will take place.
 	Default: 1000 (1 second)
+
+force_mld_version - INTEGER
+	0 - (default) No enforcement of a MLD version, MLDv1 fallback allowed
+	1 - Enforce to use MLD version 1
+	2 - Enforce to use MLD version 2
+
+suppress_frag_ndisc - INTEGER
+	Control RFC 6980 (Security Implications of IPv6 Fragmentation
+	with IPv6 Neighbor Discovery) behavior:
+	1 - (default) discard fragmented neighbor discovery packets
+	0 - allow fragmented neighbor discovery packets
 
 icmp/*:
 ratelimit - INTEGER
