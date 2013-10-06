@@ -480,6 +480,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			Format: <io>,<irq>,<mode>
 			See header of drivers/net/hamradio/baycom_ser_hdx.c.
 
+	blkdevparts=	Manual partition parsing of block device(s) for
+			embedded devices based on command line input.
+			See Documentation/block/cmdline-partition.txt
+
 	boot_delay=	Milliseconds to delay each printk during boot.
 			Values larger than 10 seconds (10000) are changed to
 			no delay (0).
@@ -1357,7 +1361,7 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			pages. In the event, a node is too small to have both
 			kernelcore and Movable pages, kernelcore pages will
 			take priority and other nodes will have a larger number
-			of kernelcore pages.  The Movable zone is used for the
+			of Movable pages.  The Movable zone is used for the
 			allocation of pages that may be reclaimed or moved
 			by the page migration subsystem.  This means that
 			HugeTLB pages may not be allocated from this zone.
@@ -1898,6 +1902,18 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			will be sent.
 			The default is to send the implementation identification
 			information.
+	
+	nfs.recover_lost_locks =
+			[NFSv4] Attempt to recover locks that were lost due
+			to a lease timeout on the server. Please note that
+			doing this risks data corruption, since there are
+			no guarantees that the file will remain unchanged
+			after the locks are lost.
+			If you want to enable the kernel legacy behaviour of
+			attempting to recover these locks, then set this
+			parameter to '1'.
+			The default parameter value of '0' causes the kernel
+			not to attempt recovery of lost locks.
 
 	nfsd.nfs4_disable_idmapping=
 			[NFSv4] When set to the default of '1', the NFSv4
@@ -3472,6 +3488,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 				unnecessary even if the host did not respond to
 				the unplug protocol
 			never -- do not unplug even if version check succeeds
+
+	xen_nopvspin	[X86,XEN]
+			Disables the ticketlock slowpath using Xen PV
+			optimizations.
 
 	xirc2ps_cs=	[NET,PCMCIA]
 			Format:

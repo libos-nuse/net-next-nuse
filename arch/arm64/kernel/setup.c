@@ -57,7 +57,7 @@
 unsigned int processor_id;
 EXPORT_SYMBOL(processor_id);
 
-unsigned int elf_hwcap __read_mostly;
+unsigned long elf_hwcap __read_mostly;
 EXPORT_SYMBOL_GPL(elf_hwcap);
 
 static const char *cpu_name;
@@ -188,11 +188,6 @@ void __init early_init_dt_add_memory_arch(u64 base, u64 size)
 		base = PHYS_OFFSET;
 	}
 	memblock_add(base, size);
-}
-
-void * __init early_init_dt_alloc_memory_arch(u64 size, u64 align)
-{
-	return __va(memblock_alloc(size, align));
 }
 
 /*

@@ -11,7 +11,6 @@ config TILE
 	select USE_GENERIC_SMP_HELPERS
 	select CC_OPTIMIZE_FOR_SIZE
 	select HAVE_DEBUG_KMEMLEAK
-	select HAVE_GENERIC_HARDIRQS
 	select GENERIC_IRQ_PROBE
 	select GENERIC_PENDING_IRQ if SMP
 	select GENERIC_IRQ_SHOW
@@ -362,7 +361,7 @@ config CMDLINE_OVERRIDE
 
 config VMALLOC_RESERVE
 	hex
-	default 0x1000000
+	default 0x2000000
 
 config HARDWALL
 	bool "Hardwall support to allow access to user dynamic network"

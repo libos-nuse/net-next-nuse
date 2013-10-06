@@ -143,8 +143,10 @@ static void i915_error_vprintf(struct drm_i915_error_state_buf *e,
 
 	/* Seek the first printf which is hits start position */
 	if (e->pos < e->start) {
-		len = vsnprintf(NULL, 0, f, args);
-		if (!__i915_error_seek(e, len))
+		va_list tmp;
+
+		va_copy(tmp, args);
+		if (!__i915_error_seek(e, vsnprintf(NULL, 0, f, tmp)))
 			return;
 	}
 
@@ -641,7 +643,7 @@ i915_error_first_batchbuffer(struct drm_i915_private *dev_priv,
 		if (WARN_ON(ring->id != RCS))
 			return NULL;
 
-		obj = ring->private;
+		obj = ring->scratch.obj;
 		if (acthd >= i915_gem_obj_ggtt_offset(obj) &&
 		    acthd < i915_gem_obj_ggtt_offset(obj) + obj->base.size)
 			return i915_error_object_create(dev_priv, obj);

@@ -1585,7 +1585,7 @@ static void ixgbe_rx_skb(struct ixgbe_q_vector *q_vector,
 {
 	struct ixgbe_adapter *adapter = q_vector->adapter;
 
-	if (ixgbe_qv_ll_polling(q_vector))
+	if (ixgbe_qv_busy_polling(q_vector))
 		netif_receive_skb(skb);
 	else if (!(adapter->flags & IXGBE_FLAG_IN_NETPOLL))
 		napi_gro_receive(&q_vector->napi, skb);
@@ -2097,7 +2097,7 @@ static int ixgbe_low_latency_recv(struct napi_struct *napi)
 
 	ixgbe_for_each_ring(ring, q_vector->rx) {
 		found = ixgbe_clean_rx_irq(q_vector, ring, 4);
-#ifdef LL_EXTENDED_STATS
+#ifdef BP_EXTENDED_STATS
 		if (found)
 			ring->stats.cleaned += found;
 		else
@@ -3571,7 +3571,7 @@ static void ixgbe_configure_rx(struct ixgbe_adapter *adapter)
 {
 	struct ixgbe_hw *hw = &adapter->hw;
 	int i;
-	u32 rxctrl;
+	u32 rxctrl, rfctl;
 
 	/* disable receives while setting up the descriptors */
 	rxctrl = IXGBE_READ_REG(hw, IXGBE_RXCTRL);
@@ -3579,6 +3579,13 @@ static void ixgbe_configure_rx(struct ixgbe_adapter *adapter)
 
 	ixgbe_setup_psrtype(adapter);
 	ixgbe_setup_rdrxctl(adapter);
+
+	/* RSC Setup */
+	rfctl = IXGBE_READ_REG(hw, IXGBE_RFCTL);
+	rfctl &= ~IXGBE_RFCTL_RSC_DIS;
+	if (!(adapter->flags2 & IXGBE_FLAG2_RSC_ENABLED))
+		rfctl |= IXGBE_RFCTL_RSC_DIS;
+	IXGBE_WRITE_REG(hw, IXGBE_RFCTL, rfctl);
 
 	/* Program registers for the distribution of queues */
 	ixgbe_setup_mrqc(adapter);
@@ -5993,8 +6000,16 @@ static void ixgbe_sfp_link_config_subtask(struct ixgbe_adapter *adapter)
 	adapter->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
 
 	speed = hw->phy.autoneg_advertised;
-	if ((!speed) && (hw->mac.ops.get_link_capabilities))
+	if ((!speed) && (hw->mac.ops.get_link_capabilities)) {
 		hw->mac.ops.get_link_capabilities(hw, &speed, &autoneg);
+
+		/* setup the highest link when no autoneg */
+		if (!autoneg) {
+			if (speed & IXGBE_LINK_SPEED_10GB_FULL)
+				speed = IXGBE_LINK_SPEED_10GB_FULL;
+		}
+	}
+
 	if (hw->mac.ops.setup_link)
 		hw->mac.ops.setup_link(hw, speed, true);
 

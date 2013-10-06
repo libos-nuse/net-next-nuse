@@ -1756,9 +1756,6 @@ void bnx2x_iov_init_dq(struct bnx2x *bp)
 	REG_WR(bp, DORQ_REG_VF_TYPE_MIN_MCID_0, 0);
 	REG_WR(bp, DORQ_REG_VF_TYPE_MAX_MCID_0, 0x1ffff);
 
-	/* set the number of VF allowed doorbells to the full DQ range */
-	REG_WR(bp, DORQ_REG_VF_NORM_MAX_CID_COUNT, 0x20000);
-
 	/* set the VF doorbell threshold */
 	REG_WR(bp, DORQ_REG_VF_USAGE_CT_LIMIT, 4);
 }
@@ -1822,7 +1819,7 @@ bnx2x_get_vf_igu_cam_info(struct bnx2x *bp)
 		fid = GET_FIELD((val), IGU_REG_MAPPING_MEMORY_FID);
 		if (fid & IGU_FID_ENCODE_IS_PF)
 			current_pf = fid & IGU_FID_PF_NUM_MASK;
-		else if (current_pf == BP_ABS_FUNC(bp))
+		else if (current_pf == BP_FUNC(bp))
 			bnx2x_vf_set_igu_info(bp, sb_id,
 					      (fid & IGU_FID_VF_NUM_MASK));
 		DP(BNX2X_MSG_IOV, "%s[%d], igu_sb_id=%d, msix=%d\n",
@@ -2805,7 +2802,7 @@ struct set_vf_state_cookie {
 	u8 state;
 };
 
-void bnx2x_set_vf_state(void *cookie)
+static void bnx2x_set_vf_state(void *cookie)
 {
 	struct set_vf_state_cookie *p = (struct set_vf_state_cookie *)cookie;
 
@@ -3183,6 +3180,7 @@ int bnx2x_enable_sriov(struct bnx2x *bp)
 		/* set local queue arrays */
 		vf->vfqs = &bp->vfdb->vfqs[qcount];
 		qcount += vf_sb_count(vf);
+		bnx2x_iov_static_resc(bp, vf);
 	}
 
 	/* prepare msix vectors in VF configuration space */
@@ -3190,6 +3188,8 @@ int bnx2x_enable_sriov(struct bnx2x *bp)
 		bnx2x_pretend_func(bp, HW_VF_HANDLE(bp, vf_idx));
 		REG_WR(bp, PCICFG_OFFSET + GRC_CONFIG_REG_VF_MSIX_CONTROL,
 		       num_vf_queues);
+		DP(BNX2X_MSG_IOV, "set msix vec num in VF %d cfg space to %d\n",
+		   vf_idx, num_vf_queues);
 	}
 	bnx2x_pretend_func(bp, BP_ABS_FUNC(bp));
 
@@ -3225,8 +3225,9 @@ void bnx2x_disable_sriov(struct bnx2x *bp)
 	pci_disable_sriov(bp->pdev);
 }
 
-int bnx2x_vf_ndo_prep(struct bnx2x *bp, int vfidx, struct bnx2x_virtf **vf,
-			struct pf_vf_bulletin_content **bulletin)
+static int bnx2x_vf_ndo_prep(struct bnx2x *bp, int vfidx,
+			     struct bnx2x_virtf **vf,
+			     struct pf_vf_bulletin_content **bulletin)
 {
 	if (bp->state != BNX2X_STATE_OPEN) {
 		BNX2X_ERR("vf ndo called though PF is down\n");
@@ -3635,29 +3636,6 @@ alloc_mem_err:
 	BNX2X_PCI_FREE(bp->vf2pf_mbox, bp->pf2vf_bulletin_mapping,
 		       sizeof(union pf_vf_bulletin));
 	return -ENOMEM;
-}
-
-int bnx2x_open_epilog(struct bnx2x *bp)
-{
-	/* Enable sriov via delayed work. This must be done via delayed work
-	 * because it causes the probe of the vf devices to be run, which invoke
-	 * register_netdevice which must have rtnl lock taken. As we are holding
-	 * the lock right now, that could only work if the probe would not take
-	 * the lock. However, as the probe of the vf may be called from other
-	 * contexts as well (such as passthrough to vm fails) it can't assume
-	 * the lock is being held for it. Using delayed work here allows the
-	 * probe code to simply take the lock (i.e. wait for it to be released
-	 * if it is being held). We only want to do this if the number of VFs
-	 * was set before PF driver was loaded.
-	 */
-	if (IS_SRIOV(bp) && BNX2X_NR_VIRTFN(bp)) {
-		smp_mb__before_clear_bit();
-		set_bit(BNX2X_SP_RTNL_ENABLE_SRIOV, &bp->sp_rtnl_state);
-		smp_mb__after_clear_bit();
-		schedule_delayed_work(&bp->sp_rtnl_task, 0);
-	}
-
-	return 0;
 }
 
 void bnx2x_iov_channel_down(struct bnx2x *bp)

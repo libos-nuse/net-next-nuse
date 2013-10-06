@@ -88,7 +88,8 @@ static inline char *nic_name(struct pci_dev *pdev)
 #define BE_MIN_MTU		256
 
 #define BE_NUM_VLANS_SUPPORTED	64
-#define BE_MAX_EQD		96u
+#define BE_UMC_NUM_VLANS_SUPPORTED	15
+#define BE_MAX_EQD		128u
 #define	BE_MAX_TX_FRAG_COUNT	30
 
 #define EVNT_Q_LEN		1024
@@ -200,6 +201,17 @@ struct be_eq_obj {
 	struct be_adapter *adapter;
 } ____cacheline_aligned_in_smp;
 
+struct be_aic_obj {		/* Adaptive interrupt coalescing (AIC) info */
+	bool enable;
+	u32 min_eqd;		/* in usecs */
+	u32 max_eqd;		/* in usecs */
+	u32 prev_eqd;		/* in usecs */
+	u32 et_eqd;		/* configured val when aic is off */
+	ulong jiffies;
+	u64 rx_pkts_prev;	/* Used to calculate RX pps */
+	u64 tx_reqs_prev;	/* Used to calculate TX pps */
+};
+
 struct be_mcc_obj {
 	struct be_queue_info q;
 	struct be_queue_info cq;
@@ -214,6 +226,7 @@ struct be_tx_stats {
 	u64 tx_compl;
 	ulong tx_jiffies;
 	u32 tx_stops;
+	u32 tx_drv_drops;	/* pkts dropped by driver */
 	struct u64_stats_sync sync;
 	struct u64_stats_sync sync_compl;
 };
@@ -238,15 +251,12 @@ struct be_rx_page_info {
 struct be_rx_stats {
 	u64 rx_bytes;
 	u64 rx_pkts;
-	u64 rx_pkts_prev;
-	ulong rx_jiffies;
 	u32 rx_drops_no_skbs;	/* skb allocation errors */
 	u32 rx_drops_no_frags;	/* HW has no fetched frags */
 	u32 rx_post_fail;	/* page post alloc failures */
 	u32 rx_compl;
 	u32 rx_mcast_pkts;
 	u32 rx_compl_err;	/* completions with err set */
-	u32 rx_pps;		/* pkts per second */
 	struct u64_stats_sync sync;
 };
 
@@ -333,6 +343,7 @@ enum vf_state {
 
 #define BE_FLAGS_LINK_STATUS_INIT		1
 #define BE_FLAGS_WORKER_SCHEDULED		(1 << 3)
+#define BE_FLAGS_VLAN_PROMISC			(1 << 4)
 #define BE_FLAGS_NAPI_ENABLED			(1 << 9)
 #define BE_UC_PMAC_COUNT		30
 #define BE_VF_UC_PMAC_COUNT		2
@@ -403,6 +414,7 @@ struct be_adapter {
 	u32 big_page_size;	/* Compounded page size shared by rx wrbs */
 
 	struct be_drv_stats drv_stats;
+	struct be_aic_obj aic_obj[MAX_EVT_QS];
 	u16 vlans_added;
 	u8 vlan_tag[VLAN_N_VID];
 	u8 vlan_prio_bmap;	/* Available Priority BitMap */
@@ -470,8 +482,8 @@ struct be_adapter {
 
 #define be_physfn(adapter)		(!adapter->virtfn)
 #define	sriov_enabled(adapter)		(adapter->num_vfs > 0)
-#define sriov_want(adapter)             (be_max_vfs(adapter) && num_vfs && \
-					 be_physfn(adapter))
+#define sriov_want(adapter)             (be_physfn(adapter) &&	\
+					 (num_vfs || pci_num_vf(adapter->pdev)))
 #define for_all_vfs(adapter, vf_cfg, i)					\
 	for (i = 0, vf_cfg = &adapter->vf_cfg[i]; i < adapter->num_vfs;	\
 		i++, vf_cfg++)
@@ -694,27 +706,27 @@ static inline int qnq_async_evt_rcvd(struct be_adapter *adapter)
 	return adapter->flags & BE_FLAGS_QNQ_ASYNC_EVT_RCVD;
 }
 
-extern void be_cq_notify(struct be_adapter *adapter, u16 qid, bool arm,
-		u16 num_popped);
-extern void be_link_status_update(struct be_adapter *adapter, u8 link_status);
-extern void be_parse_stats(struct be_adapter *adapter);
-extern int be_load_fw(struct be_adapter *adapter, u8 *func);
-extern bool be_is_wol_supported(struct be_adapter *adapter);
-extern bool be_pause_supported(struct be_adapter *adapter);
-extern u32 be_get_fw_log_level(struct be_adapter *adapter);
+void be_cq_notify(struct be_adapter *adapter, u16 qid, bool arm,
+		  u16 num_popped);
+void be_link_status_update(struct be_adapter *adapter, u8 link_status);
+void be_parse_stats(struct be_adapter *adapter);
+int be_load_fw(struct be_adapter *adapter, u8 *func);
+bool be_is_wol_supported(struct be_adapter *adapter);
+bool be_pause_supported(struct be_adapter *adapter);
+u32 be_get_fw_log_level(struct be_adapter *adapter);
 int be_update_queues(struct be_adapter *adapter);
 int be_poll(struct napi_struct *napi, int budget);
 
 /*
  * internal function to initialize-cleanup roce device.
  */
-extern void be_roce_dev_add(struct be_adapter *);
-extern void be_roce_dev_remove(struct be_adapter *);
+void be_roce_dev_add(struct be_adapter *);
+void be_roce_dev_remove(struct be_adapter *);
 
 /*
  * internal function to open-close roce device during ifup-ifdown.
  */
-extern void be_roce_dev_open(struct be_adapter *);
-extern void be_roce_dev_close(struct be_adapter *);
+void be_roce_dev_open(struct be_adapter *);
+void be_roce_dev_close(struct be_adapter *);
 
 #endif				/* BE_H */

@@ -639,6 +639,9 @@ static int bnx2x_get_regs_len(struct net_device *dev)
 	struct bnx2x *bp = netdev_priv(dev);
 	int regdump_len = 0;
 
+	if (IS_VF(bp))
+		return 0;
+
 	regdump_len = __bnx2x_get_regs_len(bp);
 	regdump_len *= 4;
 	regdump_len += sizeof(struct dump_header);
@@ -1387,9 +1390,9 @@ static bool bnx2x_is_nvm_accessible(struct bnx2x *bp)
 	u16 pm = 0;
 	struct net_device *dev = pci_get_drvdata(bp->pdev);
 
-	if (bp->pm_cap)
+	if (bp->pdev->pm_cap)
 		rc = pci_read_config_word(bp->pdev,
-					  bp->pm_cap + PCI_PM_CTRL, &pm);
+					  bp->pdev->pm_cap + PCI_PM_CTRL, &pm);
 
 	if ((rc && !netif_running(dev)) ||
 	    (!rc && ((pm & PCI_PM_CTRL_STATE_MASK) != (__force u16)PCI_D0)))
@@ -2900,9 +2903,16 @@ static void bnx2x_self_test(struct net_device *dev,
 
 	memset(buf, 0, sizeof(u64) * BNX2X_NUM_TESTS(bp));
 
+	if (bnx2x_test_nvram(bp) != 0) {
+		if (!IS_MF(bp))
+			buf[4] = 1;
+		else
+			buf[0] = 1;
+		etest->flags |= ETH_TEST_FL_FAILED;
+	}
+
 	if (!netif_running(dev)) {
-		DP(BNX2X_MSG_ETHTOOL,
-		   "Can't perform self-test when interface is down\n");
+		DP(BNX2X_MSG_ETHTOOL, "Interface is down\n");
 		return;
 	}
 
@@ -2964,13 +2974,7 @@ static void bnx2x_self_test(struct net_device *dev,
 		/* wait until link state is restored */
 		bnx2x_wait_for_link(bp, link_up, is_serdes);
 	}
-	if (bnx2x_test_nvram(bp) != 0) {
-		if (!IS_MF(bp))
-			buf[4] = 1;
-		else
-			buf[0] = 1;
-		etest->flags |= ETH_TEST_FL_FAILED;
-	}
+
 	if (bnx2x_test_intr(bp) != 0) {
 		if (!IS_MF(bp))
 			buf[5] = 1;

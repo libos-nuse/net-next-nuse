@@ -344,8 +344,8 @@ static void cp_to_buf(const int type, void *to, const void *from, int len)
 		}
 
 		clen = len & 1;
-		rtp = tp;
-		rfp = fp;
+		rtp = (unsigned char *)tp;
+		rfp = (const unsigned char *)fp;
 		while (clen--) {
 			*rtp++ = *rfp++;
 		}
@@ -372,8 +372,8 @@ static void cp_to_buf(const int type, void *to, const void *from, int len)
 		 * do the rest, if any.
 		 */
 		clen = len & 15;
-		rtp = (unsigned char *) tp;
-		rfp = (unsigned char *) fp;
+		rtp = (unsigned char *)tp;
+		rfp = (const unsigned char *)fp;
 		while (clen--) {
 			*rtp++ = *rfp++;
 		}
@@ -403,8 +403,8 @@ static void cp_from_buf(const int type, void *to, const void *from, int len)
 
 		clen = len & 1;
 
-		rtp = tp;
-		rfp = fp;
+		rtp = (unsigned char *)tp;
+		rfp = (const unsigned char *)fp;
 
 		while (clen--) {
 			*rtp++ = *rfp++;
@@ -433,8 +433,8 @@ static void cp_from_buf(const int type, void *to, const void *from, int len)
 		 * do the rest, if any.
 		 */
 		clen = len & 15;
-		rtp = (unsigned char *) tp;
-		rfp = (unsigned char *) fp;
+		rtp = (unsigned char *)tp;
+		rfp = (const unsigned char *)fp;
 		while (clen--) {
 			*rtp++ = *rfp++;
 		}
@@ -725,6 +725,7 @@ static irqreturn_t lance_dma_merr_int(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 
+	clear_ioasic_dma_irq(irq);
 	printk(KERN_ERR "%s: DMA error\n", dev->name);
 	return IRQ_HANDLED;
 }

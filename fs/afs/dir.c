@@ -600,9 +600,6 @@ static int afs_d_revalidate(struct dentry *dentry, unsigned int flags)
 
 	/* lock down the parent dentry so we can peer at it */
 	parent = dget_parent(dentry);
-	if (!parent->d_inode)
-		goto out_bad;
-
 	dir = AFS_FS_I(parent->d_inode);
 
 	/* validate the parent directory */
@@ -751,10 +748,6 @@ static int afs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	_enter("{%x:%u},{%s},%ho",
 	       dvnode->fid.vid, dvnode->fid.vnode, dentry->d_name.name, mode);
 
-	ret = -ENAMETOOLONG;
-	if (dentry->d_name.len >= AFSNAMEMAX)
-		goto error;
-
 	key = afs_request_key(dvnode->volume->cell);
 	if (IS_ERR(key)) {
 		ret = PTR_ERR(key);
@@ -815,10 +808,6 @@ static int afs_rmdir(struct inode *dir, struct dentry *dentry)
 
 	_enter("{%x:%u},{%s}",
 	       dvnode->fid.vid, dvnode->fid.vnode, dentry->d_name.name);
-
-	ret = -ENAMETOOLONG;
-	if (dentry->d_name.len >= AFSNAMEMAX)
-		goto error;
 
 	key = afs_request_key(dvnode->volume->cell);
 	if (IS_ERR(key)) {
@@ -936,10 +925,6 @@ static int afs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 	_enter("{%x:%u},{%s},%ho,",
 	       dvnode->fid.vid, dvnode->fid.vnode, dentry->d_name.name, mode);
 
-	ret = -ENAMETOOLONG;
-	if (dentry->d_name.len >= AFSNAMEMAX)
-		goto error;
-
 	key = afs_request_key(dvnode->volume->cell);
 	if (IS_ERR(key)) {
 		ret = PTR_ERR(key);
@@ -1005,10 +990,6 @@ static int afs_link(struct dentry *from, struct inode *dir,
 	       dvnode->fid.vid, dvnode->fid.vnode,
 	       dentry->d_name.name);
 
-	ret = -ENAMETOOLONG;
-	if (dentry->d_name.len >= AFSNAMEMAX)
-		goto error;
-
 	key = afs_request_key(dvnode->volume->cell);
 	if (IS_ERR(key)) {
 		ret = PTR_ERR(key);
@@ -1052,10 +1033,6 @@ static int afs_symlink(struct inode *dir, struct dentry *dentry,
 	_enter("{%x:%u},{%s},%s",
 	       dvnode->fid.vid, dvnode->fid.vnode, dentry->d_name.name,
 	       content);
-
-	ret = -ENAMETOOLONG;
-	if (dentry->d_name.len >= AFSNAMEMAX)
-		goto error;
 
 	ret = -EINVAL;
 	if (strlen(content) >= AFSPATHMAX)
@@ -1126,10 +1103,6 @@ static int afs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	       vnode->fid.vid, vnode->fid.vnode,
 	       new_dvnode->fid.vid, new_dvnode->fid.vnode,
 	       new_dentry->d_name.name);
-
-	ret = -ENAMETOOLONG;
-	if (new_dentry->d_name.len >= AFSNAMEMAX)
-		goto error;
 
 	key = afs_request_key(orig_dvnode->volume->cell);
 	if (IS_ERR(key)) {

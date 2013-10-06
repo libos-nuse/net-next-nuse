@@ -203,6 +203,14 @@ config GPIO_MXS
 	select GPIO_GENERIC
 	select GENERIC_IRQ_CHIP
 
+config GPIO_OCTEON
+	tristate "Cavium OCTEON GPIO"
+	depends on GPIOLIB && CAVIUM_OCTEON_SOC
+	default y
+	help
+	  Say yes here to support the on-chip GPIO lines on the OCTEON
+	  family of SOCs.
+
 config GPIO_PL061
 	bool "PrimeCell PL061 GPIO support"
 	depends on ARM && ARM_AMBA
@@ -314,7 +322,7 @@ config GPIO_ICH
 
 config GPIO_VX855
 	tristate "VIA VX855/VX875 GPIO"
-	depends on PCI && GENERIC_HARDIRQS
+	depends on PCI
 	select MFD_CORE
 	select MFD_VX855
 	help
@@ -388,7 +396,7 @@ config GPIO_MAX732X
 
 config GPIO_MAX732X_IRQ
 	bool "Interrupt controller support for MAX732x"
-	depends on GPIO_MAX732X=y && GENERIC_HARDIRQS
+	depends on GPIO_MAX732X=y
 	help
 	  Say yes here to enable the max732x to be used as an interrupt
 	  controller. It requires the driver to be built in the kernel.
@@ -653,7 +661,7 @@ config GPIO_TIMBERDALE
 
 config GPIO_RDC321X
 	tristate "RDC R-321x GPIO support"
-	depends on PCI && GENERIC_HARDIRQS
+	depends on PCI
 	select MFD_CORE
 	select MFD_RDC321X
 	help

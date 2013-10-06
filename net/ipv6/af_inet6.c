@@ -915,6 +915,9 @@ static int __init inet6_init(void)
 	err = ip6_route_init();
 	if (err)
 		goto ip6_route_fail;
+	err = ndisc_late_init();
+	if (err)
+		goto ndisc_late_fail;
 	err = ip6_flowlabel_init();
 	if (err)
 		goto ip6_flowlabel_fail;
@@ -981,6 +984,8 @@ ipv6_exthdrs_fail:
 addrconf_fail:
 	ip6_flowlabel_cleanup();
 ip6_flowlabel_fail:
+	ndisc_late_cleanup();
+ndisc_late_fail:
 	ip6_route_cleanup();
 ip6_route_fail:
 #ifdef CONFIG_PROC_FS
@@ -1022,52 +1027,5 @@ out_unregister_tcp_proto:
 	goto out;
 }
 module_init(inet6_init);
-
-static void __exit inet6_exit(void)
-{
-	if (disable_ipv6_mod)
-		return;
-
-	/* First of all disallow new sockets creation. */
-	sock_unregister(PF_INET6);
-	/* Disallow any further netlink messages */
-	rtnl_unregister_all(PF_INET6);
-
-	udpv6_exit();
-	udplitev6_exit();
-	tcpv6_exit();
-
-	/* Cleanup code parts. */
-	ipv6_packet_cleanup();
-	ipv6_frag_exit();
-	ipv6_exthdrs_exit();
-	addrconf_cleanup();
-	ip6_flowlabel_cleanup();
-	ip6_route_cleanup();
-#ifdef CONFIG_PROC_FS
-
-	/* Cleanup code parts. */
-	if6_proc_exit();
-	ipv6_misc_proc_exit();
-	udplite6_proc_exit();
-	raw6_proc_exit();
-#endif
-	ipv6_netfilter_fini();
-	ipv6_stub = NULL;
-	igmp6_cleanup();
-	ndisc_cleanup();
-	ip6_mr_cleanup();
-	icmpv6_cleanup();
-	rawv6_exit();
-
-	unregister_pernet_subsys(&inet6_net_ops);
-	proto_unregister(&rawv6_prot);
-	proto_unregister(&udplitev6_prot);
-	proto_unregister(&udpv6_prot);
-	proto_unregister(&tcpv6_prot);
-
-	rcu_barrier(); /* Wait for completion of call_rcu()'s */
-}
-module_exit(inet6_exit);
 
 MODULE_ALIAS_NETPROTO(PF_INET6);

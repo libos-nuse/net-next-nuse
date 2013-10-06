@@ -5708,7 +5708,7 @@ static void igb_vf_reset_msg(struct igb_adapter *adapter, u32 vf)
 
 	/* reply to reset with ack and vf mac address */
 	msgbuf[0] = E1000_VF_RESET | E1000_VT_MSGTYPE_ACK;
-	memcpy(addr, vf_mac, 6);
+	memcpy(addr, vf_mac, ETH_ALEN);
 	igb_write_mbx(hw, msgbuf, 3, vf);
 }
 
@@ -7837,5 +7837,27 @@ s32 igb_write_i2c_byte(struct e1000_hw *hw, u8 byte_offset,
 	else
 		return E1000_SUCCESS;
 
+}
+
+int igb_reinit_queues(struct igb_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+	struct pci_dev *pdev = adapter->pdev;
+	int err = 0;
+
+	if (netif_running(netdev))
+		igb_close(netdev);
+
+	igb_clear_interrupt_scheme(adapter);
+
+	if (igb_init_interrupt_scheme(adapter, true)) {
+		dev_err(&pdev->dev, "Unable to allocate memory for queues\n");
+		return -ENOMEM;
+	}
+
+	if (netif_running(netdev))
+		err = igb_open(netdev);
+
+	return err;
 }
 /* igb_main.c */
