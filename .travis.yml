@@ -2,6 +2,11 @@ language: c
 install:
     - sudo apt-get update
     - sudo apt-get install bc
+    - sudo apt-get install indent
+    - sudo apt-get install libpcap-dev
+    - sudo apt-get install libc6-dbg
+    - sudo apt-get install libsysfs-dev
+    - sudo apt-get install libdb-dev
 compiler:
   - gcc
 # Change this to your needs
