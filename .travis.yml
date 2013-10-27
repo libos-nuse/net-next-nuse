@@ -3,4 +3,4 @@ compiler:
   - gcc
   - clang
 # Change this to your needs
-script: make defconfig ARCH=SIM && make clean ARCH=SIM && make library ARCH=SIM
+script: make defconfig ARCH=sim && make clean ARCH=sim && make library ARCH=sim
