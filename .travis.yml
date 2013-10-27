@@ -1,0 +1,6 @@
+language: c
+compiler:
+  - gcc
+  - clang
+# Change this to your needs
+script: make defconfig ARCH=SIM && make clean ARCH=SIM && make library ARCH=SIM
