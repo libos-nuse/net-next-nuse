@@ -322,3 +322,9 @@ int sched_rr_handler(struct ctl_table *table, int write,
 {
   return 0;
 }
+
+void on_each_cpu_mask(const struct cpumask *mask,
+                      smp_call_func_t func, void *info, bool wait)
+{
+  return;
+}

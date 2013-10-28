@@ -4,7 +4,7 @@
 /*
  * Add a shrinker callback to be called from the vm
  */
-void register_shrinker(struct shrinker *shrinker)
+int register_shrinker(struct shrinker *shrinker)
 {
 
 }

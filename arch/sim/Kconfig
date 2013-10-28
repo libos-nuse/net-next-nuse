@@ -30,6 +30,7 @@ config KTIME_SCALAR
 
 config MODULES
        def_bool y
+       option modules
 
 config GENERIC_CSUM
 	def_bool y
