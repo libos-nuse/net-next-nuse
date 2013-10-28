@@ -230,7 +230,7 @@ static struct slave *tlb_get_least_loaded_slave(struct bonding *bond)
 	max_gap = LLONG_MIN;
 
 	/* Find the slave with the largest gap */
-	bond_for_each_slave(bond, slave, iter) {
+	bond_for_each_slave_rcu(bond, slave, iter) {
 		if (SLAVE_IS_OK(slave)) {
 			long long gap = compute_gap(slave);
 
@@ -388,6 +388,39 @@ static struct slave *rlb_next_rx_slave(struct bonding *bond)
 	bool found = false;
 
 	bond_for_each_slave(bond, slave, iter) {
+		if (!SLAVE_IS_OK(slave))
+			continue;
+		if (!found) {
+			if (!before || before->speed < slave->speed)
+				before = slave;
+		} else {
+			if (!rx_slave || rx_slave->speed < slave->speed)
+				rx_slave = slave;
+		}
+		if (slave == bond_info->rx_slave)
+			found = true;
+	}
+	/* we didn't find anything after the current or we have something
+	 * better before and up to the current slave
+	 */
+	if (!rx_slave || (before && rx_slave->speed < before->speed))
+		rx_slave = before;
+
+	if (rx_slave)
+		bond_info->rx_slave = rx_slave;
+
+	return rx_slave;
+}
+
+/* Caller must hold rcu_read_lock() for read */
+static struct slave *__rlb_next_rx_slave(struct bonding *bond)
+{
+	struct alb_bond_info *bond_info = &(BOND_ALB_INFO(bond));
+	struct slave *before = NULL, *rx_slave = NULL, *slave;
+	struct list_head *iter;
+	bool found = false;
+
+	bond_for_each_slave_rcu(bond, slave, iter) {
 		if (!SLAVE_IS_OK(slave))
 			continue;
 		if (!found) {
@@ -628,11 +661,13 @@ static struct slave *rlb_choose_channel(struct sk_buff *skb, struct bonding *bon
 {
 	struct alb_bond_info *bond_info = &(BOND_ALB_INFO(bond));
 	struct arp_pkt *arp = arp_pkt(skb);
-	struct slave *assigned_slave;
+	struct slave *assigned_slave, *curr_active_slave;
 	struct rlb_client_info *client_info;
 	u32 hash_index = 0;
 
 	_lock_rx_hashtbl(bond);
+
+	curr_active_slave = rcu_dereference(bond->curr_active_slave);
 
 	hash_index = _simple_hash((u8 *)&arp->ip_dst, sizeof(arp->ip_dst));
 	client_info = &(bond_info->rx_hashtbl[hash_index]);
@@ -658,14 +693,14 @@ static struct slave *rlb_choose_channel(struct sk_buff *skb, struct bonding *bon
 			 * that the new client can be assigned to this entry.
 			 */
 			if (bond->curr_active_slave &&
-			    client_info->slave != bond->curr_active_slave) {
-				client_info->slave = bond->curr_active_slave;
+			    client_info->slave != curr_active_slave) {
+				client_info->slave = curr_active_slave;
 				rlb_update_client(client_info);
 			}
 		}
 	}
 	/* assign a new slave */
-	assigned_slave = rlb_next_rx_slave(bond);
+	assigned_slave = __rlb_next_rx_slave(bond);
 
 	if (assigned_slave) {
 		if (!(client_info->assigned &&
@@ -728,7 +763,7 @@ static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 	/* Don't modify or load balance ARPs that do not originate locally
 	 * (e.g.,arrive via a bridge).
 	 */
-	if (!bond_slave_has_mac(bond, arp->mac_src))
+	if (!bond_slave_has_mac_rcu(bond, arp->mac_src))
 		return NULL;
 
 	if (arp->op_code == htons(ARPOP_REPLY)) {
@@ -1343,11 +1378,6 @@ int bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 	skb_reset_mac_header(skb);
 	eth_data = eth_hdr(skb);
 
-	/* make sure that the curr_active_slave do not change during tx
-	 */
-	read_lock(&bond->lock);
-	read_lock(&bond->curr_slave_lock);
-
 	switch (ntohs(skb->protocol)) {
 	case ETH_P_IP: {
 		const struct iphdr *iph = ip_hdr(skb);
@@ -1429,12 +1459,12 @@ int bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 
 	if (!tx_slave) {
 		/* unbalanced or unassigned, send through primary */
-		tx_slave = bond->curr_active_slave;
+		tx_slave = rcu_dereference(bond->curr_active_slave);
 		bond_info->unbalanced_load += skb->len;
 	}
 
 	if (tx_slave && SLAVE_IS_OK(tx_slave)) {
-		if (tx_slave != bond->curr_active_slave) {
+		if (tx_slave != rcu_dereference(bond->curr_active_slave)) {
 			memcpy(eth_data->h_source,
 			       tx_slave->dev->dev_addr,
 			       ETH_ALEN);
@@ -1449,8 +1479,6 @@ int bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 		}
 	}
 
-	read_unlock(&bond->curr_slave_lock);
-	read_unlock(&bond->lock);
 	if (res) {
 		/* no suitable interface, frame not sent */
 		kfree_skb(skb);
@@ -1467,11 +1495,13 @@ void bond_alb_monitor(struct work_struct *work)
 	struct list_head *iter;
 	struct slave *slave;
 
-	read_lock(&bond->lock);
+	if (!rtnl_trylock())
+		goto re_arm;
 
 	if (!bond_has_slaves(bond)) {
 		bond_info->tx_rebalance_counter = 0;
 		bond_info->lp_counter = 0;
+		rtnl_unlock();
 		goto re_arm;
 	}
 
@@ -1520,16 +1550,6 @@ void bond_alb_monitor(struct work_struct *work)
 		if (bond_info->primary_is_promisc &&
 		    (++bond_info->rlb_promisc_timeout_counter >= RLB_PROMISC_TIMEOUT)) {
 
-			/*
-			 * dev_set_promiscuity requires rtnl and
-			 * nothing else.  Avoid race with bond_close.
-			 */
-			read_unlock(&bond->lock);
-			if (!rtnl_trylock()) {
-				read_lock(&bond->lock);
-				goto re_arm;
-			}
-
 			bond_info->rlb_promisc_timeout_counter = 0;
 
 			/* If the primary was set to promiscuous mode
@@ -1538,9 +1558,6 @@ void bond_alb_monitor(struct work_struct *work)
 			 */
 			dev_set_promiscuity(bond->curr_active_slave->dev, -1);
 			bond_info->primary_is_promisc = 0;
-
-			rtnl_unlock();
-			read_lock(&bond->lock);
 		}
 
 		if (bond_info->rlb_rebalance) {
@@ -1563,10 +1580,9 @@ void bond_alb_monitor(struct work_struct *work)
 		}
 	}
 
+	rtnl_unlock();
 re_arm:
 	queue_delayed_work(bond->wq, &bond->alb_work, alb_delta_in_ticks);
-
-	read_unlock(&bond->lock);
 }
 
 /* assumption: called before the slave is attached to the bond
@@ -1698,6 +1714,23 @@ void bond_alb_handle_active_change(struct bonding *bond, struct slave *new_slave
 	read_unlock(&bond->lock);
 
 	ASSERT_RTNL();
+
+	/* in TLB mode, the slave might flip down/up with the old dev_addr,
+	 * and thus filter bond->dev_addr's packets, so force bond's mac
+	 */
+	if (bond->params.mode == BOND_MODE_TLB) {
+		struct sockaddr sa;
+		u8 tmp_addr[ETH_ALEN];
+
+		memcpy(tmp_addr, new_slave->dev->dev_addr, ETH_ALEN);
+
+		memcpy(sa.sa_data, bond->dev->dev_addr, bond->dev->addr_len);
+		sa.sa_family = bond->dev->type;
+		/* we don't care if it can't change its mac, best effort */
+		dev_set_mac_address(new_slave->dev, &sa);
+
+		memcpy(new_slave->dev->dev_addr, tmp_addr, ETH_ALEN);
+	}
 
 	/* curr_active_slave must be set before calling alb_swap_mac_addr */
 	if (swap_slave) {

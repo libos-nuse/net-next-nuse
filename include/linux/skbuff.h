@@ -318,9 +318,13 @@ enum {
 
 	SKB_GSO_GRE = 1 << 6,
 
-	SKB_GSO_UDP_TUNNEL = 1 << 7,
+	SKB_GSO_IPIP = 1 << 7,
 
-	SKB_GSO_MPLS = 1 << 8,
+	SKB_GSO_SIT = 1 << 8,
+
+	SKB_GSO_UDP_TUNNEL = 1 << 9,
+
+	SKB_GSO_MPLS = 1 << 10,
 };
 
 #if BITS_PER_LONG > 32
@@ -2062,6 +2066,8 @@ static inline void skb_frag_set_page(struct sk_buff *skb, int f,
 	__skb_frag_set_page(&skb_shinfo(skb)->frags[f], page);
 }
 
+bool skb_page_frag_refill(unsigned int sz, struct page_frag *pfrag, gfp_t prio);
+
 /**
  * skb_frag_dma_map - maps a paged fragment via the DMA API
  * @dev: the device to map the fragment to
@@ -2720,9 +2726,12 @@ static inline struct sec_path *skb_sec_path(struct sk_buff *skb)
 /* Keeps track of mac header offset relative to skb->head.
  * It is useful for TSO of Tunneling protocol. e.g. GRE.
  * For non-tunnel skb it points to skb_mac_header() and for
- * tunnel skb it points to outer mac header. */
+ * tunnel skb it points to outer mac header.
+ * Keeps track of level of encapsulation of network headers.
+ */
 struct skb_gso_cb {
-	int mac_offset;
+	int	mac_offset;
+	int	encap_level;
 };
 #define SKB_GSO_CB(skb) ((struct skb_gso_cb *)(skb)->cb)
 

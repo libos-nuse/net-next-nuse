@@ -64,7 +64,6 @@ struct ath_node;
 
 struct ath_config {
 	u16 txpowlimit;
-	u8 cabqReadytime;
 };
 
 /*************************/
@@ -207,6 +206,14 @@ struct ath_frame_info {
 	u8 baw_tracked : 1;
 };
 
+struct ath_rxbuf {
+	struct list_head list;
+	struct sk_buff *bf_mpdu;
+	void *bf_desc;
+	dma_addr_t bf_daddr;
+	dma_addr_t bf_buf_addr;
+};
+
 struct ath_buf_state {
 	u8 bf_type;
 	u8 bfs_paprd;
@@ -307,7 +314,7 @@ struct ath_rx {
 	struct ath_descdma rxdma;
 	struct ath_rx_edma rx_edma[ATH9K_RX_QUEUE_MAX];
 
-	struct ath_buf *buf_hold;
+	struct ath_rxbuf *buf_hold;
 	struct sk_buff *frag;
 
 	u32 ampdu_ref;
@@ -459,8 +466,8 @@ void ath9k_queue_reset(struct ath_softc *sc, enum ath_reset_type type);
 
 #define ATH_DUMP_BTCOEX(_s, _val)				\
 	do {							\
-		len += snprintf(buf + len, size - len,		\
-				"%20s : %10d\n", _s, (_val));	\
+		len += scnprintf(buf + len, size - len,		\
+				 "%20s : %10d\n", _s, (_val));	\
 	} while (0)
 
 enum bt_op_flags {
@@ -581,7 +588,6 @@ static inline void ath_fill_led_pin(struct ath_softc *sc)
 #define ATH_ANT_DIV_COMB_ALT_ANT_RATIO_LOW_RSSI 50
 #define ATH_ANT_DIV_COMB_ALT_ANT_RATIO2_LOW_RSSI 50
 
-#define ATH_ANT_DIV_COMB_LNA1_LNA2_SWITCH_DELTA -1
 #define ATH_ANT_DIV_COMB_LNA1_DELTA_HI -4
 #define ATH_ANT_DIV_COMB_LNA1_DELTA_MID -2
 #define ATH_ANT_DIV_COMB_LNA1_DELTA_LOW 2
@@ -626,12 +632,15 @@ void ath_ant_comb_scan(struct ath_softc *sc, struct ath_rx_status *rs);
 /* Main driver core */
 /********************/
 
-#define ATH9K_PCI_CUS198     0x0001
-#define ATH9K_PCI_CUS230     0x0002
-#define ATH9K_PCI_CUS217     0x0004
-#define ATH9K_PCI_WOW        0x0008
-#define ATH9K_PCI_BT_ANT_DIV 0x0010
-#define ATH9K_PCI_D3_L1_WAR  0x0020
+#define ATH9K_PCI_CUS198      0x0001
+#define ATH9K_PCI_CUS230      0x0002
+#define ATH9K_PCI_CUS217      0x0004
+#define ATH9K_PCI_CUS252      0x0008
+#define ATH9K_PCI_WOW         0x0010
+#define ATH9K_PCI_BT_ANT_DIV  0x0020
+#define ATH9K_PCI_D3_L1_WAR   0x0040
+#define ATH9K_PCI_AR9565_1ANT 0x0080
+#define ATH9K_PCI_AR9565_2ANT 0x0100
 
 /*
  * Default cache line size, in bytes.
@@ -924,7 +933,6 @@ void ath9k_deinit_device(struct ath_softc *sc);
 void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw);
 void ath9k_reload_chainmask_settings(struct ath_softc *sc);
 
-bool ath9k_uses_beacons(int type);
 void ath9k_spectral_scan_trigger(struct ieee80211_hw *hw);
 int ath9k_spectral_scan_config(struct ieee80211_hw *hw,
 			       enum spectral_mode spectral_mode);

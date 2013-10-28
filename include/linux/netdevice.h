@@ -1143,6 +1143,7 @@ struct net_device {
 	struct list_head	dev_list;
 	struct list_head	napi_list;
 	struct list_head	unreg_list;
+	struct list_head	close_list;
 
 	/* directly linked devices, like slaves for bonding */
 	struct {
@@ -2272,11 +2273,11 @@ static inline void netif_wake_subqueue(struct net_device *dev, u16 queue_index)
 }
 
 #ifdef CONFIG_XPS
-int netif_set_xps_queue(struct net_device *dev, struct cpumask *mask,
+int netif_set_xps_queue(struct net_device *dev, const struct cpumask *mask,
 			u16 index);
 #else
 static inline int netif_set_xps_queue(struct net_device *dev,
-				      struct cpumask *mask,
+				      const struct cpumask *mask,
 				      u16 index)
 {
 	return 0;
@@ -3048,7 +3049,7 @@ do {								\
  * file/line information and a backtrace.
  */
 #define netdev_WARN(dev, format, args...)			\
-	WARN(1, "netdevice: %s\n" format, netdev_name(dev), ##args);
+	WARN(1, "netdevice: %s\n" format, netdev_name(dev), ##args)
 
 /* netif printk helpers, similar to netdev_printk */
 
