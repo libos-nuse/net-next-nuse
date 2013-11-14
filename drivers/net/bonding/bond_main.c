@@ -79,6 +79,7 @@
 #include <net/pkt_sched.h>
 #include <linux/rculist.h>
 #include <net/flow_keys.h>
+#include <linux/reciprocal_div.h>
 #include "bonding.h"
 #include "bond_3ad.h"
 #include "bond_alb.h"
@@ -111,6 +112,7 @@ static char *fail_over_mac;
 static int all_slaves_active;
 static struct bond_params bonding_defaults;
 static int resend_igmp = BOND_DEFAULT_RESEND_IGMP;
+static int packets_per_slave = 1;
 
 module_param(max_bonds, int, 0);
 MODULE_PARM_DESC(max_bonds, "Max number of bonded devices");
@@ -183,6 +185,10 @@ MODULE_PARM_DESC(all_slaves_active, "Keep all frames received on an interface"
 module_param(resend_igmp, int, 0);
 MODULE_PARM_DESC(resend_igmp, "Number of IGMP membership reports to send on "
 			      "link failure");
+module_param(packets_per_slave, int, 0);
+MODULE_PARM_DESC(packets_per_slave, "Packets to send per slave in balance-rr "
+				    "mode; 0 for a random slave, 1 packet per "
+				    "slave (default), >1 packets per slave.");
 
 /*----------------------------- Global variables ----------------------------*/
 
@@ -2118,29 +2124,49 @@ void bond_mii_monitor(struct work_struct *work)
 	struct bonding *bond = container_of(work, struct bonding,
 					    mii_work.work);
 	bool should_notify_peers = false;
+	unsigned long delay;
 
-	if (!rtnl_trylock())
-		goto re_arm;
+	read_lock(&bond->lock);
 
-	if (!bond_has_slaves(bond)) {
-		rtnl_unlock();
+	delay = msecs_to_jiffies(bond->params.miimon);
+
+	if (!bond_has_slaves(bond))
 		goto re_arm;
-	}
 
 	should_notify_peers = bond_should_notify_peers(bond);
 
-	if (bond_miimon_inspect(bond))
+	if (bond_miimon_inspect(bond)) {
+		read_unlock(&bond->lock);
+
+		/* Race avoidance with bond_close cancel of workqueue */
+		if (!rtnl_trylock()) {
+			read_lock(&bond->lock);
+			delay = 1;
+			should_notify_peers = false;
+			goto re_arm;
+		}
+
+		read_lock(&bond->lock);
+
 		bond_miimon_commit(bond);
 
-	if (should_notify_peers)
-		call_netdevice_notifiers(NETDEV_NOTIFY_PEERS, bond->dev);
-
-	rtnl_unlock();
+		read_unlock(&bond->lock);
+		rtnl_unlock();	/* might sleep, hold no other locks */
+		read_lock(&bond->lock);
+	}
 
 re_arm:
 	if (bond->params.miimon)
-		queue_delayed_work(bond->wq, &bond->mii_work,
-				msecs_to_jiffies(bond->params.miimon));
+		queue_delayed_work(bond->wq, &bond->mii_work, delay);
+
+	read_unlock(&bond->lock);
+
+	if (should_notify_peers) {
+		if (!rtnl_trylock())
+			return;
+		call_netdevice_notifiers(NETDEV_NOTIFY_PEERS, bond->dev);
+		rtnl_unlock();
+	}
 }
 
 static bool bond_has_this_ip(struct bonding *bond, __be32 ip)
@@ -2396,13 +2422,10 @@ void bond_loadbalance_arp_mon(struct work_struct *work)
 	struct list_head *iter;
 	int do_failover = 0;
 
-	if (!rtnl_trylock())
-		goto re_arm;
+	read_lock(&bond->lock);
 
-	if (!bond_has_slaves(bond)) {
-		rtnl_unlock();
+	if (!bond_has_slaves(bond))
 		goto re_arm;
-	}
 
 	oldcurrent = bond->curr_active_slave;
 	/* see if any of the previous devices are up now (i.e. they have
@@ -2484,12 +2507,13 @@ void bond_loadbalance_arp_mon(struct work_struct *work)
 		write_unlock_bh(&bond->curr_slave_lock);
 		unblock_netpoll_tx();
 	}
-	rtnl_unlock();
 
 re_arm:
 	if (bond->params.arp_interval)
 		queue_delayed_work(bond->wq, &bond->arp_work,
 				   msecs_to_jiffies(bond->params.arp_interval));
+
+	read_unlock(&bond->lock);
 }
 
 /*
@@ -2726,31 +2750,51 @@ void bond_activebackup_arp_mon(struct work_struct *work)
 	struct bonding *bond = container_of(work, struct bonding,
 					    arp_work.work);
 	bool should_notify_peers = false;
+	int delta_in_ticks;
 
-	if (!rtnl_trylock())
-		goto re_arm;
+	read_lock(&bond->lock);
 
-	if (!bond_has_slaves(bond)) {
-		rtnl_unlock();
+	delta_in_ticks = msecs_to_jiffies(bond->params.arp_interval);
+
+	if (!bond_has_slaves(bond))
 		goto re_arm;
-	}
 
 	should_notify_peers = bond_should_notify_peers(bond);
 
-	if (bond_ab_arp_inspect(bond))
+	if (bond_ab_arp_inspect(bond)) {
+		read_unlock(&bond->lock);
+
+		/* Race avoidance with bond_close flush of workqueue */
+		if (!rtnl_trylock()) {
+			read_lock(&bond->lock);
+			delta_in_ticks = 1;
+			should_notify_peers = false;
+			goto re_arm;
+		}
+
+		read_lock(&bond->lock);
+
 		bond_ab_arp_commit(bond);
+
+		read_unlock(&bond->lock);
+		rtnl_unlock();
+		read_lock(&bond->lock);
+	}
 
 	bond_ab_arp_probe(bond);
 
-	if (should_notify_peers)
-		call_netdevice_notifiers(NETDEV_NOTIFY_PEERS, bond->dev);
-
-	rtnl_unlock();
-
 re_arm:
 	if (bond->params.arp_interval)
-		queue_delayed_work(bond->wq, &bond->arp_work,
-				msecs_to_jiffies(bond->params.arp_interval));
+		queue_delayed_work(bond->wq, &bond->arp_work, delta_in_ticks);
+
+	read_unlock(&bond->lock);
+
+	if (should_notify_peers) {
+		if (!rtnl_trylock())
+			return;
+		call_netdevice_notifiers(NETDEV_NOTIFY_PEERS, bond->dev);
+		rtnl_unlock();
+	}
 }
 
 /*-------------------------- netdev event handling --------------------------*/
@@ -3536,14 +3580,44 @@ void bond_xmit_slave_id(struct bonding *bond, struct sk_buff *skb, int slave_id)
 	kfree_skb(skb);
 }
 
+/**
+ * bond_rr_gen_slave_id - generate slave id based on packets_per_slave
+ * @bond: bonding device to use
+ *
+ * Based on the value of the bonding device's packets_per_slave parameter
+ * this function generates a slave id, which is usually used as the next
+ * slave to transmit through.
+ */
+static u32 bond_rr_gen_slave_id(struct bonding *bond)
+{
+	int packets_per_slave = bond->params.packets_per_slave;
+	u32 slave_id;
+
+	switch (packets_per_slave) {
+	case 0:
+		slave_id = prandom_u32();
+		break;
+	case 1:
+		slave_id = bond->rr_tx_counter;
+		break;
+	default:
+		slave_id = reciprocal_divide(bond->rr_tx_counter,
+					     packets_per_slave);
+		break;
+	}
+	bond->rr_tx_counter++;
+
+	return slave_id;
+}
+
 static int bond_xmit_roundrobin(struct sk_buff *skb, struct net_device *bond_dev)
 {
 	struct bonding *bond = netdev_priv(bond_dev);
 	struct iphdr *iph = ip_hdr(skb);
 	struct slave *slave;
+	u32 slave_id;
 
-	/*
-	 * Start with the curr_active_slave that joined the bond as the
+	/* Start with the curr_active_slave that joined the bond as the
 	 * default for sending IGMP traffic.  For failover purposes one
 	 * needs to maintain some consistency for the interface that will
 	 * send the join/membership reports.  The curr_active_slave found
@@ -3556,8 +3630,8 @@ static int bond_xmit_roundrobin(struct sk_buff *skb, struct net_device *bond_dev
 		else
 			bond_xmit_slave_id(bond, skb, 0);
 	} else {
-		bond_xmit_slave_id(bond, skb,
-				   bond->rr_tx_counter++ % bond->slave_cnt);
+		slave_id = bond_rr_gen_slave_id(bond);
+		bond_xmit_slave_id(bond, skb, slave_id % bond->slave_cnt);
 	}
 
 	return NETDEV_TX_OK;
@@ -4061,6 +4135,12 @@ static int bond_check_params(struct bond_params *params)
 		resend_igmp = BOND_DEFAULT_RESEND_IGMP;
 	}
 
+	if (packets_per_slave < 0 || packets_per_slave > USHRT_MAX) {
+		pr_warn("Warning: packets_per_slave (%d) should be between 0 and %u resetting to 1\n",
+			packets_per_slave, USHRT_MAX);
+		packets_per_slave = 1;
+	}
+
 	/* reset values for TLB/ALB */
 	if ((bond_mode == BOND_MODE_TLB) ||
 	    (bond_mode == BOND_MODE_ALB)) {
@@ -4250,7 +4330,10 @@ static int bond_check_params(struct bond_params *params)
 	params->resend_igmp = resend_igmp;
 	params->min_links = min_links;
 	params->lp_interval = BOND_ALB_DEFAULT_LP_INTERVAL;
-
+	if (packets_per_slave > 1)
+		params->packets_per_slave = reciprocal_value(packets_per_slave);
+	else
+		params->packets_per_slave = packets_per_slave;
 	if (primary) {
 		strncpy(params->primary, primary, IFNAMSIZ);
 		params->primary[IFNAMSIZ - 1] = 0;

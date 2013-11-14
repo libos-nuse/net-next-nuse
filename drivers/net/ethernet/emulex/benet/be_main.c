@@ -3379,6 +3379,12 @@ static int be_setup(struct be_adapter *adapter)
 
 	be_cmd_get_fw_ver(adapter, adapter->fw_ver, adapter->fw_on_flash);
 
+	if (BE2_chip(adapter) && fw_major_num(adapter->fw_ver) < 4) {
+		dev_err(dev, "Firmware on card is old(%s), IRQs may not work.",
+			adapter->fw_ver);
+		dev_err(dev, "Please upgrade firmware to version >= 4.0\n");
+	}
+
 	if (adapter->vlans_added)
 		be_vid_config(adapter);
 
@@ -4095,11 +4101,6 @@ static int be_roce_map_pci_bars(struct be_adapter *adapter)
 static int be_map_pci_bars(struct be_adapter *adapter)
 {
 	u8 __iomem *addr;
-	u32 sli_intf;
-
-	pci_read_config_dword(adapter->pdev, SLI_INTF_REG_OFFSET, &sli_intf);
-	adapter->if_type = (sli_intf & SLI_INTF_IF_TYPE_MASK) >>
-				SLI_INTF_IF_TYPE_SHIFT;
 
 	if (BEx_chip(adapter) && be_physfn(adapter)) {
 		adapter->csr = pci_iomap(adapter->pdev, 2, 0);

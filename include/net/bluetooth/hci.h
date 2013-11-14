@@ -64,16 +64,20 @@
 #define HCI_AMP		0x01
 
 /* First BR/EDR Controller shall have ID = 0 */
-#define HCI_BREDR_ID	0
+#define AMP_ID_BREDR	0x00
+
+/* AMP controller types */
+#define AMP_TYPE_BREDR	0x00
+#define AMP_TYPE_80211	0x01
 
 /* AMP controller status */
-#define AMP_CTRL_POWERED_DOWN			0x00
-#define AMP_CTRL_BLUETOOTH_ONLY			0x01
-#define AMP_CTRL_NO_CAPACITY			0x02
-#define AMP_CTRL_LOW_CAPACITY			0x03
-#define AMP_CTRL_MEDIUM_CAPACITY		0x04
-#define AMP_CTRL_HIGH_CAPACITY			0x05
-#define AMP_CTRL_FULL_CAPACITY			0x06
+#define AMP_STATUS_POWERED_DOWN			0x00
+#define AMP_STATUS_BLUETOOTH_ONLY		0x01
+#define AMP_STATUS_NO_CAPACITY			0x02
+#define AMP_STATUS_LOW_CAPACITY			0x03
+#define AMP_STATUS_MEDIUM_CAPACITY		0x04
+#define AMP_STATUS_HIGH_CAPACITY		0x05
+#define AMP_STATUS_FULL_CAPACITY		0x06
 
 /* HCI device quirks */
 enum {
@@ -111,6 +115,7 @@ enum {
 	HCI_PAIRABLE,
 	HCI_SERVICE_CACHE,
 	HCI_DEBUG_KEYS,
+	HCI_DUT_MODE,
 	HCI_UNREGISTER,
 	HCI_USER_CHANNEL,
 
@@ -118,9 +123,10 @@ enum {
 	HCI_SSP_ENABLED,
 	HCI_HS_ENABLED,
 	HCI_LE_ENABLED,
-	HCI_LE_PERIPHERAL,
+	HCI_ADVERTISING,
 	HCI_CONNECTABLE,
 	HCI_DISCOVERABLE,
+	HCI_LIMITED_DISCOVERABLE,
 	HCI_LINK_SECURITY,
 	HCI_PERIODIC_INQ,
 	HCI_FAST_CONNECTABLE,
@@ -811,6 +817,20 @@ struct hci_cp_host_buffer_size {
 	__le16   sco_max_pkt;
 } __packed;
 
+#define HCI_OP_READ_NUM_SUPPORTED_IAC	0x0c38
+struct hci_rp_read_num_supported_iac {
+	__u8	status;
+	__u8	num_iac;
+} __packed;
+
+#define HCI_OP_READ_CURRENT_IAC_LAP	0x0c39
+
+#define HCI_OP_WRITE_CURRENT_IAC_LAP	0x0c3a
+struct hci_cp_write_current_iac_lap {
+	__u8	num_iac;
+	__u8	iac_lap[6];
+} __packed;
+
 #define HCI_OP_WRITE_INQUIRY_MODE	0x0c45
 
 #define HCI_MAX_EIR_LENGTH		240
@@ -846,6 +866,8 @@ struct hci_rp_read_inq_rsp_tx_power {
 } __packed;
 
 #define HCI_OP_SET_EVENT_MASK_PAGE_2	0x0c63
+
+#define HCI_OP_READ_LOCATION_DATA	0x0c64
 
 #define HCI_OP_READ_FLOW_CONTROL_MODE	0x0c66
 struct hci_rp_read_flow_control_mode {
@@ -1022,6 +1044,10 @@ struct hci_rp_write_remote_amp_assoc {
 	__u8     phy_handle;
 } __packed;
 
+#define HCI_OP_ENABLE_DUT_MODE		0x1803
+
+#define HCI_OP_WRITE_SSP_DEBUG_MODE	0x1804
+
 #define HCI_OP_LE_SET_EVENT_MASK	0x2001
 struct hci_cp_le_set_event_mask {
 	__u8     mask[8];
@@ -1042,6 +1068,18 @@ struct hci_rp_le_read_local_features {
 
 #define HCI_OP_LE_SET_RANDOM_ADDR	0x2005
 
+#define HCI_OP_LE_SET_ADV_PARAM		0x2006
+struct hci_cp_le_set_adv_param {
+	__le16   min_interval;
+	__le16   max_interval;
+	__u8     type;
+	__u8     own_address_type;
+	__u8     direct_addr_type;
+	bdaddr_t direct_addr;
+	__u8     channel_map;
+	__u8     filter_policy;
+} __packed;
+
 #define HCI_OP_LE_READ_ADV_TX_POWER	0x2007
 struct hci_rp_le_read_adv_tx_power {
 	__u8	status;
@@ -1052,6 +1090,12 @@ struct hci_rp_le_read_adv_tx_power {
 
 #define HCI_OP_LE_SET_ADV_DATA		0x2008
 struct hci_cp_le_set_adv_data {
+	__u8	length;
+	__u8	data[HCI_MAX_AD_LENGTH];
+} __packed;
+
+#define HCI_OP_LE_SET_SCAN_RSP_DATA	0x2009
+struct hci_cp_le_set_scan_rsp_data {
 	__u8	length;
 	__u8	data[HCI_MAX_AD_LENGTH];
 } __packed;
@@ -1536,11 +1580,11 @@ struct hci_ev_le_ltk_req {
 } __packed;
 
 /* Advertising report event types */
-#define ADV_IND		0x00
-#define ADV_DIRECT_IND	0x01
-#define ADV_SCAN_IND	0x02
-#define ADV_NONCONN_IND	0x03
-#define ADV_SCAN_RSP	0x04
+#define LE_ADV_IND		0x00
+#define LE_ADV_DIRECT_IND	0x01
+#define LE_ADV_SCAN_IND		0x02
+#define LE_ADV_NONCONN_IND	0x03
+#define LE_ADV_SCAN_RSP		0x04
 
 #define ADDR_LE_DEV_PUBLIC	0x00
 #define ADDR_LE_DEV_RANDOM	0x01
@@ -1747,7 +1791,5 @@ struct hci_inquiry_req {
 	__u8  num_rsp;
 };
 #define IREQ_CACHE_FLUSH 0x0001
-
-extern bool enable_hs;
 
 #endif /* __HCI_H */

@@ -476,6 +476,18 @@ void skb_add_rx_frag(struct sk_buff *skb, int i, struct page *page, int off,
 }
 EXPORT_SYMBOL(skb_add_rx_frag);
 
+void skb_coalesce_rx_frag(struct sk_buff *skb, int i, int size,
+			  unsigned int truesize)
+{
+	skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+
+	skb_frag_size_add(frag, size);
+	skb->len += size;
+	skb->data_len += size;
+	skb->truesize += truesize;
+}
+EXPORT_SYMBOL(skb_coalesce_rx_frag);
+
 static void skb_drop_list(struct sk_buff **listp)
 {
 	kfree_skb_list(*listp);
@@ -579,9 +591,6 @@ static void skb_release_head_state(struct sk_buff *skb)
 	}
 #if IS_ENABLED(CONFIG_NF_CONNTRACK)
 	nf_conntrack_put(skb->nfct);
-#endif
-#ifdef NET_SKBUFF_NF_DEFRAG_NEEDED
-	nf_conntrack_put_reasm(skb->nfct_reasm);
 #endif
 #ifdef CONFIG_BRIDGE_NETFILTER
 	nf_bridge_put(skb->nf_bridge);
@@ -1039,8 +1048,8 @@ EXPORT_SYMBOL(__pskb_copy);
  *	@ntail: room to add at tail
  *	@gfp_mask: allocation priority
  *
- *	Expands (or creates identical copy, if &nhead and &ntail are zero)
- *	header of skb. &sk_buff itself is not changed. &sk_buff MUST have
+ *	Expands (or creates identical copy, if @nhead and @ntail are zero)
+ *	header of @skb. &sk_buff itself is not changed. &sk_buff MUST have
  *	reference count of 1. Returns zero in the case of success or error,
  *	if expansion failed. In the last case, &sk_buff is not changed.
  *
@@ -1250,6 +1259,29 @@ free_skb:
 	return err;
 }
 EXPORT_SYMBOL(skb_pad);
+
+/**
+ *	pskb_put - add data to the tail of a potentially fragmented buffer
+ *	@skb: start of the buffer to use
+ *	@tail: tail fragment of the buffer to use
+ *	@len: amount of data to add
+ *
+ *	This function extends the used data area of the potentially
+ *	fragmented buffer. @tail must be the last fragment of @skb -- or
+ *	@skb itself. If this would exceed the total buffer size the kernel
+ *	will panic. A pointer to the first byte of the extra data is
+ *	returned.
+ */
+
+unsigned char *pskb_put(struct sk_buff *skb, struct sk_buff *tail, int len)
+{
+	if (tail != skb) {
+		skb->data_len += len;
+		skb->len += len;
+	}
+	return skb_put(tail, len);
+}
+EXPORT_SYMBOL_GPL(pskb_put);
 
 /**
  *	skb_put - add data to a buffer
@@ -1928,9 +1960,8 @@ fault:
 EXPORT_SYMBOL(skb_store_bits);
 
 /* Checksum skb data. */
-
-__wsum skb_checksum(const struct sk_buff *skb, int offset,
-			  int len, __wsum csum)
+__wsum __skb_checksum(const struct sk_buff *skb, int offset, int len,
+		      __wsum csum, const struct skb_checksum_ops *ops)
 {
 	int start = skb_headlen(skb);
 	int i, copy = start - offset;
@@ -1941,7 +1972,7 @@ __wsum skb_checksum(const struct sk_buff *skb, int offset,
 	if (copy > 0) {
 		if (copy > len)
 			copy = len;
-		csum = csum_partial(skb->data + offset, copy, csum);
+		csum = ops->update(skb->data + offset, copy, csum);
 		if ((len -= copy) == 0)
 			return csum;
 		offset += copy;
@@ -1962,10 +1993,10 @@ __wsum skb_checksum(const struct sk_buff *skb, int offset,
 			if (copy > len)
 				copy = len;
 			vaddr = kmap_atomic(skb_frag_page(frag));
-			csum2 = csum_partial(vaddr + frag->page_offset +
-					     offset - start, copy, 0);
+			csum2 = ops->update(vaddr + frag->page_offset +
+					    offset - start, copy, 0);
 			kunmap_atomic(vaddr);
-			csum = csum_block_add(csum, csum2, pos);
+			csum = ops->combine(csum, csum2, pos, copy);
 			if (!(len -= copy))
 				return csum;
 			offset += copy;
@@ -1984,9 +2015,9 @@ __wsum skb_checksum(const struct sk_buff *skb, int offset,
 			__wsum csum2;
 			if (copy > len)
 				copy = len;
-			csum2 = skb_checksum(frag_iter, offset - start,
-					     copy, 0);
-			csum = csum_block_add(csum, csum2, pos);
+			csum2 = __skb_checksum(frag_iter, offset - start,
+					       copy, 0, ops);
+			csum = ops->combine(csum, csum2, pos, copy);
 			if ((len -= copy) == 0)
 				return csum;
 			offset += copy;
@@ -1997,6 +2028,18 @@ __wsum skb_checksum(const struct sk_buff *skb, int offset,
 	BUG_ON(len);
 
 	return csum;
+}
+EXPORT_SYMBOL(__skb_checksum);
+
+__wsum skb_checksum(const struct sk_buff *skb, int offset,
+		    int len, __wsum csum)
+{
+	const struct skb_checksum_ops ops = {
+		.update  = csum_partial_ext,
+		.combine = csum_block_add_ext,
+	};
+
+	return __skb_checksum(skb, offset, len, csum, &ops);
 }
 EXPORT_SYMBOL(skb_checksum);
 
@@ -2517,14 +2560,14 @@ EXPORT_SYMBOL(skb_prepare_seq_read);
  * @data: destination pointer for data to be returned
  * @st: state variable
  *
- * Reads a block of skb data at &consumed relative to the
+ * Reads a block of skb data at @consumed relative to the
  * lower offset specified to skb_prepare_seq_read(). Assigns
- * the head of the data block to &data and returns the length
+ * the head of the data block to @data and returns the length
  * of the block or 0 if the end of the skb data or the upper
  * offset has been reached.
  *
  * The caller is not required to consume all of the data
- * returned, i.e. &consumed is typically set to the number
+ * returned, i.e. @consumed is typically set to the number
  * of bytes already consumed and the next call to
  * skb_seq_read() will return the remaining part of the block.
  *

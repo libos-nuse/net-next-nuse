@@ -2538,7 +2538,7 @@ static inline int skb_needs_linearize(struct sk_buff *skb,
 }
 
 int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
-			struct netdev_queue *txq)
+			struct netdev_queue *txq, void *accel_priv)
 {
 	const struct net_device_ops *ops = dev->netdev_ops;
 	int rc = NETDEV_TX_OK;
@@ -2604,9 +2604,13 @@ int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 			dev_queue_xmit_nit(skb, dev);
 
 		skb_len = skb->len;
-		rc = ops->ndo_start_xmit(skb, dev);
+		if (accel_priv)
+			rc = ops->ndo_dfwd_start_xmit(skb, dev, accel_priv);
+		else
+			rc = ops->ndo_start_xmit(skb, dev);
+
 		trace_net_dev_xmit(skb, rc, dev, skb_len);
-		if (rc == NETDEV_TX_OK)
+		if (rc == NETDEV_TX_OK && txq)
 			txq_trans_update(txq);
 		return rc;
 	}
@@ -2622,7 +2626,10 @@ gso:
 			dev_queue_xmit_nit(nskb, dev);
 
 		skb_len = nskb->len;
-		rc = ops->ndo_start_xmit(nskb, dev);
+		if (accel_priv)
+			rc = ops->ndo_dfwd_start_xmit(nskb, dev, accel_priv);
+		else
+			rc = ops->ndo_start_xmit(nskb, dev);
 		trace_net_dev_xmit(nskb, rc, dev, skb_len);
 		if (unlikely(rc != NETDEV_TX_OK)) {
 			if (rc & ~NETDEV_TX_MASK)
@@ -2647,6 +2654,7 @@ out_kfree_skb:
 out:
 	return rc;
 }
+EXPORT_SYMBOL_GPL(dev_hard_start_xmit);
 
 static void qdisc_pkt_len_init(struct sk_buff *skb)
 {
@@ -2854,7 +2862,7 @@ int dev_queue_xmit(struct sk_buff *skb)
 
 			if (!netif_xmit_stopped(txq)) {
 				__this_cpu_inc(xmit_recursion);
-				rc = dev_hard_start_xmit(skb, dev, txq);
+				rc = dev_hard_start_xmit(skb, dev, txq, NULL);
 				__this_cpu_dec(xmit_recursion);
 				if (dev_xmit_complete(rc)) {
 					HARD_TX_UNLOCK(dev, txq);
@@ -6196,6 +6204,16 @@ void netdev_set_default_ethtool_ops(struct net_device *dev,
 }
 EXPORT_SYMBOL_GPL(netdev_set_default_ethtool_ops);
 
+void netdev_freemem(struct net_device *dev)
+{
+	char *addr = (char *)dev - dev->padded;
+
+	if (is_vmalloc_addr(addr))
+		vfree(addr);
+	else
+		kfree(addr);
+}
+
 /**
  *	alloc_netdev_mqs - allocate network device
  *	@sizeof_priv:	size of private data to allocate space for
@@ -6239,7 +6257,9 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 	/* ensure 32-byte alignment of whole construct */
 	alloc_size += NETDEV_ALIGN - 1;
 
-	p = kzalloc(alloc_size, GFP_KERNEL);
+	p = kzalloc(alloc_size, GFP_KERNEL | __GFP_NOWARN | __GFP_REPEAT);
+	if (!p)
+		p = vzalloc(alloc_size);
 	if (!p)
 		return NULL;
 
@@ -6248,7 +6268,7 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 
 	dev->pcpu_refcnt = alloc_percpu(int);
 	if (!dev->pcpu_refcnt)
-		goto free_p;
+		goto free_dev;
 
 	if (dev_addr_init(dev))
 		goto free_pcpu;
@@ -6301,8 +6321,8 @@ free_pcpu:
 	kfree(dev->_rx);
 #endif
 
-free_p:
-	kfree(p);
+free_dev:
+	netdev_freemem(dev);
 	return NULL;
 }
 EXPORT_SYMBOL(alloc_netdev_mqs);
@@ -6339,7 +6359,7 @@ void free_netdev(struct net_device *dev)
 
 	/*  Compatibility with error handling in drivers */
 	if (dev->reg_state == NETREG_UNINITIALIZED) {
-		kfree((char *)dev - dev->padded);
+		netdev_freemem(dev);
 		return;
 	}
 

@@ -129,10 +129,6 @@ void ixgbe_enable_sriov(struct ixgbe_adapter *adapter)
 	if (!pre_existing_vfs && !adapter->num_vfs)
 		return;
 
-	if (!pre_existing_vfs)
-		dev_warn(&adapter->pdev->dev,
-			 "Enabling SR-IOV VFs using the module parameter is deprecated - please use the pci sysfs interface.\n");
-
 	/* If there are pre-existing VFs then we have to force
 	 * use of that many - over ride any module parameter value.
 	 * This may result from the user unloading the PF driver
@@ -223,17 +219,19 @@ int ixgbe_disable_sriov(struct ixgbe_adapter *adapter)
 	IXGBE_WRITE_FLUSH(hw);
 
 	/* Disable VMDq flag so device will be set in VM mode */
-	if (adapter->ring_feature[RING_F_VMDQ].limit == 1)
+	if (adapter->ring_feature[RING_F_VMDQ].limit == 1) {
 		adapter->flags &= ~IXGBE_FLAG_VMDQ_ENABLED;
-	adapter->ring_feature[RING_F_VMDQ].offset = 0;
+		adapter->flags &= ~IXGBE_FLAG_SRIOV_ENABLED;
+		rss = min_t(int, IXGBE_MAX_RSS_INDICES, num_online_cpus());
+	} else {
+		rss = min_t(int, IXGBE_MAX_L2A_QUEUES, num_online_cpus());
+	}
 
-	rss = min_t(int, IXGBE_MAX_RSS_INDICES, num_online_cpus());
+	adapter->ring_feature[RING_F_VMDQ].offset = 0;
 	adapter->ring_feature[RING_F_RSS].limit = rss;
 
 	/* take a breather then clean up driver data */
 	msleep(100);
-
-	adapter->flags &= ~IXGBE_FLAG_SRIOV_ENABLED;
 	return 0;
 }
 
@@ -298,13 +296,10 @@ static int ixgbe_pci_sriov_disable(struct pci_dev *dev)
 	err = ixgbe_disable_sriov(adapter);
 
 	/* Only reinit if no error and state changed */
-	if (!err && current_flags != adapter->flags) {
-		/* ixgbe_disable_sriov() doesn't clear VMDQ flag */
-		adapter->flags &= ~IXGBE_FLAG_VMDQ_ENABLED;
 #ifdef CONFIG_PCI_IOV
+	if (!err && current_flags != adapter->flags)
 		ixgbe_sriov_reinit(adapter);
 #endif
-	}
 
 	return err;
 }

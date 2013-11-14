@@ -40,6 +40,7 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 #include <linux/nsproxy.h>
+#include <linux/reciprocal_div.h>
 
 #include "bonding.h"
 
@@ -149,14 +150,6 @@ err_no_cmd:
 	return -EPERM;
 }
 
-static const void *bonding_namespace(struct class *cls,
-				     const struct class_attribute *attr)
-{
-	const struct bond_net *bn =
-		container_of(attr, struct bond_net, class_attr_bonding_masters);
-	return bn->net;
-}
-
 /* class attribute for bond_masters file.  This ends up in /sys/class/net */
 static const struct class_attribute class_attr_bonding_masters = {
 	.attr = {
@@ -165,7 +158,6 @@ static const struct class_attribute class_attr_bonding_masters = {
 	},
 	.show = bonding_show_bonds,
 	.store = bonding_store_bonds,
-	.namespace = bonding_namespace,
 };
 
 /*
@@ -1640,6 +1632,53 @@ out:
 static DEVICE_ATTR(lp_interval, S_IRUGO | S_IWUSR,
 		   bonding_show_lp_interval, bonding_store_lp_interval);
 
+static ssize_t bonding_show_packets_per_slave(struct device *d,
+					      struct device_attribute *attr,
+					      char *buf)
+{
+	struct bonding *bond = to_bond(d);
+	int packets_per_slave = bond->params.packets_per_slave;
+
+	if (packets_per_slave > 1)
+		packets_per_slave = reciprocal_value(packets_per_slave);
+
+	return sprintf(buf, "%d\n", packets_per_slave);
+}
+
+static ssize_t bonding_store_packets_per_slave(struct device *d,
+					       struct device_attribute *attr,
+					       const char *buf, size_t count)
+{
+	struct bonding *bond = to_bond(d);
+	int new_value, ret = count;
+
+	if (sscanf(buf, "%d", &new_value) != 1) {
+		pr_err("%s: no packets_per_slave value specified.\n",
+		       bond->dev->name);
+		ret = -EINVAL;
+		goto out;
+	}
+	if (new_value < 0 || new_value > USHRT_MAX) {
+		pr_err("%s: packets_per_slave must be between 0 and %u\n",
+		       bond->dev->name, USHRT_MAX);
+		ret = -EINVAL;
+		goto out;
+	}
+	if (bond->params.mode != BOND_MODE_ROUNDROBIN)
+		pr_warn("%s: Warning: packets_per_slave has effect only in balance-rr mode\n",
+			bond->dev->name);
+	if (new_value > 1)
+		bond->params.packets_per_slave = reciprocal_value(new_value);
+	else
+		bond->params.packets_per_slave = new_value;
+out:
+	return ret;
+}
+
+static DEVICE_ATTR(packets_per_slave, S_IRUGO | S_IWUSR,
+		   bonding_show_packets_per_slave,
+		   bonding_store_packets_per_slave);
+
 static struct attribute *per_bond_attrs[] = {
 	&dev_attr_slaves.attr,
 	&dev_attr_mode.attr,
@@ -1671,6 +1710,7 @@ static struct attribute *per_bond_attrs[] = {
 	&dev_attr_resend_igmp.attr,
 	&dev_attr_min_links.attr,
 	&dev_attr_lp_interval.attr,
+	&dev_attr_packets_per_slave.attr,
 	NULL,
 };
 
@@ -1690,7 +1730,8 @@ int bond_create_sysfs(struct bond_net *bn)
 	bn->class_attr_bonding_masters = class_attr_bonding_masters;
 	sysfs_attr_init(&bn->class_attr_bonding_masters.attr);
 
-	ret = netdev_class_create_file(&bn->class_attr_bonding_masters);
+	ret = netdev_class_create_file_ns(&bn->class_attr_bonding_masters,
+					  bn->net);
 	/*
 	 * Permit multiple loads of the module by ignoring failures to
 	 * create the bonding_masters sysfs file.  Bonding devices
@@ -1720,7 +1761,7 @@ int bond_create_sysfs(struct bond_net *bn)
  */
 void bond_destroy_sysfs(struct bond_net *bn)
 {
-	netdev_class_remove_file(&bn->class_attr_bonding_masters);
+	netdev_class_remove_file_ns(&bn->class_attr_bonding_masters, bn->net);
 }
 
 /*

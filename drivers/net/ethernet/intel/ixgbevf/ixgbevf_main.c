@@ -251,7 +251,7 @@ static bool ixgbevf_clean_tx_irq(struct ixgbevf_q_vector *q_vector,
 
 #define TX_WAKE_THRESHOLD (DESC_NEEDED * 2)
 	if (unlikely(count && netif_carrier_ok(tx_ring->netdev) &&
-		     (IXGBE_DESC_UNUSED(tx_ring) >= TX_WAKE_THRESHOLD))) {
+		     (ixgbevf_desc_unused(tx_ring) >= TX_WAKE_THRESHOLD))) {
 		/* Make sure that anybody stopping the queue after this
 		 * sees the new next_to_clean.
 		 */
@@ -297,6 +297,30 @@ static void ixgbevf_receive_skb(struct ixgbevf_q_vector *q_vector,
 		napi_gro_receive(&q_vector->napi, skb);
 	else
 		netif_rx(skb);
+}
+
+/**
+ * ixgbevf_rx_skb - Helper function to determine proper Rx method
+ * @q_vector: structure containing interrupt and ring information
+ * @skb: packet to send up
+ * @status: hardware indication of status of receive
+ * @rx_desc: rx descriptor
+ **/
+static void ixgbevf_rx_skb(struct ixgbevf_q_vector *q_vector,
+			   struct sk_buff *skb, u8 status,
+			   union ixgbe_adv_rx_desc *rx_desc)
+{
+#ifdef CONFIG_NET_RX_BUSY_POLL
+	skb_mark_napi_id(skb, &q_vector->napi);
+
+	if (ixgbevf_qv_busy_polling(q_vector)) {
+		netif_receive_skb(skb);
+		/* exit early if we busy polled */
+		return;
+	}
+#endif /* CONFIG_NET_RX_BUSY_POLL */
+
+	ixgbevf_receive_skb(q_vector, skb, status, rx_desc);
 }
 
 /**
@@ -396,9 +420,9 @@ static inline void ixgbevf_irq_enable_queues(struct ixgbevf_adapter *adapter,
 	IXGBE_WRITE_REG(hw, IXGBE_VTEIMS, qmask);
 }
 
-static bool ixgbevf_clean_rx_irq(struct ixgbevf_q_vector *q_vector,
-				 struct ixgbevf_ring *rx_ring,
-				 int budget)
+static int ixgbevf_clean_rx_irq(struct ixgbevf_q_vector *q_vector,
+				struct ixgbevf_ring *rx_ring,
+				int budget)
 {
 	struct ixgbevf_adapter *adapter = q_vector->adapter;
 	struct pci_dev *pdev = adapter->pdev;
@@ -473,15 +497,6 @@ static bool ixgbevf_clean_rx_irq(struct ixgbevf_q_vector *q_vector,
 		total_rx_bytes += skb->len;
 		total_rx_packets++;
 
-		/*
-		 * Work around issue of some types of VM to VM loop back
-		 * packets not getting split correctly
-		 */
-		if (staterr & IXGBE_RXD_STAT_LB) {
-			u32 header_fixup_len = skb_headlen(skb);
-			if (header_fixup_len < 14)
-				skb_push(skb, header_fixup_len);
-		}
 		skb->protocol = eth_type_trans(skb, rx_ring->netdev);
 
 		/* Workaround hardware that can't do proper VEPA multicast
@@ -494,7 +509,7 @@ static bool ixgbevf_clean_rx_irq(struct ixgbevf_q_vector *q_vector,
 			goto next_desc;
 		}
 
-		ixgbevf_receive_skb(q_vector, skb, staterr, rx_desc);
+		ixgbevf_rx_skb(q_vector, skb, staterr, rx_desc);
 
 next_desc:
 		rx_desc->wb.upper.status_error = 0;
@@ -514,7 +529,7 @@ next_desc:
 	}
 
 	rx_ring->next_to_clean = i;
-	cleaned_count = IXGBE_DESC_UNUSED(rx_ring);
+	cleaned_count = ixgbevf_desc_unused(rx_ring);
 
 	if (cleaned_count)
 		ixgbevf_alloc_rx_buffers(adapter, rx_ring, cleaned_count);
@@ -526,7 +541,7 @@ next_desc:
 	q_vector->rx.total_packets += total_rx_packets;
 	q_vector->rx.total_bytes += total_rx_bytes;
 
-	return !!budget;
+	return total_rx_packets;
 }
 
 /**
@@ -549,6 +564,11 @@ static int ixgbevf_poll(struct napi_struct *napi, int budget)
 	ixgbevf_for_each_ring(ring, q_vector->tx)
 		clean_complete &= ixgbevf_clean_tx_irq(q_vector, ring);
 
+#ifdef CONFIG_NET_RX_BUSY_POLL
+	if (!ixgbevf_qv_lock_napi(q_vector))
+		return budget;
+#endif
+
 	/* attempt to distribute budget to each queue fairly, but don't allow
 	 * the budget to go below 1 because we'll exit polling */
 	if (q_vector->rx.count > 1)
@@ -558,9 +578,14 @@ static int ixgbevf_poll(struct napi_struct *napi, int budget)
 
 	adapter->flags |= IXGBE_FLAG_IN_NETPOLL;
 	ixgbevf_for_each_ring(ring, q_vector->rx)
-		clean_complete &= ixgbevf_clean_rx_irq(q_vector, ring,
-						       per_ring_budget);
+		clean_complete &= (ixgbevf_clean_rx_irq(q_vector, ring,
+							per_ring_budget)
+				   < per_ring_budget);
 	adapter->flags &= ~IXGBE_FLAG_IN_NETPOLL;
+
+#ifdef CONFIG_NET_RX_BUSY_POLL
+	ixgbevf_qv_unlock_napi(q_vector);
+#endif
 
 	/* If all work not completed, return budget and keep polling */
 	if (!clean_complete)
@@ -595,6 +620,40 @@ void ixgbevf_write_eitr(struct ixgbevf_q_vector *q_vector)
 
 	IXGBE_WRITE_REG(hw, IXGBE_VTEITR(v_idx), itr_reg);
 }
+
+#ifdef CONFIG_NET_RX_BUSY_POLL
+/* must be called with local_bh_disable()d */
+static int ixgbevf_busy_poll_recv(struct napi_struct *napi)
+{
+	struct ixgbevf_q_vector *q_vector =
+			container_of(napi, struct ixgbevf_q_vector, napi);
+	struct ixgbevf_adapter *adapter = q_vector->adapter;
+	struct ixgbevf_ring  *ring;
+	int found = 0;
+
+	if (test_bit(__IXGBEVF_DOWN, &adapter->state))
+		return LL_FLUSH_FAILED;
+
+	if (!ixgbevf_qv_lock_poll(q_vector))
+		return LL_FLUSH_BUSY;
+
+	ixgbevf_for_each_ring(ring, q_vector->rx) {
+		found = ixgbevf_clean_rx_irq(q_vector, ring, 4);
+#ifdef BP_EXTENDED_STATS
+		if (found)
+			ring->bp_cleaned += found;
+		else
+			ring->bp_misses++;
+#endif
+		if (found)
+			break;
+	}
+
+	ixgbevf_qv_unlock_poll(q_vector);
+
+	return found;
+}
+#endif /* CONFIG_NET_RX_BUSY_POLL */
 
 /**
  * ixgbevf_configure_msix - Configure MSI-X hardware
@@ -1282,6 +1341,9 @@ static void ixgbevf_napi_enable_all(struct ixgbevf_adapter *adapter)
 
 	for (q_idx = 0; q_idx < q_vectors; q_idx++) {
 		q_vector = adapter->q_vector[q_idx];
+#ifdef CONFIG_NET_RX_BUSY_POLL
+		ixgbevf_qv_init_lock(adapter->q_vector[q_idx]);
+#endif
 		napi_enable(&q_vector->napi);
 	}
 }
@@ -1295,6 +1357,12 @@ static void ixgbevf_napi_disable_all(struct ixgbevf_adapter *adapter)
 	for (q_idx = 0; q_idx < q_vectors; q_idx++) {
 		q_vector = adapter->q_vector[q_idx];
 		napi_disable(&q_vector->napi);
+#ifdef CONFIG_NET_RX_BUSY_POLL
+		while (!ixgbevf_qv_disable(adapter->q_vector[q_idx])) {
+			pr_info("QV %d locked\n", q_idx);
+			usleep_range(1000, 20000);
+		}
+#endif /* CONFIG_NET_RX_BUSY_POLL */
 	}
 }
 
@@ -1312,7 +1380,7 @@ static void ixgbevf_configure(struct ixgbevf_adapter *adapter)
 	for (i = 0; i < adapter->num_rx_queues; i++) {
 		struct ixgbevf_ring *ring = &adapter->rx_ring[i];
 		ixgbevf_alloc_rx_buffers(adapter, ring,
-					 IXGBE_DESC_UNUSED(ring));
+					 ixgbevf_desc_unused(ring));
 	}
 }
 
@@ -1945,6 +2013,9 @@ static int ixgbevf_alloc_q_vectors(struct ixgbevf_adapter *adapter)
 		q_vector->v_idx = q_idx;
 		netif_napi_add(adapter->netdev, &q_vector->napi,
 			       ixgbevf_poll, 64);
+#ifdef CONFIG_NET_RX_BUSY_POLL
+		napi_hash_add(&q_vector->napi);
+#endif
 		adapter->q_vector[q_idx] = q_vector;
 	}
 
@@ -1954,6 +2025,9 @@ err_out:
 	while (q_idx) {
 		q_idx--;
 		q_vector = adapter->q_vector[q_idx];
+#ifdef CONFIG_NET_RX_BUSY_POLL
+		napi_hash_del(&q_vector->napi);
+#endif
 		netif_napi_del(&q_vector->napi);
 		kfree(q_vector);
 		adapter->q_vector[q_idx] = NULL;
@@ -1977,6 +2051,9 @@ static void ixgbevf_free_q_vectors(struct ixgbevf_adapter *adapter)
 		struct ixgbevf_q_vector *q_vector = adapter->q_vector[q_idx];
 
 		adapter->q_vector[q_idx] = NULL;
+#ifdef CONFIG_NET_RX_BUSY_POLL
+		napi_hash_del(&q_vector->napi);
+#endif
 		netif_napi_del(&q_vector->napi);
 		kfree(q_vector);
 	}
@@ -3025,7 +3102,7 @@ static int __ixgbevf_maybe_stop_tx(struct ixgbevf_ring *tx_ring, int size)
 
 	/* We need to check again in a case another CPU has just
 	 * made room available. */
-	if (likely(IXGBE_DESC_UNUSED(tx_ring) < size))
+	if (likely(ixgbevf_desc_unused(tx_ring) < size))
 		return -EBUSY;
 
 	/* A reprieve! - use start_queue because it doesn't call schedule */
@@ -3036,7 +3113,7 @@ static int __ixgbevf_maybe_stop_tx(struct ixgbevf_ring *tx_ring, int size)
 
 static int ixgbevf_maybe_stop_tx(struct ixgbevf_ring *tx_ring, int size)
 {
-	if (likely(IXGBE_DESC_UNUSED(tx_ring) >= size))
+	if (likely(ixgbevf_desc_unused(tx_ring) >= size))
 		return 0;
 	return __ixgbevf_maybe_stop_tx(tx_ring, size);
 }
@@ -3308,6 +3385,9 @@ static const struct net_device_ops ixgbevf_netdev_ops = {
 	.ndo_tx_timeout		= ixgbevf_tx_timeout,
 	.ndo_vlan_rx_add_vid	= ixgbevf_vlan_rx_add_vid,
 	.ndo_vlan_rx_kill_vid	= ixgbevf_vlan_rx_kill_vid,
+#ifdef CONFIG_NET_RX_BUSY_POLL
+	.ndo_busy_poll		= ixgbevf_busy_poll_recv,
+#endif
 };
 
 static void ixgbevf_assign_netdev_ops(struct net_device *dev)

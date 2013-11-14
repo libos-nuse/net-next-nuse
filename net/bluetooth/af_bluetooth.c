@@ -25,12 +25,13 @@
 /* Bluetooth address family and sockets. */
 
 #include <linux/module.h>
+#include <linux/debugfs.h>
 #include <asm/ioctls.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <linux/proc_fs.h>
 
-#define VERSION "2.16"
+#define VERSION "2.17"
 
 /* Bluetooth sockets */
 #define BT_MAX_PROTO	8
@@ -221,12 +222,12 @@ int bt_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if (flags & (MSG_OOB))
 		return -EOPNOTSUPP;
 
-	msg->msg_namelen = 0;
-
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
 	if (!skb) {
-		if (sk->sk_shutdown & RCV_SHUTDOWN)
+		if (sk->sk_shutdown & RCV_SHUTDOWN) {
+			msg->msg_namelen = 0;
 			return 0;
+		}
 		return err;
 	}
 
@@ -238,8 +239,15 @@ int bt_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 	skb_reset_transport_header(skb);
 	err = skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
-	if (err == 0)
+	if (err == 0) {
 		sock_recv_ts_and_drops(msg, sk, skb);
+
+		if (bt_sk(sk)->skb_msg_name)
+			bt_sk(sk)->skb_msg_name(skb, msg->msg_name,
+						&msg->msg_namelen);
+		else
+			msg->msg_namelen = 0;
+	}
 
 	skb_free_datagram(sk, skb);
 
@@ -604,7 +612,7 @@ static int bt_seq_show(struct seq_file *seq, void *v)
 	struct bt_sock_list *l = s->l;
 
 	if (v == SEQ_START_TOKEN) {
-		seq_puts(seq ,"sk               RefCnt Rmem   Wmem   User   Inode  Src Dst Parent");
+		seq_puts(seq ,"sk               RefCnt Rmem   Wmem   User   Inode  Parent");
 
 		if (l->custom_seq_show) {
 			seq_putc(seq, ' ');
@@ -617,15 +625,13 @@ static int bt_seq_show(struct seq_file *seq, void *v)
 		struct bt_sock *bt = bt_sk(sk);
 
 		seq_printf(seq,
-			   "%pK %-6d %-6u %-6u %-6u %-6lu %pMR %pMR %-6lu",
+			   "%pK %-6d %-6u %-6u %-6u %-6lu %-6lu",
 			   sk,
 			   atomic_read(&sk->sk_refcnt),
 			   sk_rmem_alloc_get(sk),
 			   sk_wmem_alloc_get(sk),
 			   from_kuid(seq_user_ns(seq), sock_i_uid(sk)),
 			   sock_i_ino(sk),
-			   &bt->src,
-			   &bt->dst,
 			   bt->parent? sock_i_ino(bt->parent): 0LU);
 
 		if (l->custom_seq_show) {
@@ -703,11 +709,16 @@ static struct net_proto_family bt_sock_family_ops = {
 	.create	= bt_sock_create,
 };
 
+struct dentry *bt_debugfs;
+EXPORT_SYMBOL_GPL(bt_debugfs);
+
 static int __init bt_init(void)
 {
 	int err;
 
 	BT_INFO("Core ver %s", VERSION);
+
+	bt_debugfs = debugfs_create_dir("bluetooth", NULL);
 
 	err = bt_sysfs_init();
 	if (err < 0)
@@ -749,7 +760,6 @@ error:
 
 static void __exit bt_exit(void)
 {
-
 	sco_exit();
 
 	l2cap_exit();
@@ -759,6 +769,8 @@ static void __exit bt_exit(void)
 	sock_unregister(PF_BLUETOOTH);
 
 	bt_sysfs_cleanup();
+
+	debugfs_remove_recursive(bt_debugfs);
 }
 
 subsys_initcall(bt_init);
