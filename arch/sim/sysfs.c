@@ -13,11 +13,6 @@ int sysfs_create_dir(struct kobject *kobj)
 {
   return 0;
 }
-int sysfs_create_file(struct kobject *kobj,
-		      const struct attribute *attr)
-{
-  return 0;
-}
 int sysfs_create_link(struct kobject *kobj, struct kobject *target,
 				   const char *name)
 {
@@ -30,19 +25,10 @@ int sysfs_move_dir(struct kobject *kobj,
 }
 void sysfs_remove_dir(struct kobject *kobj)
 {}
-void sysfs_remove_file(struct kobject *kobj, const struct attribute *attr)
-{}
 void sysfs_remove_group(struct kobject *kobj,
                         const struct attribute_group *grp)
 {}
-void sysfs_remove_link(struct kobject *kobj, const char *name)
-{}
 int sysfs_rename_dir(struct kobject *kobj, const char *new_name)
-{
-  return 0;
-}
-int sysfs_rename_link(struct kobject *k, struct kobject *t,
-                                    const char *old_name, const char *new_name)
 {
   return 0;
 }
@@ -68,3 +54,17 @@ void sysfs_exit_ns(enum kobj_ns_type type, const void *tag)
 {}
 void sysfs_notify(struct kobject *kobj, const char *dir, const char *attr)
 {}
+int sysfs_create_dir_ns(struct kobject *kobj, const void *ns)
+{
+  return 0;
+}
+int sysfs_create_file_ns(struct kobject *kobj, const struct attribute *attr,
+                         const void *ns)
+{
+  return 0;
+}
+
+struct sysfs_dirent *sysfs_get(struct sysfs_dirent *sd)
+{
+  return NULL;
+}

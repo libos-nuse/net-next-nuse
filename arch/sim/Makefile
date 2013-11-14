@@ -54,13 +54,14 @@ all: library modules
 
 AUTOCONF=$(ARCH_DIR)/autoconf.h
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/
+dirs=kernel/ kernel/rcu/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o time.o sysctl.o mutex.o \
-rwsem.o semaphore.o srcu.o rcupdate.o rcutiny.o kfifo.o
+rwsem.o semaphore.o kfifo.o
+kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 mm/_to_keep=util.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
@@ -151,3 +152,4 @@ test:
 .PHONY : clean
 
 KBUILD_KCONFIG := arch/$(ARCH)/Kconfig
+CLEAN_FILES := $(ARCH_DIR)/test/buildtop/source/quagga/lib/*.lo

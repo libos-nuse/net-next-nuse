@@ -11,7 +11,7 @@
 
 #include "sim-assert.h"
 
-DEFINE_BRLOCK(vfsmount_lock);
+__cacheline_aligned_in_smp DEFINE_SEQLOCK(mount_lock);
 struct super_block;
 
 struct backing_dev_info default_backing_dev_info = {
