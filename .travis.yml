@@ -12,5 +12,5 @@ compiler:
 # Change this to your needs
 script:
   - make defconfig ARCH=sim && make clean ARCH=sim && make library ARCH=sim
-  - make bake -C arch/sim/test && make testbin -C arch/sim/test 
-  - make test ARCH=sim ADD_PARAM="-r"
+#  - make bake -C arch/sim/test && make testbin -C arch/sim/test 
+#  - make test ARCH=sim ADD_PARAM="-r"
