@@ -253,6 +253,20 @@ F:	drivers/pci/*acpi*
 F:	drivers/pci/*/*acpi*
 F:	drivers/pci/*/*/*acpi*
 
+ACPI COMPONENT ARCHITECTURE (ACPICA)
+M:	Robert Moore <robert.moore@intel.com>
+M:	Lv Zheng <lv.zheng@intel.com>
+M:	Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+L:	linux-acpi@vger.kernel.org
+L:	devel@acpica.org
+W:	https://acpica.org/
+W:	https://github.com/acpica/acpica/
+Q:	https://patchwork.kernel.org/project/linux-acpi/list/
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/rafael/linux-pm
+S:	Supported
+F:	drivers/acpi/acpica/
+F:	include/acpi/
+
 ACPI FAN DRIVER
 M:	Zhang Rui <rui.zhang@intel.com>
 L:	linux-acpi@vger.kernel.org
@@ -1056,7 +1070,6 @@ S:	Maintained
 ARM/NOMADIK ARCHITECTURE
 M:	Alessandro Rubini <rubini@unipv.it>
 M:	Linus Walleij <linus.walleij@linaro.org>
-M:	STEricsson <STEricsson_nomadik_linux@list.st.com>
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Maintained
 F:	arch/arm/mach-nomadik/
@@ -1412,7 +1425,7 @@ M:	Wolfram Sang <wsa@the-dreams.de>
 L:	linux-i2c@vger.kernel.org
 S:	Maintained
 F:	drivers/misc/eeprom/at24.c
-F:	include/linux/i2c/at24.h
+F:	include/linux/platform_data/at24.h
 
 ATA OVER ETHERNET (AOE) DRIVER
 M:	"Ed L. Cashin" <ecashin@coraid.com>
@@ -1444,17 +1457,6 @@ W:	http://wireless.kernel.org/en/users/Drivers/ath6kl
 T:	git git://github.com/kvalo/ath.git
 S:	Supported
 F:	drivers/net/wireless/ath/ath6kl/
-
-ATHEROS ATH9K WIRELESS DRIVER
-M:	"Luis R. Rodriguez" <mcgrof@qca.qualcomm.com>
-M:	Jouni Malinen <jouni@qca.qualcomm.com>
-M:	Vasanthakumar Thiagarajan <vthiagar@qca.qualcomm.com>
-M:	Senthil Balasubramanian <senthilb@qca.qualcomm.com>
-L:	linux-wireless@vger.kernel.org
-L:	ath9k-devel@lists.ath9k.org
-W:	http://wireless.kernel.org/en/users/Drivers/ath9k
-S:	Supported
-F:	drivers/net/wireless/ath/ath9k/
 
 WILOCITY WIL6210 WIRELESS DRIVER
 M:	Vladimir Kondratiev <qca_vkondrat@qca.qualcomm.com>
@@ -1867,7 +1869,7 @@ S:	Supported
 F:	drivers/net/wireless/brcm80211/
 
 BROADCOM BNX2FC 10 GIGABIT FCOE DRIVER
-M:	Bhanu Prakash Gollapudi <bprakash@broadcom.com>
+M:	Eddie Wai <eddie.wai@broadcom.com>
 L:	linux-scsi@vger.kernel.org
 S:	Supported
 F:	drivers/scsi/bnx2fc/
@@ -2128,6 +2130,11 @@ M:	Alexander Shishkin <alexander.shishkin@linux.intel.com>
 L:	linux-usb@vger.kernel.org
 S:	Maintained
 F:	drivers/usb/chipidea/
+
+CHROME HARDWARE PLATFORM SUPPORT
+M:	Olof Johansson <olof@lixom.net>
+S:	Maintained
+F:	drivers/platform/chrome/
 
 CISCO VIC ETHERNET NIC DRIVER
 M:	Christian Benvenuti <benve@cisco.com>
@@ -2455,7 +2462,7 @@ S:	Maintained
 F:	drivers/media/dvb-frontends/cxd2820r*
 
 CXGB3 ETHERNET DRIVER (CXGB3)
-M:	Divy Le Ray <divy@chelsio.com>
+M:	Santosh Raspatur <santosh@chelsio.com>
 L:	netdev@vger.kernel.org
 W:	http://www.chelsio.com
 S:	Supported
@@ -2647,6 +2654,7 @@ M:	dm-devel@redhat.com
 L:	dm-devel@redhat.com
 W:	http://sources.redhat.com/dm
 Q:	http://patchwork.kernel.org/project/dm-devel/list/
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/device-mapper/linux-dm.git
 T:	quilt http://people.redhat.com/agk/patches/linux/editing/
 S:	Maintained
 F:	Documentation/device-mapper/
@@ -2834,7 +2842,9 @@ L:	dri-devel@lists.freedesktop.org
 L:	linux-tegra@vger.kernel.org
 T:	git git://anongit.freedesktop.org/tegra/linux.git
 S:	Supported
+F:	drivers/gpu/drm/tegra/
 F:	drivers/gpu/host1x/
+F:	include/linux/host1x.h
 F:	include/uapi/drm/tegra_drm.h
 F:	Documentation/devicetree/bindings/gpu/nvidia,tegra20-host1x.txt
 
@@ -3047,6 +3057,14 @@ W:	bluesmoke.sourceforge.net
 S:	Maintained
 F:	drivers/edac/amd64_edac*
 
+EDAC-CALXEDA
+M:	Doug Thompson <dougthompson@xmission.com>
+M:	Robert Richter <rric@kernel.org>
+L:	linux-edac@vger.kernel.org
+W:	bluesmoke.sourceforge.net
+S:	Maintained
+F:	drivers/edac/highbank*
+
 EDAC-CAVIUM
 M:	Ralf Baechle <ralf@linux-mips.org>
 M:	David Daney <david.daney@cavium.com>
@@ -3127,6 +3145,13 @@ L:	linux-edac@vger.kernel.org
 W:	bluesmoke.sourceforge.net
 S:	Maintained
 F:	drivers/edac/i82975x_edac.c
+
+EDAC-MPC85XX
+M:	Johannes Thumshirn <johannes.thumshirn@men.de>
+L:	linux-edac@vger.kernel.org
+W:	bluesmoke.sourceforge.net
+S:	Maintained
+F:	drivers/edac/mpc85xx_edac.[ch]
 
 EDAC-PASEMI
 M:	Egor Martovetsky <egor@pasemi.com>
@@ -4013,6 +4038,12 @@ W:	http://www.pharscape.org
 S:	Maintained
 F:	drivers/net/usb/hso.c
 
+HSR NETWORK PROTOCOL
+M:	Arvid Brodin <arvid.brodin@alten.se>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	net/hsr/
+
 HTCPEN TOUCHSCREEN DRIVER
 M:	Pau Oliva Fora <pof@eslack.org>
 L:	linux-input@vger.kernel.org
@@ -4034,6 +4065,7 @@ F:	arch/x86/include/uapi/asm/hyperv.h
 F:	arch/x86/kernel/cpu/mshyperv.c
 F:	drivers/hid/hid-hyperv.c
 F:	drivers/hv/
+F:	drivers/input/serio/hyperv-keyboard.c
 F:	drivers/net/hyperv/
 F:	drivers/scsi/storvsc_drv.c
 F:	drivers/video/hyperv_fb.c
@@ -4791,9 +4823,10 @@ S:	Maintained
 F:	drivers/staging/ktap/
 
 KCONFIG
-M:	Michal Marek <mmarek@suse.cz>
+M:	"Yann E. MORIN" <yann.morin.1998@free.fr>
 L:	linux-kbuild@vger.kernel.org
-S:	Odd Fixes
+T:	git://gitorious.org/linux-kconfig/linux-kconfig
+S:	Maintained
 F:	Documentation/kbuild/kconfig-language.txt
 F:	scripts/kconfig/
 
@@ -4856,7 +4889,8 @@ KERNEL VIRTUAL MACHINE (KVM)
 M:	Gleb Natapov <gleb@redhat.com>
 M:	Paolo Bonzini <pbonzini@redhat.com>
 L:	kvm@vger.kernel.org
-W:	http://linux-kvm.org
+W:	http://www.linux-kvm.org
+T:	git git://git.kernel.org/pub/scm/virt/kvm/kvm.git
 S:	Supported
 F:	Documentation/*/kvm*.txt
 F:	Documentation/virtual/kvm/
@@ -5196,6 +5230,7 @@ M:	Jean Delvare <khali@linux-fr.org>
 L:	lm-sensors@lm-sensors.org
 S:	Maintained
 F:	Documentation/hwmon/lm90
+F:	Documentation/devicetree/bindings/hwmon/lm90.txt
 F:	drivers/hwmon/lm90.c
 
 LM95234 HARDWARE MONITOR DRIVER
@@ -5221,7 +5256,7 @@ S:	Maintained
 F:	Documentation/lockdep*.txt
 F:	Documentation/lockstat.txt
 F:	include/linux/lockdep.h
-F:	kernel/lockdep*
+F:	kernel/locking/
 
 LOGICAL DISK MANAGER SUPPORT (LDM, Windows 2000/XP/Vista Dynamic Disks)
 M:	"Richard Russon (FlatCap)" <ldm@flatcap.org>
@@ -6412,6 +6447,7 @@ S:	Supported
 F:	Documentation/PCI/
 F:	drivers/pci/
 F:	include/linux/pci*
+F:	arch/x86/pci/
 
 PCI DRIVER FOR NVIDIA TEGRA
 M:	Thierry Reding <thierry.reding@gmail.com>
@@ -6419,6 +6455,12 @@ L:	linux-tegra@vger.kernel.org
 S:	Supported
 F:	Documentation/devicetree/bindings/pci/nvidia,tegra20-pcie.txt
 F:	drivers/pci/host/pci-tegra.c
+
+PCI DRIVER FOR SAMSUNG EXYNOS
+M:	Jingoo Han <jg1.han@samsung.com>
+L:	linux-pci@vger.kernel.org
+S:	Maintained
+F:	drivers/pci/host/pci-exynos.c
 
 PCMCIA SUBSYSTEM
 P:	Linux PCMCIA Team
@@ -6758,8 +6800,7 @@ PWM SUBSYSTEM
 M:	Thierry Reding <thierry.reding@gmail.com>
 L:	linux-pwm@vger.kernel.org
 S:	Maintained
-W:	http://gitorious.org/linux-pwm
-T:	git git://gitorious.org/linux-pwm/linux-pwm.git
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/thierry.reding/linux-pwm.git
 F:	Documentation/pwm.txt
 F:	Documentation/devicetree/bindings/pwm/
 F:	include/linux/pwm.h
@@ -6875,6 +6916,14 @@ Q:	http://patchwork.linuxtv.org/project/linux-media/list/
 T:	git git://linuxtv.org/anttip/media_tree.git
 S:	Maintained
 F:	drivers/media/tuners/qt1010*
+
+QUALCOMM ATHEROS ATH9K WIRELESS DRIVER
+M:	QCA ath9k Development <ath9k-devel@qca.qualcomm.com>
+L:	linux-wireless@vger.kernel.org
+L:	ath9k-devel@lists.ath9k.org
+W:	http://wireless.kernel.org/en/users/Drivers/ath9k
+S:	Supported
+F:	drivers/net/wireless/ath/ath9k/
 
 QUALCOMM ATHEROS ATH10K WIRELESS DRIVER
 M:	Kalle Valo <kvalo@qca.qualcomm.com>
@@ -7339,7 +7388,6 @@ S:	Maintained
 F:	kernel/sched/
 F:	include/linux/sched.h
 F:	include/uapi/linux/sched.h
-F:	kernel/wait.c
 F:	include/linux/wait.h
 
 SCORE ARCHITECTURE
@@ -7475,9 +7523,10 @@ SELINUX SECURITY MODULE
 M:	Stephen Smalley <sds@tycho.nsa.gov>
 M:	James Morris <james.l.morris@oracle.com>
 M:	Eric Paris <eparis@parisplace.org>
+M:	Paul Moore <paul@paul-moore.com>
 L:	selinux@tycho.nsa.gov (subscribers-only, general discussion)
 W:	http://selinuxproject.org
-T:	git git://git.infradead.org/users/eparis/selinux.git
+T:	git git://git.infradead.org/users/pcmoore/selinux
 S:	Supported
 F:	include/linux/selinux*
 F:	security/selinux/
@@ -8624,6 +8673,7 @@ F:	drivers/media/usb/tm6000/
 TPM DEVICE DRIVER
 M:	Leonidas Da Silva Barbosa <leosilva@linux.vnet.ibm.com>
 M:	Ashley Lai <ashley@ashleylai.com>
+M:	Peter Huewe <peterhuewe@gmx.de>
 M:	Rajiv Andrade <mail@srajiv.net>
 W:	http://tpmdd.sourceforge.net
 M:	Marcel Selhorst <tpmdd@selhorst.net>
@@ -8920,8 +8970,8 @@ USB PEGASUS DRIVER
 M:	Petko Manolov <petkan@nucleusys.com>
 L:	linux-usb@vger.kernel.org
 L:	netdev@vger.kernel.org
-T:	git git://git.code.sf.net/p/pegasus2/git
-W:	http://pegasus2.sourceforge.net/
+T:	git git://github.com/petkan/pegasus.git
+W:	https://github.com/petkan/pegasus
 S:	Maintained
 F:	drivers/net/usb/pegasus.*
 
@@ -8942,8 +8992,8 @@ USB RTL8150 DRIVER
 M:	Petko Manolov <petkan@nucleusys.com>
 L:	linux-usb@vger.kernel.org
 L:	netdev@vger.kernel.org
-T:	git git://git.code.sf.net/p/pegasus2/git
-W:	http://pegasus2.sourceforge.net/
+T:	git git://github.com/petkan/rtl8150.git
+W:	https://github.com/petkan/rtl8150
 S:	Maintained
 F:	drivers/net/usb/rtl8150.c
 
@@ -9482,8 +9532,8 @@ F:	drivers/xen/*swiotlb*
 
 XFS FILESYSTEM
 P:	Silicon Graphics Inc
+M:	Dave Chinner <dchinner@fromorbit.com>
 M:	Ben Myers <bpm@sgi.com>
-M:	Alex Elder <elder@kernel.org>
 M:	xfs@oss.sgi.com
 L:	xfs@oss.sgi.com
 W:	http://oss.sgi.com/projects/xfs

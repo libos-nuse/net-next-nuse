@@ -202,7 +202,7 @@ static int mxs_spi_txrx_dma(struct mxs_spi *spi,
 	if (!dma_xfer)
 		return -ENOMEM;
 
-	INIT_COMPLETION(spi->c);
+	reinit_completion(&spi->c);
 
 	/* Chip select was already programmed into CTRL0 */
 	ctrl0 = readl(ssp->base + HW_SSP_CTRL0);
@@ -565,7 +565,7 @@ static int mxs_spi_remove(struct platform_device *pdev)
 	struct mxs_spi *spi;
 	struct mxs_ssp *ssp;
 
-	master = spi_master_get(platform_get_drvdata(pdev));
+	master = platform_get_drvdata(pdev);
 	spi = spi_master_get_devdata(master);
 	ssp = &spi->ssp;
 

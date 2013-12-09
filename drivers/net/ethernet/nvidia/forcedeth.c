@@ -26,8 +26,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Known bugs:
  * We suspect that on some hardware no TX done interrupts are generated.
@@ -5619,6 +5618,8 @@ static int nv_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	spin_lock_init(&np->lock);
 	spin_lock_init(&np->hwstats_lock);
 	SET_NETDEV_DEV(dev, &pci_dev->dev);
+	u64_stats_init(&np->swstats_rx_syncp);
+	u64_stats_init(&np->swstats_tx_syncp);
 
 	init_timer(&np->oom_kick);
 	np->oom_kick.data = (unsigned long) dev;

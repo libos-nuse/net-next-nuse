@@ -1079,7 +1079,7 @@ static int be_vid_config(struct be_adapter *adapter)
 			vids[num++] = cpu_to_le16(i);
 
 	status = be_cmd_vlan_config(adapter, adapter->if_handle,
-				    vids, num, 1, 0);
+				    vids, num, 0);
 
 	if (status) {
 		/* Set to VLAN promisc mode as setting VLAN filter failed */
@@ -2148,6 +2148,9 @@ static int be_tx_qs_create(struct be_adapter *adapter)
 		if (status)
 			return status;
 
+		u64_stats_init(&txo->stats.sync);
+		u64_stats_init(&txo->stats.sync_compl);
+
 		/* If num_evt_qs is less than num_tx_qs, then more than
 		 * one txq share an eq
 		 */
@@ -2209,6 +2212,7 @@ static int be_rx_cqs_create(struct be_adapter *adapter)
 		if (rc)
 			return rc;
 
+		u64_stats_init(&rxo->stats.sync);
 		eq = &adapter->eq_obj[i % adapter->num_evt_qs].q;
 		rc = be_cmd_cq_create(adapter, cq, eq, false, 3);
 		if (rc)
@@ -2654,8 +2658,8 @@ static int be_close(struct net_device *netdev)
 
 	be_roce_dev_close(adapter);
 
-	for_all_evt_queues(adapter, eqo, i) {
-		if (adapter->flags & BE_FLAGS_NAPI_ENABLED) {
+	if (adapter->flags & BE_FLAGS_NAPI_ENABLED) {
+		for_all_evt_queues(adapter, eqo, i) {
 			napi_disable(&eqo->napi);
 			be_disable_busy_poll(eqo);
 		}
@@ -2671,6 +2675,11 @@ static int be_close(struct net_device *netdev)
 	be_tx_compl_clean(adapter);
 
 	be_rx_qs_destroy(adapter);
+
+	for (i = 1; i < (adapter->uc_macs + 1); i++)
+		be_cmd_pmac_del(adapter, adapter->if_handle,
+				adapter->pmac_id[i], 0);
+	adapter->uc_macs = 0;
 
 	for_all_evt_queues(adapter, eqo, i) {
 		if (msix_enabled(adapter))
@@ -3244,12 +3253,10 @@ static int be_mac_setup(struct be_adapter *adapter)
 		memcpy(mac, adapter->netdev->dev_addr, ETH_ALEN);
 	}
 
-	/* On BE3 VFs this cmd may fail due to lack of privilege.
-	 * Ignore the failure as in this case pmac_id is fetched
-	 * in the IFACE_CREATE cmd.
-	 */
-	be_cmd_pmac_add(adapter, mac, adapter->if_handle,
-			&adapter->pmac_id[0], 0);
+	/* For BE3-R VFs, the PF programs the initial MAC address */
+	if (!(BEx_chip(adapter) && be_virtfn(adapter)))
+		be_cmd_pmac_add(adapter, mac, adapter->if_handle,
+				&adapter->pmac_id[0], 0);
 	return 0;
 }
 
@@ -4487,19 +4494,11 @@ static int be_probe(struct pci_dev *pdev, const struct pci_device_id *pdev_id)
 	adapter->netdev = netdev;
 	SET_NETDEV_DEV(netdev, &pdev->dev);
 
-	status = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
+	status = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (!status) {
-		status = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64));
-		if (status < 0) {
-			dev_err(&pdev->dev, "dma_set_coherent_mask failed\n");
-			goto free_netdev;
-		}
 		netdev->features |= NETIF_F_HIGHDMA;
 	} else {
-		status = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
-		if (!status)
-			status = dma_set_coherent_mask(&pdev->dev,
-						       DMA_BIT_MASK(32));
+		status = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 		if (status) {
 			dev_err(&pdev->dev, "Could not set PCI DMA Mask\n");
 			goto free_netdev;
@@ -4598,6 +4597,7 @@ static int be_suspend(struct pci_dev *pdev, pm_message_t state)
 	if (adapter->wol)
 		be_setup_wol(adapter, true);
 
+	be_intr_set(adapter, false);
 	cancel_delayed_work_sync(&adapter->func_recovery_work);
 
 	netif_device_detach(netdev);
@@ -4633,6 +4633,7 @@ static int be_resume(struct pci_dev *pdev)
 	if (status)
 		return status;
 
+	be_intr_set(adapter, true);
 	/* tell fw we're ready to fire cmds */
 	status = be_cmd_fw_init(adapter);
 	if (status)

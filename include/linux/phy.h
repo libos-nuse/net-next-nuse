@@ -27,17 +27,26 @@
 
 #include <linux/atomic.h>
 
-#define PHY_BASIC_FEATURES	(SUPPORTED_10baseT_Half | \
-				 SUPPORTED_10baseT_Full | \
-				 SUPPORTED_100baseT_Half | \
-				 SUPPORTED_100baseT_Full | \
-				 SUPPORTED_Autoneg | \
+#define PHY_DEFAULT_FEATURES	(SUPPORTED_Autoneg | \
 				 SUPPORTED_TP | \
 				 SUPPORTED_MII)
 
-#define PHY_GBIT_FEATURES	(PHY_BASIC_FEATURES | \
-				 SUPPORTED_1000baseT_Half | \
+#define PHY_10BT_FEATURES	(SUPPORTED_10baseT_Half | \
+				 SUPPORTED_10baseT_Full)
+
+#define PHY_100BT_FEATURES	(SUPPORTED_100baseT_Half | \
+				 SUPPORTED_100baseT_Full)
+
+#define PHY_1000BT_FEATURES	(SUPPORTED_1000baseT_Half | \
 				 SUPPORTED_1000baseT_Full)
+
+#define PHY_BASIC_FEATURES	(PHY_10BT_FEATURES | \
+				 PHY_100BT_FEATURES | \
+				 PHY_DEFAULT_FEATURES)
+
+#define PHY_GBIT_FEATURES	(PHY_BASIC_FEATURES | \
+				 PHY_1000BT_FEATURES)
+
 
 /*
  * Set phydev->irq to PHY_POLL if interrupts are not supported,
@@ -559,6 +568,7 @@ static inline int phy_read_status(struct phy_device *phydev) {
 	return phydev->drv->read_status(phydev);
 }
 
+int genphy_setup_forced(struct phy_device *phydev);
 int genphy_restart_aneg(struct phy_device *phydev);
 int genphy_config_aneg(struct phy_device *phydev);
 int genphy_update_link(struct phy_device *phydev);

@@ -1730,7 +1730,7 @@ static void qlcnic_extend_lb_idc_cmpltn_wait(struct qlcnic_adapter *adapter,
 	struct qlcnic_hardware_context *ahw = adapter->ahw;
 	int temp;
 
-	netdev_info(adapter->netdev, "Recieved loopback IDC time extend event for 0x%x seconds\n",
+	netdev_info(adapter->netdev, "Received loopback IDC time extend event for 0x%x seconds\n",
 		    ahw->extend_lb_time);
 	temp = ahw->extend_lb_time * 1000;
 	*max_wait_count += temp / QLC_83XX_LB_MSLEEP_COUNT;
@@ -3537,7 +3537,7 @@ int qlcnic_83xx_resume(struct qlcnic_adapter *adapter)
 
 void qlcnic_83xx_reinit_mbx_work(struct qlcnic_mailbox *mbx)
 {
-	INIT_COMPLETION(mbx->completion);
+	reinit_completion(&mbx->completion);
 	set_bit(QLC_83XX_MBX_READY, &mbx->status);
 }
 

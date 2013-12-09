@@ -156,6 +156,16 @@ tcp_app_win - INTEGER
 	buffer. Value 0 is special, it means that nothing is reserved.
 	Default: 31
 
+tcp_autocorking - BOOLEAN
+	Enable TCP auto corking :
+	When applications do consecutive small write()/sendmsg() system calls,
+	we try to coalesce these small writes as much as possible, to lower
+	total amount of sent packets. This is done if at least one prior
+	packet for the flow is waiting in Qdisc queues or device transmit
+	queue. Applications can still use TCP_CORK for optimal behavior
+	when they know how/when to uncork their sockets.
+	Default : 1
+
 tcp_available_congestion_control - STRING
 	Shows the available congestion control choices that are registered.
 	More congestion control algorithms may be available as modules,
@@ -577,9 +587,6 @@ tcp_limit_output_bytes - INTEGER
 	typical pfifo_fast qdiscs.
 	tcp_limit_output_bytes limits the number of bytes on qdisc
 	or device to reduce artificial RTT/cwnd and reduce bufferbloat.
-	Note: For GSO/TSO enabled flows, we try to have at least two
-	packets in flight. Reducing tcp_limit_output_bytes might also
-	reduce the size of individual GSO packet (64KB being the max)
 	Default: 131072
 
 tcp_challenge_ack_limit - INTEGER

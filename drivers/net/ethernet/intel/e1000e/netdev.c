@@ -3482,10 +3482,10 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca)
  * specified. Matching the kind of event packet is not supported, with the
  * exception of "all V2 events regardless of level 2 or 4".
  **/
-static int e1000e_config_hwtstamp(struct e1000_adapter *adapter)
+static int e1000e_config_hwtstamp(struct e1000_adapter *adapter,
+				  struct hwtstamp_config *config)
 {
 	struct e1000_hw *hw = &adapter->hw;
-	struct hwtstamp_config *config = &adapter->hwtstamp_config;
 	u32 tsync_tx_ctl = E1000_TSYNCTXCTL_ENABLED;
 	u32 tsync_rx_ctl = E1000_TSYNCRXCTL_ENABLED;
 	u32 rxmtrl = 0;
@@ -3585,6 +3585,8 @@ static int e1000e_config_hwtstamp(struct e1000_adapter *adapter)
 	default:
 		return -ERANGE;
 	}
+
+	adapter->hwtstamp_config = *config;
 
 	/* enable/disable Tx h/w time stamping */
 	regval = er32(TSYNCTXCTL);
@@ -3874,7 +3876,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	e1000e_reset_adaptive(hw);
 
 	/* initialize systim and reset the ns time counter */
-	e1000e_config_hwtstamp(adapter);
+	e1000e_config_hwtstamp(adapter, &adapter->hwtstamp_config);
 
 	/* Set EEE advertisement as appropriate */
 	if (adapter->flags2 & FLAG2_HAS_EEE) {
@@ -5788,7 +5790,7 @@ static int e1000_mii_ioctl(struct net_device *netdev, struct ifreq *ifr,
  * specified. Matching the kind of event packet is not supported, with the
  * exception of "all V2 events regardless of level 2 or 4".
  **/
-static int e1000e_hwtstamp_ioctl(struct net_device *netdev, struct ifreq *ifr)
+static int e1000e_hwtstamp_set(struct net_device *netdev, struct ifreq *ifr)
 {
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 	struct hwtstamp_config config;
@@ -5797,13 +5799,9 @@ static int e1000e_hwtstamp_ioctl(struct net_device *netdev, struct ifreq *ifr)
 	if (copy_from_user(&config, ifr->ifr_data, sizeof(config)))
 		return -EFAULT;
 
-	adapter->hwtstamp_config = config;
-
-	ret_val = e1000e_config_hwtstamp(adapter);
+	ret_val = e1000e_config_hwtstamp(adapter, &config);
 	if (ret_val)
 		return ret_val;
-
-	config = adapter->hwtstamp_config;
 
 	switch (config.rx_filter) {
 	case HWTSTAMP_FILTER_PTP_V2_L4_SYNC:
@@ -5827,6 +5825,14 @@ static int e1000e_hwtstamp_ioctl(struct net_device *netdev, struct ifreq *ifr)
 			    sizeof(config)) ? -EFAULT : 0;
 }
 
+static int e1000e_hwtstamp_get(struct net_device *netdev, struct ifreq *ifr)
+{
+	struct e1000_adapter *adapter = netdev_priv(netdev);
+
+	return copy_to_user(ifr->ifr_data, &adapter->hwtstamp_config,
+			    sizeof(adapter->hwtstamp_config)) ? -EFAULT : 0;
+}
+
 static int e1000_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 {
 	switch (cmd) {
@@ -5835,7 +5841,9 @@ static int e1000_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 	case SIOCSMIIREG:
 		return e1000_mii_ioctl(netdev, ifr, cmd);
 	case SIOCSHWTSTAMP:
-		return e1000e_hwtstamp_ioctl(netdev, ifr);
+		return e1000e_hwtstamp_set(netdev, ifr);
+	case SIOCGHWTSTAMP:
+		return e1000e_hwtstamp_get(netdev, ifr);
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -6553,21 +6561,15 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return err;
 
 	pci_using_dac = 0;
-	err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
+	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (!err) {
-		err = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64));
-		if (!err)
-			pci_using_dac = 1;
+		pci_using_dac = 1;
 	} else {
-		err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
+		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 		if (err) {
-			err = dma_set_coherent_mask(&pdev->dev,
-						    DMA_BIT_MASK(32));
-			if (err) {
-				dev_err(&pdev->dev,
-					"No usable DMA configuration, aborting\n");
-				goto err_dma;
-			}
+			dev_err(&pdev->dev,
+				"No usable DMA configuration, aborting\n");
+			goto err_dma;
 		}
 	}
 

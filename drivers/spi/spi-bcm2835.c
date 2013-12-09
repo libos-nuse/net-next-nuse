@@ -217,7 +217,7 @@ static int bcm2835_spi_start_transfer(struct spi_device *spi,
 		cs |= spi->chip_select;
 	}
 
-	INIT_COMPLETION(bs->done);
+	reinit_completion(&bs->done);
 	bs->tx_buf = tfr->tx_buf;
 	bs->rx_buf = tfr->rx_buf;
 	bs->len = tfr->len;
@@ -377,7 +377,7 @@ out_master_put:
 
 static int bcm2835_spi_remove(struct platform_device *pdev)
 {
-	struct spi_master *master = spi_master_get(platform_get_drvdata(pdev));
+	struct spi_master *master = platform_get_drvdata(pdev);
 	struct bcm2835_spi *bs = spi_master_get_devdata(master);
 
 	free_irq(bs->irq, master);

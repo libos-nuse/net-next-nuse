@@ -534,6 +534,7 @@ static int macvlan_init(struct net_device *dev)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	const struct net_device *lowerdev = vlan->lowerdev;
+	int i;
 
 	dev->state		= (dev->state & ~MACVLAN_STATE_MASK) |
 				  (lowerdev->state & MACVLAN_STATE_MASK);
@@ -548,6 +549,12 @@ static int macvlan_init(struct net_device *dev)
 	vlan->pcpu_stats = alloc_percpu(struct macvlan_pcpu_stats);
 	if (!vlan->pcpu_stats)
 		return -ENOMEM;
+
+	for_each_possible_cpu(i) {
+		struct macvlan_pcpu_stats *mvlstats;
+		mvlstats = per_cpu_ptr(vlan->pcpu_stats, i);
+		u64_stats_init(&mvlstats->syncp);
+	}
 
 	return 0;
 }
@@ -813,13 +820,11 @@ int macvlan_common_newlink(struct net *src_net, struct net_device *dev,
 	if (lowerdev == NULL)
 		return -ENODEV;
 
-	/* When creating macvlans on top of other macvlans - use
+	/* When creating macvlans or macvtaps on top of other macvlans - use
 	 * the real device as the lowerdev.
 	 */
-	if (lowerdev->rtnl_link_ops == dev->rtnl_link_ops) {
-		struct macvlan_dev *lowervlan = netdev_priv(lowerdev);
-		lowerdev = lowervlan->lowerdev;
-	}
+	if (netif_is_macvlan(lowerdev))
+		lowerdev = macvlan_dev_real_dev(lowerdev);
 
 	if (!tb[IFLA_MTU])
 		dev->mtu = lowerdev->mtu;

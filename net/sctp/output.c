@@ -20,9 +20,8 @@
  * See the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with GNU CC; see the file COPYING.  If not, write to
- * the Free Software Foundation, 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with GNU CC; see the file COPYING.  If not, see
+ * <http://www.gnu.org/licenses/>.
  *
  * Please send any bug reports or fixes you make to the
  * email address(es):
@@ -474,10 +473,11 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 			 * for a given destination transport address.
 			 */
 
-			if (!tp->rto_pending) {
+			if (!chunk->resent && !tp->rto_pending) {
 				chunk->rtt_in_progress = 1;
 				tp->rto_pending = 1;
 			}
+
 			has_data = 1;
 		}
 

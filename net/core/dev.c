@@ -131,6 +131,7 @@
 #include <linux/static_key.h>
 #include <linux/hashtable.h>
 #include <linux/vmalloc.h>
+#include <linux/if_macvlan.h>
 
 #include "net-sysfs.h"
 
@@ -1424,6 +1425,10 @@ void dev_disable_lro(struct net_device *dev)
 	if (is_vlan_dev(dev))
 		dev = vlan_dev_real_dev(dev);
 
+	/* the same for macvlan devices */
+	if (netif_is_macvlan(dev))
+		dev = macvlan_dev_real_dev(dev);
+
 	dev->wanted_features &= ~NETIF_F_LRO;
 	netdev_update_features(dev);
 
@@ -1690,13 +1695,9 @@ int dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
 		kfree_skb(skb);
 		return NET_RX_DROP;
 	}
-	skb->protocol = eth_type_trans(skb, dev);
 
-	/* eth_type_trans() can set pkt_type.
-	 * call skb_scrub_packet() after it to clear pkt_type _after_ calling
-	 * eth_type_trans().
-	 */
 	skb_scrub_packet(skb, true);
+	skb->protocol = eth_type_trans(skb, dev);
 
 	return netif_rx(skb);
 }
@@ -2144,30 +2145,42 @@ void __netif_schedule(struct Qdisc *q)
 }
 EXPORT_SYMBOL(__netif_schedule);
 
-void dev_kfree_skb_irq(struct sk_buff *skb)
+struct dev_kfree_skb_cb {
+	enum skb_free_reason reason;
+};
+
+static struct dev_kfree_skb_cb *get_kfree_skb_cb(const struct sk_buff *skb)
 {
-	if (atomic_dec_and_test(&skb->users)) {
-		struct softnet_data *sd;
-		unsigned long flags;
-
-		local_irq_save(flags);
-		sd = &__get_cpu_var(softnet_data);
-		skb->next = sd->completion_queue;
-		sd->completion_queue = skb;
-		raise_softirq_irqoff(NET_TX_SOFTIRQ);
-		local_irq_restore(flags);
-	}
+	return (struct dev_kfree_skb_cb *)skb->cb;
 }
-EXPORT_SYMBOL(dev_kfree_skb_irq);
 
-void dev_kfree_skb_any(struct sk_buff *skb)
+void __dev_kfree_skb_irq(struct sk_buff *skb, enum skb_free_reason reason)
+{
+	unsigned long flags;
+
+	if (likely(atomic_read(&skb->users) == 1)) {
+		smp_rmb();
+		atomic_set(&skb->users, 0);
+	} else if (likely(!atomic_dec_and_test(&skb->users))) {
+		return;
+	}
+	get_kfree_skb_cb(skb)->reason = reason;
+	local_irq_save(flags);
+	skb->next = __this_cpu_read(softnet_data.completion_queue);
+	__this_cpu_write(softnet_data.completion_queue, skb);
+	raise_softirq_irqoff(NET_TX_SOFTIRQ);
+	local_irq_restore(flags);
+}
+EXPORT_SYMBOL(__dev_kfree_skb_irq);
+
+void __dev_kfree_skb_any(struct sk_buff *skb, enum skb_free_reason reason)
 {
 	if (in_irq() || irqs_disabled())
-		dev_kfree_skb_irq(skb);
+		__dev_kfree_skb_irq(skb, reason);
 	else
 		dev_kfree_skb(skb);
 }
-EXPORT_SYMBOL(dev_kfree_skb_any);
+EXPORT_SYMBOL(__dev_kfree_skb_any);
 
 
 /**
@@ -3305,7 +3318,10 @@ static void net_tx_action(struct softirq_action *h)
 			clist = clist->next;
 
 			WARN_ON(atomic_read(&skb->users));
-			trace_kfree_skb(skb, net_tx_action);
+			if (likely(get_kfree_skb_cb(skb)->reason == SKB_REASON_CONSUMED))
+				trace_consume_skb(skb);
+			else
+				trace_kfree_skb(skb, net_tx_action);
 			__kfree_skb(skb);
 		}
 	}
@@ -3980,8 +3996,7 @@ struct sk_buff *napi_get_frags(struct napi_struct *napi)
 
 	if (!skb) {
 		skb = netdev_alloc_skb_ip_align(napi->dev, GRO_MAX_HEAD);
-		if (skb)
-			napi->skb = skb;
+		napi->skb = skb;
 	}
 	return skb;
 }
@@ -4995,7 +5010,7 @@ static void dev_change_rx_flags(struct net_device *dev, int flags)
 {
 	const struct net_device_ops *ops = dev->netdev_ops;
 
-	if ((dev->flags & IFF_UP) && ops->ndo_change_rx_flags)
+	if (ops->ndo_change_rx_flags)
 		ops->ndo_change_rx_flags(dev, flags);
 }
 

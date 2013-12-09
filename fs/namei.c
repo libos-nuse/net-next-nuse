@@ -513,8 +513,7 @@ static int unlazy_walk(struct nameidata *nd, struct dentry *dentry)
 
 	if (!lockref_get_not_dead(&parent->d_lockref)) {
 		nd->path.dentry = NULL;	
-		rcu_read_unlock();
-		return -ECHILD;
+		goto out;
 	}
 
 	/*
@@ -2435,6 +2434,7 @@ static int may_delete(struct inode *dir, struct dentry *victim, bool isdir)
  */
 static inline int may_create(struct inode *dir, struct dentry *child)
 {
+	audit_inode_child(dir, child, AUDIT_TYPE_CHILD_CREATE);
 	if (child->d_inode)
 		return -EEXIST;
 	if (IS_DEADDIR(dir))

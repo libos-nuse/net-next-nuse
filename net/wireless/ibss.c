@@ -262,7 +262,7 @@ int cfg80211_ibss_wext_join(struct cfg80211_registered_device *rdev,
 
 	/* try to find an IBSS channel if none requested ... */
 	if (!wdev->wext.ibss.chandef.chan) {
-		wdev->wext.ibss.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
+		struct ieee80211_channel *new_chan = NULL;
 
 		for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
 			struct ieee80211_supported_band *sband;
@@ -274,22 +274,23 @@ int cfg80211_ibss_wext_join(struct cfg80211_registered_device *rdev,
 
 			for (i = 0; i < sband->n_channels; i++) {
 				chan = &sband->channels[i];
-				if (chan->flags & IEEE80211_CHAN_NO_IBSS)
+				if (chan->flags & IEEE80211_CHAN_NO_IR)
 					continue;
 				if (chan->flags & IEEE80211_CHAN_DISABLED)
 					continue;
-				wdev->wext.ibss.chandef.chan = chan;
-				wdev->wext.ibss.chandef.center_freq1 =
-					chan->center_freq;
+				new_chan = chan;
 				break;
 			}
 
-			if (wdev->wext.ibss.chandef.chan)
+			if (new_chan)
 				break;
 		}
 
-		if (!wdev->wext.ibss.chandef.chan)
+		if (!new_chan)
 			return -EINVAL;
+
+		cfg80211_chandef_create(&wdev->wext.ibss.chandef, new_chan,
+					NL80211_CHAN_NO_HT);
 	}
 
 	/* don't join -- SSID is not there */
@@ -345,7 +346,7 @@ int cfg80211_ibss_wext_siwfreq(struct net_device *dev,
 		chan = ieee80211_get_channel(wdev->wiphy, freq);
 		if (!chan)
 			return -EINVAL;
-		if (chan->flags & IEEE80211_CHAN_NO_IBSS ||
+		if (chan->flags & IEEE80211_CHAN_NO_IR ||
 		    chan->flags & IEEE80211_CHAN_DISABLED)
 			return -EINVAL;
 	}
@@ -363,9 +364,8 @@ int cfg80211_ibss_wext_siwfreq(struct net_device *dev,
 		return err;
 
 	if (chan) {
-		wdev->wext.ibss.chandef.chan = chan;
-		wdev->wext.ibss.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
-		wdev->wext.ibss.chandef.center_freq1 = freq;
+		cfg80211_chandef_create(&wdev->wext.ibss.chandef, chan,
+					NL80211_CHAN_NO_HT);
 		wdev->wext.ibss.channel_fixed = true;
 	} else {
 		/* cfg80211_ibss_wext_join will pick one if needed */

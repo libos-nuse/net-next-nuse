@@ -238,7 +238,7 @@ static void davinci_pcm_dma_irq(unsigned link, u16 ch_status, void *data)
 	print_buf_info(prtd->ram_channel, "i ram_channel");
 	pr_debug("davinci_pcm: link=%d, status=0x%x\n", link, ch_status);
 
-	if (unlikely(ch_status != DMA_COMPLETE))
+	if (unlikely(ch_status != EDMA_DMA_COMPLETE))
 		return;
 
 	if (snd_pcm_running(substream)) {
@@ -843,18 +843,15 @@ static void davinci_pcm_free(struct snd_pcm *pcm)
 	}
 }
 
-static u64 davinci_pcm_dmamask = DMA_BIT_MASK(32);
-
 static int davinci_pcm_new(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_card *card = rtd->card->snd_card;
 	struct snd_pcm *pcm = rtd->pcm;
 	int ret;
 
-	if (!card->dev->dma_mask)
-		card->dev->dma_mask = &davinci_pcm_dmamask;
-	if (!card->dev->coherent_dma_mask)
-		card->dev->coherent_dma_mask = DMA_BIT_MASK(32);
+	ret = dma_coerce_mask_and_coherent(card->dev, DMA_BIT_MASK(32));
+	if (ret)
+		return ret;
 
 	if (pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream) {
 		ret = davinci_pcm_preallocate_dma_buffer(pcm,

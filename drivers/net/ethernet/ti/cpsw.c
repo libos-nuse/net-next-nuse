@@ -967,14 +967,19 @@ static inline void cpsw_add_dual_emac_def_ale_entries(
 		priv->host_port, ALE_VLAN, slave->port_vlan);
 }
 
-static void cpsw_slave_open(struct cpsw_slave *slave, struct cpsw_priv *priv)
+static void soft_reset_slave(struct cpsw_slave *slave)
 {
 	char name[32];
+
+	snprintf(name, sizeof(name), "slave-%d", slave->slave_num);
+	soft_reset(name, &slave->sliver->soft_reset);
+}
+
+static void cpsw_slave_open(struct cpsw_slave *slave, struct cpsw_priv *priv)
+{
 	u32 slave_port;
 
-	sprintf(name, "slave-%d", slave->slave_num);
-
-	soft_reset(name, &slave->sliver->soft_reset);
+	soft_reset_slave(slave);
 
 	/* setup priority mapping */
 	__raw_writel(RX_PRIORITY_MAPPING, &slave->sliver->rx_pri_map);
@@ -1317,11 +1322,15 @@ static void cpsw_hwtstamp_v2(struct cpsw_priv *priv)
 	__raw_writel(ETH_P_1588, &priv->regs->ts_ltype);
 }
 
-static int cpsw_hwtstamp_ioctl(struct net_device *dev, struct ifreq *ifr)
+static int cpsw_hwtstamp_set(struct net_device *dev, struct ifreq *ifr)
 {
 	struct cpsw_priv *priv = netdev_priv(dev);
 	struct cpts *cpts = priv->cpts;
 	struct hwtstamp_config cfg;
+
+	if (priv->version != CPSW_VERSION_1 &&
+	    priv->version != CPSW_VERSION_2)
+		return -EOPNOTSUPP;
 
 	if (copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg)))
 		return -EFAULT;
@@ -1330,16 +1339,8 @@ static int cpsw_hwtstamp_ioctl(struct net_device *dev, struct ifreq *ifr)
 	if (cfg.flags)
 		return -EINVAL;
 
-	switch (cfg.tx_type) {
-	case HWTSTAMP_TX_OFF:
-		cpts->tx_enable = 0;
-		break;
-	case HWTSTAMP_TX_ON:
-		cpts->tx_enable = 1;
-		break;
-	default:
+	if (cfg.tx_type != HWTSTAMP_TX_OFF && cfg.tx_type != HWTSTAMP_TX_ON)
 		return -ERANGE;
-	}
 
 	switch (cfg.rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
@@ -1366,6 +1367,8 @@ static int cpsw_hwtstamp_ioctl(struct net_device *dev, struct ifreq *ifr)
 		return -ERANGE;
 	}
 
+	cpts->tx_enable = cfg.tx_type == HWTSTAMP_TX_ON;
+
 	switch (priv->version) {
 	case CPSW_VERSION_1:
 		cpsw_hwtstamp_v1(priv);
@@ -1374,8 +1377,26 @@ static int cpsw_hwtstamp_ioctl(struct net_device *dev, struct ifreq *ifr)
 		cpsw_hwtstamp_v2(priv);
 		break;
 	default:
-		return -ENOTSUPP;
+		WARN_ON(1);
 	}
+
+	return copy_to_user(ifr->ifr_data, &cfg, sizeof(cfg)) ? -EFAULT : 0;
+}
+
+static int cpsw_hwtstamp_get(struct net_device *dev, struct ifreq *ifr)
+{
+	struct cpsw_priv *priv = netdev_priv(dev);
+	struct cpts *cpts = priv->cpts;
+	struct hwtstamp_config cfg;
+
+	if (priv->version != CPSW_VERSION_1 &&
+	    priv->version != CPSW_VERSION_2)
+		return -EOPNOTSUPP;
+
+	cfg.flags = 0;
+	cfg.tx_type = cpts->tx_enable ? HWTSTAMP_TX_ON : HWTSTAMP_TX_OFF;
+	cfg.rx_filter = (cpts->rx_enable ?
+			 HWTSTAMP_FILTER_PTP_V2_EVENT : HWTSTAMP_FILTER_NONE);
 
 	return copy_to_user(ifr->ifr_data, &cfg, sizeof(cfg)) ? -EFAULT : 0;
 }
@@ -1394,7 +1415,9 @@ static int cpsw_ndo_ioctl(struct net_device *dev, struct ifreq *req, int cmd)
 	switch (cmd) {
 #ifdef CONFIG_TI_CPTS
 	case SIOCSHWTSTAMP:
-		return cpsw_hwtstamp_ioctl(dev, req);
+		return cpsw_hwtstamp_set(dev, req);
+	case SIOCGHWTSTAMP:
+		return cpsw_hwtstamp_get(dev, req);
 #endif
 	case SIOCGMIIPHY:
 		data->phy_id = priv->slaves[slave_no].phy->addr;
@@ -1813,6 +1836,8 @@ static int cpsw_probe_dt(struct cpsw_platform_data *data,
 		}
 
 		i++;
+		if (i == data->slaves)
+			break;
 	}
 
 	return 0;
@@ -2173,8 +2198,9 @@ static int cpsw_suspend(struct device *dev)
 
 	if (netif_running(ndev))
 		cpsw_ndo_stop(ndev);
-	soft_reset("sliver 0", &priv->slaves[0].sliver->soft_reset);
-	soft_reset("sliver 1", &priv->slaves[1].sliver->soft_reset);
+
+	for_each_slave(priv, soft_reset_slave);
+
 	pm_runtime_put_sync(&pdev->dev);
 
 	/* Select sleep pin state */
