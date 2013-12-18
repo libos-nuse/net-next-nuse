@@ -4,6 +4,7 @@
 #include <uapi/linux/ipv6.h>
 
 #define ipv6_optlen(p)  (((p)->hdrlen+1) << 3)
+#define ipv6_authlen(p) (((p)->hdrlen+2) << 2)
 /*
  * This structure contains configuration options per IPv6 link.
  */
@@ -199,7 +200,7 @@ struct ipv6_pinfo {
 				dontfrag:1;
 	__u8			min_hopcount;
 	__u8			tclass;
-	__u8			rcv_tclass;
+	__be32			rcv_flowinfo;
 
 	__u32			dst_cookie;
 	__u32			rx_dst_cookie;

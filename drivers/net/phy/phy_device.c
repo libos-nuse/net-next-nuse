@@ -162,7 +162,7 @@ struct phy_device *phy_device_create(struct mii_bus *bus, int addr, int phy_id,
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 
 	if (NULL == dev)
-		return (struct phy_device*) PTR_ERR((void*)-ENOMEM);
+		return (struct phy_device *)PTR_ERR((void *)-ENOMEM);
 
 	dev->dev.release = phy_device_release;
 
@@ -364,7 +364,11 @@ int phy_device_register(struct phy_device *phydev)
 	phydev->bus->phy_map[phydev->addr] = phydev;
 
 	/* Run all of the fixups for this PHY */
-	phy_scan_fixups(phydev);
+	err = phy_init_hw(phydev);
+	if (err) {
+		pr_err("PHY %d failed to initialize\n", phydev->addr);
+		goto out;
+	}
 
 	err = device_add(&phydev->dev);
 	if (err) {
@@ -455,7 +459,7 @@ EXPORT_SYMBOL(phy_connect_direct);
  *   choose to call only the subset of functions which provide
  *   the desired functionality.
  */
-struct phy_device * phy_connect(struct net_device *dev, const char *bus_id,
+struct phy_device *phy_connect(struct net_device *dev, const char *bus_id,
 		void (*handler)(struct net_device *),
 		phy_interface_t interface)
 {
@@ -490,12 +494,53 @@ void phy_disconnect(struct phy_device *phydev)
 		phy_stop_interrupts(phydev);
 
 	phy_stop_machine(phydev);
-	
+
 	phydev->adjust_link = NULL;
 
 	phy_detach(phydev);
 }
 EXPORT_SYMBOL(phy_disconnect);
+
+/**
+ * phy_poll_reset - Safely wait until a PHY reset has properly completed
+ * @phydev: The PHY device to poll
+ *
+ * Description: According to IEEE 802.3, Section 2, Subsection 22.2.4.1.1, as
+ *   published in 2008, a PHY reset may take up to 0.5 seconds.  The MII BMCR
+ *   register must be polled until the BMCR_RESET bit clears.
+ *
+ *   Furthermore, any attempts to write to PHY registers may have no effect
+ *   or even generate MDIO bus errors until this is complete.
+ *
+ *   Some PHYs (such as the Marvell 88E1111) don't entirely conform to the
+ *   standard and do not fully reset after the BMCR_RESET bit is set, and may
+ *   even *REQUIRE* a soft-reset to properly restart autonegotiation.  In an
+ *   effort to support such broken PHYs, this function is separate from the
+ *   standard phy_init_hw() which will zero all the other bits in the BMCR
+ *   and reapply all driver-specific and board-specific fixups.
+ */
+static int phy_poll_reset(struct phy_device *phydev)
+{
+	/* Poll until the reset bit clears (50ms per retry == 0.6 sec) */
+	unsigned int retries = 12;
+	int ret;
+
+	do {
+		msleep(50);
+		ret = phy_read(phydev, MII_BMCR);
+		if (ret < 0)
+			return ret;
+	} while (ret & BMCR_RESET && --retries);
+	if (ret & BMCR_RESET)
+		return -ETIMEDOUT;
+
+	/*
+	 * Some chips (smsc911x) may still need up to another 1ms after the
+	 * BMCR_RESET bit is cleared before they are usable.
+	 */
+	msleep(1);
+	return 0;
+}
 
 int phy_init_hw(struct phy_device *phydev)
 {
@@ -504,12 +549,21 @@ int phy_init_hw(struct phy_device *phydev)
 	if (!phydev->drv || !phydev->drv->config_init)
 		return 0;
 
+	ret = phy_write(phydev, MII_BMCR, BMCR_RESET);
+	if (ret < 0)
+		return ret;
+
+	ret = phy_poll_reset(phydev);
+	if (ret < 0)
+		return ret;
+
 	ret = phy_scan_fixups(phydev);
 	if (ret < 0)
 		return ret;
 
 	return phydev->drv->config_init(phydev);
 }
+EXPORT_SYMBOL(phy_init_hw);
 
 /**
  * phy_attach_direct - attach a network device to a given PHY device pointer
@@ -570,6 +624,8 @@ static int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 	if (err)
 		phy_detach(phydev);
 
+	phy_resume(phydev);
+
 	return err;
 }
 
@@ -615,6 +671,7 @@ void phy_detach(struct phy_device *phydev)
 {
 	phydev->attached_dev->phydev = NULL;
 	phydev->attached_dev = NULL;
+	phy_suspend(phydev);
 
 	/* If the device had no specific driver before (i.e. - it
 	 * was using the generic driver), we unbind the device
@@ -625,6 +682,30 @@ void phy_detach(struct phy_device *phydev)
 }
 EXPORT_SYMBOL(phy_detach);
 
+int phy_suspend(struct phy_device *phydev)
+{
+	struct phy_driver *phydrv = to_phy_driver(phydev->dev.driver);
+	struct ethtool_wolinfo wol;
+
+	/* If the device has WOL enabled, we cannot suspend the PHY */
+	wol.cmd = ETHTOOL_GWOL;
+	phy_ethtool_get_wol(phydev, &wol);
+	if (wol.wolopts)
+		return -EBUSY;
+
+	if (phydrv->suspend)
+		return phydrv->suspend(phydev);
+	return 0;
+}
+
+int phy_resume(struct phy_device *phydev)
+{
+	struct phy_driver *phydrv = to_phy_driver(phydev->dev.driver);
+
+	if (phydrv->resume)
+		return phydrv->resume(phydev);
+	return 0;
+}
 
 /* Generic PHY support and helper functions */
 
@@ -711,7 +792,7 @@ int genphy_setup_forced(struct phy_device *phydev)
 
 	if (DUPLEX_FULL == phydev->duplex)
 		ctl |= BMCR_FULLDPLX;
-	
+
 	err = phy_write(phydev, MII_BMCR, ctl);
 
 	return err;
@@ -839,6 +920,8 @@ int genphy_read_status(struct phy_device *phydev)
 	if (err)
 		return err;
 
+	phydev->lp_advertising = 0;
+
 	if (AUTONEG_ENABLE == phydev->autoneg) {
 		if (phydev->supported & (SUPPORTED_1000baseT_Half
 					| SUPPORTED_1000baseT_Full)) {
@@ -852,6 +935,8 @@ int genphy_read_status(struct phy_device *phydev)
 			if (adv < 0)
 				return adv;
 
+			phydev->lp_advertising =
+				mii_stat1000_to_ethtool_lpa_t(lpagb);
 			lpagb &= adv << 2;
 		}
 
@@ -859,6 +944,8 @@ int genphy_read_status(struct phy_device *phydev)
 
 		if (lpa < 0)
 			return lpa;
+
+		phydev->lp_advertising |= mii_lpa_to_ethtool_lpa_t(lpa);
 
 		adv = phy_read(phydev, MII_ADVERTISE);
 
@@ -878,14 +965,14 @@ int genphy_read_status(struct phy_device *phydev)
 				phydev->duplex = DUPLEX_FULL;
 		} else if (lpa & (LPA_100FULL | LPA_100HALF)) {
 			phydev->speed = SPEED_100;
-			
+
 			if (lpa & LPA_100FULL)
 				phydev->duplex = DUPLEX_FULL;
 		} else
 			if (lpa & LPA_10FULL)
 				phydev->duplex = DUPLEX_FULL;
 
-		if (phydev->duplex == DUPLEX_FULL){
+		if (phydev->duplex == DUPLEX_FULL) {
 			phydev->pause = lpa & LPA_PAUSE_CAP ? 1 : 0;
 			phydev->asym_pause = lpa & LPA_PAUSE_ASYM ? 1 : 0;
 		}
@@ -1126,7 +1213,7 @@ static struct phy_driver genphy_driver = {
 	.read_status	= genphy_read_status,
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
-	.driver		= {.owner= THIS_MODULE, },
+	.driver		= { .owner = THIS_MODULE, },
 };
 
 static int __init phy_init(void)

@@ -123,6 +123,16 @@ Transmission process is similar to capture as shown below.
 [shutdown]  close() --------> destruction of the transmission socket and
                               deallocation of all associated resources.
 
+Socket creation and destruction is also straight forward, and is done
+the same way as in capturing described in the previous paragraph:
+
+ int fd = socket(PF_PACKET, mode, 0);
+
+The protocol can optionally be 0 in case we only want to transmit
+via this socket, which avoids an expensive call to packet_rcv().
+In this case, you also need to bind(2) the TX_RING with sll_protocol = 0
+set. Otherwise, htons(ETH_P_ALL) or any other protocol, for example.
+
 Binding the socket to your network interface is mandatory (with zero copy) to
 know the header size of frames used in the circular buffer.
 
@@ -941,6 +951,27 @@ int main(int argc, char **argp)
 	teardown_socket(&ring, fd);
 	return 0;
 }
+
+-------------------------------------------------------------------------------
++ PACKET_QDISC_BYPASS
+-------------------------------------------------------------------------------
+
+If there is a requirement to load the network with many packets in a similar
+fashion as pktgen does, you might set the following option after socket
+creation:
+
+    int one = 1;
+    setsockopt(fd, SOL_PACKET, PACKET_QDISC_BYPASS, &one, sizeof(one));
+
+This has the side-effect, that packets sent through PF_PACKET will bypass the
+kernel's qdisc layer and are forcedly pushed to the driver directly. Meaning,
+packet are not buffered, tc disciplines are ignored, increased loss can occur
+and such packets are also not visible to other PF_PACKET sockets anymore. So,
+you have been warned; generally, this can be useful for stress testing various
+components of a system.
+
+On default, PACKET_QDISC_BYPASS is disabled and needs to be explicitly enabled
+on PF_PACKET sockets.
 
 -------------------------------------------------------------------------------
 + PACKET_TIMESTAMP

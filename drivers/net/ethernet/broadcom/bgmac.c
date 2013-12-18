@@ -682,70 +682,6 @@ static int bgmac_phy_write(struct bgmac *bgmac, u8 phyaddr, u8 reg, u16 value)
 	return 0;
 }
 
-/* http://bcm-v4.sipsolutions.net/mac-gbit/gmac/chipphyforce */
-static void bgmac_phy_force(struct bgmac *bgmac)
-{
-	u16 ctl;
-	u16 mask = ~(BGMAC_PHY_CTL_SPEED | BGMAC_PHY_CTL_SPEED_MSB |
-		     BGMAC_PHY_CTL_ANENAB | BGMAC_PHY_CTL_DUPLEX);
-
-	if (bgmac->phyaddr == BGMAC_PHY_NOREGS)
-		return;
-
-	if (bgmac->autoneg)
-		return;
-
-	ctl = bgmac_phy_read(bgmac, bgmac->phyaddr, BGMAC_PHY_CTL);
-	ctl &= mask;
-	if (bgmac->full_duplex)
-		ctl |= BGMAC_PHY_CTL_DUPLEX;
-	if (bgmac->speed == BGMAC_SPEED_100)
-		ctl |= BGMAC_PHY_CTL_SPEED_100;
-	else if (bgmac->speed == BGMAC_SPEED_1000)
-		ctl |= BGMAC_PHY_CTL_SPEED_1000;
-	bgmac_phy_write(bgmac, bgmac->phyaddr, BGMAC_PHY_CTL, ctl);
-}
-
-/* http://bcm-v4.sipsolutions.net/mac-gbit/gmac/chipphyadvertise */
-static void bgmac_phy_advertise(struct bgmac *bgmac)
-{
-	u16 adv;
-
-	if (bgmac->phyaddr == BGMAC_PHY_NOREGS)
-		return;
-
-	if (!bgmac->autoneg)
-		return;
-
-	/* Adv selected 10/100 speeds */
-	adv = bgmac_phy_read(bgmac, bgmac->phyaddr, BGMAC_PHY_ADV);
-	adv &= ~(BGMAC_PHY_ADV_10HALF | BGMAC_PHY_ADV_10FULL |
-		 BGMAC_PHY_ADV_100HALF | BGMAC_PHY_ADV_100FULL);
-	if (!bgmac->full_duplex && bgmac->speed & BGMAC_SPEED_10)
-		adv |= BGMAC_PHY_ADV_10HALF;
-	if (!bgmac->full_duplex && bgmac->speed & BGMAC_SPEED_100)
-		adv |= BGMAC_PHY_ADV_100HALF;
-	if (bgmac->full_duplex && bgmac->speed & BGMAC_SPEED_10)
-		adv |= BGMAC_PHY_ADV_10FULL;
-	if (bgmac->full_duplex && bgmac->speed & BGMAC_SPEED_100)
-		adv |= BGMAC_PHY_ADV_100FULL;
-	bgmac_phy_write(bgmac, bgmac->phyaddr, BGMAC_PHY_ADV, adv);
-
-	/* Adv selected 1000 speeds */
-	adv = bgmac_phy_read(bgmac, bgmac->phyaddr, BGMAC_PHY_ADV2);
-	adv &= ~(BGMAC_PHY_ADV2_1000HALF | BGMAC_PHY_ADV2_1000FULL);
-	if (!bgmac->full_duplex && bgmac->speed & BGMAC_SPEED_1000)
-		adv |= BGMAC_PHY_ADV2_1000HALF;
-	if (bgmac->full_duplex && bgmac->speed & BGMAC_SPEED_1000)
-		adv |= BGMAC_PHY_ADV2_1000FULL;
-	bgmac_phy_write(bgmac, bgmac->phyaddr, BGMAC_PHY_ADV2, adv);
-
-	/* Restart */
-	bgmac_phy_write(bgmac, bgmac->phyaddr, BGMAC_PHY_CTL,
-			bgmac_phy_read(bgmac, bgmac->phyaddr, BGMAC_PHY_CTL) |
-			BGMAC_PHY_CTL_RESTART);
-}
-
 /* http://bcm-v4.sipsolutions.net/mac-gbit/gmac/chipphyinit */
 static void bgmac_phy_init(struct bgmac *bgmac)
 {
@@ -876,19 +812,28 @@ static void bgmac_clear_mib(struct bgmac *bgmac)
 }
 
 /* http://bcm-v4.sipsolutions.net/mac-gbit/gmac/gmac_speed */
-static void bgmac_speed(struct bgmac *bgmac, int speed)
+static void bgmac_mac_speed(struct bgmac *bgmac)
 {
 	u32 mask = ~(BGMAC_CMDCFG_ES_MASK | BGMAC_CMDCFG_HD);
 	u32 set = 0;
 
-	if (speed & BGMAC_SPEED_10)
+	switch (bgmac->mac_speed) {
+	case SPEED_10:
 		set |= BGMAC_CMDCFG_ES_10;
-	if (speed & BGMAC_SPEED_100)
+		break;
+	case SPEED_100:
 		set |= BGMAC_CMDCFG_ES_100;
-	if (speed & BGMAC_SPEED_1000)
+		break;
+	case SPEED_1000:
 		set |= BGMAC_CMDCFG_ES_1000;
-	if (!bgmac->full_duplex)
+		break;
+	default:
+		bgmac_err(bgmac, "Unsupported speed: %d\n", bgmac->mac_speed);
+	}
+
+	if (bgmac->mac_duplex == DUPLEX_HALF)
 		set |= BGMAC_CMDCFG_HD;
+
 	bgmac_cmdcfg_maskset(bgmac, mask, set, true);
 }
 
@@ -897,10 +842,9 @@ static void bgmac_miiconfig(struct bgmac *bgmac)
 	u8 imode = (bgmac_read(bgmac, BGMAC_DEV_STATUS) & BGMAC_DS_MM_MASK) >>
 			BGMAC_DS_MM_SHIFT;
 	if (imode == 0 || imode == 1) {
-		if (bgmac->autoneg)
-			bgmac_speed(bgmac, BGMAC_SPEED_100);
-		else
-			bgmac_speed(bgmac, bgmac->speed);
+		bgmac->mac_speed = SPEED_100;
+		bgmac->mac_duplex = DUPLEX_FULL;
+		bgmac_mac_speed(bgmac);
 	}
 }
 
@@ -933,9 +877,9 @@ static void bgmac_chip_reset(struct bgmac *bgmac)
 	}
 
 	iost = bcma_aread32(core, BCMA_IOST);
-	if ((ci->id == BCMA_CHIP_ID_BCM5357 && ci->pkg == 10) ||
+	if ((ci->id == BCMA_CHIP_ID_BCM5357 && ci->pkg == BCMA_PKG_ID_BCM47186) ||
 	    (ci->id == BCMA_CHIP_ID_BCM4749 && ci->pkg == 10) ||
-	    (ci->id == BCMA_CHIP_ID_BCM53572 && ci->pkg == 9))
+	    (ci->id == BCMA_CHIP_ID_BCM53572 && ci->pkg == BCMA_PKG_ID_BCM47188))
 		iost &= ~BGMAC_BCMA_IOST_ATTACHED;
 
 	if (iost & BGMAC_BCMA_IOST_ATTACHED) {
@@ -947,12 +891,16 @@ static void bgmac_chip_reset(struct bgmac *bgmac)
 	bcma_core_enable(core, flags);
 
 	if (core->id.rev > 2) {
-		bgmac_set(bgmac, BCMA_CLKCTLST, 1 << 8);
-		bgmac_wait_value(bgmac->core, BCMA_CLKCTLST, 1 << 24, 1 << 24,
+		bgmac_set(bgmac, BCMA_CLKCTLST,
+			  BGMAC_BCMA_CLKCTLST_MISC_PLL_REQ);
+		bgmac_wait_value(bgmac->core, BCMA_CLKCTLST,
+				 BGMAC_BCMA_CLKCTLST_MISC_PLL_ST,
+				 BGMAC_BCMA_CLKCTLST_MISC_PLL_ST,
 				 1000);
 	}
 
-	if (ci->id == BCMA_CHIP_ID_BCM5357 || ci->id == BCMA_CHIP_ID_BCM4749 ||
+	if (ci->id == BCMA_CHIP_ID_BCM5357 ||
+	    ci->id == BCMA_CHIP_ID_BCM4749 ||
 	    ci->id == BCMA_CHIP_ID_BCM53572) {
 		struct bcma_drv_cc *cc = &bgmac->core->bus->drv_cc;
 		u8 et_swtype = 0;
@@ -967,10 +915,11 @@ static void bgmac_chip_reset(struct bgmac *bgmac)
 			et_swtype &= 0x0f;
 			et_swtype <<= 4;
 			sw_type = et_swtype;
-		} else if (ci->id == BCMA_CHIP_ID_BCM5357 && ci->pkg == 9) {
+		} else if (ci->id == BCMA_CHIP_ID_BCM5357 && ci->pkg == BCMA_PKG_ID_BCM5358) {
 			sw_type = BGMAC_CHIPCTL_1_SW_TYPE_EPHYRMII;
-		} else if ((ci->id != BCMA_CHIP_ID_BCM53572 && ci->pkg == 10) ||
-			   (ci->id == BCMA_CHIP_ID_BCM53572 && ci->pkg == 9)) {
+		} else if ((ci->id == BCMA_CHIP_ID_BCM5357 && ci->pkg == BCMA_PKG_ID_BCM47186) ||
+			   (ci->id == BCMA_CHIP_ID_BCM4749 && ci->pkg == 10) ||
+			   (ci->id == BCMA_CHIP_ID_BCM53572 && ci->pkg == BCMA_PKG_ID_BCM47188)) {
 			sw_type = BGMAC_CHIPCTL_1_IF_TYPE_RGMII |
 				  BGMAC_CHIPCTL_1_SW_TYPE_RGMII;
 		}
@@ -1009,6 +958,8 @@ static void bgmac_chip_reset(struct bgmac *bgmac)
 			     BGMAC_CMDCFG_CFE |
 			     BGMAC_CMDCFG_SR,
 			     false);
+	bgmac->mac_speed = SPEED_UNKNOWN;
+	bgmac->mac_duplex = DUPLEX_UNKNOWN;
 
 	bgmac_clear_mib(bgmac);
 	if (core->id.id == BCMA_CORE_4706_MAC_GBIT)
@@ -1108,13 +1059,6 @@ static void bgmac_chip_init(struct bgmac *bgmac, bool full_init)
 
 	bgmac_write(bgmac, BGMAC_RXMAX_LENGTH, 32 + ETHER_MAX_LEN);
 
-	if (!bgmac->autoneg) {
-		bgmac_speed(bgmac, bgmac->speed);
-		bgmac_phy_force(bgmac);
-	} else if (bgmac->speed) { /* if there is anything to adv */
-		bgmac_phy_advertise(bgmac);
-	}
-
 	if (full_init) {
 		bgmac_dma_init(bgmac);
 		if (1) /* FIXME: is there any case we don't want IRQs? */
@@ -1204,6 +1148,8 @@ static int bgmac_open(struct net_device *net_dev)
 	}
 	napi_enable(&bgmac->napi);
 
+	phy_start(bgmac->phy_dev);
+
 	netif_carrier_on(net_dev);
 
 err_out:
@@ -1215,6 +1161,8 @@ static int bgmac_stop(struct net_device *net_dev)
 	struct bgmac *bgmac = netdev_priv(net_dev);
 
 	netif_carrier_off(net_dev);
+
+	phy_stop(bgmac->phy_dev);
 
 	napi_disable(&bgmac->napi);
 	bgmac_chip_intrs_off(bgmac);
@@ -1294,61 +1242,16 @@ static int bgmac_get_settings(struct net_device *net_dev,
 {
 	struct bgmac *bgmac = netdev_priv(net_dev);
 
-	cmd->supported = SUPPORTED_10baseT_Half |
-			 SUPPORTED_10baseT_Full |
-			 SUPPORTED_100baseT_Half |
-			 SUPPORTED_100baseT_Full |
-			 SUPPORTED_1000baseT_Half |
-			 SUPPORTED_1000baseT_Full |
-			 SUPPORTED_Autoneg;
-
-	if (bgmac->autoneg) {
-		WARN_ON(cmd->advertising);
-		if (bgmac->full_duplex) {
-			if (bgmac->speed & BGMAC_SPEED_10)
-				cmd->advertising |= ADVERTISED_10baseT_Full;
-			if (bgmac->speed & BGMAC_SPEED_100)
-				cmd->advertising |= ADVERTISED_100baseT_Full;
-			if (bgmac->speed & BGMAC_SPEED_1000)
-				cmd->advertising |= ADVERTISED_1000baseT_Full;
-		} else {
-			if (bgmac->speed & BGMAC_SPEED_10)
-				cmd->advertising |= ADVERTISED_10baseT_Half;
-			if (bgmac->speed & BGMAC_SPEED_100)
-				cmd->advertising |= ADVERTISED_100baseT_Half;
-			if (bgmac->speed & BGMAC_SPEED_1000)
-				cmd->advertising |= ADVERTISED_1000baseT_Half;
-		}
-	} else {
-		switch (bgmac->speed) {
-		case BGMAC_SPEED_10:
-			ethtool_cmd_speed_set(cmd, SPEED_10);
-			break;
-		case BGMAC_SPEED_100:
-			ethtool_cmd_speed_set(cmd, SPEED_100);
-			break;
-		case BGMAC_SPEED_1000:
-			ethtool_cmd_speed_set(cmd, SPEED_1000);
-			break;
-		}
-	}
-
-	cmd->duplex = bgmac->full_duplex ? DUPLEX_FULL : DUPLEX_HALF;
-
-	cmd->autoneg = bgmac->autoneg;
-
-	return 0;
+	return phy_ethtool_gset(bgmac->phy_dev, cmd);
 }
 
-#if 0
 static int bgmac_set_settings(struct net_device *net_dev,
 			      struct ethtool_cmd *cmd)
 {
 	struct bgmac *bgmac = netdev_priv(net_dev);
 
-	return -1;
+	return phy_ethtool_sset(bgmac->phy_dev, cmd);
 }
-#endif
 
 static void bgmac_get_drvinfo(struct net_device *net_dev,
 			      struct ethtool_drvinfo *info)
@@ -1359,6 +1262,7 @@ static void bgmac_get_drvinfo(struct net_device *net_dev,
 
 static const struct ethtool_ops bgmac_ethtool_ops = {
 	.get_settings		= bgmac_get_settings,
+	.set_settings		= bgmac_set_settings,
 	.get_drvinfo		= bgmac_get_drvinfo,
 };
 
@@ -1377,9 +1281,35 @@ static int bgmac_mii_write(struct mii_bus *bus, int mii_id, int regnum,
 	return bgmac_phy_write(bus->priv, mii_id, regnum, value);
 }
 
+static void bgmac_adjust_link(struct net_device *net_dev)
+{
+	struct bgmac *bgmac = netdev_priv(net_dev);
+	struct phy_device *phy_dev = bgmac->phy_dev;
+	bool update = false;
+
+	if (phy_dev->link) {
+		if (phy_dev->speed != bgmac->mac_speed) {
+			bgmac->mac_speed = phy_dev->speed;
+			update = true;
+		}
+
+		if (phy_dev->duplex != bgmac->mac_duplex) {
+			bgmac->mac_duplex = phy_dev->duplex;
+			update = true;
+		}
+	}
+
+	if (update) {
+		bgmac_mac_speed(bgmac);
+		phy_print_status(phy_dev);
+	}
+}
+
 static int bgmac_mii_register(struct bgmac *bgmac)
 {
 	struct mii_bus *mii_bus;
+	struct phy_device *phy_dev;
+	char bus_id[MII_BUS_ID_SIZE + 3];
 	int i, err = 0;
 
 	mii_bus = mdiobus_alloc();
@@ -1411,8 +1341,22 @@ static int bgmac_mii_register(struct bgmac *bgmac)
 
 	bgmac->mii_bus = mii_bus;
 
+	/* Connect to the PHY */
+	snprintf(bus_id, sizeof(bus_id), PHY_ID_FMT, mii_bus->id,
+		 bgmac->phyaddr);
+	phy_dev = phy_connect(bgmac->net_dev, bus_id, &bgmac_adjust_link,
+			      PHY_INTERFACE_MODE_MII);
+	if (IS_ERR(phy_dev)) {
+		bgmac_err(bgmac, "PHY connecton failed\n");
+		err = PTR_ERR(phy_dev);
+		goto err_unregister_bus;
+	}
+	bgmac->phy_dev = phy_dev;
+
 	return err;
 
+err_unregister_bus:
+	mdiobus_unregister(mii_bus);
 err_free_irq:
 	kfree(mii_bus->irq);
 err_free_bus:
@@ -1467,9 +1411,6 @@ static int bgmac_probe(struct bcma_device *core)
 	bcma_set_drvdata(core, bgmac);
 
 	/* Defaults */
-	bgmac->autoneg = true;
-	bgmac->full_duplex = true;
-	bgmac->speed = BGMAC_SPEED_10 | BGMAC_SPEED_100 | BGMAC_SPEED_1000;
 	memcpy(bgmac->net_dev->dev_addr, mac, ETH_ALEN);
 
 	/* On BCM4706 we need common core to access PHY */

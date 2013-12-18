@@ -166,18 +166,20 @@ struct neigh_table arp_tbl = {
 	.id		= "arp_cache",
 	.parms		= {
 		.tbl			= &arp_tbl,
-		.base_reachable_time	= 30 * HZ,
-		.retrans_time		= 1 * HZ,
-		.gc_staletime		= 60 * HZ,
 		.reachable_time		= 30 * HZ,
-		.delay_probe_time	= 5 * HZ,
-		.queue_len_bytes	= 64*1024,
-		.ucast_probes		= 3,
-		.mcast_probes		= 3,
-		.anycast_delay		= 1 * HZ,
-		.proxy_delay		= (8 * HZ) / 10,
-		.proxy_qlen		= 64,
-		.locktime		= 1 * HZ,
+		.data	= {
+			[NEIGH_VAR_MCAST_PROBES] = 3,
+			[NEIGH_VAR_UCAST_PROBES] = 3,
+			[NEIGH_VAR_RETRANS_TIME] = 1 * HZ,
+			[NEIGH_VAR_BASE_REACHABLE_TIME] = 30 * HZ,
+			[NEIGH_VAR_DELAY_PROBE_TIME] = 5 * HZ,
+			[NEIGH_VAR_GC_STALETIME] = 60 * HZ,
+			[NEIGH_VAR_QUEUE_LEN_BYTES] = 64 * 1024,
+			[NEIGH_VAR_PROXY_QLEN] = 64,
+			[NEIGH_VAR_ANYCAST_DELAY] = 1 * HZ,
+			[NEIGH_VAR_PROXY_DELAY]	= (8 * HZ) / 10,
+			[NEIGH_VAR_LOCKTIME] = 1 * HZ,
+		},
 	},
 	.gc_interval	= 30 * HZ,
 	.gc_thresh1	= 128,
@@ -359,14 +361,14 @@ static void arp_solicit(struct neighbour *neigh, struct sk_buff *skb)
 	if (!saddr)
 		saddr = inet_select_addr(dev, target, RT_SCOPE_LINK);
 
-	probes -= neigh->parms->ucast_probes;
+	probes -= NEIGH_VAR(neigh->parms, UCAST_PROBES);
 	if (probes < 0) {
 		if (!(neigh->nud_state & NUD_VALID))
 			pr_debug("trying to ucast probe in NUD_INVALID\n");
 		neigh_ha_snapshot(dst_ha, neigh, dev);
 		dst_hw = dst_ha;
 	} else {
-		probes -= neigh->parms->app_probes;
+		probes -= NEIGH_VAR(neigh->parms, APP_PROBES);
 		if (probes < 0) {
 			neigh_app_ns(neigh);
 			return;
@@ -379,6 +381,7 @@ static void arp_solicit(struct neighbour *neigh, struct sk_buff *skb)
 
 static int arp_ignore(struct in_device *in_dev, __be32 sip, __be32 tip)
 {
+	struct net *net = dev_net(in_dev->dev);
 	int scope;
 
 	switch (IN_DEV_ARP_IGNORE(in_dev)) {
@@ -397,6 +400,7 @@ static int arp_ignore(struct in_device *in_dev, __be32 sip, __be32 tip)
 	case 3:	/* Do not reply for scope host addresses */
 		sip = 0;
 		scope = RT_SCOPE_LINK;
+		in_dev = NULL;
 		break;
 	case 4:	/* Reserved */
 	case 5:
@@ -408,7 +412,7 @@ static int arp_ignore(struct in_device *in_dev, __be32 sip, __be32 tip)
 	default:
 		return 0;
 	}
-	return !inet_confirm_addr(in_dev, sip, tip, scope);
+	return !inet_confirm_addr(net, in_dev, sip, tip, scope);
 }
 
 static int arp_filter(__be32 sip, __be32 tip, struct net_device *dev)
@@ -871,7 +875,7 @@ static int arp_process(struct sk_buff *skb)
 
 				if (NEIGH_CB(skb)->flags & LOCALLY_ENQUEUED ||
 				    skb->pkt_type == PACKET_HOST ||
-				    in_dev->arp_parms->proxy_delay == 0) {
+				    NEIGH_VAR(in_dev->arp_parms, PROXY_DELAY) == 0) {
 					arp_send(ARPOP_REPLY, ETH_P_ARP, sip,
 						 dev, tip, sha, dev->dev_addr,
 						 sha);
@@ -910,7 +914,8 @@ static int arp_process(struct sk_buff *skb)
 		   agents are active. Taking the first reply prevents
 		   arp trashing and chooses the fastest router.
 		 */
-		override = time_after(jiffies, n->updated + n->parms->locktime);
+		override = time_after(jiffies, n->updated +
+					       NEIGH_VAR(n->parms, LOCKTIME));
 
 		/* Broadcast replies and request packets
 		   do not assert neighbour reachability.
@@ -1284,7 +1289,7 @@ void __init arp_init(void)
 	dev_add_pack(&arp_packet_type);
 	arp_proc_init();
 #ifdef CONFIG_SYSCTL
-	neigh_sysctl_register(NULL, &arp_tbl.parms, "ipv4", NULL);
+	neigh_sysctl_register(NULL, &arp_tbl.parms, NULL);
 #endif
 	register_netdevice_notifier(&arp_netdev_notifier);
 }

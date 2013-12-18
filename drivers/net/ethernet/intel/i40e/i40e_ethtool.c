@@ -193,28 +193,48 @@ static int i40e_get_settings(struct net_device *netdev,
 		ecmd->supported = SUPPORTED_10000baseKR_Full;
 		ecmd->advertising = ADVERTISED_10000baseKR_Full;
 		break;
-	case I40E_PHY_TYPE_10GBASE_T:
 	default:
-		ecmd->supported = SUPPORTED_10000baseT_Full;
-		ecmd->advertising = ADVERTISED_10000baseT_Full;
+		if (i40e_is_40G_device(hw->device_id)) {
+			ecmd->supported = SUPPORTED_40000baseSR4_Full;
+			ecmd->advertising = ADVERTISED_40000baseSR4_Full;
+		} else {
+			ecmd->supported = SUPPORTED_10000baseT_Full;
+			ecmd->advertising = ADVERTISED_10000baseT_Full;
+		}
 		break;
 	}
 
-	/* for now just say autoneg all the time */
 	ecmd->supported |= SUPPORTED_Autoneg;
+	ecmd->advertising |= ADVERTISED_Autoneg;
+	ecmd->autoneg = ((hw_link_info->an_info & I40E_AQ_AN_COMPLETED) ?
+			  AUTONEG_ENABLE : AUTONEG_DISABLE);
 
-	if (hw->phy.media_type == I40E_MEDIA_TYPE_BACKPLANE) {
+	switch (hw->phy.media_type) {
+	case I40E_MEDIA_TYPE_BACKPLANE:
 		ecmd->supported |= SUPPORTED_Backplane;
 		ecmd->advertising |= ADVERTISED_Backplane;
 		ecmd->port = PORT_NONE;
-	} else if (hw->phy.media_type == I40E_MEDIA_TYPE_BASET) {
+		break;
+	case I40E_MEDIA_TYPE_BASET:
 		ecmd->supported |= SUPPORTED_TP;
 		ecmd->advertising |= ADVERTISED_TP;
 		ecmd->port = PORT_TP;
-	} else {
+		break;
+	case I40E_MEDIA_TYPE_DA:
+	case I40E_MEDIA_TYPE_CX4:
+		ecmd->supported |= SUPPORTED_FIBRE;
+		ecmd->advertising |= ADVERTISED_FIBRE;
+		ecmd->port = PORT_DA;
+		break;
+	case I40E_MEDIA_TYPE_FIBER:
 		ecmd->supported |= SUPPORTED_FIBRE;
 		ecmd->advertising |= ADVERTISED_FIBRE;
 		ecmd->port = PORT_FIBRE;
+		break;
+	case I40E_MEDIA_TYPE_UNKNOWN:
+	default:
+		ecmd->port = PORT_OTHER;
+		break;
 	}
 
 	ecmd->transceiver = XCVR_EXTERNAL;
@@ -256,12 +276,14 @@ static void i40e_get_pauseparam(struct net_device *netdev,
 		((hw_link_info->an_info & I40E_AQ_AN_COMPLETED) ?
 		  AUTONEG_ENABLE : AUTONEG_DISABLE);
 
-	pause->rx_pause = 0;
-	pause->tx_pause = 0;
-	if (hw_link_info->an_info & I40E_AQ_LINK_PAUSE_RX)
+	if (hw->fc.current_mode == I40E_FC_RX_PAUSE) {
 		pause->rx_pause = 1;
-	if (hw_link_info->an_info & I40E_AQ_LINK_PAUSE_TX)
+	} else if (hw->fc.current_mode == I40E_FC_TX_PAUSE) {
 		pause->tx_pause = 1;
+	} else if (hw->fc.current_mode == I40E_FC_FULL) {
+		pause->rx_pause = 1;
+		pause->tx_pause = 1;
+	}
 }
 
 static u32 i40e_get_msglevel(struct net_device *netdev)
@@ -418,15 +440,19 @@ static int i40e_set_ringparam(struct net_device *netdev,
 	if ((ring->rx_mini_pending) || (ring->rx_jumbo_pending))
 		return -EINVAL;
 
-	new_tx_count = clamp_t(u32, ring->tx_pending,
-			       I40E_MIN_NUM_DESCRIPTORS,
-			       I40E_MAX_NUM_DESCRIPTORS);
-	new_tx_count = ALIGN(new_tx_count, I40E_REQ_DESCRIPTOR_MULTIPLE);
+	if (ring->tx_pending > I40E_MAX_NUM_DESCRIPTORS ||
+	    ring->tx_pending < I40E_MIN_NUM_DESCRIPTORS ||
+	    ring->rx_pending > I40E_MAX_NUM_DESCRIPTORS ||
+	    ring->rx_pending < I40E_MIN_NUM_DESCRIPTORS) {
+		netdev_info(netdev,
+			    "Descriptors requested (Tx: %d / Rx: %d) out of range [%d-%d]\n",
+			    ring->tx_pending, ring->rx_pending,
+			    I40E_MIN_NUM_DESCRIPTORS, I40E_MAX_NUM_DESCRIPTORS);
+		return -EINVAL;
+	}
 
-	new_rx_count = clamp_t(u32, ring->rx_pending,
-			       I40E_MIN_NUM_DESCRIPTORS,
-			       I40E_MAX_NUM_DESCRIPTORS);
-	new_rx_count = ALIGN(new_rx_count, I40E_REQ_DESCRIPTOR_MULTIPLE);
+	new_tx_count = ALIGN(ring->tx_pending, I40E_REQ_DESCRIPTOR_MULTIPLE);
+	new_rx_count = ALIGN(ring->rx_pending, I40E_REQ_DESCRIPTOR_MULTIPLE);
 
 	/* if nothing to do return success */
 	if ((new_tx_count == vsi->tx_rings[0]->count) &&
@@ -702,8 +728,12 @@ static int i40e_get_ts_info(struct net_device *dev,
 	return ethtool_op_get_ts_info(dev, info);
 }
 
-static int i40e_link_test(struct i40e_pf *pf, u64 *data)
+static int i40e_link_test(struct net_device *netdev, u64 *data)
 {
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_pf *pf = np->vsi->back;
+
+	netif_info(pf, hw, netdev, "link test\n");
 	if (i40e_get_link_status(&pf->hw))
 		*data = 0;
 	else
@@ -712,30 +742,35 @@ static int i40e_link_test(struct i40e_pf *pf, u64 *data)
 	return *data;
 }
 
-static int i40e_reg_test(struct i40e_pf *pf, u64 *data)
+static int i40e_reg_test(struct net_device *netdev, u64 *data)
 {
-	i40e_status ret;
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_pf *pf = np->vsi->back;
 
-	ret = i40e_diag_reg_test(&pf->hw);
-	*data = ret;
+	netif_info(pf, hw, netdev, "register test\n");
+	*data = i40e_diag_reg_test(&pf->hw);
 
-	return ret;
+	return *data;
 }
 
-static int i40e_eeprom_test(struct i40e_pf *pf, u64 *data)
+static int i40e_eeprom_test(struct net_device *netdev, u64 *data)
 {
-	i40e_status ret;
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_pf *pf = np->vsi->back;
 
-	ret = i40e_diag_eeprom_test(&pf->hw);
-	*data = ret;
+	netif_info(pf, hw, netdev, "eeprom test\n");
+	*data = i40e_diag_eeprom_test(&pf->hw);
 
-	return ret;
+	return *data;
 }
 
-static int i40e_intr_test(struct i40e_pf *pf, u64 *data)
+static int i40e_intr_test(struct net_device *netdev, u64 *data)
 {
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_pf *pf = np->vsi->back;
 	u16 swc_old = pf->sw_int_count;
 
+	netif_info(pf, hw, netdev, "interrupt test\n");
 	wr32(&pf->hw, I40E_PFINT_DYN_CTL0,
 	     (I40E_PFINT_DYN_CTL0_INTENA_MASK |
 	      I40E_PFINT_DYN_CTL0_SWINT_TRIG_MASK));
@@ -745,8 +780,12 @@ static int i40e_intr_test(struct i40e_pf *pf, u64 *data)
 	return *data;
 }
 
-static int i40e_loopback_test(struct i40e_pf *pf, u64 *data)
+static int i40e_loopback_test(struct net_device *netdev, u64 *data)
 {
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_pf *pf = np->vsi->back;
+
+	netif_info(pf, hw, netdev, "loopback test not implemented\n");
 	*data = 0;
 
 	return *data;
@@ -758,42 +797,38 @@ static void i40e_diag_test(struct net_device *netdev,
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
 	struct i40e_pf *pf = np->vsi->back;
 
-	set_bit(__I40E_TESTING, &pf->state);
 	if (eth_test->flags == ETH_TEST_FL_OFFLINE) {
 		/* Offline tests */
+		netif_info(pf, drv, netdev, "offline testing starting\n");
 
-		netdev_info(netdev, "offline testing starting\n");
+		set_bit(__I40E_TESTING, &pf->state);
 
 		/* Link test performed before hardware reset
 		 * so autoneg doesn't interfere with test result
 		 */
-		netdev_info(netdev, "link test starting\n");
-		if (i40e_link_test(pf, &data[I40E_ETH_TEST_LINK]))
+		if (i40e_link_test(netdev, &data[I40E_ETH_TEST_LINK]))
 			eth_test->flags |= ETH_TEST_FL_FAILED;
 
-		netdev_info(netdev, "register test starting\n");
-		if (i40e_reg_test(pf, &data[I40E_ETH_TEST_REG]))
+		if (i40e_eeprom_test(netdev, &data[I40E_ETH_TEST_EEPROM]))
 			eth_test->flags |= ETH_TEST_FL_FAILED;
 
+		if (i40e_intr_test(netdev, &data[I40E_ETH_TEST_INTR]))
+			eth_test->flags |= ETH_TEST_FL_FAILED;
+
+		if (i40e_loopback_test(netdev, &data[I40E_ETH_TEST_LOOPBACK]))
+			eth_test->flags |= ETH_TEST_FL_FAILED;
+
+		/* run reg test last, a reset is required after it */
+		if (i40e_reg_test(netdev, &data[I40E_ETH_TEST_REG]))
+			eth_test->flags |= ETH_TEST_FL_FAILED;
+
+		clear_bit(__I40E_TESTING, &pf->state);
 		i40e_do_reset(pf, (1 << __I40E_PF_RESET_REQUESTED));
-		netdev_info(netdev, "eeprom test starting\n");
-		if (i40e_eeprom_test(pf, &data[I40E_ETH_TEST_EEPROM]))
-			eth_test->flags |= ETH_TEST_FL_FAILED;
-
-		i40e_do_reset(pf, (1 << __I40E_PF_RESET_REQUESTED));
-		netdev_info(netdev, "interrupt test starting\n");
-		if (i40e_intr_test(pf, &data[I40E_ETH_TEST_INTR]))
-			eth_test->flags |= ETH_TEST_FL_FAILED;
-
-		i40e_do_reset(pf, (1 << __I40E_PF_RESET_REQUESTED));
-		netdev_info(netdev, "loopback test starting\n");
-		if (i40e_loopback_test(pf, &data[I40E_ETH_TEST_LOOPBACK]))
-			eth_test->flags |= ETH_TEST_FL_FAILED;
-
 	} else {
-		netdev_info(netdev, "online test starting\n");
 		/* Online tests */
-		if (i40e_link_test(pf, &data[I40E_ETH_TEST_LINK]))
+		netif_info(pf, drv, netdev, "online testing starting\n");
+
+		if (i40e_link_test(netdev, &data[I40E_ETH_TEST_LINK]))
 			eth_test->flags |= ETH_TEST_FL_FAILED;
 
 		/* Offline only tests, not run in online; pass by default */
@@ -801,9 +836,9 @@ static void i40e_diag_test(struct net_device *netdev,
 		data[I40E_ETH_TEST_EEPROM] = 0;
 		data[I40E_ETH_TEST_INTR] = 0;
 		data[I40E_ETH_TEST_LOOPBACK] = 0;
-
-		clear_bit(__I40E_TESTING, &pf->state);
 	}
+
+	netif_info(pf, drv, netdev, "testing finished\n");
 }
 
 static void i40e_get_wol(struct net_device *netdev,
@@ -1437,6 +1472,94 @@ static int i40e_set_rxnfc(struct net_device *netdev, struct ethtool_rxnfc *cmd)
 	return ret;
 }
 
+/**
+ * i40e_max_channels - get Max number of combined channels supported
+ * @vsi: vsi pointer
+ **/
+static unsigned int i40e_max_channels(struct i40e_vsi *vsi)
+{
+	/* TODO: This code assumes DCB and FD is disabled for now. */
+	return vsi->alloc_queue_pairs;
+}
+
+/**
+ * i40e_get_channels - Get the current channels enabled and max supported etc.
+ * @netdev: network interface device structure
+ * @ch: ethtool channels structure
+ *
+ * We don't support separate tx and rx queues as channels. The other count
+ * represents how many queues are being used for control. max_combined counts
+ * how many queue pairs we can support. They may not be mapped 1 to 1 with
+ * q_vectors since we support a lot more queue pairs than q_vectors.
+ **/
+static void i40e_get_channels(struct net_device *dev,
+			       struct ethtool_channels *ch)
+{
+	struct i40e_netdev_priv *np = netdev_priv(dev);
+	struct i40e_vsi *vsi = np->vsi;
+	struct i40e_pf *pf = vsi->back;
+
+	/* report maximum channels */
+	ch->max_combined = i40e_max_channels(vsi);
+
+	/* report info for other vector */
+	ch->other_count = (pf->flags & I40E_FLAG_FDIR_ENABLED) ? 1 : 0;
+	ch->max_other = ch->other_count;
+
+	/* Note: This code assumes DCB is disabled for now. */
+	ch->combined_count = vsi->num_queue_pairs;
+}
+
+/**
+ * i40e_set_channels - Set the new channels count.
+ * @netdev: network interface device structure
+ * @ch: ethtool channels structure
+ *
+ * The new channels count may not be the same as requested by the user
+ * since it gets rounded down to a power of 2 value.
+ **/
+static int i40e_set_channels(struct net_device *dev,
+			      struct ethtool_channels *ch)
+{
+	struct i40e_netdev_priv *np = netdev_priv(dev);
+	unsigned int count = ch->combined_count;
+	struct i40e_vsi *vsi = np->vsi;
+	struct i40e_pf *pf = vsi->back;
+	int new_count;
+
+	/* We do not support setting channels for any other VSI at present */
+	if (vsi->type != I40E_VSI_MAIN)
+		return -EINVAL;
+
+	/* verify they are not requesting separate vectors */
+	if (!count || ch->rx_count || ch->tx_count)
+		return -EINVAL;
+
+	/* verify other_count has not changed */
+	if (ch->other_count != ((pf->flags & I40E_FLAG_FDIR_ENABLED) ? 1 : 0))
+		return -EINVAL;
+
+	/* verify the number of channels does not exceed hardware limits */
+	if (count > i40e_max_channels(vsi))
+		return -EINVAL;
+
+	/* update feature limits from largest to smallest supported values */
+	/* TODO: Flow director limit, DCB etc */
+
+	/* cap RSS limit */
+	if (count > pf->rss_size_max)
+		count = pf->rss_size_max;
+
+	/* use rss_reconfig to rebuild with new queue count and update traffic
+	 * class queue mapping
+	 */
+	new_count = i40e_reconfig_rss_queues(pf, count);
+	if (new_count > 1)
+		return 0;
+	else
+		return -EINVAL;
+}
+
 static const struct ethtool_ops i40e_ethtool_ops = {
 	.get_settings		= i40e_get_settings,
 	.get_drvinfo		= i40e_get_drvinfo,
@@ -1461,6 +1584,8 @@ static const struct ethtool_ops i40e_ethtool_ops = {
 	.get_ethtool_stats	= i40e_get_ethtool_stats,
 	.get_coalesce		= i40e_get_coalesce,
 	.set_coalesce		= i40e_set_coalesce,
+	.get_channels		= i40e_get_channels,
+	.set_channels		= i40e_set_channels,
 	.get_ts_info		= i40e_get_ts_info,
 };
 

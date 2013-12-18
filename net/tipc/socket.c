@@ -239,7 +239,6 @@ static int tipc_sk_create(struct net *net, struct socket *sock, int protocol,
 int tipc_sock_create_local(int type, struct socket **res)
 {
 	int rc;
-	struct sock *sk;
 
 	rc = sock_create_lite(AF_TIPC, type, 0, res);
 	if (rc < 0) {
@@ -247,8 +246,6 @@ int tipc_sock_create_local(int type, struct socket **res)
 		return rc;
 	}
 	tipc_sk_create(&init_net, *res, 0, 1);
-
-	sk = (*res)->sk;
 
 	return 0;
 }
@@ -754,16 +751,14 @@ static int send_stream(struct kiocb *iocb, struct socket *sock,
 
 	/* Handle special cases where there is no connection */
 	if (unlikely(sock->state != SS_CONNECTED)) {
-		if (sock->state == SS_UNCONNECTED) {
+		res = -ENOTCONN;
+
+		if (sock->state == SS_UNCONNECTED)
 			res = send_packet(NULL, sock, m, total_len);
-			goto exit;
-		} else if (sock->state == SS_DISCONNECTING) {
+		else if (sock->state == SS_DISCONNECTING)
 			res = -EPIPE;
-			goto exit;
-		} else {
-			res = -ENOTCONN;
-			goto exit;
-		}
+
+		goto exit;
 	}
 
 	if (unlikely(m->msg_name)) {
@@ -1311,14 +1306,12 @@ static u32 filter_connect(struct tipc_sock *tsock, struct sk_buff **buf)
 static unsigned int rcvbuf_limit(struct sock *sk, struct sk_buff *buf)
 {
 	struct tipc_msg *msg = buf_msg(buf);
-	unsigned int limit;
 
 	if (msg_connected(msg))
-		limit = sysctl_tipc_rmem[2];
-	else
-		limit = sk->sk_rcvbuf >> TIPC_CRITICAL_IMPORTANCE <<
-			msg_importance(msg);
-	return limit;
+		return sysctl_tipc_rmem[2];
+
+	return sk->sk_rcvbuf >> TIPC_CRITICAL_IMPORTANCE <<
+		msg_importance(msg);
 }
 
 /**
@@ -1514,14 +1507,12 @@ static int connect(struct socket *sock, struct sockaddr *dest, int destlen,
 				sock->state != SS_CONNECTING,
 				timeout ? (long)msecs_to_jiffies(timeout)
 					: MAX_SCHEDULE_TIMEOUT);
-		lock_sock(sk);
 		if (res <= 0) {
 			if (res == 0)
 				res = -ETIMEDOUT;
-			else
-				; /* leave "res" unchanged */
-			goto exit;
+			return res;
 		}
+		lock_sock(sk);
 	}
 
 	if (unlikely(sock->state == SS_DISCONNECTING))

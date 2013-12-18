@@ -395,8 +395,8 @@ static struct sh_eth_cpu_data r8a777x_data = {
 	.hw_swap	= 1,
 };
 
-/* R8A7790 */
-static struct sh_eth_cpu_data r8a7790_data = {
+/* R8A7790/1 */
+static struct sh_eth_cpu_data r8a779x_data = {
 	.set_duplex	= sh_eth_set_duplex,
 	.set_rate	= sh_eth_set_rate_r8a777x,
 
@@ -1704,7 +1704,10 @@ static int sh_eth_phy_start(struct net_device *ndev)
 		return ret;
 
 	/* reset phy - this also wakes it from PDOWN */
-	phy_write(mdp->phydev, MII_BMCR, BMCR_RESET);
+	ret = phy_init_hw(mdp->phydev);
+	if (ret)
+		return ret;
+
 	phy_start(mdp->phydev);
 
 	return 0;
@@ -2807,7 +2810,8 @@ static struct platform_device_id sh_eth_id_table[] = {
 	{ "sh7763-gether", (kernel_ulong_t)&sh7763_data },
 	{ "r8a7740-gether", (kernel_ulong_t)&r8a7740_data },
 	{ "r8a777x-ether", (kernel_ulong_t)&r8a777x_data },
-	{ "r8a7790-ether", (kernel_ulong_t)&r8a7790_data },
+	{ "r8a7790-ether", (kernel_ulong_t)&r8a779x_data },
+	{ "r8a7791-ether", (kernel_ulong_t)&r8a779x_data },
 	{ }
 };
 MODULE_DEVICE_TABLE(platform, sh_eth_id_table);

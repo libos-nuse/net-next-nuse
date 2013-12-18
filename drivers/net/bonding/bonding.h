@@ -101,6 +101,10 @@
 		netdev_adjacent_get_private(bond_slave_list(bond)->prev) : \
 		NULL)
 
+/* Caller must have rcu_read_lock */
+#define bond_first_slave_rcu(bond) \
+	netdev_lower_get_first_private_rcu(bond->dev)
+
 #define bond_is_first_slave(bond, pos) (pos == bond_first_slave(bond))
 #define bond_is_last_slave(bond, pos) (pos == bond_last_slave(bond))
 
@@ -394,8 +398,8 @@ static inline __be32 bond_confirm_addr(struct net_device *dev, __be32 dst, __be3
 	in_dev = __in_dev_get_rcu(dev);
 
 	if (in_dev)
-		addr = inet_confirm_addr(in_dev, dst, local, RT_SCOPE_HOST);
-
+		addr = inet_confirm_addr(dev_net(dev), in_dev, dst, local,
+					 RT_SCOPE_HOST);
 	rcu_read_unlock();
 	return addr;
 }
@@ -439,6 +443,24 @@ int bond_netlink_init(void);
 void bond_netlink_fini(void);
 int bond_option_mode_set(struct bonding *bond, int mode);
 int bond_option_active_slave_set(struct bonding *bond, struct net_device *slave_dev);
+int bond_option_miimon_set(struct bonding *bond, int miimon);
+int bond_option_updelay_set(struct bonding *bond, int updelay);
+int bond_option_downdelay_set(struct bonding *bond, int downdelay);
+int bond_option_use_carrier_set(struct bonding *bond, int use_carrier);
+int bond_option_arp_interval_set(struct bonding *bond, int arp_interval);
+int bond_option_arp_ip_targets_set(struct bonding *bond, __be32 *targets,
+				   int count);
+int bond_option_arp_ip_target_add(struct bonding *bond, __be32 target);
+int bond_option_arp_ip_target_rem(struct bonding *bond, __be32 target);
+int bond_option_arp_validate_set(struct bonding *bond, int arp_validate);
+int bond_option_arp_all_targets_set(struct bonding *bond, int arp_all_targets);
+int bond_option_primary_set(struct bonding *bond, const char *primary);
+int bond_option_primary_reselect_set(struct bonding *bond,
+				     int primary_reselect);
+int bond_option_fail_over_mac_set(struct bonding *bond, int fail_over_mac);
+int bond_option_xmit_hash_policy_set(struct bonding *bond,
+				     int xmit_hash_policy);
+int bond_option_resend_igmp_set(struct bonding *bond, int resend_igmp);
 struct net_device *bond_option_active_slave_get_rcu(struct bonding *bond);
 struct net_device *bond_option_active_slave_get(struct bonding *bond);
 

@@ -5149,8 +5149,10 @@ static void nv_self_test(struct net_device *dev, struct ethtool_test *test, u64 
 {
 	struct fe_priv *np = netdev_priv(dev);
 	u8 __iomem *base = get_hwbase(dev);
-	int result;
-	memset(buffer, 0, nv_get_sset_count(dev, ETH_SS_TEST)*sizeof(u64));
+	int result, count;
+
+	count = nv_get_sset_count(dev, ETH_SS_TEST);
+	memset(buffer, 0, count * sizeof(u64));
 
 	if (!nv_link_test(dev)) {
 		test->flags |= ETH_TEST_FL_FAILED;
@@ -5194,7 +5196,7 @@ static void nv_self_test(struct net_device *dev, struct ethtool_test *test, u64 
 			return;
 		}
 
-		if (!nv_loopback_test(dev)) {
+		if (count > NV_TEST_COUNT_BASE && !nv_loopback_test(dev)) {
 			test->flags |= ETH_TEST_FL_FAILED;
 			buffer[3] = 1;
 		}
@@ -6017,7 +6019,6 @@ static int nv_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 out_error:
 	if (phystate_orig)
 		writel(phystate|NVREG_ADAPTCTL_RUNNING, base + NvRegAdapterControl);
-	pci_set_drvdata(pci_dev, NULL);
 out_freering:
 	free_rings(dev);
 out_unmap:
@@ -6088,7 +6089,6 @@ static void nv_remove(struct pci_dev *pci_dev)
 	pci_release_regions(pci_dev);
 	pci_disable_device(pci_dev);
 	free_netdev(dev);
-	pci_set_drvdata(pci_dev, NULL);
 }
 
 #ifdef CONFIG_PM_SLEEP

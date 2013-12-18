@@ -1283,6 +1283,9 @@ struct net_device {
 #if IS_ENABLED(CONFIG_NET_DSA)
 	struct dsa_switch_tree	*dsa_ptr;	/* dsa specific data */
 #endif
+#if IS_ENABLED(CONFIG_TIPC)
+	struct tipc_bearer __rcu *tipc_ptr;	/* TIPC specific data */
+#endif
 	void 			*atalk_ptr;	/* AppleTalk link 	*/
 	struct in_device __rcu	*ip_ptr;	/* IPv4 specific data	*/
 	struct dn_dev __rcu     *dn_ptr;        /* DECnet specific data */
@@ -1673,7 +1676,7 @@ struct offload_callbacks {
 	int			(*gso_send_check)(struct sk_buff *skb);
 	struct sk_buff		**(*gro_receive)(struct sk_buff **head,
 					       struct sk_buff *skb);
-	int			(*gro_complete)(struct sk_buff *skb);
+	int			(*gro_complete)(struct sk_buff *skb, int nhoff);
 };
 
 struct packet_offload {
@@ -2807,17 +2810,10 @@ int register_netdev(struct net_device *dev);
 void unregister_netdev(struct net_device *dev);
 
 /* General hardware address lists handling functions */
-int __hw_addr_add_multiple(struct netdev_hw_addr_list *to_list,
-			   struct netdev_hw_addr_list *from_list,
-			   int addr_len, unsigned char addr_type);
-void __hw_addr_del_multiple(struct netdev_hw_addr_list *to_list,
-			    struct netdev_hw_addr_list *from_list,
-			    int addr_len, unsigned char addr_type);
 int __hw_addr_sync(struct netdev_hw_addr_list *to_list,
 		   struct netdev_hw_addr_list *from_list, int addr_len);
 void __hw_addr_unsync(struct netdev_hw_addr_list *to_list,
 		      struct netdev_hw_addr_list *from_list, int addr_len);
-void __hw_addr_flush(struct netdev_hw_addr_list *list);
 void __hw_addr_init(struct netdev_hw_addr_list *list);
 
 /* Functions used for device addresses handling */
@@ -2825,10 +2821,6 @@ int dev_addr_add(struct net_device *dev, const unsigned char *addr,
 		 unsigned char addr_type);
 int dev_addr_del(struct net_device *dev, const unsigned char *addr,
 		 unsigned char addr_type);
-int dev_addr_add_multiple(struct net_device *to_dev,
-			  struct net_device *from_dev, unsigned char addr_type);
-int dev_addr_del_multiple(struct net_device *to_dev,
-			  struct net_device *from_dev, unsigned char addr_type);
 void dev_addr_flush(struct net_device *dev);
 int dev_addr_init(struct net_device *dev);
 
@@ -2904,6 +2896,7 @@ void *netdev_lower_get_next_private_rcu(struct net_device *dev,
 	     priv = netdev_lower_get_next_private_rcu(dev, &(iter)))
 
 void *netdev_adjacent_get_private(struct list_head *adj_list);
+void *netdev_lower_get_first_private_rcu(struct net_device *dev);
 struct net_device *netdev_master_upper_dev_get(struct net_device *dev);
 struct net_device *netdev_master_upper_dev_get_rcu(struct net_device *dev);
 int netdev_upper_dev_link(struct net_device *dev, struct net_device *upper_dev);

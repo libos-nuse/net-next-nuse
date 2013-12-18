@@ -110,7 +110,8 @@ struct frag_hdr {
 	__be32	identification;
 };
 
-#define	IP6_MF	0x0001
+#define	IP6_MF		0x0001
+#define	IP6_OFFSET	0xFFF8
 
 #include <net/sock.h>
 
@@ -237,6 +238,7 @@ struct ip6_flowlabel {
 
 #define IPV6_FLOWINFO_MASK	cpu_to_be32(0x0FFFFFFF)
 #define IPV6_FLOWLABEL_MASK	cpu_to_be32(0x000FFFFF)
+#define IPV6_TCLASS_MASK (IPV6_FLOWINFO_MASK & ~IPV6_FLOWLABEL_MASK)
 
 struct ipv6_fl_socklist {
 	struct ipv6_fl_socklist	__rcu	*next;
@@ -675,6 +677,11 @@ static inline void ip6_flow_hdr(struct ipv6hdr *hdr, unsigned int tclass,
 static inline __be32 ip6_flowinfo(const struct ipv6hdr *hdr)
 {
 	return *(__be32 *)hdr & IPV6_FLOWINFO_MASK;
+}
+
+static inline __be32 ip6_flowlabel(const struct ipv6hdr *hdr)
+{
+	return *(__be32 *)hdr & IPV6_FLOWLABEL_MASK;
 }
 
 /*
