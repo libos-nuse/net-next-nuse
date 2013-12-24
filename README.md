@@ -1,4 +1,4 @@
-Direct Code Execution [![Build Status](https://travis-ci.org/thehajime/net-next-sim.png)](https://travis-ci.org/thehajime/net-next-sim)
+Direct Code Execution [![Build Status](https://travis-ci.org/direct-code-execution/net-next-sim.png)](https://travis-ci.org/direct-code-execution/net-next-sim)
 ===============================
 
 
