@@ -101,6 +101,14 @@ struct proc_dir_entry *proc_mkdir(const char *name,
   return proc_create_entry (name, S_IRUGO | S_IXUGO, parent);
 }
 
+struct proc_dir_entry *proc_mkdir_data(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, void *data)
+{
+  struct proc_dir_entry *de = proc_create_entry (name, mode, parent);
+  de->data = data;
+  return de;
+}
+
 int proc_alloc_inum(unsigned int *inum)
 {
   *inum = 1;
