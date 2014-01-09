@@ -26,6 +26,9 @@ int sim_sock_socket (int domain, int type, int protocol, struct SimSocket **sock
 {
   struct socket **kernel_socket = (struct socket **)socket;
   int retval = sock_create (domain, type, protocol, kernel_socket);
+  /* XXX: SCTP code never look at flags args, but file flags instead. */
+  struct file *fp = sim_malloc (sizeof (struct file));
+  (*kernel_socket)->file = fp;
   return retval;
 }
 int sim_sock_close (struct SimSocket *socket)
@@ -95,6 +98,8 @@ int sim_sock_connect (struct SimSocket *socket, const struct sockaddr *name, int
   struct socket *sock = (struct socket *)socket;
   struct sockaddr_storage address;
   memcpy (&address, name, namelen);
+  /* XXX: SCTP code never look at flags args, but file flags instead. */
+  sock->file->f_flags = flags;
   int retval = sock->ops->connect(sock, (struct sockaddr *)&address, namelen, flags);
   return retval;
 }
