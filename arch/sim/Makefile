@@ -101,17 +101,18 @@ $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	ld -shared --verbose | ./$^ > $@
 
 # from lib/Makefile
-hostprogs-y	:= $(srctree)/lib/gen_crc32table
+CRC32TABLE = $(srctree)/lib/gen_crc32table
+hostprogs-y	:= $(CRC32TABLE)
 clean-files	:= crc32table.h
 
-$(srctree)/lib/gen_crc32table: $(srctree)/lib/gen_crc32table.c
+$(CRC32TABLE): $(srctree)/lib/gen_crc32table.c
 	cc $^ -o $@
 
 quiet_cmd_crc32 = GEN     $@
       cmd_crc32 = $< > $@
 
 $(ARCH_DIR)/crc32table.h: $(srctree)/lib/gen_crc32table
-	$(call cmd,crc32)
+	$(call if_changed,crc32)
 
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(SIM_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
@@ -158,7 +159,7 @@ quiet_cmd_linklib = LIB   $@
       cmd_linklib = $(CC) $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@; \
 		    ln -s -f $(KERNEL_LIB) liblinux.so
 
-$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
+$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linklib)
 
 test:
