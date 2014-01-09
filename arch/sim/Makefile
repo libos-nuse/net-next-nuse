@@ -101,17 +101,17 @@ $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	ld -shared --verbose | ./$^ > $@
 
 # from lib/Makefile
-CRC32TABLE = $(srctree)/lib/gen_crc32table
-hostprogs-y	:= $(CRC32TABLE)
+CRC32TABLE = $(ARCH_DIR)/crc32table.h
+hostprogs-y	:= $(srctree)/lib/gen_crc32table
 clean-files	:= crc32table.h
 
-$(CRC32TABLE): $(srctree)/lib/gen_crc32table.c
+$(srctree)/lib/gen_crc32table: $(srctree)/lib/gen_crc32table.c
 	cc $^ -o $@
 
 quiet_cmd_crc32 = GEN     $@
       cmd_crc32 = $< > $@
 
-$(ARCH_DIR)/crc32table.h: $(srctree)/lib/gen_crc32table
+$(CRC32TABLE): $(srctree)/lib/gen_crc32table
 	$(call if_changed,crc32)
 
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
