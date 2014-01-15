@@ -127,7 +127,7 @@
 struct sk_buff *qlcnic_process_rxbuf(struct qlcnic_adapter *,
 				     struct qlcnic_host_rds_ring *, u16, u16);
 
-inline void qlcnic_enable_tx_intr(struct qlcnic_adapter *adapter,
+static inline void qlcnic_enable_tx_intr(struct qlcnic_adapter *adapter,
 				  struct qlcnic_host_tx_ring *tx_ring)
 {
 	if (qlcnic_check_multi_tx(adapter) &&
@@ -144,13 +144,13 @@ static inline void qlcnic_disable_tx_int(struct qlcnic_adapter *adapter,
 		writel(1, tx_ring->crb_intr_mask);
 }
 
-inline void qlcnic_83xx_enable_tx_intr(struct qlcnic_adapter *adapter,
+static inline void qlcnic_83xx_enable_tx_intr(struct qlcnic_adapter *adapter,
 				       struct qlcnic_host_tx_ring *tx_ring)
 {
 	writel(0, tx_ring->crb_intr_mask);
 }
 
-inline void qlcnic_83xx_disable_tx_intr(struct qlcnic_adapter *adapter,
+static inline void qlcnic_83xx_disable_tx_intr(struct qlcnic_adapter *adapter,
 					struct qlcnic_host_tx_ring *tx_ring)
 {
 	writel(1, tx_ring->crb_intr_mask);
@@ -202,7 +202,7 @@ static struct qlcnic_filter *qlcnic_find_mac_filter(struct hlist_head *head,
 	struct hlist_node *n;
 
 	hlist_for_each_entry_safe(tmp_fil, n, head, fnode) {
-		if (!memcmp(tmp_fil->faddr, addr, ETH_ALEN) &&
+		if (ether_addr_equal(tmp_fil->faddr, addr) &&
 		    tmp_fil->vlan_id == vlan_id)
 			return tmp_fil;
 	}
@@ -346,7 +346,7 @@ static void qlcnic_send_filter(struct qlcnic_adapter *adapter,
 	head = &(adapter->fhash.fhead[hindex]);
 
 	hlist_for_each_entry_safe(tmp_fil, n, head, fnode) {
-		if (!memcmp(tmp_fil->faddr, &src_addr, ETH_ALEN) &&
+		if (ether_addr_equal(tmp_fil->faddr, &src_addr) &&
 		    tmp_fil->vlan_id == vlan_id) {
 			if (jiffies > (QLCNIC_READD_AGE * HZ + tmp_fil->ftime))
 				qlcnic_change_filter(adapter, &src_addr,
@@ -687,17 +687,15 @@ void qlcnic_advert_link_change(struct qlcnic_adapter *adapter, int linkup)
 	if (adapter->ahw->linkup && !linkup) {
 		netdev_info(netdev, "NIC Link is down\n");
 		adapter->ahw->linkup = 0;
-		if (netif_running(netdev)) {
-			netif_carrier_off(netdev);
-			netif_tx_stop_all_queues(netdev);
-		}
+		netif_carrier_off(netdev);
 	} else if (!adapter->ahw->linkup && linkup) {
+		/* Do not advertise Link up if the port is in loopback mode */
+		if (qlcnic_83xx_check(adapter) && adapter->ahw->lb_mode)
+			return;
+
 		netdev_info(netdev, "NIC Link is up\n");
 		adapter->ahw->linkup = 1;
-		if (netif_running(netdev)) {
-			netif_carrier_on(netdev);
-			netif_wake_queue(netdev);
-		}
+		netif_carrier_on(netdev);
 	}
 }
 
@@ -784,7 +782,7 @@ static int qlcnic_process_cmd_ring(struct qlcnic_adapter *adapter,
 	struct net_device *netdev = adapter->netdev;
 	struct qlcnic_skb_frag *frag;
 
-	if (!spin_trylock(&adapter->tx_clean_lock))
+	if (!spin_trylock(&tx_ring->tx_clean_lock))
 		return 1;
 
 	sw_consumer = tx_ring->sw_consumer;
@@ -813,8 +811,9 @@ static int qlcnic_process_cmd_ring(struct qlcnic_adapter *adapter,
 			break;
 	}
 
+	tx_ring->sw_consumer = sw_consumer;
+
 	if (count && netif_running(netdev)) {
-		tx_ring->sw_consumer = sw_consumer;
 		smp_mb();
 		if (netif_tx_queue_stopped(tx_ring->txq) &&
 		    netif_carrier_ok(netdev)) {
@@ -840,7 +839,8 @@ static int qlcnic_process_cmd_ring(struct qlcnic_adapter *adapter,
 	 */
 	hw_consumer = le32_to_cpu(*(tx_ring->hw_consumer));
 	done = (sw_consumer == hw_consumer);
-	spin_unlock(&adapter->tx_clean_lock);
+
+	spin_unlock(&tx_ring->tx_clean_lock);
 
 	return done;
 }

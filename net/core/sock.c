@@ -882,7 +882,7 @@ set_rcvbuf:
 
 	case SO_PEEK_OFF:
 		if (sock->ops->set_peek_off)
-			sock->ops->set_peek_off(sk, val);
+			ret = sock->ops->set_peek_off(sk, val);
 		else
 			ret = -EOPNOTSUPP;
 		break;
@@ -925,8 +925,8 @@ set_rcvbuf:
 EXPORT_SYMBOL(sock_setsockopt);
 
 
-void cred_to_ucred(struct pid *pid, const struct cred *cred,
-		   struct ucred *ucred)
+static void cred_to_ucred(struct pid *pid, const struct cred *cred,
+			  struct ucred *ucred)
 {
 	ucred->pid = pid_vnr(pid);
 	ucred->uid = ucred->gid = -1;
@@ -937,7 +937,6 @@ void cred_to_ucred(struct pid *pid, const struct cred *cred,
 		ucred->gid = from_kgid_munged(current_ns, cred->egid);
 	}
 }
-EXPORT_SYMBOL_GPL(cred_to_ucred);
 
 int sock_getsockopt(struct socket *sock, int level, int optname,
 		    char __user *optval, int __user *optlen)
@@ -1308,19 +1307,7 @@ static void sk_prot_free(struct proto *prot, struct sock *sk)
 	module_put(owner);
 }
 
-#if IS_ENABLED(CONFIG_NET_CLS_CGROUP)
-void sock_update_classid(struct sock *sk)
-{
-	u32 classid;
-
-	classid = task_cls_classid(current);
-	if (classid != sk->sk_classid)
-		sk->sk_classid = classid;
-}
-EXPORT_SYMBOL(sock_update_classid);
-#endif
-
-#if IS_ENABLED(CONFIG_NETPRIO_CGROUP)
+#if IS_ENABLED(CONFIG_CGROUP_NET_PRIO)
 void sock_update_netprioidx(struct sock *sk)
 {
 	if (in_interrupt())
@@ -1664,22 +1651,6 @@ struct sk_buff *sock_wmalloc(struct sock *sk, unsigned long size, int force,
 	return NULL;
 }
 EXPORT_SYMBOL(sock_wmalloc);
-
-/*
- * Allocate a skb from the socket's receive buffer.
- */
-struct sk_buff *sock_rmalloc(struct sock *sk, unsigned long size, int force,
-			     gfp_t priority)
-{
-	if (force || atomic_read(&sk->sk_rmem_alloc) < sk->sk_rcvbuf) {
-		struct sk_buff *skb = alloc_skb(size, priority);
-		if (skb) {
-			skb_set_owner_r(skb, sk);
-			return skb;
-		}
-	}
-	return NULL;
-}
 
 /*
  * Allocate a memory block from the socket's option memory buffer.

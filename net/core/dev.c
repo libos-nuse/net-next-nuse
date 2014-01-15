@@ -480,7 +480,7 @@ EXPORT_SYMBOL(dev_add_offload);
  *	and must not be freed until after all the CPU's have gone
  *	through a quiescent state.
  */
-void __dev_remove_offload(struct packet_offload *po)
+static void __dev_remove_offload(struct packet_offload *po)
 {
 	struct list_head *head = &offload_base;
 	struct packet_offload *po1;
@@ -498,7 +498,6 @@ void __dev_remove_offload(struct packet_offload *po)
 out:
 	spin_unlock(&offload_lock);
 }
-EXPORT_SYMBOL(__dev_remove_offload);
 
 /**
  *	dev_remove_offload	 - remove packet offload handler
@@ -1566,14 +1565,14 @@ EXPORT_SYMBOL(unregister_netdevice_notifier);
  *	are as for raw_notifier_call_chain().
  */
 
-int call_netdevice_notifiers_info(unsigned long val, struct net_device *dev,
-				  struct netdev_notifier_info *info)
+static int call_netdevice_notifiers_info(unsigned long val,
+					 struct net_device *dev,
+					 struct netdev_notifier_info *info)
 {
 	ASSERT_RTNL();
 	netdev_notifier_info_init(info, dev);
 	return raw_notifier_call_chain(&netdev_chain, val, info);
 }
-EXPORT_SYMBOL(call_netdevice_notifiers_info);
 
 /**
  *	call_netdevice_notifiers - call all network notifier blocks
@@ -2454,13 +2453,8 @@ static void dev_gso_skb_destructor(struct sk_buff *skb)
 {
 	struct dev_gso_cb *cb;
 
-	do {
-		struct sk_buff *nskb = skb->next;
-
-		skb->next = nskb->next;
-		nskb->next = NULL;
-		kfree_skb(nskb);
-	} while (skb->next);
+	kfree_skb_list(skb->next);
+	skb->next = NULL;
 
 	cb = DEV_GSO_CB(skb);
 	if (cb->destructor)
@@ -2747,7 +2741,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	return rc;
 }
 
-#if IS_ENABLED(CONFIG_NETPRIO_CGROUP)
+#if IS_ENABLED(CONFIG_CGROUP_NET_PRIO)
 static void skb_update_prio(struct sk_buff *skb)
 {
 	struct netprio_map *map = rcu_dereference_bh(skb->dev->priomap);
@@ -4035,7 +4029,7 @@ gro_result_t napi_gro_frags(struct napi_struct *napi)
 EXPORT_SYMBOL(napi_gro_frags);
 
 /*
- * net_rps_action sends any pending IPI's for rps.
+ * net_rps_action_and_irq_enable sends any pending IPI's for rps.
  * Note: called with local irq disabled, but exits with local irq enabled.
  */
 static void net_rps_action_and_irq_enable(struct softnet_data *sd)
@@ -4240,17 +4234,10 @@ EXPORT_SYMBOL(netif_napi_add);
 
 void netif_napi_del(struct napi_struct *napi)
 {
-	struct sk_buff *skb, *next;
-
 	list_del_init(&napi->dev_list);
 	napi_free_frags(napi);
 
-	for (skb = napi->gro_list; skb; skb = next) {
-		next = skb->next;
-		skb->next = NULL;
-		kfree_skb(skb);
-	}
-
+	kfree_skb_list(napi->gro_list);
 	napi->gro_list = NULL;
 	napi->gro_count = 0;
 }
@@ -4367,19 +4354,6 @@ struct netdev_adjacent {
 	struct rcu_head rcu;
 };
 
-static struct netdev_adjacent *__netdev_find_adj_rcu(struct net_device *dev,
-						     struct net_device *adj_dev,
-						     struct list_head *adj_list)
-{
-	struct netdev_adjacent *adj;
-
-	list_for_each_entry_rcu(adj, adj_list, list) {
-		if (adj->dev == adj_dev)
-			return adj;
-	}
-	return NULL;
-}
-
 static struct netdev_adjacent *__netdev_find_adj(struct net_device *dev,
 						 struct net_device *adj_dev,
 						 struct list_head *adj_list)
@@ -4418,13 +4392,12 @@ EXPORT_SYMBOL(netdev_has_upper_dev);
  * Find out if a device is linked to an upper device and return true in case
  * it is. The caller must hold the RTNL lock.
  */
-bool netdev_has_any_upper_dev(struct net_device *dev)
+static bool netdev_has_any_upper_dev(struct net_device *dev)
 {
 	ASSERT_RTNL();
 
 	return !list_empty(&dev->all_adj_list.upper);
 }
-EXPORT_SYMBOL(netdev_has_any_upper_dev);
 
 /**
  * netdev_master_upper_dev_get - Get master upper device
@@ -4473,7 +4446,7 @@ struct net_device *netdev_all_upper_get_next_dev_rcu(struct net_device *dev,
 {
 	struct netdev_adjacent *upper;
 
-	WARN_ON_ONCE(!rcu_read_lock_held());
+	WARN_ON_ONCE(!rcu_read_lock_held() && !lockdep_rtnl_is_held());
 
 	upper = list_entry_rcu((*iter)->next, struct netdev_adjacent, list);
 
@@ -4656,9 +4629,9 @@ free_adj:
 	return ret;
 }
 
-void __netdev_adjacent_dev_remove(struct net_device *dev,
-				  struct net_device *adj_dev,
-				  struct list_head *dev_list)
+static void __netdev_adjacent_dev_remove(struct net_device *dev,
+					 struct net_device *adj_dev,
+					 struct list_head *dev_list)
 {
 	struct netdev_adjacent *adj;
 	char linkname[IFNAMSIZ+7];
@@ -4696,11 +4669,11 @@ void __netdev_adjacent_dev_remove(struct net_device *dev,
 	kfree_rcu(adj, rcu);
 }
 
-int __netdev_adjacent_dev_link_lists(struct net_device *dev,
-				     struct net_device *upper_dev,
-				     struct list_head *up_list,
-				     struct list_head *down_list,
-				     void *private, bool master)
+static int __netdev_adjacent_dev_link_lists(struct net_device *dev,
+					    struct net_device *upper_dev,
+					    struct list_head *up_list,
+					    struct list_head *down_list,
+					    void *private, bool master)
 {
 	int ret;
 
@@ -4719,8 +4692,8 @@ int __netdev_adjacent_dev_link_lists(struct net_device *dev,
 	return 0;
 }
 
-int __netdev_adjacent_dev_link(struct net_device *dev,
-			       struct net_device *upper_dev)
+static int __netdev_adjacent_dev_link(struct net_device *dev,
+				      struct net_device *upper_dev)
 {
 	return __netdev_adjacent_dev_link_lists(dev, upper_dev,
 						&dev->all_adj_list.upper,
@@ -4728,26 +4701,26 @@ int __netdev_adjacent_dev_link(struct net_device *dev,
 						NULL, false);
 }
 
-void __netdev_adjacent_dev_unlink_lists(struct net_device *dev,
-					struct net_device *upper_dev,
-					struct list_head *up_list,
-					struct list_head *down_list)
+static void __netdev_adjacent_dev_unlink_lists(struct net_device *dev,
+					       struct net_device *upper_dev,
+					       struct list_head *up_list,
+					       struct list_head *down_list)
 {
 	__netdev_adjacent_dev_remove(dev, upper_dev, up_list);
 	__netdev_adjacent_dev_remove(upper_dev, dev, down_list);
 }
 
-void __netdev_adjacent_dev_unlink(struct net_device *dev,
-				  struct net_device *upper_dev)
+static void __netdev_adjacent_dev_unlink(struct net_device *dev,
+					 struct net_device *upper_dev)
 {
 	__netdev_adjacent_dev_unlink_lists(dev, upper_dev,
 					   &dev->all_adj_list.upper,
 					   &upper_dev->all_adj_list.lower);
 }
 
-int __netdev_adjacent_dev_link_neighbour(struct net_device *dev,
-					 struct net_device *upper_dev,
-					 void *private, bool master)
+static int __netdev_adjacent_dev_link_neighbour(struct net_device *dev,
+						struct net_device *upper_dev,
+						void *private, bool master)
 {
 	int ret = __netdev_adjacent_dev_link(dev, upper_dev);
 
@@ -4766,8 +4739,8 @@ int __netdev_adjacent_dev_link_neighbour(struct net_device *dev,
 	return 0;
 }
 
-void __netdev_adjacent_dev_unlink_neighbour(struct net_device *dev,
-					    struct net_device *upper_dev)
+static void __netdev_adjacent_dev_unlink_neighbour(struct net_device *dev,
+						   struct net_device *upper_dev)
 {
 	__netdev_adjacent_dev_unlink(dev, upper_dev);
 	__netdev_adjacent_dev_unlink_lists(dev, upper_dev,
@@ -4955,21 +4928,6 @@ void netdev_upper_dev_unlink(struct net_device *dev,
 	call_netdevice_notifiers(NETDEV_CHANGEUPPER, dev);
 }
 EXPORT_SYMBOL(netdev_upper_dev_unlink);
-
-void *netdev_lower_dev_get_private_rcu(struct net_device *dev,
-				       struct net_device *lower_dev)
-{
-	struct netdev_adjacent *lower;
-
-	if (!lower_dev)
-		return NULL;
-	lower = __netdev_find_adj_rcu(dev, lower_dev, &dev->adj_list.lower);
-	if (!lower)
-		return NULL;
-
-	return lower->private;
-}
-EXPORT_SYMBOL(netdev_lower_dev_get_private_rcu);
 
 void *netdev_lower_dev_get_private(struct net_device *dev,
 				   struct net_device *lower_dev)
@@ -5825,13 +5783,8 @@ int register_netdevice(struct net_device *dev)
 	dev->features |= NETIF_F_SOFT_FEATURES;
 	dev->wanted_features = dev->features & dev->hw_features;
 
-	/* Turn on no cache copy if HW is doing checksum */
 	if (!(dev->flags & IFF_LOOPBACK)) {
 		dev->hw_features |= NETIF_F_NOCACHE_COPY;
-		if (dev->features & NETIF_F_ALL_CSUM) {
-			dev->wanted_features |= NETIF_F_NOCACHE_COPY;
-			dev->features |= NETIF_F_NOCACHE_COPY;
-		}
 	}
 
 	/* Make NETIF_F_HIGHDMA inheritable to VLAN devices.

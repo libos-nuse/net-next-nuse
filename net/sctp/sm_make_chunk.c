@@ -1967,13 +1967,13 @@ static int sctp_verify_ext_param(struct net *net, union sctp_params param)
 
 	for (i = 0; i < num_ext; i++) {
 		switch (param.ext->chunks[i]) {
-		    case SCTP_CID_AUTH:
-			    have_auth = 1;
-			    break;
-		    case SCTP_CID_ASCONF:
-		    case SCTP_CID_ASCONF_ACK:
-			    have_asconf = 1;
-			    break;
+		case SCTP_CID_AUTH:
+			have_auth = 1;
+			break;
+		case SCTP_CID_ASCONF:
+		case SCTP_CID_ASCONF_ACK:
+			have_asconf = 1;
+			break;
 		}
 	}
 
@@ -2000,25 +2000,24 @@ static void sctp_process_ext_param(struct sctp_association *asoc,
 
 	for (i = 0; i < num_ext; i++) {
 		switch (param.ext->chunks[i]) {
-		    case SCTP_CID_FWD_TSN:
-			    if (net->sctp.prsctp_enable &&
-				!asoc->peer.prsctp_capable)
+		case SCTP_CID_FWD_TSN:
+			if (net->sctp.prsctp_enable && !asoc->peer.prsctp_capable)
 				    asoc->peer.prsctp_capable = 1;
-			    break;
-		    case SCTP_CID_AUTH:
-			    /* if the peer reports AUTH, assume that he
-			     * supports AUTH.
-			     */
-			    if (net->sctp.auth_enable)
-				    asoc->peer.auth_capable = 1;
-			    break;
-		    case SCTP_CID_ASCONF:
-		    case SCTP_CID_ASCONF_ACK:
-			    if (net->sctp.addip_enable)
-				    asoc->peer.asconf_capable = 1;
-			    break;
-		    default:
-			    break;
+			break;
+		case SCTP_CID_AUTH:
+			/* if the peer reports AUTH, assume that he
+			 * supports AUTH.
+			 */
+			if (net->sctp.auth_enable)
+				asoc->peer.auth_capable = 1;
+			break;
+		case SCTP_CID_ASCONF:
+		case SCTP_CID_ASCONF_ACK:
+			if (net->sctp.addip_enable)
+				asoc->peer.asconf_capable = 1;
+			break;
+		default:
+			break;
 		}
 	}
 }
@@ -2251,7 +2250,7 @@ int sctp_verify_init(struct net *net, const struct sctp_association *asoc,
 	 * VIOLATION error.  We build the ERROR chunk here and let the normal
 	 * error handling code build and send the packet.
 	 */
-	if (param.v != (void*)chunk->chunk_end)
+	if (param.v != (void *)chunk->chunk_end)
 		return sctp_process_inv_paramlength(asoc, param.p, chunk, errp);
 
 	/* The only missing mandatory param possible today is
@@ -2266,14 +2265,14 @@ int sctp_verify_init(struct net *net, const struct sctp_association *asoc,
 
 		result = sctp_verify_param(net, asoc, param, cid, chunk, errp);
 		switch (result) {
-		    case SCTP_IERROR_ABORT:
-		    case SCTP_IERROR_NOMEM:
-				return 0;
-		    case SCTP_IERROR_ERROR:
-				return 1;
-		    case SCTP_IERROR_NO_ERROR:
-		    default:
-				break;
+		case SCTP_IERROR_ABORT:
+		case SCTP_IERROR_NOMEM:
+			return 0;
+		case SCTP_IERROR_ERROR:
+			return 1;
+		case SCTP_IERROR_NO_ERROR:
+		default:
+			break;
 		}
 
 	} /* for (loop through all parameters) */
@@ -2308,7 +2307,7 @@ int sctp_process_init(struct sctp_association *asoc, struct sctp_chunk *chunk,
 	 * added as the primary transport.  The source address seems to
 	 * be a a better choice than any of the embedded addresses.
 	 */
-	if(!sctp_assoc_add_peer(asoc, peer_addr, gfp, SCTP_ACTIVE))
+	if (!sctp_assoc_add_peer(asoc, peer_addr, gfp, SCTP_ACTIVE))
 		goto nomem;
 
 	if (sctp_cmp_addr_exact(sctp_source(chunk), peer_addr))
@@ -3334,7 +3333,7 @@ static __be16 sctp_get_asconf_response(struct sctp_chunk *asconf_ack,
 
 	while (asconf_ack_len > 0) {
 		if (asconf_ack_param->crr_id == asconf_param->crr_id) {
-			switch(asconf_ack_param->param_hdr.type) {
+			switch (asconf_ack_param->param_hdr.type) {
 			case SCTP_PARAM_SUCCESS_REPORT:
 				return SCTP_ERROR_NO_ERROR;
 			case SCTP_PARAM_ERR_CAUSE:

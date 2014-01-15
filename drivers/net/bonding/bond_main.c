@@ -113,6 +113,7 @@ static int all_slaves_active;
 static struct bond_params bonding_defaults;
 static int resend_igmp = BOND_DEFAULT_RESEND_IGMP;
 static int packets_per_slave = 1;
+static int lp_interval = BOND_ALB_DEFAULT_LP_INTERVAL;
 
 module_param(max_bonds, int, 0);
 MODULE_PARM_DESC(max_bonds, "Max number of bonded devices");
@@ -189,6 +190,10 @@ module_param(packets_per_slave, int, 0);
 MODULE_PARM_DESC(packets_per_slave, "Packets to send per slave in balance-rr "
 				    "mode; 0 for a random slave, 1 packet per "
 				    "slave (default), >1 packets per slave.");
+module_param(lp_interval, uint, 0);
+MODULE_PARM_DESC(lp_interval, "The number of seconds between instances where "
+			      "the bonding driver sends learning packets to "
+			      "each slaves peer switch. The default is 1.");
 
 /*----------------------------- Global variables ----------------------------*/
 
@@ -299,7 +304,7 @@ const char *bond_mode_name(int mode)
  * @skb: hw accel VLAN tagged skb to transmit
  * @slave_dev: slave that is supposed to xmit this skbuff
  */
-int bond_dev_queue_xmit(struct bonding *bond, struct sk_buff *skb,
+void bond_dev_queue_xmit(struct bonding *bond, struct sk_buff *skb,
 			struct net_device *slave_dev)
 {
 	skb->dev = slave_dev;
@@ -312,8 +317,6 @@ int bond_dev_queue_xmit(struct bonding *bond, struct sk_buff *skb,
 		bond_netpoll_send_skb(bond_get_slave_by_dev(bond, slave_dev), skb);
 	else
 		dev_queue_xmit(skb);
-
-	return 0;
 }
 
 /*
@@ -1634,7 +1637,7 @@ err_free:
 err_undo_flags:
 	/* Enslave of first slave has failed and we need to fix master's mac */
 	if (!bond_has_slaves(bond) &&
-	    ether_addr_equal(bond_dev->dev_addr, slave_dev->dev_addr))
+	    ether_addr_equal_64bits(bond_dev->dev_addr, slave_dev->dev_addr))
 		eth_hw_addr_random(bond_dev);
 
 	return res;
@@ -1707,7 +1710,7 @@ static int __bond_release_one(struct net_device *bond_dev,
 	bond->current_arp_slave = NULL;
 
 	if (!all && !bond->params.fail_over_mac) {
-		if (ether_addr_equal(bond_dev->dev_addr, slave->perm_hwaddr) &&
+		if (ether_addr_equal_64bits(bond_dev->dev_addr, slave->perm_hwaddr) &&
 		    bond_has_slaves(bond))
 			pr_warn("%s: Warning: the permanent HWaddr of %s - %pM - is still in use by %s. Set the HWaddr of %s to a different address to avoid conflicts.\n",
 				   bond_dev->name, slave_dev->name,
@@ -2085,7 +2088,7 @@ do_failover:
  * an acquisition of appropriate locks followed by a commit phase to
  * implement whatever link state changes are indicated.
  */
-void bond_mii_monitor(struct work_struct *work)
+static void bond_mii_monitor(struct work_struct *work)
 {
 	struct bonding *bond = container_of(work, struct bonding,
 					    mii_work.work);
@@ -2374,7 +2377,7 @@ static bool bond_time_in_interval(struct bonding *bond, unsigned long last_act,
  * arp is transmitted to generate traffic. see activebackup_arp_monitor for
  * arp monitoring in active backup mode.
  */
-void bond_loadbalance_arp_mon(struct work_struct *work)
+static void bond_loadbalance_arp_mon(struct work_struct *work)
 {
 	struct bonding *bond = container_of(work, struct bonding,
 					    arp_work.work);
@@ -2711,7 +2714,7 @@ static void bond_ab_arp_probe(struct bonding *bond)
 	rcu_assign_pointer(bond->current_arp_slave, new_slave);
 }
 
-void bond_activebackup_arp_mon(struct work_struct *work)
+static void bond_activebackup_arp_mon(struct work_struct *work)
 {
 	struct bonding *bond = container_of(work, struct bonding,
 					    arp_work.work);
@@ -3511,7 +3514,7 @@ unwind:
  * it fails, it tries to find the first available slave for transmission.
  * The skb is consumed in all cases, thus the function is void.
  */
-void bond_xmit_slave_id(struct bonding *bond, struct sk_buff *skb, int slave_id)
+static void bond_xmit_slave_id(struct bonding *bond, struct sk_buff *skb, int slave_id)
 {
 	struct list_head *iter;
 	struct slave *slave;
@@ -3668,28 +3671,24 @@ static inline int bond_slave_override(struct bonding *bond,
 				      struct sk_buff *skb)
 {
 	struct slave *slave = NULL;
-	struct slave *check_slave;
 	struct list_head *iter;
-	int res = 1;
 
 	if (!skb->queue_mapping)
 		return 1;
 
 	/* Find out if any slaves have the same mapping as this skb. */
-	bond_for_each_slave_rcu(bond, check_slave, iter) {
-		if (check_slave->queue_id == skb->queue_mapping) {
-			slave = check_slave;
+	bond_for_each_slave_rcu(bond, slave, iter) {
+		if (slave->queue_id == skb->queue_mapping) {
+			if (slave_can_tx(slave)) {
+				bond_dev_queue_xmit(bond, skb, slave->dev);
+				return 0;
+			}
+			/* If the slave isn't UP, use default transmit policy. */
 			break;
 		}
 	}
 
-	/* If the slave isn't UP, use default transmit policy. */
-	if (slave && slave->queue_id && IS_UP(slave->dev) &&
-	    (slave->link == BOND_LINK_UP)) {
-		res = bond_dev_queue_xmit(bond, skb, slave->dev);
-	}
-
-	return res;
+	return 1;
 }
 
 
@@ -3934,6 +3933,29 @@ static void bond_uninit(struct net_device *bond_dev)
 
 /*------------------------- Module initialization ---------------------------*/
 
+int bond_parm_tbl_lookup(int mode, const struct bond_parm_tbl *tbl)
+{
+	int i;
+
+	for (i = 0; tbl[i].modename; i++)
+		if (mode == tbl[i].mode)
+			return tbl[i].mode;
+
+	return -1;
+}
+
+static int bond_parm_tbl_lookup_name(const char *modename,
+				     const struct bond_parm_tbl *tbl)
+{
+	int i;
+
+	for (i = 0; tbl[i].modename; i++)
+		if (strcmp(modename, tbl[i].modename) == 0)
+			return tbl[i].mode;
+
+	return -1;
+}
+
 /*
  * Convert string input module parms.  Accept either the
  * number of the mode or its string name.  A bit complicated because
@@ -3942,27 +3964,17 @@ static void bond_uninit(struct net_device *bond_dev)
  */
 int bond_parse_parm(const char *buf, const struct bond_parm_tbl *tbl)
 {
-	int modeint = -1, i, rv;
-	char *p, modestr[BOND_MAX_MODENAME_LEN + 1] = { 0, };
+	int modeint;
+	char *p, modestr[BOND_MAX_MODENAME_LEN + 1];
 
 	for (p = (char *)buf; *p; p++)
 		if (!(isdigit(*p) || isspace(*p)))
 			break;
 
-	if (*p)
-		rv = sscanf(buf, "%20s", modestr);
-	else
-		rv = sscanf(buf, "%d", &modeint);
-
-	if (!rv)
-		return -1;
-
-	for (i = 0; tbl[i].modename; i++) {
-		if (modeint == tbl[i].mode)
-			return tbl[i].mode;
-		if (strcmp(modestr, tbl[i].modename) == 0)
-			return tbl[i].mode;
-	}
+	if (*p && sscanf(buf, "%20s", modestr) != 0)
+		return bond_parm_tbl_lookup_name(modestr, tbl);
+	else if (sscanf(buf, "%d", &modeint) != 0)
+		return bond_parm_tbl_lookup(modeint, tbl);
 
 	return -1;
 }
@@ -4066,8 +4078,8 @@ static int bond_check_params(struct bond_params *params)
 		num_peer_notif = 1;
 	}
 
-	/* reset values for 802.3ad */
-	if (bond_mode == BOND_MODE_8023AD) {
+	/* reset values for 802.3ad/TLB/ALB */
+	if (BOND_NO_USES_ARP(bond_mode)) {
 		if (!miimon) {
 			pr_warning("Warning: miimon must be specified, otherwise bonding will not detect link failure, speed and duplex which are essential for 802.3ad operation\n");
 			pr_warning("Forcing miimon to 100msec\n");
@@ -4100,16 +4112,6 @@ static int bond_check_params(struct bond_params *params)
 		pr_warn("Warning: packets_per_slave (%d) should be between 0 and %u resetting to 1\n",
 			packets_per_slave, USHRT_MAX);
 		packets_per_slave = 1;
-	}
-
-	/* reset values for TLB/ALB */
-	if ((bond_mode == BOND_MODE_TLB) ||
-	    (bond_mode == BOND_MODE_ALB)) {
-		if (!miimon) {
-			pr_warning("Warning: miimon must be specified, otherwise bonding will not detect link failure and link speed which are essential for TLB/ALB load balancing\n");
-			pr_warning("Forcing miimon to 100msec\n");
-			miimon = BOND_DEFAULT_MIIMON;
-		}
 	}
 
 	if (bond_mode == BOND_MODE_ALB) {
@@ -4271,6 +4273,12 @@ static int bond_check_params(struct bond_params *params)
 		fail_over_mac_value = BOND_FOM_NONE;
 	}
 
+	if (lp_interval == 0) {
+		pr_warning("Warning: ip_interval must be between 1 and %d, so it was reset to %d\n",
+			   INT_MAX, BOND_ALB_DEFAULT_LP_INTERVAL);
+		lp_interval = BOND_ALB_DEFAULT_LP_INTERVAL;
+	}
+
 	/* fill params struct with the proper values */
 	params->mode = bond_mode;
 	params->xmit_policy = xmit_hashtype;
@@ -4290,7 +4298,7 @@ static int bond_check_params(struct bond_params *params)
 	params->all_slaves_active = all_slaves_active;
 	params->resend_igmp = resend_igmp;
 	params->min_links = min_links;
-	params->lp_interval = BOND_ALB_DEFAULT_LP_INTERVAL;
+	params->lp_interval = lp_interval;
 	if (packets_per_slave > 1)
 		params->packets_per_slave = reciprocal_value(packets_per_slave);
 	else

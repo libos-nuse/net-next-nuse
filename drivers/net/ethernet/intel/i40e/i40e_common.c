@@ -126,6 +126,44 @@ void i40e_debug_aq(struct i40e_hw *hw, enum i40e_debug_mask mask, void *desc,
 }
 
 /**
+ * i40e_check_asq_alive
+ * @hw: pointer to the hw struct
+ *
+ * Returns true if Queue is enabled else false.
+ **/
+bool i40e_check_asq_alive(struct i40e_hw *hw)
+{
+	return !!(rd32(hw, hw->aq.asq.len) & I40E_PF_ATQLEN_ATQENABLE_MASK);
+}
+
+/**
+ * i40e_aq_queue_shutdown
+ * @hw: pointer to the hw struct
+ * @unloading: is the driver unloading itself
+ *
+ * Tell the Firmware that we're shutting down the AdminQ and whether
+ * or not the driver is unloading as well.
+ **/
+i40e_status i40e_aq_queue_shutdown(struct i40e_hw *hw,
+					     bool unloading)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_queue_shutdown *cmd =
+		(struct i40e_aqc_queue_shutdown *)&desc.params.raw;
+	i40e_status status;
+
+	i40e_fill_default_direct_cmd_desc(&desc,
+					  i40e_aqc_opc_queue_shutdown);
+
+	if (unloading)
+		cmd->driver_unloading = cpu_to_le32(I40E_AQ_DRIVER_UNLOADING);
+	status = i40e_asq_send_command(hw, &desc, NULL, 0, NULL);
+
+	return status;
+}
+
+
+/**
  * i40e_init_shared_code - Initialize the shared code
  * @hw: pointer to hardware structure
  *
@@ -236,33 +274,6 @@ i40e_status i40e_get_mac_addr(struct i40e_hw *hw, u8 *mac_addr)
 	if (flags & I40E_AQC_LAN_ADDR_VALID)
 		memcpy(mac_addr, &addrs.pf_lan_mac, sizeof(addrs.pf_lan_mac));
 
-	return status;
-}
-
-/**
- * i40e_validate_mac_addr - Validate MAC address
- * @mac_addr: pointer to MAC address
- *
- * Tests a MAC address to ensure it is a valid Individual Address
- **/
-i40e_status i40e_validate_mac_addr(u8 *mac_addr)
-{
-	i40e_status status = 0;
-
-	/* Make sure it is not a multicast address */
-	if (I40E_IS_MULTICAST(mac_addr)) {
-		hw_dbg(hw, "MAC address is multicast\n");
-		status = I40E_ERR_INVALID_MAC_ADDR;
-	/* Not a broadcast address */
-	} else if (I40E_IS_BROADCAST(mac_addr)) {
-		hw_dbg(hw, "MAC address is broadcast\n");
-		status = I40E_ERR_INVALID_MAC_ADDR;
-	/* Reject the zero address */
-	} else if (mac_addr[0] == 0 && mac_addr[1] == 0 && mac_addr[2] == 0 &&
-		   mac_addr[3] == 0 && mac_addr[4] == 0 && mac_addr[5] == 0) {
-		hw_dbg(hw, "MAC address is all zeros\n");
-		status = I40E_ERR_INVALID_MAC_ADDR;
-	}
 	return status;
 }
 
@@ -401,6 +412,38 @@ void i40e_clear_pxe_mode(struct i40e_hw *hw)
 }
 
 /**
+ * i40e_led_is_mine - helper to find matching led
+ * @hw: pointer to the hw struct
+ * @idx: index into GPIO registers
+ *
+ * returns: 0 if no match, otherwise the value of the GPIO_CTL register
+ */
+static u32 i40e_led_is_mine(struct i40e_hw *hw, int idx)
+{
+	u32 gpio_val = 0;
+	u32 port;
+
+	if (!hw->func_caps.led[idx])
+		return 0;
+
+	gpio_val = rd32(hw, I40E_GLGEN_GPIO_CTL(idx));
+	port = (gpio_val & I40E_GLGEN_GPIO_CTL_PRT_NUM_MASK) >>
+		I40E_GLGEN_GPIO_CTL_PRT_NUM_SHIFT;
+
+	/* if PRT_NUM_NA is 1 then this LED is not port specific, OR
+	 * if it is not our port then ignore
+	 */
+	if ((gpio_val & I40E_GLGEN_GPIO_CTL_PRT_NUM_NA_MASK) ||
+	    (port != hw->port))
+		return 0;
+
+	return gpio_val;
+}
+
+#define I40E_LED0 22
+#define I40E_LINK_ACTIVITY 0xC
+
+/**
  * i40e_led_get - return current on/off mode
  * @hw: pointer to the hw struct
  *
@@ -411,24 +454,20 @@ void i40e_clear_pxe_mode(struct i40e_hw *hw)
  **/
 u32 i40e_led_get(struct i40e_hw *hw)
 {
-	u32 gpio_val = 0;
 	u32 mode = 0;
-	u32 port;
 	int i;
 
-	for (i = 0; i < I40E_HW_CAP_MAX_GPIO; i++) {
-		if (!hw->func_caps.led[i])
+	/* as per the documentation GPIO 22-29 are the LED
+	 * GPIO pins named LED0..LED7
+	 */
+	for (i = I40E_LED0; i <= I40E_GLGEN_GPIO_CTL_MAX_INDEX; i++) {
+		u32 gpio_val = i40e_led_is_mine(hw, i);
+
+		if (!gpio_val)
 			continue;
 
-		gpio_val = rd32(hw, I40E_GLGEN_GPIO_CTL(i));
-		port = (gpio_val & I40E_GLGEN_GPIO_CTL_PRT_NUM_MASK)
-			>> I40E_GLGEN_GPIO_CTL_PRT_NUM_SHIFT;
-
-		if (port != hw->port)
-			continue;
-
-		mode = (gpio_val & I40E_GLGEN_GPIO_CTL_LED_MODE_MASK)
-				>> I40E_GLGEN_GPIO_CTL_INT_MODE_SHIFT;
+		mode = (gpio_val & I40E_GLGEN_GPIO_CTL_LED_MODE_MASK) >>
+			I40E_GLGEN_GPIO_CTL_LED_MODE_SHIFT;
 		break;
 	}
 
@@ -438,60 +477,45 @@ u32 i40e_led_get(struct i40e_hw *hw)
 /**
  * i40e_led_set - set new on/off mode
  * @hw: pointer to the hw struct
- * @mode: 0=off, else on (see EAS for mode details)
+ * @mode: 0=off, 0xf=on (else see manual for mode details)
+ * @blink: true if the LED should blink when on, false if steady
+ *
+ * if this function is used to turn on the blink it should
+ * be used to disable the blink when restoring the original state.
  **/
-void i40e_led_set(struct i40e_hw *hw, u32 mode)
+void i40e_led_set(struct i40e_hw *hw, u32 mode, bool blink)
 {
-	u32 gpio_val = 0;
-	u32 led_mode = 0;
-	u32 port;
 	int i;
 
-	for (i = 0; i < I40E_HW_CAP_MAX_GPIO; i++) {
-		if (!hw->func_caps.led[i])
+	if (mode & 0xfffffff0)
+		hw_dbg(hw, "invalid mode passed in %X\n", mode);
+
+	/* as per the documentation GPIO 22-29 are the LED
+	 * GPIO pins named LED0..LED7
+	 */
+	for (i = I40E_LED0; i <= I40E_GLGEN_GPIO_CTL_MAX_INDEX; i++) {
+		u32 gpio_val = i40e_led_is_mine(hw, i);
+
+		if (!gpio_val)
 			continue;
 
-		gpio_val = rd32(hw, I40E_GLGEN_GPIO_CTL(i));
-		port = (gpio_val & I40E_GLGEN_GPIO_CTL_PRT_NUM_MASK)
-			>> I40E_GLGEN_GPIO_CTL_PRT_NUM_SHIFT;
-
-		if (port != hw->port)
-			continue;
-
-		led_mode = (mode << I40E_GLGEN_GPIO_CTL_LED_MODE_SHIFT) &
-			    I40E_GLGEN_GPIO_CTL_LED_MODE_MASK;
 		gpio_val &= ~I40E_GLGEN_GPIO_CTL_LED_MODE_MASK;
-		gpio_val |= led_mode;
+		/* this & is a bit of paranoia, but serves as a range check */
+		gpio_val |= ((mode << I40E_GLGEN_GPIO_CTL_LED_MODE_SHIFT) &
+			     I40E_GLGEN_GPIO_CTL_LED_MODE_MASK);
+
+		if (mode == I40E_LINK_ACTIVITY)
+			blink = false;
+
+		gpio_val |= (blink ? 1 : 0) <<
+			    I40E_GLGEN_GPIO_CTL_LED_BLINK_SHIFT;
+
 		wr32(hw, I40E_GLGEN_GPIO_CTL(i), gpio_val);
+		break;
 	}
 }
 
 /* Admin command wrappers */
-/**
- * i40e_aq_queue_shutdown
- * @hw: pointer to the hw struct
- * @unloading: is the driver unloading itself
- *
- * Tell the Firmware that we're shutting down the AdminQ and whether
- * or not the driver is unloading as well.
- **/
-i40e_status i40e_aq_queue_shutdown(struct i40e_hw *hw,
-					     bool unloading)
-{
-	struct i40e_aq_desc desc;
-	struct i40e_aqc_queue_shutdown *cmd =
-		(struct i40e_aqc_queue_shutdown *)&desc.params.raw;
-	i40e_status status;
-
-	i40e_fill_default_direct_cmd_desc(&desc,
-					  i40e_aqc_opc_queue_shutdown);
-
-	if (unloading)
-		cmd->driver_unloading = cpu_to_le32(I40E_AQ_DRIVER_UNLOADING);
-	status = i40e_asq_send_command(hw, &desc, NULL, 0, NULL);
-
-	return status;
-}
 
 /**
  * i40e_aq_set_link_restart_an
@@ -737,8 +761,8 @@ i40e_status i40e_aq_get_vsi_params(struct i40e_hw *hw,
 				struct i40e_asq_cmd_details *cmd_details)
 {
 	struct i40e_aq_desc desc;
-	struct i40e_aqc_switch_seid *cmd =
-		(struct i40e_aqc_switch_seid *)&desc.params.raw;
+	struct i40e_aqc_add_get_update_vsi *cmd =
+		(struct i40e_aqc_add_get_update_vsi *)&desc.params.raw;
 	struct i40e_aqc_add_get_update_vsi_completion *resp =
 		(struct i40e_aqc_add_get_update_vsi_completion *)
 		&desc.params.raw;
@@ -747,7 +771,7 @@ i40e_status i40e_aq_get_vsi_params(struct i40e_hw *hw,
 	i40e_fill_default_direct_cmd_desc(&desc,
 					  i40e_aqc_opc_get_vsi_parameters);
 
-	cmd->seid = cpu_to_le16(vsi_ctx->seid);
+	cmd->uplink_seid = cpu_to_le16(vsi_ctx->seid);
 
 	desc.flags |= cpu_to_le16((u16)I40E_AQ_FLAG_BUF);
 	if (sizeof(vsi_ctx->info) > I40E_AQ_LARGE_BUF)
@@ -781,13 +805,13 @@ i40e_status i40e_aq_update_vsi_params(struct i40e_hw *hw,
 				struct i40e_asq_cmd_details *cmd_details)
 {
 	struct i40e_aq_desc desc;
-	struct i40e_aqc_switch_seid *cmd =
-		(struct i40e_aqc_switch_seid *)&desc.params.raw;
+	struct i40e_aqc_add_get_update_vsi *cmd =
+		(struct i40e_aqc_add_get_update_vsi *)&desc.params.raw;
 	i40e_status status;
 
 	i40e_fill_default_direct_cmd_desc(&desc,
 					  i40e_aqc_opc_update_vsi_parameters);
-	cmd->seid = cpu_to_le16(vsi_ctx->seid);
+	cmd->uplink_seid = cpu_to_le16(vsi_ctx->seid);
 
 	desc.flags |= cpu_to_le16((u16)(I40E_AQ_FLAG_BUF | I40E_AQ_FLAG_RD));
 	if (sizeof(vsi_ctx->info) > I40E_AQ_LARGE_BUF)
@@ -1123,86 +1147,6 @@ i40e_status i40e_aq_remove_macvlan(struct i40e_hw *hw, u16 seid,
 		desc.flags |= cpu_to_le16((u16)I40E_AQ_FLAG_LB);
 
 	status = i40e_asq_send_command(hw, &desc, mv_list, buf_size,
-				       cmd_details);
-
-	return status;
-}
-
-/**
- * i40e_aq_add_vlan - Add VLAN ids to the HW filtering
- * @hw: pointer to the hw struct
- * @seid: VSI for the vlan filters
- * @v_list: list of vlan filters to be added
- * @count: length of the list
- * @cmd_details: pointer to command details structure or NULL
- **/
-i40e_status i40e_aq_add_vlan(struct i40e_hw *hw, u16 seid,
-			struct i40e_aqc_add_remove_vlan_element_data *v_list,
-			u8 count, struct i40e_asq_cmd_details *cmd_details)
-{
-	struct i40e_aq_desc desc;
-	struct i40e_aqc_macvlan *cmd =
-		(struct i40e_aqc_macvlan *)&desc.params.raw;
-	i40e_status status;
-	u16 buf_size;
-
-	if (count == 0 || !v_list || !hw)
-		return I40E_ERR_PARAM;
-
-	buf_size = count * sizeof(struct i40e_aqc_add_remove_vlan_element_data);
-
-	/* prep the rest of the request */
-	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_add_vlan);
-	cmd->num_addresses = cpu_to_le16(count);
-	cmd->seid[0] = cpu_to_le16(seid | I40E_AQC_MACVLAN_CMD_SEID_VALID);
-	cmd->seid[1] = 0;
-	cmd->seid[2] = 0;
-
-	desc.flags |= cpu_to_le16((u16)(I40E_AQ_FLAG_BUF | I40E_AQ_FLAG_RD));
-	if (buf_size > I40E_AQ_LARGE_BUF)
-		desc.flags |= cpu_to_le16((u16)I40E_AQ_FLAG_LB);
-
-	status = i40e_asq_send_command(hw, &desc, v_list, buf_size,
-				       cmd_details);
-
-	return status;
-}
-
-/**
- * i40e_aq_remove_vlan - Remove VLANs from the HW filtering
- * @hw: pointer to the hw struct
- * @seid: VSI for the vlan filters
- * @v_list: list of macvlans to be removed
- * @count: length of the list
- * @cmd_details: pointer to command details structure or NULL
- **/
-i40e_status i40e_aq_remove_vlan(struct i40e_hw *hw, u16 seid,
-			struct i40e_aqc_add_remove_vlan_element_data *v_list,
-			u8 count, struct i40e_asq_cmd_details *cmd_details)
-{
-	struct i40e_aq_desc desc;
-	struct i40e_aqc_macvlan *cmd =
-		(struct i40e_aqc_macvlan *)&desc.params.raw;
-	i40e_status status;
-	u16 buf_size;
-
-	if (count == 0 || !v_list || !hw)
-		return I40E_ERR_PARAM;
-
-	buf_size = count * sizeof(struct i40e_aqc_add_remove_vlan_element_data);
-
-	/* prep the rest of the request */
-	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_remove_vlan);
-	cmd->num_addresses = cpu_to_le16(count);
-	cmd->seid[0] = cpu_to_le16(seid | I40E_AQC_MACVLAN_CMD_SEID_VALID);
-	cmd->seid[1] = 0;
-	cmd->seid[2] = 0;
-
-	desc.flags |= cpu_to_le16((u16)(I40E_AQ_FLAG_BUF | I40E_AQ_FLAG_RD));
-	if (buf_size > I40E_AQ_LARGE_BUF)
-		desc.flags |= cpu_to_le16((u16)I40E_AQ_FLAG_LB);
-
-	status = i40e_asq_send_command(hw, &desc, v_list, buf_size,
 				       cmd_details);
 
 	return status;
@@ -1751,6 +1695,63 @@ i40e_status i40e_aq_start_lldp(struct i40e_hw *hw,
 }
 
 /**
+ * i40e_aq_add_udp_tunnel
+ * @hw: pointer to the hw struct
+ * @udp_port: the UDP port to add
+ * @header_len: length of the tunneling header length in DWords
+ * @protocol_index: protocol index type
+ * @cmd_details: pointer to command details structure or NULL
+ **/
+i40e_status i40e_aq_add_udp_tunnel(struct i40e_hw *hw,
+				u16 udp_port, u8 header_len,
+				u8 protocol_index, u8 *filter_index,
+				struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_add_udp_tunnel *cmd =
+		(struct i40e_aqc_add_udp_tunnel *)&desc.params.raw;
+	struct i40e_aqc_del_udp_tunnel_completion *resp =
+		(struct i40e_aqc_del_udp_tunnel_completion *)&desc.params.raw;
+	i40e_status status;
+
+	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_add_udp_tunnel);
+
+	cmd->udp_port = cpu_to_le16(udp_port);
+	cmd->header_len = header_len;
+	cmd->protocol_index = protocol_index;
+
+	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
+
+	if (!status)
+		*filter_index = resp->index;
+
+	return status;
+}
+
+/**
+ * i40e_aq_del_udp_tunnel
+ * @hw: pointer to the hw struct
+ * @index: filter index
+ * @cmd_details: pointer to command details structure or NULL
+ **/
+i40e_status i40e_aq_del_udp_tunnel(struct i40e_hw *hw, u8 index,
+				struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_remove_udp_tunnel *cmd =
+		(struct i40e_aqc_remove_udp_tunnel *)&desc.params.raw;
+	i40e_status status;
+
+	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_del_udp_tunnel);
+
+	cmd->index = index;
+
+	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
+
+	return status;
+}
+
+/**
  * i40e_aq_delete_element - Delete switch element
  * @hw: pointer to the hw struct
  * @seid: the SEID to delete from the switch
@@ -2108,4 +2109,48 @@ i40e_status i40e_set_filter_control(struct i40e_hw *hw,
 	wr32(hw, I40E_PFQF_CTL_0, val);
 
 	return 0;
+}
+/**
+ * i40e_set_pci_config_data - store PCI bus info
+ * @hw: pointer to hardware structure
+ * @link_status: the link status word from PCI config space
+ *
+ * Stores the PCI bus info (speed, width, type) within the i40e_hw structure
+ **/
+void i40e_set_pci_config_data(struct i40e_hw *hw, u16 link_status)
+{
+	hw->bus.type = i40e_bus_type_pci_express;
+
+	switch (link_status & PCI_EXP_LNKSTA_NLW) {
+	case PCI_EXP_LNKSTA_NLW_X1:
+		hw->bus.width = i40e_bus_width_pcie_x1;
+		break;
+	case PCI_EXP_LNKSTA_NLW_X2:
+		hw->bus.width = i40e_bus_width_pcie_x2;
+		break;
+	case PCI_EXP_LNKSTA_NLW_X4:
+		hw->bus.width = i40e_bus_width_pcie_x4;
+		break;
+	case PCI_EXP_LNKSTA_NLW_X8:
+		hw->bus.width = i40e_bus_width_pcie_x8;
+		break;
+	default:
+		hw->bus.width = i40e_bus_width_unknown;
+		break;
+	}
+
+	switch (link_status & PCI_EXP_LNKSTA_CLS) {
+	case PCI_EXP_LNKSTA_CLS_2_5GB:
+		hw->bus.speed = i40e_bus_speed_2500;
+		break;
+	case PCI_EXP_LNKSTA_CLS_5_0GB:
+		hw->bus.speed = i40e_bus_speed_5000;
+		break;
+	case PCI_EXP_LNKSTA_CLS_8_0GB:
+		hw->bus.speed = i40e_bus_speed_8000;
+		break;
+	default:
+		hw->bus.speed = i40e_bus_speed_unknown;
+		break;
+	}
 }

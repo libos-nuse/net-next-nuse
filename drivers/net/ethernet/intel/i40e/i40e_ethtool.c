@@ -351,38 +351,56 @@ static int i40e_get_eeprom(struct net_device *netdev,
 {
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
 	struct i40e_hw *hw = &np->vsi->back->hw;
-	int first_word, last_word;
-	u16 i, eeprom_len;
-	u16 *eeprom_buff;
-	int ret_val = 0;
-
+	struct i40e_pf *pf = np->vsi->back;
+	int ret_val = 0, len;
+	u8 *eeprom_buff;
+	u16 i, sectors;
+	bool last;
+#define I40E_NVM_SECTOR_SIZE  4096
 	if (eeprom->len == 0)
 		return -EINVAL;
 
 	eeprom->magic = hw->vendor_id | (hw->device_id << 16);
 
-	first_word = eeprom->offset >> 1;
-	last_word = (eeprom->offset + eeprom->len - 1) >> 1;
-	eeprom_len = last_word - first_word + 1;
-
-	eeprom_buff = kmalloc(sizeof(u16) * eeprom_len, GFP_KERNEL);
+	eeprom_buff = kzalloc(eeprom->len, GFP_KERNEL);
 	if (!eeprom_buff)
 		return -ENOMEM;
 
-	ret_val = i40e_read_nvm_buffer(hw, first_word, &eeprom_len,
-					   eeprom_buff);
-	if (eeprom_len == 0) {
-		kfree(eeprom_buff);
-		return -EACCES;
+	ret_val = i40e_acquire_nvm(hw, I40E_RESOURCE_READ);
+	if (ret_val) {
+		dev_info(&pf->pdev->dev,
+			 "Failed Acquiring NVM resource for read err=%d status=0x%x\n",
+			 ret_val, hw->aq.asq_last_status);
+		goto free_buff;
 	}
 
-	/* Device's eeprom is always little-endian, word addressable */
-	for (i = 0; i < eeprom_len; i++)
-		le16_to_cpus(&eeprom_buff[i]);
+	sectors = eeprom->len / I40E_NVM_SECTOR_SIZE;
+	sectors += (eeprom->len % I40E_NVM_SECTOR_SIZE) ? 1 : 0;
+	len = I40E_NVM_SECTOR_SIZE;
+	last = false;
+	for (i = 0; i < sectors; i++) {
+		if (i == (sectors - 1)) {
+			len = eeprom->len - (I40E_NVM_SECTOR_SIZE * i);
+			last = true;
+		}
+		ret_val = i40e_aq_read_nvm(hw, 0x0,
+				eeprom->offset + (I40E_NVM_SECTOR_SIZE * i),
+				len,
+				(u8 *)eeprom_buff + (I40E_NVM_SECTOR_SIZE * i),
+				last, NULL);
+		if (ret_val) {
+			dev_info(&pf->pdev->dev,
+				 "read NVM failed err=%d status=0x%x\n",
+				 ret_val, hw->aq.asq_last_status);
+			goto release_nvm;
+		}
+	}
 
-	memcpy(bytes, (u8 *)eeprom_buff + (eeprom->offset & 1), eeprom->len);
+release_nvm:
+	i40e_release_nvm(hw);
+	memcpy(bytes, (u8 *)eeprom_buff, eeprom->len);
+free_buff:
 	kfree(eeprom_buff);
-
 	return ret_val;
 }
 
@@ -390,8 +408,14 @@ static int i40e_get_eeprom_len(struct net_device *netdev)
 {
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
 	struct i40e_hw *hw = &np->vsi->back->hw;
+	u32 val;
 
-	return hw->nvm.sr_size * 2;
+	val = (rd32(hw, I40E_GLPCI_LBARCTRL)
+		& I40E_GLPCI_LBARCTRL_FL_SIZE_MASK)
+		>> I40E_GLPCI_LBARCTRL_FL_SIZE_SHIFT;
+	/* register returns value in power of 2, 64Kbyte chunks. */
+	val = (64 * 1024) * (1 << val);
+	return val;
 }
 
 static void i40e_get_drvinfo(struct net_device *netdev,
@@ -844,8 +868,45 @@ static void i40e_diag_test(struct net_device *netdev,
 static void i40e_get_wol(struct net_device *netdev,
 			 struct ethtool_wolinfo *wol)
 {
-	wol->supported = 0;
-	wol->wolopts = 0;
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_pf *pf = np->vsi->back;
+	struct i40e_hw *hw = &pf->hw;
+	u16 wol_nvm_bits;
+
+	/* NVM bit on means WoL disabled for the port */
+	i40e_read_nvm_word(hw, I40E_SR_NVM_WAKE_ON_LAN, &wol_nvm_bits);
+	if ((1 << hw->port) & wol_nvm_bits) {
+		wol->supported = 0;
+		wol->wolopts = 0;
+	} else {
+		wol->supported = WAKE_MAGIC;
+		wol->wolopts = (pf->wol_en ? WAKE_MAGIC : 0);
+	}
+}
+
+static int i40e_set_wol(struct net_device *netdev, struct ethtool_wolinfo *wol)
+{
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_pf *pf = np->vsi->back;
+	struct i40e_hw *hw = &pf->hw;
+	u16 wol_nvm_bits;
+
+	/* NVM bit on means WoL disabled for the port */
+	i40e_read_nvm_word(hw, I40E_SR_NVM_WAKE_ON_LAN, &wol_nvm_bits);
+	if (((1 << hw->port) & wol_nvm_bits))
+		return -EOPNOTSUPP;
+
+	/* only magic packet is supported */
+	if (wol->wolopts && (wol->wolopts != WAKE_MAGIC))
+		return -EOPNOTSUPP;
+
+	/* is this a new value? */
+	if (pf->wol_en != !!wol->wolopts) {
+		pf->wol_en = !!wol->wolopts;
+		device_set_wakeup_enable(&pf->pdev->dev, pf->wol_en);
+	}
+
+	return 0;
 }
 
 static int i40e_nway_reset(struct net_device *netdev)
@@ -879,13 +940,13 @@ static int i40e_set_phys_id(struct net_device *netdev,
 		pf->led_status = i40e_led_get(hw);
 		return blink_freq;
 	case ETHTOOL_ID_ON:
-		i40e_led_set(hw, 0xF);
+		i40e_led_set(hw, 0xF, false);
 		break;
 	case ETHTOOL_ID_OFF:
-		i40e_led_set(hw, 0x0);
+		i40e_led_set(hw, 0x0, false);
 		break;
 	case ETHTOOL_ID_INACTIVE:
-		i40e_led_set(hw, pf->led_status);
+		i40e_led_set(hw, pf->led_status, false);
 		break;
 	}
 
@@ -1568,6 +1629,7 @@ static const struct ethtool_ops i40e_ethtool_ops = {
 	.nway_reset		= i40e_nway_reset,
 	.get_link		= ethtool_op_get_link,
 	.get_wol		= i40e_get_wol,
+	.set_wol		= i40e_set_wol,
 	.get_eeprom_len		= i40e_get_eeprom_len,
 	.get_eeprom		= i40e_get_eeprom,
 	.get_ringparam		= i40e_get_ringparam,

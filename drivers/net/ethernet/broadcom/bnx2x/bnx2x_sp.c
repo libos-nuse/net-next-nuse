@@ -663,7 +663,7 @@ static int bnx2x_check_mac_add(struct bnx2x *bp,
 
 	/* Check if a requested MAC already exists */
 	list_for_each_entry(pos, &o->head, link)
-		if (!memcmp(data->mac.mac, pos->u.mac.mac, ETH_ALEN) &&
+		if (ether_addr_equal(data->mac.mac, pos->u.mac.mac) &&
 		    (data->mac.is_inner_mac == pos->u.mac.is_inner_mac))
 			return -EEXIST;
 
@@ -696,8 +696,7 @@ static int bnx2x_check_vlan_mac_add(struct bnx2x *bp,
 
 	list_for_each_entry(pos, &o->head, link)
 		if ((data->vlan_mac.vlan == pos->u.vlan_mac.vlan) &&
-		    (!memcmp(data->vlan_mac.mac, pos->u.vlan_mac.mac,
-				  ETH_ALEN)) &&
+		    ether_addr_equal_unaligned(data->vlan_mac.mac, pos->u.vlan_mac.mac) &&
 		    (data->vlan_mac.is_inner_mac ==
 		     pos->u.vlan_mac.is_inner_mac))
 			return -EEXIST;
@@ -716,7 +715,7 @@ static struct bnx2x_vlan_mac_registry_elem *
 	DP(BNX2X_MSG_SP, "Checking MAC %pM for DEL command\n", data->mac.mac);
 
 	list_for_each_entry(pos, &o->head, link)
-		if ((!memcmp(data->mac.mac, pos->u.mac.mac, ETH_ALEN)) &&
+		if (ether_addr_equal(data->mac.mac, pos->u.mac.mac) &&
 		    (data->mac.is_inner_mac == pos->u.mac.is_inner_mac))
 			return pos;
 
@@ -751,8 +750,7 @@ static struct bnx2x_vlan_mac_registry_elem *
 
 	list_for_each_entry(pos, &o->head, link)
 		if ((data->vlan_mac.vlan == pos->u.vlan_mac.vlan) &&
-		    (!memcmp(data->vlan_mac.mac, pos->u.vlan_mac.mac,
-			     ETH_ALEN)) &&
+		    ether_addr_equal_unaligned(data->vlan_mac.mac, pos->u.vlan_mac.mac) &&
 		    (data->vlan_mac.is_inner_mac ==
 		     pos->u.vlan_mac.is_inner_mac))
 			return pos;
@@ -2038,6 +2036,7 @@ static int bnx2x_vlan_mac_del_all(struct bnx2x *bp,
 	struct bnx2x_vlan_mac_ramrod_params p;
 	struct bnx2x_exe_queue_obj *exeq = &o->exe_queue;
 	struct bnx2x_exeq_elem *exeq_pos, *exeq_pos_n;
+	unsigned long flags;
 	int read_lock;
 	int rc = 0;
 
@@ -2046,8 +2045,9 @@ static int bnx2x_vlan_mac_del_all(struct bnx2x *bp,
 	spin_lock_bh(&exeq->lock);
 
 	list_for_each_entry_safe(exeq_pos, exeq_pos_n, &exeq->exe_queue, link) {
-		if (exeq_pos->cmd_data.vlan_mac.vlan_mac_flags ==
-		    *vlan_mac_flags) {
+		flags = exeq_pos->cmd_data.vlan_mac.vlan_mac_flags;
+		if (BNX2X_VLAN_MAC_CMP_FLAGS(flags) ==
+		    BNX2X_VLAN_MAC_CMP_FLAGS(*vlan_mac_flags)) {
 			rc = exeq->remove(bp, exeq->owner, exeq_pos);
 			if (rc) {
 				BNX2X_ERR("Failed to remove command\n");
@@ -2080,7 +2080,9 @@ static int bnx2x_vlan_mac_del_all(struct bnx2x *bp,
 		return read_lock;
 
 	list_for_each_entry(pos, &o->head, link) {
-		if (pos->vlan_mac_flags == *vlan_mac_flags) {
+		flags = pos->vlan_mac_flags;
+		if (BNX2X_VLAN_MAC_CMP_FLAGS(flags) ==
+		    BNX2X_VLAN_MAC_CMP_FLAGS(*vlan_mac_flags)) {
 			p.user_req.vlan_mac_flags = pos->vlan_mac_flags;
 			memcpy(&p.user_req.u, &pos->u, sizeof(pos->u));
 			rc = bnx2x_config_vlan_mac(bp, &p);
@@ -4382,8 +4384,11 @@ int bnx2x_config_rss(struct bnx2x *bp,
 	struct bnx2x_raw_obj *r = &o->raw;
 
 	/* Do nothing if only driver cleanup was requested */
-	if (test_bit(RAMROD_DRV_CLR_ONLY, &p->ramrod_flags))
+	if (test_bit(RAMROD_DRV_CLR_ONLY, &p->ramrod_flags)) {
+		DP(BNX2X_MSG_SP, "Not configuring RSS ramrod_flags=%lx\n",
+		   p->ramrod_flags);
 		return 0;
+	}
 
 	r->set_pending(r);
 

@@ -287,7 +287,7 @@ static int be_mac_addr_set(struct net_device *netdev, void *p)
 	/* The MAC change did not happen, either due to lack of privilege
 	 * or PF didn't pre-provision.
 	 */
-	if (memcmp(addr->sa_data, mac, ETH_ALEN)) {
+	if (!ether_addr_equal(addr->sa_data, mac)) {
 		status = -EPERM;
 		goto err;
 	}
@@ -1581,7 +1581,7 @@ static void be_rx_compl_process(struct be_rx_obj *rxo, struct napi_struct *napi,
 	skb->protocol = eth_type_trans(skb, netdev);
 	skb_record_rx_queue(skb, rxo - &adapter->rx_obj[0]);
 	if (netdev->features & NETIF_F_RXHASH)
-		skb->rxhash = rxcp->rss_hash;
+		skb_set_hash(skb, rxcp->rss_hash, PKT_HASH_TYPE_L3);
 	skb_mark_napi_id(skb, napi);
 
 	if (rxcp->vlanf)
@@ -1639,7 +1639,7 @@ static void be_rx_compl_process_gro(struct be_rx_obj *rxo,
 	skb->ip_summed = CHECKSUM_UNNECESSARY;
 	skb_record_rx_queue(skb, rxo - &adapter->rx_obj[0]);
 	if (adapter->netdev->features & NETIF_F_RXHASH)
-		skb->rxhash = rxcp->rss_hash;
+		skb_set_hash(skb, rxcp->rss_hash, PKT_HASH_TYPE_L3);
 	skb_mark_napi_id(skb, napi);
 
 	if (rxcp->vlanf)
@@ -2744,13 +2744,16 @@ static int be_rx_qs_create(struct be_adapter *adapter)
 		if (!BEx_chip(adapter))
 			adapter->rss_flags |= RSS_ENABLE_UDP_IPV4 |
 						RSS_ENABLE_UDP_IPV6;
+	} else {
+		/* Disable RSS, if only default RX Q is created */
+		adapter->rss_flags = RSS_ENABLE_NONE;
+	}
 
-		rc = be_cmd_rss_config(adapter, rsstable, adapter->rss_flags,
-				       128);
-		if (rc) {
-			adapter->rss_flags = 0;
-			return rc;
-		}
+	rc = be_cmd_rss_config(adapter, rsstable, adapter->rss_flags,
+			       128);
+	if (rc) {
+		adapter->rss_flags = RSS_ENABLE_NONE;
+		return rc;
 	}
 
 	/* First time posting */
@@ -3124,11 +3127,11 @@ static void BEx_get_resources(struct be_adapter *adapter,
 {
 	struct pci_dev *pdev = adapter->pdev;
 	bool use_sriov = false;
+	int max_vfs;
+
+	max_vfs = pci_sriov_get_totalvfs(pdev);
 
 	if (BE3_chip(adapter) && sriov_want(adapter)) {
-		int max_vfs;
-
-		max_vfs = pci_sriov_get_totalvfs(pdev);
 		res->max_vfs = max_vfs > 0 ? min(MAX_VFS, max_vfs) : 0;
 		use_sriov = res->max_vfs;
 	}
@@ -3159,7 +3162,11 @@ static void BEx_get_resources(struct be_adapter *adapter,
 					   BE3_MAX_RSS_QS : BE2_MAX_RSS_QS;
 	res->max_rx_qs = res->max_rss_qs + 1;
 
-	res->max_evt_qs = be_physfn(adapter) ? BE3_MAX_EVT_QS : 1;
+	if (be_physfn(adapter))
+		res->max_evt_qs = (max_vfs > 0) ?
+					BE3_SRIOV_MAX_EVT_QS : BE3_MAX_EVT_QS;
+	else
+		res->max_evt_qs = 1;
 
 	res->if_cap_flags = BE_IF_CAP_FLAGS_WANT;
 	if (!(adapter->function_caps & BE_FUNCTION_CAPS_RSS))
@@ -4205,7 +4212,7 @@ static int be_ctrl_init(struct be_adapter *adapter)
 	spin_lock_init(&adapter->mcc_lock);
 	spin_lock_init(&adapter->mcc_cq_lock);
 
-	init_completion(&adapter->flash_compl);
+	init_completion(&adapter->et_cmd_compl);
 	pci_save_state(adapter->pdev);
 	return 0;
 

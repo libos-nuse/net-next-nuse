@@ -30,16 +30,9 @@
 #include <linux/if_arp.h>
 
 #define MIRRED_TAB_MASK     7
-static struct tcf_common *tcf_mirred_ht[MIRRED_TAB_MASK + 1];
 static u32 mirred_idx_gen;
-static DEFINE_RWLOCK(mirred_lock);
 static LIST_HEAD(mirred_list);
-
-static struct tcf_hashinfo mirred_hash_info = {
-	.htab	=	tcf_mirred_ht,
-	.hmask	=	MIRRED_TAB_MASK,
-	.lock	=	&mirred_lock,
-};
+static struct tcf_hashinfo mirred_hash_info;
 
 static int tcf_mirred_release(struct tcf_mirred *m, int bind)
 {
@@ -261,7 +254,6 @@ static struct notifier_block mirred_device_notifier = {
 	.notifier_call = mirred_device_event,
 };
 
-
 static struct tc_action_ops act_mirred_ops = {
 	.kind		=	"mirred",
 	.hinfo		=	&mirred_hash_info,
@@ -284,14 +276,20 @@ static int __init mirred_init_module(void)
 	if (err)
 		return err;
 
+	err = tcf_hashinfo_init(&mirred_hash_info, MIRRED_TAB_MASK);
+	if (err) {
+		unregister_netdevice_notifier(&mirred_device_notifier);
+		return err;
+	}
 	pr_info("Mirror/redirect action on\n");
 	return tcf_register_action(&act_mirred_ops);
 }
 
 static void __exit mirred_cleanup_module(void)
 {
-	unregister_netdevice_notifier(&mirred_device_notifier);
 	tcf_unregister_action(&act_mirred_ops);
+	tcf_hashinfo_destroy(&mirred_hash_info);
+	unregister_netdevice_notifier(&mirred_device_notifier);
 }
 
 module_init(mirred_init_module);

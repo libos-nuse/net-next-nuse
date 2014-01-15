@@ -355,7 +355,7 @@ static int xenvif_gop_skb(struct sk_buff *skb,
 	}
 
 	/* Set up a GSO prefix descriptor, if necessary */
-	if ((1 << skb_shinfo(skb)->gso_type) & vif->gso_prefix_mask) {
+	if ((1 << gso_type) & vif->gso_prefix_mask) {
 		req = RING_GET_REQUEST(&vif->rx, vif->rx.req_cons++);
 		meta = npo->meta + npo->meta_prod++;
 		meta->gso_type = gso_type;
@@ -524,7 +524,7 @@ static void xenvif_rx_action(struct xenvif *vif)
 	if (!npo.copy_prod)
 		goto done;
 
-	BUG_ON(npo.copy_prod > ARRAY_SIZE(vif->grant_copy_op));
+	BUG_ON(npo.copy_prod > MAX_GRANT_COPY_OPS);
 	gnttab_batch_copy(vif->grant_copy_op, npo.copy_prod);
 
 	while ((skb = __skb_dequeue(&rxq)) != NULL) {
@@ -1043,10 +1043,7 @@ static int xenvif_set_skb_gso(struct xenvif *vif,
 	}
 
 	skb_shinfo(skb)->gso_size = gso->u.gso.size;
-
-	/* Header must be checked, and gso_segs computed. */
-	skb_shinfo(skb)->gso_type |= SKB_GSO_DODGY;
-	skb_shinfo(skb)->gso_segs = 0;
+	/* gso_segs will be calculated later */
 
 	return 0;
 }
@@ -1099,44 +1096,49 @@ static int checksum_setup_ip(struct xenvif *vif, struct sk_buff *skb,
 
 	err = -EPROTO;
 
+	if (fragment)
+		goto out;
+
 	switch (ip_hdr(skb)->protocol) {
 	case IPPROTO_TCP:
-		if (!skb_partial_csum_set(skb, off,
-					  offsetof(struct tcphdr, check)))
+		err = maybe_pull_tail(skb,
+				      off + sizeof(struct tcphdr),
+				      MAX_IP_HDR_LEN);
+		if (err < 0)
 			goto out;
 
-		if (recalculate_partial_csum) {
-			err = maybe_pull_tail(skb,
-					      off + sizeof(struct tcphdr),
-					      MAX_IP_HDR_LEN);
-			if (err < 0)
-				goto out;
+		if (!skb_partial_csum_set(skb, off,
+					  offsetof(struct tcphdr, check))) {
+			err = -EPROTO;
+			goto out;
+		}
 
+		if (recalculate_partial_csum)
 			tcp_hdr(skb)->check =
 				~csum_tcpudp_magic(ip_hdr(skb)->saddr,
 						   ip_hdr(skb)->daddr,
 						   skb->len - off,
 						   IPPROTO_TCP, 0);
-		}
 		break;
 	case IPPROTO_UDP:
-		if (!skb_partial_csum_set(skb, off,
-					  offsetof(struct udphdr, check)))
+		err = maybe_pull_tail(skb,
+				      off + sizeof(struct udphdr),
+				      MAX_IP_HDR_LEN);
+		if (err < 0)
 			goto out;
 
-		if (recalculate_partial_csum) {
-			err = maybe_pull_tail(skb,
-					      off + sizeof(struct udphdr),
-					      MAX_IP_HDR_LEN);
-			if (err < 0)
-				goto out;
+		if (!skb_partial_csum_set(skb, off,
+					  offsetof(struct udphdr, check))) {
+			err = -EPROTO;
+			goto out;
+		}
 
+		if (recalculate_partial_csum)
 			udp_hdr(skb)->check =
 				~csum_tcpudp_magic(ip_hdr(skb)->saddr,
 						   ip_hdr(skb)->daddr,
 						   skb->len - off,
 						   IPPROTO_UDP, 0);
-		}
 		break;
 	default:
 		goto out;
@@ -1244,42 +1246,44 @@ static int checksum_setup_ipv6(struct xenvif *vif, struct sk_buff *skb,
 
 	switch (nexthdr) {
 	case IPPROTO_TCP:
-		if (!skb_partial_csum_set(skb, off,
-					  offsetof(struct tcphdr, check)))
+		err = maybe_pull_tail(skb,
+				      off + sizeof(struct tcphdr),
+				      MAX_IPV6_HDR_LEN);
+		if (err < 0)
 			goto out;
 
-		if (recalculate_partial_csum) {
-			err = maybe_pull_tail(skb,
-					      off + sizeof(struct tcphdr),
-					      MAX_IPV6_HDR_LEN);
-			if (err < 0)
-				goto out;
+		if (!skb_partial_csum_set(skb, off,
+					  offsetof(struct tcphdr, check))) {
+			err = -EPROTO;
+			goto out;
+		}
 
+		if (recalculate_partial_csum)
 			tcp_hdr(skb)->check =
 				~csum_ipv6_magic(&ipv6_hdr(skb)->saddr,
 						 &ipv6_hdr(skb)->daddr,
 						 skb->len - off,
 						 IPPROTO_TCP, 0);
-		}
 		break;
 	case IPPROTO_UDP:
-		if (!skb_partial_csum_set(skb, off,
-					  offsetof(struct udphdr, check)))
+		err = maybe_pull_tail(skb,
+				      off + sizeof(struct udphdr),
+				      MAX_IPV6_HDR_LEN);
+		if (err < 0)
 			goto out;
 
-		if (recalculate_partial_csum) {
-			err = maybe_pull_tail(skb,
-					      off + sizeof(struct udphdr),
-					      MAX_IPV6_HDR_LEN);
-			if (err < 0)
-				goto out;
+		if (!skb_partial_csum_set(skb, off,
+					  offsetof(struct udphdr, check))) {
+			err = -EPROTO;
+			goto out;
+		}
 
+		if (recalculate_partial_csum)
 			udp_hdr(skb)->check =
 				~csum_ipv6_magic(&ipv6_hdr(skb)->saddr,
 						 &ipv6_hdr(skb)->daddr,
 						 skb->len - off,
 						 IPPROTO_UDP, 0);
-		}
 		break;
 	default:
 		goto out;
@@ -1351,14 +1355,15 @@ static bool tx_credit_exceeded(struct xenvif *vif, unsigned size)
 	return false;
 }
 
-static unsigned xenvif_tx_build_gops(struct xenvif *vif)
+static unsigned xenvif_tx_build_gops(struct xenvif *vif, int budget)
 {
 	struct gnttab_copy *gop = vif->tx_copy_ops, *request_gop;
 	struct sk_buff *skb;
 	int ret;
 
 	while ((nr_pending_reqs(vif) + XEN_NETBK_LEGACY_SLOTS_MAX
-		< MAX_PENDING_REQS)) {
+		< MAX_PENDING_REQS) &&
+	       (skb_queue_len(&vif->tx_queue) < budget)) {
 		struct xen_netif_tx_request txreq;
 		struct xen_netif_tx_request txfrags[XEN_NETBK_LEGACY_SLOTS_MAX];
 		struct page *page;
@@ -1380,7 +1385,7 @@ static unsigned xenvif_tx_build_gops(struct xenvif *vif)
 			continue;
 		}
 
-		RING_FINAL_CHECK_FOR_REQUESTS(&vif->tx, work_to_do);
+		work_to_do = RING_HAS_UNCONSUMED_REQUESTS(&vif->tx);
 		if (!work_to_do)
 			break;
 
@@ -1520,14 +1525,13 @@ static unsigned xenvif_tx_build_gops(struct xenvif *vif)
 }
 
 
-static int xenvif_tx_submit(struct xenvif *vif, int budget)
+static int xenvif_tx_submit(struct xenvif *vif)
 {
 	struct gnttab_copy *gop = vif->tx_copy_ops;
 	struct sk_buff *skb;
 	int work_done = 0;
 
-	while (work_done < budget &&
-	       (skb = __skb_dequeue(&vif->tx_queue)) != NULL) {
+	while ((skb = __skb_dequeue(&vif->tx_queue)) != NULL) {
 		struct xen_netif_tx_request *txp;
 		u16 pending_idx;
 		unsigned data_len;
@@ -1582,6 +1586,20 @@ static int xenvif_tx_submit(struct xenvif *vif, int budget)
 
 		skb_probe_transport_header(skb, 0);
 
+		/* If the packet is GSO then we will have just set up the
+		 * transport header offset in checksum_setup so it's now
+		 * straightforward to calculate gso_segs.
+		 */
+		if (skb_is_gso(skb)) {
+			int mss = skb_shinfo(skb)->gso_size;
+			int hdrlen = skb_transport_header(skb) -
+				skb_mac_header(skb) +
+				tcp_hdrlen(skb);
+
+			skb_shinfo(skb)->gso_segs =
+				DIV_ROUND_UP(skb->len - hdrlen, mss);
+		}
+
 		vif->dev->stats.rx_bytes += skb->len;
 		vif->dev->stats.rx_packets++;
 
@@ -1602,14 +1620,14 @@ int xenvif_tx_action(struct xenvif *vif, int budget)
 	if (unlikely(!tx_work_todo(vif)))
 		return 0;
 
-	nr_gops = xenvif_tx_build_gops(vif);
+	nr_gops = xenvif_tx_build_gops(vif, budget);
 
 	if (nr_gops == 0)
 		return 0;
 
 	gnttab_batch_copy(vif->tx_copy_ops, nr_gops);
 
-	work_done = xenvif_tx_submit(vif, nr_gops);
+	work_done = xenvif_tx_submit(vif);
 
 	return work_done;
 }

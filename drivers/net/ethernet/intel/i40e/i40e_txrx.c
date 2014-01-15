@@ -77,7 +77,6 @@ int i40e_program_fdir_filter(struct i40e_fdir_data *fdir_data,
 	/* grab the next descriptor */
 	i = tx_ring->next_to_use;
 	fdir_desc = I40E_TX_FDIRDESC(tx_ring, i);
-	tx_buf = &tx_ring->tx_bi[i];
 
 	tx_ring->next_to_use = (i + 1 < tx_ring->count) ? i + 1 : 0;
 
@@ -129,14 +128,22 @@ int i40e_program_fdir_filter(struct i40e_fdir_data *fdir_data,
 	/* Now program a dummy descriptor */
 	i = tx_ring->next_to_use;
 	tx_desc = I40E_TX_DESC(tx_ring, i);
+	tx_buf = &tx_ring->tx_bi[i];
 
 	tx_ring->next_to_use = (i + 1 < tx_ring->count) ? i + 1 : 0;
+
+	/* record length, and DMA address */
+	dma_unmap_len_set(tx_buf, len, I40E_FDIR_MAX_RAW_PACKET_LOOKUP);
+	dma_unmap_addr_set(tx_buf, dma, dma);
 
 	tx_desc->buffer_addr = cpu_to_le64(dma);
 	td_cmd = I40E_TXD_CMD | I40E_TX_DESC_CMD_DUMMY;
 
 	tx_desc->cmd_type_offset_bsz =
 		build_ctob(td_cmd, 0, I40E_FDIR_MAX_RAW_PACKET_LOOKUP, 0);
+
+	/* set the timestamp */
+	tx_buf->time_stamp = jiffies;
 
 	/* Force memory writes to complete before letting h/w
 	 * know there are new descriptors to fetch.  (Only
@@ -860,12 +867,25 @@ static void i40e_receive_skb(struct i40e_ring *rx_ring,
  * @skb: skb currently being received and modified
  * @rx_status: status value of last descriptor in packet
  * @rx_error: error value of last descriptor in packet
+ * @rx_ptype: ptype value of last descriptor in packet
  **/
 static inline void i40e_rx_checksum(struct i40e_vsi *vsi,
 				    struct sk_buff *skb,
 				    u32 rx_status,
-				    u32 rx_error)
+				    u32 rx_error,
+				    u16 rx_ptype)
 {
+	bool ipv4_tunnel, ipv6_tunnel;
+	__wsum rx_udp_csum;
+	__sum16 csum;
+	struct iphdr *iph;
+
+	ipv4_tunnel = (rx_ptype > I40E_RX_PTYPE_GRENAT4_MAC_PAY3) &&
+		      (rx_ptype < I40E_RX_PTYPE_GRENAT4_MACVLAN_IPV6_ICMP_PAY4);
+	ipv6_tunnel = (rx_ptype > I40E_RX_PTYPE_GRENAT6_MAC_PAY3) &&
+		      (rx_ptype < I40E_RX_PTYPE_GRENAT6_MACVLAN_IPV6_ICMP_PAY4);
+
+	skb->encapsulation = ipv4_tunnel || ipv6_tunnel;
 	skb->ip_summed = CHECKSUM_NONE;
 
 	/* Rx csum enabled and ip headers found? */
@@ -873,11 +893,41 @@ static inline void i40e_rx_checksum(struct i40e_vsi *vsi,
 	      rx_status & (1 << I40E_RX_DESC_STATUS_L3L4P_SHIFT)))
 		return;
 
-	/* IP or L4 checksum error */
+	/* IP or L4 or outmost IP checksum error */
 	if (rx_error & ((1 << I40E_RX_DESC_ERROR_IPE_SHIFT) |
-			(1 << I40E_RX_DESC_ERROR_L4E_SHIFT))) {
+			(1 << I40E_RX_DESC_ERROR_L4E_SHIFT) |
+			(1 << I40E_RX_DESC_ERROR_EIPE_SHIFT))) {
 		vsi->back->hw_csum_rx_error++;
 		return;
+	}
+
+	if (ipv4_tunnel &&
+	    !(rx_status & (1 << I40E_RX_DESC_STATUS_UDP_0_SHIFT))) {
+		/* If VXLAN traffic has an outer UDPv4 checksum we need to check
+		 * it in the driver, hardware does not do it for us.
+		 * Since L3L4P bit was set we assume a valid IHL value (>=5)
+		 * so the total length of IPv4 header is IHL*4 bytes
+		 */
+		skb->transport_header = skb->mac_header +
+					sizeof(struct ethhdr) +
+					(ip_hdr(skb)->ihl * 4);
+
+		/* Add 4 bytes for VLAN tagged packets */
+		skb->transport_header += (skb->protocol == htons(ETH_P_8021Q) ||
+					  skb->protocol == htons(ETH_P_8021AD))
+					  ? VLAN_HLEN : 0;
+
+		rx_udp_csum = udp_csum(skb);
+		iph = ip_hdr(skb);
+		csum = csum_tcpudp_magic(
+				iph->saddr, iph->daddr,
+				(skb->len - skb_transport_offset(skb)),
+				IPPROTO_UDP, rx_udp_csum);
+
+		if (udp_hdr(skb)->check != csum) {
+			vsi->back->hw_csum_rx_error++;
+			return;
+		}
 	}
 
 	skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -920,6 +970,7 @@ static int i40e_clean_rx_irq(struct i40e_ring *rx_ring, int budget)
 	union i40e_rx_desc *rx_desc;
 	u32 rx_error, rx_status;
 	u64 qword;
+	u16 rx_ptype;
 
 	rx_desc = I40E_RX_DESC(rx_ring, i);
 	qword = le64_to_cpu(rx_desc->wb.qword1.status_error_len);
@@ -952,6 +1003,8 @@ static int i40e_clean_rx_irq(struct i40e_ring *rx_ring, int budget)
 		rx_hbo = rx_error & (1 << I40E_RX_DESC_ERROR_HBO_SHIFT);
 		rx_error &= ~(1 << I40E_RX_DESC_ERROR_HBO_SHIFT);
 
+		rx_ptype = (qword & I40E_RXD_QW1_PTYPE_MASK) >>
+			   I40E_RXD_QW1_PTYPE_SHIFT;
 		rx_bi->skb = NULL;
 
 		/* This memory barrier is needed to keep us from reading
@@ -1032,13 +1085,14 @@ static int i40e_clean_rx_irq(struct i40e_ring *rx_ring, int budget)
 		}
 
 		skb->rxhash = i40e_rx_hash(rx_ring, rx_desc);
-		i40e_rx_checksum(vsi, skb, rx_status, rx_error);
-
 		/* probably a little skewed due to removing CRC */
 		total_rx_bytes += skb->len;
 		total_rx_packets++;
 
 		skb->protocol = eth_type_trans(skb, rx_ring->netdev);
+
+		i40e_rx_checksum(vsi, skb, rx_status, rx_error, rx_ptype);
+
 		vlan_tag = rx_status & (1 << I40E_RX_DESC_STATUS_L2TAG1P_SHIFT)
 			 ? le16_to_cpu(rx_desc->wb.qword0.lo_dword.l2tag1)
 			 : 0;
@@ -1270,7 +1324,7 @@ static int i40e_tx_prepare_vlan_flags(struct sk_buff *skb,
 		tx_flags |= vlan_tx_tag_get(skb) << I40E_TX_FLAGS_VLAN_SHIFT;
 		tx_flags |= I40E_TX_FLAGS_HW_VLAN;
 	/* else if it is a SW VLAN, check the next protocol and store the tag */
-	} else if (protocol == __constant_htons(ETH_P_8021Q)) {
+	} else if (protocol == htons(ETH_P_8021Q)) {
 		struct vlan_hdr *vhdr, _vhdr;
 		vhdr = skb_header_pointer(skb, ETH_HLEN, sizeof(_vhdr), &_vhdr);
 		if (!vhdr)
@@ -1335,7 +1389,7 @@ static int i40e_tso(struct i40e_ring *tx_ring, struct sk_buff *skb,
 			return err;
 	}
 
-	if (protocol == __constant_htons(ETH_P_IP)) {
+	if (protocol == htons(ETH_P_IP)) {
 		iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
 		tcph = skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
 		iph->tot_len = 0;
@@ -1758,9 +1812,9 @@ static netdev_tx_t i40e_xmit_frame_ring(struct sk_buff *skb,
 	first = &tx_ring->tx_bi[tx_ring->next_to_use];
 
 	/* setup IPv4/IPv6 offloads */
-	if (protocol == __constant_htons(ETH_P_IP))
+	if (protocol == htons(ETH_P_IP))
 		tx_flags |= I40E_TX_FLAGS_IPV4;
-	else if (protocol == __constant_htons(ETH_P_IPV6))
+	else if (protocol == htons(ETH_P_IPV6))
 		tx_flags |= I40E_TX_FLAGS_IPV6;
 
 	tso = i40e_tso(tx_ring, skb, tx_flags, protocol, &hdr_len,

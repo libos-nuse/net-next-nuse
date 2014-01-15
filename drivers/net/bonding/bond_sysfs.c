@@ -658,41 +658,23 @@ static ssize_t bonding_store_lacp(struct device *d,
 				  const char *buf, size_t count)
 {
 	struct bonding *bond = to_bond(d);
-	int new_value, ret = count;
+	int new_value, ret;
+
+	new_value = bond_parse_parm(buf, bond_lacp_tbl);
+	if (new_value < 0) {
+		pr_err("%s: Ignoring invalid LACP rate value %.*s.\n",
+		       bond->dev->name, (int)strlen(buf) - 1, buf);
+		return -EINVAL;
+	}
 
 	if (!rtnl_trylock())
 		return restart_syscall();
 
-	if (bond->dev->flags & IFF_UP) {
-		pr_err("%s: Unable to update LACP rate because interface is up.\n",
-		       bond->dev->name);
-		ret = -EPERM;
-		goto out;
-	}
+	ret = bond_option_lacp_rate_set(bond, new_value);
+	if (!ret)
+		ret = count;
 
-	if (bond->params.mode != BOND_MODE_8023AD) {
-		pr_err("%s: Unable to update LACP rate because bond is not in 802.3ad mode.\n",
-		       bond->dev->name);
-		ret = -EPERM;
-		goto out;
-	}
-
-	new_value = bond_parse_parm(buf, bond_lacp_tbl);
-
-	if ((new_value == 1) || (new_value == 0)) {
-		bond->params.lacp_fast = new_value;
-		bond_3ad_update_lacp_rate(bond);
-		pr_info("%s: Setting LACP rate to %s (%d).\n",
-			bond->dev->name, bond_lacp_tbl[new_value].modename,
-			new_value);
-	} else {
-		pr_err("%s: Ignoring invalid LACP rate value %.*s.\n",
-		       bond->dev->name, (int)strlen(buf) - 1, buf);
-		ret = -EINVAL;
-	}
-out:
 	rtnl_unlock();
-
 	return ret;
 }
 static DEVICE_ATTR(lacp_rate, S_IRUGO | S_IWUSR,
@@ -722,10 +704,15 @@ static ssize_t bonding_store_min_links(struct device *d,
 		return ret;
 	}
 
-	pr_info("%s: Setting min links value to %u\n",
-		bond->dev->name, new_value);
-	bond->params.min_links = new_value;
-	return count;
+	if (!rtnl_trylock())
+		return restart_syscall();
+
+	ret = bond_option_min_links_set(bond, new_value);
+	if (!ret)
+		ret = count;
+
+	rtnl_unlock();
+	return ret;
 }
 static DEVICE_ATTR(min_links, S_IRUGO | S_IWUSR,
 		   bonding_show_min_links, bonding_store_min_links);
@@ -746,29 +733,24 @@ static ssize_t bonding_store_ad_select(struct device *d,
 				       struct device_attribute *attr,
 				       const char *buf, size_t count)
 {
-	int new_value, ret = count;
+	int new_value, ret;
 	struct bonding *bond = to_bond(d);
 
-	if (bond->dev->flags & IFF_UP) {
-		pr_err("%s: Unable to update ad_select because interface is up.\n",
-		       bond->dev->name);
-		ret = -EPERM;
-		goto out;
-	}
-
 	new_value = bond_parse_parm(buf, ad_select_tbl);
-
-	if (new_value != -1) {
-		bond->params.ad_select = new_value;
-		pr_info("%s: Setting ad_select to %s (%d).\n",
-			bond->dev->name, ad_select_tbl[new_value].modename,
-			new_value);
-	} else {
+	if (new_value < 0) {
 		pr_err("%s: Ignoring invalid ad_select value %.*s.\n",
 		       bond->dev->name, (int)strlen(buf) - 1, buf);
-		ret = -EINVAL;
+		return -EINVAL;
 	}
-out:
+
+	if (!rtnl_trylock())
+		return restart_syscall();
+
+	ret = bond_option_ad_select_set(bond, new_value);
+	if (!ret)
+		ret = count;
+
+	rtnl_unlock();
 	return ret;
 }
 static DEVICE_ATTR(ad_select, S_IRUGO | S_IWUSR,
@@ -790,8 +772,25 @@ static ssize_t bonding_store_num_peer_notif(struct device *d,
 					    const char *buf, size_t count)
 {
 	struct bonding *bond = to_bond(d);
-	int err = kstrtou8(buf, 10, &bond->params.num_peer_notif);
-	return err ? err : count;
+	u8 new_value;
+	int ret;
+
+	ret = kstrtou8(buf, 10, &new_value);
+	if (ret) {
+		pr_err("%s: invalid value %s specified.\n",
+		       bond->dev->name, buf);
+		return ret;
+	}
+
+	if (!rtnl_trylock())
+		return restart_syscall();
+
+	ret = bond_option_num_peer_notif_set(bond, new_value);
+	if (!ret)
+		ret = count;
+
+	rtnl_unlock();
+	return ret;
 }
 static DEVICE_ATTR(num_grat_arp, S_IRUGO | S_IWUSR,
 		   bonding_show_num_peer_notif, bonding_store_num_peer_notif);
@@ -1273,41 +1272,21 @@ static ssize_t bonding_store_slaves_active(struct device *d,
 					   const char *buf, size_t count)
 {
 	struct bonding *bond = to_bond(d);
-	int new_value, ret = count;
-	struct list_head *iter;
-	struct slave *slave;
-
-	if (!rtnl_trylock())
-		return restart_syscall();
+	int new_value, ret;
 
 	if (sscanf(buf, "%d", &new_value) != 1) {
 		pr_err("%s: no all_slaves_active value specified.\n",
 		       bond->dev->name);
-		ret = -EINVAL;
-		goto out;
+		return -EINVAL;
 	}
 
-	if (new_value == bond->params.all_slaves_active)
-		goto out;
+	if (!rtnl_trylock())
+		return restart_syscall();
 
-	if ((new_value == 0) || (new_value == 1)) {
-		bond->params.all_slaves_active = new_value;
-	} else {
-		pr_info("%s: Ignoring invalid all_slaves_active value %d.\n",
-			bond->dev->name, new_value);
-		ret = -EINVAL;
-		goto out;
-	}
+	ret = bond_option_all_slaves_active_set(bond, new_value);
+	if (!ret)
+		ret = count;
 
-	bond_for_each_slave(bond, slave, iter) {
-		if (!bond_is_active_slave(slave)) {
-			if (new_value)
-				slave->inactive = 0;
-			else
-				slave->inactive = 1;
-		}
-	}
-out:
 	rtnl_unlock();
 	return ret;
 }
@@ -1367,24 +1346,22 @@ static ssize_t bonding_store_lp_interval(struct device *d,
 					 const char *buf, size_t count)
 {
 	struct bonding *bond = to_bond(d);
-	int new_value, ret = count;
+	int new_value, ret;
 
 	if (sscanf(buf, "%d", &new_value) != 1) {
 		pr_err("%s: no lp interval value specified.\n",
 			bond->dev->name);
-		ret = -EINVAL;
-		goto out;
+		return -EINVAL;
 	}
 
-	if (new_value <= 0) {
-		pr_err ("%s: lp_interval must be between 1 and %d\n",
-			bond->dev->name, INT_MAX);
-		ret = -EINVAL;
-		goto out;
-	}
+	if (!rtnl_trylock())
+		return restart_syscall();
 
-	bond->params.lp_interval = new_value;
-out:
+	ret = bond_option_lp_interval_set(bond, new_value);
+	if (!ret)
+		ret = count;
+
+	rtnl_unlock();
 	return ret;
 }
 
@@ -1409,28 +1386,22 @@ static ssize_t bonding_store_packets_per_slave(struct device *d,
 					       const char *buf, size_t count)
 {
 	struct bonding *bond = to_bond(d);
-	int new_value, ret = count;
+	int new_value, ret;
 
 	if (sscanf(buf, "%d", &new_value) != 1) {
 		pr_err("%s: no packets_per_slave value specified.\n",
 		       bond->dev->name);
-		ret = -EINVAL;
-		goto out;
+		return -EINVAL;
 	}
-	if (new_value < 0 || new_value > USHRT_MAX) {
-		pr_err("%s: packets_per_slave must be between 0 and %u\n",
-		       bond->dev->name, USHRT_MAX);
-		ret = -EINVAL;
-		goto out;
-	}
-	if (bond->params.mode != BOND_MODE_ROUNDROBIN)
-		pr_warn("%s: Warning: packets_per_slave has effect only in balance-rr mode\n",
-			bond->dev->name);
-	if (new_value > 1)
-		bond->params.packets_per_slave = reciprocal_value(new_value);
-	else
-		bond->params.packets_per_slave = new_value;
-out:
+
+	if (!rtnl_trylock())
+		return restart_syscall();
+
+	ret = bond_option_packets_per_slave_set(bond, new_value);
+	if (!ret)
+		ret = count;
+
+	rtnl_unlock();
 	return ret;
 }
 

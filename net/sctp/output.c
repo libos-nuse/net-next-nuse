@@ -280,7 +280,7 @@ static sctp_xmit_t __sctp_packet_append_chunk(struct sctp_packet *packet,
 
 	/* We believe that this chunk is OK to add to the packet */
 	switch (chunk->chunk_hdr->type) {
-	    case SCTP_CID_DATA:
+	case SCTP_CID_DATA:
 		/* Account for the data being in the packet */
 		sctp_packet_append_data(packet, chunk);
 		/* Disallow SACK bundling after DATA. */
@@ -292,17 +292,17 @@ static sctp_xmit_t __sctp_packet_append_chunk(struct sctp_packet *packet,
 		/* timestamp the chunk for rtx purposes */
 		chunk->sent_at = jiffies;
 		break;
-	    case SCTP_CID_COOKIE_ECHO:
+	case SCTP_CID_COOKIE_ECHO:
 		packet->has_cookie_echo = 1;
 		break;
 
-	    case SCTP_CID_SACK:
+	case SCTP_CID_SACK:
 		packet->has_sack = 1;
 		if (chunk->asoc)
 			chunk->asoc->stats.osacks++;
 		break;
 
-	    case SCTP_CID_AUTH:
+	case SCTP_CID_AUTH:
 		packet->has_auth = 1;
 		packet->auth = chunk;
 		break;
@@ -387,7 +387,7 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 	int err = 0;
 	int padding;		/* How much padding do we need?  */
 	__u8 has_data = 0;
-	struct dst_entry *dst = tp->dst;
+	struct dst_entry *dst;
 	unsigned char *auth = NULL;	/* pointer to auth in skb data */
 
 	pr_debug("%s: packet:%p\n", __func__, packet);
@@ -420,9 +420,9 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 		}
 	}
 	dst = dst_clone(tp->dst);
-	skb_dst_set(nskb, dst);
 	if (!dst)
 		goto no_route;
+	skb_dst_set(nskb, dst);
 
 	/* Build the SCTP header.  */
 	sh = (struct sctphdr *)skb_push(nskb, sizeof(struct sctphdr));
@@ -540,8 +540,7 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 		} else {
 			/* no need to seed pseudo checksum for SCTP */
 			nskb->ip_summed = CHECKSUM_PARTIAL;
-			nskb->csum_start = (skb_transport_header(nskb) -
-			                    nskb->head);
+			nskb->csum_start = skb_transport_header(nskb) - nskb->head;
 			nskb->csum_offset = offsetof(struct sctphdr, checksum);
 		}
 	}
@@ -558,7 +557,7 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 	 * Note: The works for IPv6 layer checks this bit too later
 	 * in transmission.  See IP6_ECN_flow_xmit().
 	 */
-	(*tp->af_specific->ecn_capable)(nskb->sk);
+	tp->af_specific->ecn_capable(nskb->sk);
 
 	/* Set up the IP options.  */
 	/* BUG: not implemented
@@ -580,7 +579,8 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 		unsigned long timeout;
 
 		/* Restart the AUTOCLOSE timer when sending data. */
-		if (sctp_state(asoc, ESTABLISHED) && asoc->autoclose) {
+		if (sctp_state(asoc, ESTABLISHED) &&
+		    asoc->timeouts[SCTP_EVENT_TIMEOUT_AUTOCLOSE]) {
 			timer = &asoc->timers[SCTP_EVENT_TIMEOUT_AUTOCLOSE];
 			timeout = asoc->timeouts[SCTP_EVENT_TIMEOUT_AUTOCLOSE];
 
@@ -592,7 +592,7 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 	pr_debug("***sctp_transmit_packet*** skb->len:%d\n", nskb->len);
 
 	nskb->local_df = packet->ipfragok;
-	(*tp->af_specific->sctp_xmit)(nskb, tp);
+	tp->af_specific->sctp_xmit(nskb, tp);
 
 out:
 	sctp_packet_reset(packet);

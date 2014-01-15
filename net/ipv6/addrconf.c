@@ -442,6 +442,8 @@ static int inet6_netconf_msgsize_devconf(int type)
 	if (type == -1 || type == NETCONFA_MC_FORWARDING)
 		size += nla_total_size(4);
 #endif
+	if (type == -1 || type == NETCONFA_PROXY_NEIGH)
+		size += nla_total_size(4);
 
 	return size;
 }
@@ -475,6 +477,10 @@ static int inet6_netconf_fill_devconf(struct sk_buff *skb, int ifindex,
 			devconf->mc_forwarding) < 0)
 		goto nla_put_failure;
 #endif
+	if ((type == -1 || type == NETCONFA_PROXY_NEIGH) &&
+	    nla_put_s32(skb, NETCONFA_PROXY_NEIGH, devconf->proxy_ndp) < 0)
+		goto nla_put_failure;
+
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
@@ -509,6 +515,7 @@ errout:
 static const struct nla_policy devconf_ipv6_policy[NETCONFA_MAX+1] = {
 	[NETCONFA_IFINDEX]	= { .len = sizeof(int) },
 	[NETCONFA_FORWARDING]	= { .len = sizeof(int) },
+	[NETCONFA_PROXY_NEIGH]	= { .len = sizeof(int) },
 };
 
 static int inet6_netconf_get_devconf(struct sk_buff *in_skb,
@@ -988,12 +995,9 @@ static void ipv6_del_addr(struct inet6_ifaddr *ifp)
 	 * --yoshfuji
 	 */
 	if ((ifp->flags & IFA_F_PERMANENT) && onlink < 1) {
-		struct in6_addr prefix;
 		struct rt6_info *rt;
 
-		ipv6_addr_prefix(&prefix, &ifp->addr, ifp->prefix_len);
-
-		rt = addrconf_get_prefix_route(&prefix,
+		rt = addrconf_get_prefix_route(&ifp->addr,
 					       ifp->prefix_len,
 					       ifp->idev->dev,
 					       0, RTF_GATEWAY | RTF_DEFAULT);
@@ -1673,7 +1677,7 @@ void addrconf_leave_solict(struct inet6_dev *idev, const struct in6_addr *addr)
 static void addrconf_join_anycast(struct inet6_ifaddr *ifp)
 {
 	struct in6_addr addr;
-	if (ifp->prefix_len == 127) /* RFC 6164 */
+	if (ifp->prefix_len >= 127) /* RFC 6164 */
 		return;
 	ipv6_addr_prefix(&addr, &ifp->addr, ifp->prefix_len);
 	if (ipv6_addr_any(&addr))
@@ -1684,7 +1688,7 @@ static void addrconf_join_anycast(struct inet6_ifaddr *ifp)
 static void addrconf_leave_anycast(struct inet6_ifaddr *ifp)
 {
 	struct in6_addr addr;
-	if (ifp->prefix_len == 127) /* RFC 6164 */
+	if (ifp->prefix_len >= 127) /* RFC 6164 */
 		return;
 	ipv6_addr_prefix(&addr, &ifp->addr, ifp->prefix_len);
 	if (ipv6_addr_any(&addr))
@@ -3472,7 +3476,12 @@ restart:
 					 &inet6_addr_lst[i], addr_lst) {
 			unsigned long age;
 
-			if (ifp->flags & IFA_F_PERMANENT)
+			/* When setting preferred_lft to a value not zero or
+			 * infinity, while valid_lft is infinity
+			 * IFA_F_PERMANENT has a non-infinity life time.
+			 */
+			if ((ifp->flags & IFA_F_PERMANENT) &&
+			    (ifp->prefered_lft == INFINITY_LIFE_TIME))
 				continue;
 
 			spin_lock(&ifp->lock);
@@ -3497,7 +3506,8 @@ restart:
 					ifp->flags |= IFA_F_DEPRECATED;
 				}
 
-				if (time_before(ifp->tstamp + ifp->valid_lft * HZ, next))
+				if ((ifp->valid_lft != INFINITY_LIFE_TIME) &&
+				    (time_before(ifp->tstamp + ifp->valid_lft * HZ, next)))
 					next = ifp->tstamp + ifp->valid_lft * HZ;
 
 				spin_unlock(&ifp->lock);
@@ -3797,7 +3807,8 @@ static int inet6_fill_ifaddr(struct sk_buff *skb, struct inet6_ifaddr *ifa,
 	put_ifaddrmsg(nlh, ifa->prefix_len, ifa->flags, rt_scope(ifa->scope),
 		      ifa->idev->dev->ifindex);
 
-	if (!(ifa->flags&IFA_F_PERMANENT)) {
+	if (!((ifa->flags&IFA_F_PERMANENT) &&
+	      (ifa->prefered_lft == INFINITY_LIFE_TIME))) {
 		preferred = ifa->prefered_lft;
 		valid = ifa->valid_lft;
 		if (preferred != INFINITY_LIFE_TIME) {
@@ -4728,6 +4739,46 @@ int addrconf_sysctl_disable(struct ctl_table *ctl, int write,
 	return ret;
 }
 
+static
+int addrconf_sysctl_proxy_ndp(struct ctl_table *ctl, int write,
+			      void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	int *valp = ctl->data;
+	int ret;
+	int old, new;
+
+	old = *valp;
+	ret = proc_dointvec(ctl, write, buffer, lenp, ppos);
+	new = *valp;
+
+	if (write && old != new) {
+		struct net *net = ctl->extra2;
+
+		if (!rtnl_trylock())
+			return restart_syscall();
+
+		if (valp == &net->ipv6.devconf_dflt->proxy_ndp)
+			inet6_netconf_notify_devconf(net, NETCONFA_PROXY_NEIGH,
+						     NETCONFA_IFINDEX_DEFAULT,
+						     net->ipv6.devconf_dflt);
+		else if (valp == &net->ipv6.devconf_all->proxy_ndp)
+			inet6_netconf_notify_devconf(net, NETCONFA_PROXY_NEIGH,
+						     NETCONFA_IFINDEX_ALL,
+						     net->ipv6.devconf_all);
+		else {
+			struct inet6_dev *idev = ctl->extra1;
+
+			inet6_netconf_notify_devconf(net, NETCONFA_PROXY_NEIGH,
+						     idev->dev->ifindex,
+						     &idev->cnf);
+		}
+		rtnl_unlock();
+	}
+
+	return ret;
+}
+
+
 static struct addrconf_sysctl_table
 {
 	struct ctl_table_header *sysctl_header;
@@ -4914,7 +4965,7 @@ static struct addrconf_sysctl_table
 			.data		= &ipv6_devconf.proxy_ndp,
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
+			.proc_handler	= addrconf_sysctl_proxy_ndp,
 		},
 		{
 			.procname	= "accept_source_route",
@@ -5163,9 +5214,7 @@ int __init addrconf_init(void)
 
 	addrconf_verify(0);
 
-	err = rtnl_af_register(&inet6_ops);
-	if (err < 0)
-		goto errout_af;
+	rtnl_af_register(&inet6_ops);
 
 	err = __rtnl_register(PF_INET6, RTM_GETLINK, NULL, inet6_dump_ifinfo,
 			      NULL);
@@ -5189,7 +5238,6 @@ int __init addrconf_init(void)
 	return 0;
 errout:
 	rtnl_af_unregister(&inet6_ops);
-errout_af:
 	unregister_netdevice_notifier(&ipv6_dev_notf);
 errlo:
 	unregister_pernet_subsys(&addrconf_ops);

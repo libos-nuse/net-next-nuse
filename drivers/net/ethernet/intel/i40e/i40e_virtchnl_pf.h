@@ -82,6 +82,8 @@ struct i40e_vf {
 
 	struct i40e_virtchnl_ether_addr default_lan_addr;
 	struct i40e_virtchnl_ether_addr default_fcoe_addr;
+	u16 port_vlan_id;
+	bool pf_set_mac;	/* The VMM admin set the VF MAC address */
 
 	/* VSI indices - actual VSI pointers are maintained in the PF structure
 	 * When assigned, these will be non-zero, because VSI 0 is always
@@ -104,7 +106,7 @@ int i40e_pci_sriov_configure(struct pci_dev *dev, int num_vfs);
 int i40e_vc_process_vf_msg(struct i40e_pf *pf, u16 vf_id, u32 v_opcode,
 			   u32 v_retval, u8 *msg, u16 msglen);
 int i40e_vc_process_vflr_event(struct i40e_pf *pf);
-int i40e_reset_vf(struct i40e_vf *vf, bool flr);
+void i40e_reset_vf(struct i40e_vf *vf, bool flr);
 void i40e_vc_notify_vf_reset(struct i40e_vf *vf);
 
 /* vf configuration related iplink handlers */

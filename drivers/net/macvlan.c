@@ -290,8 +290,8 @@ xmit_world:
 	return dev_queue_xmit(skb);
 }
 
-netdev_tx_t macvlan_start_xmit(struct sk_buff *skb,
-			       struct net_device *dev)
+static netdev_tx_t macvlan_start_xmit(struct sk_buff *skb,
+				      struct net_device *dev)
 {
 	unsigned int len = skb->len;
 	int ret;
@@ -305,7 +305,7 @@ netdev_tx_t macvlan_start_xmit(struct sk_buff *skb,
 	}
 
 	if (likely(ret == NET_XMIT_SUCCESS || ret == NET_XMIT_CN)) {
-		struct macvlan_pcpu_stats *pcpu_stats;
+		struct vlan_pcpu_stats *pcpu_stats;
 
 		pcpu_stats = this_cpu_ptr(vlan->pcpu_stats);
 		u64_stats_update_begin(&pcpu_stats->syncp);
@@ -317,7 +317,6 @@ netdev_tx_t macvlan_start_xmit(struct sk_buff *skb,
 	}
 	return ret;
 }
-EXPORT_SYMBOL_GPL(macvlan_start_xmit);
 
 static int macvlan_hard_header(struct sk_buff *skb, struct net_device *dev,
 			       unsigned short type, const void *daddr,
@@ -546,12 +545,12 @@ static int macvlan_init(struct net_device *dev)
 
 	macvlan_set_lockdep_class(dev);
 
-	vlan->pcpu_stats = alloc_percpu(struct macvlan_pcpu_stats);
+	vlan->pcpu_stats = alloc_percpu(struct vlan_pcpu_stats);
 	if (!vlan->pcpu_stats)
 		return -ENOMEM;
 
 	for_each_possible_cpu(i) {
-		struct macvlan_pcpu_stats *mvlstats;
+		struct vlan_pcpu_stats *mvlstats;
 		mvlstats = per_cpu_ptr(vlan->pcpu_stats, i);
 		u64_stats_init(&mvlstats->syncp);
 	}
@@ -577,7 +576,7 @@ static struct rtnl_link_stats64 *macvlan_dev_get_stats64(struct net_device *dev,
 	struct macvlan_dev *vlan = netdev_priv(dev);
 
 	if (vlan->pcpu_stats) {
-		struct macvlan_pcpu_stats *p;
+		struct vlan_pcpu_stats *p;
 		u64 rx_packets, rx_bytes, rx_multicast, tx_packets, tx_bytes;
 		u32 rx_errors = 0, tx_dropped = 0;
 		unsigned int start;
@@ -690,8 +689,19 @@ static netdev_features_t macvlan_fix_features(struct net_device *dev,
 					      netdev_features_t features)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
+	netdev_features_t mask;
 
-	return features & (vlan->set_features | ~MACVLAN_FEATURES);
+	features |= NETIF_F_ALL_FOR_ALL;
+	features &= (vlan->set_features | ~MACVLAN_FEATURES);
+	mask = features;
+
+	features = netdev_increment_features(vlan->lowerdev->features,
+					     features,
+					     mask);
+	if (!vlan->fwd_priv)
+		features |= NETIF_F_LLTX;
+
+	return features;
 }
 
 static const struct ethtool_ops macvlan_ethtool_ops = {
@@ -1010,9 +1020,8 @@ static int macvlan_device_event(struct notifier_block *unused,
 		break;
 	case NETDEV_FEAT_CHANGE:
 		list_for_each_entry(vlan, &port->vlans, list) {
-			vlan->dev->features = dev->features & MACVLAN_FEATURES;
 			vlan->dev->gso_max_size = dev->gso_max_size;
-			netdev_features_change(vlan->dev);
+			netdev_update_features(vlan->dev);
 		}
 		break;
 	case NETDEV_UNREGISTER:

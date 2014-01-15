@@ -354,7 +354,7 @@ static inline void bnx2x_update_sge_prod(struct bnx2x_fastpath *fp,
  */
 static u32 bnx2x_get_rxhash(const struct bnx2x *bp,
 			    const struct eth_fast_path_rx_cqe *cqe,
-			    bool *l4_rxhash)
+			    enum pkt_hash_types *rxhash_type)
 {
 	/* Get Toeplitz hash from CQE */
 	if ((bp->dev->features & NETIF_F_RXHASH) &&
@@ -362,11 +362,13 @@ static u32 bnx2x_get_rxhash(const struct bnx2x *bp,
 		enum eth_rss_hash_type htype;
 
 		htype = cqe->status_flags & ETH_FAST_PATH_RX_CQE_RSS_HASH_TYPE;
-		*l4_rxhash = (htype == TCP_IPV4_HASH_TYPE) ||
-			     (htype == TCP_IPV6_HASH_TYPE);
+		*rxhash_type = ((htype == TCP_IPV4_HASH_TYPE) ||
+				(htype == TCP_IPV6_HASH_TYPE)) ?
+			       PKT_HASH_TYPE_L4 : PKT_HASH_TYPE_L3;
+
 		return le32_to_cpu(cqe->rss_hash_result);
 	}
-	*l4_rxhash = false;
+	*rxhash_type = PKT_HASH_TYPE_NONE;
 	return 0;
 }
 
@@ -420,7 +422,7 @@ static void bnx2x_tpa_start(struct bnx2x_fastpath *fp, u16 queue,
 	tpa_info->tpa_state = BNX2X_TPA_START;
 	tpa_info->len_on_bd = le16_to_cpu(cqe->len_on_bd);
 	tpa_info->placement_offset = cqe->placement_offset;
-	tpa_info->rxhash = bnx2x_get_rxhash(bp, cqe, &tpa_info->l4_rxhash);
+	tpa_info->rxhash = bnx2x_get_rxhash(bp, cqe, &tpa_info->rxhash_type);
 	if (fp->mode == TPA_MODE_GRO) {
 		u16 gro_size = le16_to_cpu(cqe->pkt_len_or_gro_seg_len);
 		tpa_info->full_page = SGE_PAGES / gro_size * gro_size;
@@ -728,8 +730,7 @@ static void bnx2x_tpa_stop(struct bnx2x *bp, struct bnx2x_fastpath *fp,
 
 		skb_reserve(skb, pad + NET_SKB_PAD);
 		skb_put(skb, len);
-		skb->rxhash = tpa_info->rxhash;
-		skb->l4_rxhash = tpa_info->l4_rxhash;
+		skb_set_hash(skb, tpa_info->rxhash, tpa_info->rxhash_type);
 
 		skb->protocol = eth_type_trans(skb, bp->dev);
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -846,7 +847,8 @@ int bnx2x_rx_int(struct bnx2x_fastpath *fp, int budget)
 		enum eth_rx_cqe_type cqe_fp_type;
 		u16 len, pad, queue;
 		u8 *data;
-		bool l4_rxhash;
+		u32 rxhash;
+		enum pkt_hash_types rxhash_type;
 
 #ifdef BNX2X_STOP_ON_ERROR
 		if (unlikely(bp->panic))
@@ -987,8 +989,8 @@ reuse_rx:
 		skb->protocol = eth_type_trans(skb, bp->dev);
 
 		/* Set Toeplitz hash for a none-LRO skb */
-		skb->rxhash = bnx2x_get_rxhash(bp, cqe_fp, &l4_rxhash);
-		skb->l4_rxhash = l4_rxhash;
+		rxhash = bnx2x_get_rxhash(bp, cqe_fp, &rxhash_type);
+		skb_set_hash(skb, rxhash, rxhash_type);
 
 		skb_checksum_none_assert(skb);
 
@@ -2263,7 +2265,7 @@ static int bnx2x_nic_load_request(struct bnx2x *bp, u32 *load_code)
  * virtualized environments a pf from another VM may have already
  * initialized the device including loading FW
  */
-int bnx2x_nic_load_analyze_req(struct bnx2x *bp, u32 load_code)
+int bnx2x_compare_fw_ver(struct bnx2x *bp, u32 load_code, bool print_err)
 {
 	/* is another pf loaded on this engine? */
 	if (load_code != FW_MSG_CODE_DRV_LOAD_COMMON_CHIP &&
@@ -2282,8 +2284,12 @@ int bnx2x_nic_load_analyze_req(struct bnx2x *bp, u32 load_code)
 
 		/* abort nic load if version mismatch */
 		if (my_fw != loaded_fw) {
-			BNX2X_ERR("bnx2x with FW %x was already loaded which mismatches my %x FW. Aborting\n",
-				  loaded_fw, my_fw);
+			if (print_err)
+				BNX2X_ERR("bnx2x with FW %x was already loaded which mismatches my %x FW. Aborting\n",
+					  loaded_fw, my_fw);
+			else
+				BNX2X_DEV_INFO("bnx2x with FW %x was already loaded which mismatches my %x FW, possibly due to MF UNDI\n",
+					       loaded_fw, my_fw);
 			return -EBUSY;
 		}
 	}
@@ -2598,7 +2604,7 @@ int bnx2x_nic_load(struct bnx2x *bp, int load_mode)
 				LOAD_ERROR_EXIT(bp, load_error1);
 
 			/* what did mcp say? */
-			rc = bnx2x_nic_load_analyze_req(bp, load_code);
+			rc = bnx2x_compare_fw_ver(bp, load_code, true);
 			if (rc) {
 				bnx2x_fw_command(bp, DRV_MSG_CODE_LOAD_DONE, 0);
 				LOAD_ERROR_EXIT(bp, load_error2);

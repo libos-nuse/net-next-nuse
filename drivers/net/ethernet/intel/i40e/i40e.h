@@ -29,6 +29,7 @@
 #define _I40E_H_
 
 #include <net/tcp.h>
+#include <net/udp.h>
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/errno.h>
@@ -64,7 +65,7 @@
 #define I40E_MAX_NPAR_QPS     32
 
 #define I40E_MAX_NUM_DESCRIPTORS      4096
-#define I40E_MAX_REGISTER     0x0038FFFF
+#define I40E_MAX_REGISTER     0x800000
 #define I40E_DEFAULT_NUM_DESCRIPTORS  512
 #define I40E_REQ_DESCRIPTOR_MULTIPLE  32
 #define I40E_MIN_NUM_DESCRIPTORS      64
@@ -205,7 +206,13 @@ struct i40e_pf {
 	u16 rss_size_max;          /* HW defined max RSS queues */
 	u16 fdir_pf_filter_count;  /* num of guaranteed filters for this PF */
 	u8 atr_sample_rate;
+	bool wol_en;
 
+#ifdef CONFIG_I40E_VXLAN
+	__be16  vxlan_ports[I40E_MAX_PF_UDP_OFFLOAD_PORTS];
+	u16 pending_vxlan_bitmap;
+
+#endif
 	enum i40e_interrupt_policy int_policy;
 	u16 rx_itr_default;
 	u16 tx_itr_default;
@@ -223,24 +230,23 @@ struct i40e_pf {
 #define I40E_FLAG_RX_1BUF_ENABLED              (u64)(1 << 4)
 #define I40E_FLAG_RX_PS_ENABLED                (u64)(1 << 5)
 #define I40E_FLAG_RSS_ENABLED                  (u64)(1 << 6)
-#define I40E_FLAG_MQ_ENABLED                   (u64)(1 << 7)
-#define I40E_FLAG_VMDQ_ENABLED                 (u64)(1 << 8)
-#define I40E_FLAG_FDIR_REQUIRES_REINIT         (u64)(1 << 9)
-#define I40E_FLAG_NEED_LINK_UPDATE             (u64)(1 << 10)
-#define I40E_FLAG_IN_NETPOLL                   (u64)(1 << 13)
-#define I40E_FLAG_16BYTE_RX_DESC_ENABLED       (u64)(1 << 14)
-#define I40E_FLAG_CLEAN_ADMINQ                 (u64)(1 << 15)
-#define I40E_FLAG_FILTER_SYNC                  (u64)(1 << 16)
-#define I40E_FLAG_PROCESS_MDD_EVENT            (u64)(1 << 18)
-#define I40E_FLAG_PROCESS_VFLR_EVENT           (u64)(1 << 19)
-#define I40E_FLAG_SRIOV_ENABLED                (u64)(1 << 20)
-#define I40E_FLAG_DCB_ENABLED                  (u64)(1 << 21)
-#define I40E_FLAG_FDIR_ENABLED                 (u64)(1 << 22)
-#define I40E_FLAG_FDIR_ATR_ENABLED             (u64)(1 << 23)
-#define I40E_FLAG_MFP_ENABLED                  (u64)(1 << 27)
-
-	u16 num_tx_queues;
-	u16 num_rx_queues;
+#define I40E_FLAG_VMDQ_ENABLED                 (u64)(1 << 7)
+#define I40E_FLAG_FDIR_REQUIRES_REINIT         (u64)(1 << 8)
+#define I40E_FLAG_NEED_LINK_UPDATE             (u64)(1 << 9)
+#define I40E_FLAG_IN_NETPOLL                   (u64)(1 << 12)
+#define I40E_FLAG_16BYTE_RX_DESC_ENABLED       (u64)(1 << 13)
+#define I40E_FLAG_CLEAN_ADMINQ                 (u64)(1 << 14)
+#define I40E_FLAG_FILTER_SYNC                  (u64)(1 << 15)
+#define I40E_FLAG_PROCESS_MDD_EVENT            (u64)(1 << 17)
+#define I40E_FLAG_PROCESS_VFLR_EVENT           (u64)(1 << 18)
+#define I40E_FLAG_SRIOV_ENABLED                (u64)(1 << 19)
+#define I40E_FLAG_DCB_ENABLED                  (u64)(1 << 20)
+#define I40E_FLAG_FDIR_ENABLED                 (u64)(1 << 21)
+#define I40E_FLAG_FDIR_ATR_ENABLED             (u64)(1 << 22)
+#define I40E_FLAG_MFP_ENABLED                  (u64)(1 << 26)
+#ifdef CONFIG_I40E_VXLAN
+#define I40E_FLAG_VXLAN_FILTER_SYNC            (u64)(1 << 27)
+#endif
 
 	bool stat_offsets_loaded;
 	struct i40e_hw_port_stats stats;
@@ -511,13 +517,6 @@ struct rtnl_link_stats64 *i40e_get_vsi_stats_struct(struct i40e_vsi *vsi);
 int i40e_fetch_switch_configuration(struct i40e_pf *pf,
 				    bool printconfig);
 
-/* needed by i40e_main.c */
-void i40e_add_fdir_filter(struct i40e_fdir_data fdir_data,
-			  struct i40e_ring *tx_ring);
-void i40e_add_remove_filter(struct i40e_fdir_data fdir_data,
-			    struct i40e_ring *tx_ring);
-void i40e_update_fdir_filter(struct i40e_fdir_data fdir_data,
-			     struct i40e_ring *tx_ring);
 int i40e_program_fdir_filter(struct i40e_fdir_data *fdir_data,
 			     struct i40e_pf *pf, bool add);
 
@@ -533,6 +532,7 @@ struct i40e_vsi *i40e_vsi_setup(struct i40e_pf *pf, u8 type,
 int i40e_vsi_release(struct i40e_vsi *vsi);
 struct i40e_vsi *i40e_vsi_lookup(struct i40e_pf *pf, enum i40e_vsi_type type,
 				 struct i40e_vsi *start_vsi);
+int i40e_vsi_control_rings(struct i40e_vsi *vsi, bool enable);
 int i40e_reconfig_rss_queues(struct i40e_pf *pf, int queue_count);
 struct i40e_veb *i40e_veb_setup(struct i40e_pf *pf, u16 flags, u16 uplink_seid,
 				u16 downlink_seid, u8 enabled_tc);
@@ -554,6 +554,7 @@ static inline void i40e_dbg_init(void) {}
 static inline void i40e_dbg_exit(void) {}
 #endif /* CONFIG_DEBUG_FS*/
 void i40e_irq_dynamic_enable(struct i40e_vsi *vsi, int vector);
+void i40e_irq_dynamic_disable_icr0(struct i40e_pf *pf);
 void i40e_irq_dynamic_enable_icr0(struct i40e_pf *pf);
 int i40e_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd);
 void i40e_vlan_stripping_disable(struct i40e_vsi *vsi);

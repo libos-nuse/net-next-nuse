@@ -416,19 +416,16 @@ static inline bool slave_can_tx(struct slave *slave)
 struct bond_net;
 
 int bond_arp_rcv(const struct sk_buff *skb, struct bonding *bond, struct slave *slave);
-int bond_dev_queue_xmit(struct bonding *bond, struct sk_buff *skb, struct net_device *slave_dev);
-void bond_xmit_slave_id(struct bonding *bond, struct sk_buff *skb, int slave_id);
+void bond_dev_queue_xmit(struct bonding *bond, struct sk_buff *skb, struct net_device *slave_dev);
 int bond_create(struct net *net, const char *name);
 int bond_create_sysfs(struct bond_net *net);
 void bond_destroy_sysfs(struct bond_net *net);
 void bond_prepare_sysfs_group(struct bonding *bond);
 int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev);
 int bond_release(struct net_device *bond_dev, struct net_device *slave_dev);
-void bond_mii_monitor(struct work_struct *);
-void bond_loadbalance_arp_mon(struct work_struct *);
-void bond_activebackup_arp_mon(struct work_struct *);
 int bond_xmit_hash(struct bonding *bond, struct sk_buff *skb, int count);
 int bond_parse_parm(const char *mode_arg, const struct bond_parm_tbl *tbl);
+int bond_parm_tbl_lookup(int mode, const struct bond_parm_tbl *tbl);
 void bond_select_active_slave(struct bonding *bond);
 void bond_change_active_slave(struct bonding *bond, struct slave *new_active);
 void bond_create_debugfs(void);
@@ -461,6 +458,15 @@ int bond_option_fail_over_mac_set(struct bonding *bond, int fail_over_mac);
 int bond_option_xmit_hash_policy_set(struct bonding *bond,
 				     int xmit_hash_policy);
 int bond_option_resend_igmp_set(struct bonding *bond, int resend_igmp);
+int bond_option_num_peer_notif_set(struct bonding *bond, int num_peer_notif);
+int bond_option_all_slaves_active_set(struct bonding *bond,
+				      int all_slaves_active);
+int bond_option_min_links_set(struct bonding *bond, int min_links);
+int bond_option_lp_interval_set(struct bonding *bond, int min_links);
+int bond_option_packets_per_slave_set(struct bonding *bond,
+				      int packets_per_slave);
+int bond_option_lacp_rate_set(struct bonding *bond, int lacp_rate);
+int bond_option_ad_select_set(struct bonding *bond, int ad_select);
 struct net_device *bond_option_active_slave_get_rcu(struct bonding *bond);
 struct net_device *bond_option_active_slave_get(struct bonding *bond);
 

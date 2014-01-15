@@ -24,15 +24,9 @@
 #include <net/tc_act/tc_pedit.h>
 
 #define PEDIT_TAB_MASK	15
-static struct tcf_common *tcf_pedit_ht[PEDIT_TAB_MASK + 1];
 static u32 pedit_idx_gen;
-static DEFINE_RWLOCK(pedit_lock);
 
-static struct tcf_hashinfo pedit_hash_info = {
-	.htab	=	tcf_pedit_ht,
-	.hmask	=	PEDIT_TAB_MASK,
-	.lock	=	&pedit_lock,
-};
+static struct tcf_hashinfo pedit_hash_info;
 
 static const struct nla_policy pedit_policy[TCA_PEDIT_MAX + 1] = {
 	[TCA_PEDIT_PARMS]	= { .len = sizeof(struct tc_pedit) },
@@ -84,10 +78,12 @@ static int tcf_pedit_init(struct net *net, struct nlattr *nla,
 		ret = ACT_P_CREATED;
 	} else {
 		p = to_pedit(pc);
-		if (!ovr) {
-			tcf_hash_release(pc, bind, &pedit_hash_info);
+		tcf_hash_release(pc, bind, &pedit_hash_info);
+		if (bind)
+			return 0;
+		if (!ovr)
 			return -EEXIST;
-		}
+
 		if (p->tcfp_nkeys && p->tcfp_nkeys != parm->nkeys) {
 			keys = kmalloc(ksize, GFP_KERNEL);
 			if (keys == NULL)
@@ -252,11 +248,15 @@ MODULE_LICENSE("GPL");
 
 static int __init pedit_init_module(void)
 {
+	int err = tcf_hashinfo_init(&pedit_hash_info, PEDIT_TAB_MASK);
+	if (err)
+		return err;
 	return tcf_register_action(&act_pedit_ops);
 }
 
 static void __exit pedit_cleanup_module(void)
 {
+	tcf_hashinfo_destroy(&pedit_hash_info);
 	tcf_unregister_action(&act_pedit_ops);
 }
 
