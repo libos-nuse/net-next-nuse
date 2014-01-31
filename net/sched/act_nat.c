@@ -30,7 +30,6 @@
 
 
 #define NAT_TAB_MASK	15
-static u32 nat_idx_gen;
 
 static struct tcf_hashinfo nat_hash_info;
 
@@ -58,17 +57,16 @@ static int tcf_nat_init(struct net *net, struct nlattr *nla, struct nlattr *est,
 		return -EINVAL;
 	parm = nla_data(tb[TCA_NAT_PARMS]);
 
-	pc = tcf_hash_check(parm->index, a, bind, &nat_hash_info);
+	pc = tcf_hash_check(parm->index, a, bind);
 	if (!pc) {
-		pc = tcf_hash_create(parm->index, est, a, sizeof(*p), bind,
-				     &nat_idx_gen, &nat_hash_info);
+		pc = tcf_hash_create(parm->index, est, a, sizeof(*p), bind);
 		if (IS_ERR(pc))
 			return PTR_ERR(pc);
 		ret = ACT_P_CREATED;
 	} else {
 		if (bind)
 			return 0;
-		tcf_hash_release(pc, bind, &nat_hash_info);
+		tcf_hash_release(pc, bind, a->ops->hinfo);
 		if (!ovr)
 			return -EEXIST;
 	}
@@ -84,7 +82,7 @@ static int tcf_nat_init(struct net *net, struct nlattr *nla, struct nlattr *est,
 	spin_unlock_bh(&p->tcf_lock);
 
 	if (ret == ACT_P_CREATED)
-		tcf_hash_insert(pc, &nat_hash_info);
+		tcf_hash_insert(pc, a->ops->hinfo);
 
 	return ret;
 }
@@ -297,7 +295,6 @@ static struct tc_action_ops act_nat_ops = {
 	.kind		=	"nat",
 	.hinfo		=	&nat_hash_info,
 	.type		=	TCA_ACT_NAT,
-	.capab		=	TCA_CAP_NONE,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_nat,
 	.dump		=	tcf_nat_dump,

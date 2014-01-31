@@ -702,7 +702,7 @@ int brcmf_net_attach(struct brcmf_if *ifp, bool rtnl_locked)
 
 	brcmf_dbg(INFO, "%s: Broadcom Dongle Host Driver\n", ndev->name);
 
-	ndev->destructor = free_netdev;
+	ndev->destructor = brcmf_cfg80211_free_netdev;
 	return 0;
 
 fail:
@@ -859,8 +859,6 @@ void brcmf_del_if(struct brcmf_pub *drvr, s32 bssidx)
 		}
 		/* unregister will take care of freeing it */
 		unregister_netdev(ifp->ndev);
-		if (bssidx == 0)
-			brcmf_cfg80211_detach(drvr->config);
 	} else {
 		kfree(ifp);
 	}
@@ -936,7 +934,7 @@ int brcmf_bus_start(struct device *dev)
 		p2p_ifp = NULL;
 
 	/* signal bus ready */
-	bus_if->state = BRCMF_BUS_DATA;
+	brcmf_bus_change_state(bus_if, BRCMF_BUS_DATA);
 
 	/* Bus is ready, do any initialization */
 	ret = brcmf_c_preinit_dcmds(ifp);
@@ -963,8 +961,7 @@ int brcmf_bus_start(struct device *dev)
 fail:
 	if (ret < 0) {
 		brcmf_err("failed: %d\n", ret);
-		if (drvr->config)
-			brcmf_cfg80211_detach(drvr->config);
+		brcmf_cfg80211_detach(drvr->config);
 		if (drvr->fws) {
 			brcmf_fws_del_interface(ifp);
 			brcmf_fws_deinit(drvr);
@@ -1032,12 +1029,16 @@ void brcmf_detach(struct device *dev)
 	/* stop firmware event handling */
 	brcmf_fweh_detach(drvr);
 
+	brcmf_bus_change_state(bus_if, BRCMF_BUS_DOWN);
+
 	/* make sure primary interface removed last */
 	for (i = BRCMF_MAX_IFS-1; i > -1; i--)
 		if (drvr->iflist[i]) {
 			brcmf_fws_del_interface(drvr->iflist[i]);
 			brcmf_del_if(drvr, i);
 		}
+
+	brcmf_cfg80211_detach(drvr->config);
 
 	brcmf_bus_detach(drvr);
 

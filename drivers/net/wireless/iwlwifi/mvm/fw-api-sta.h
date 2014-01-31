@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -97,9 +97,6 @@ enum iwl_sta_flags {
 					   STA_FLG_FLG_ANT_B),
 
 	STA_FLG_PS			= BIT(8),
-	STA_FLG_INVALID			= BIT(9),
-	STA_FLG_DLP_EN			= BIT(10),
-	STA_FLG_SET_ALL_KEYS		= BIT(11),
 	STA_FLG_DRAIN_FLOW		= BIT(12),
 	STA_FLG_PAN			= BIT(13),
 	STA_FLG_CLASS_AUTH		= BIT(14),

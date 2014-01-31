@@ -239,6 +239,7 @@ struct ip6_flowlabel {
 #define IPV6_FLOWINFO_MASK	cpu_to_be32(0x0FFFFFFF)
 #define IPV6_FLOWLABEL_MASK	cpu_to_be32(0x000FFFFF)
 #define IPV6_TCLASS_MASK (IPV6_FLOWINFO_MASK & ~IPV6_FLOWLABEL_MASK)
+#define IPV6_TCLASS_SHIFT	20
 
 struct ipv6_fl_socklist {
 	struct ipv6_fl_socklist	__rcu	*next;
@@ -252,7 +253,8 @@ struct ipv6_txoptions *fl6_merge_options(struct ipv6_txoptions *opt_space,
 					 struct ipv6_txoptions *fopt);
 void fl6_free_socklist(struct sock *sk);
 int ipv6_flowlabel_opt(struct sock *sk, char __user *optval, int optlen);
-int ipv6_flowlabel_opt_get(struct sock *sk, struct in6_flowlabel_req *freq);
+int ipv6_flowlabel_opt_get(struct sock *sk, struct in6_flowlabel_req *freq,
+			   int flags);
 int ip6_flowlabel_init(void);
 void ip6_flowlabel_cleanup(void);
 
@@ -681,6 +683,10 @@ static inline __be32 ip6_flowlabel(const struct ipv6hdr *hdr)
 	return *(__be32 *)hdr & IPV6_FLOWLABEL_MASK;
 }
 
+static inline u8 ip6_tclass(__be32 flowinfo)
+{
+	return ntohl(flowinfo & IPV6_TCLASS_MASK) >> IPV6_TCLASS_SHIFT;
+}
 /*
  *	Prototypes exported by ipv6
  */
@@ -777,6 +783,8 @@ int compat_ipv6_getsockopt(struct sock *sk, int level, int optname,
 			   char __user *optval, int __user *optlen);
 
 int ip6_datagram_connect(struct sock *sk, struct sockaddr *addr, int addr_len);
+int ip6_datagram_connect_v6_only(struct sock *sk, struct sockaddr *addr,
+				 int addr_len);
 
 int ipv6_recv_error(struct sock *sk, struct msghdr *msg, int len,
 		    int *addr_len);

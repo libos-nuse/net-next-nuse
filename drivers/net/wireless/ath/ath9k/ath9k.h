@@ -146,7 +146,9 @@ int ath_descdma_setup(struct ath_softc *sc, struct ath_descdma *dd,
 
 #define ATH_AN_2_TID(_an, _tidno)  (&(_an)->tid[(_tidno)])
 
-#define IS_CCK_RATE(rate) ((rate >= 0x18) && (rate <= 0x1e))
+#define IS_HT_RATE(rate)   (rate & 0x80)
+#define IS_CCK_RATE(rate)  ((rate >= 0x18) && (rate <= 0x1e))
+#define IS_OFDM_RATE(rate) ((rate >= 0x8) && (rate <= 0xf))
 
 struct ath_txq {
 	int mac80211_qnum; /* mac80211 queue number, -1 means not mac80211 Q */
@@ -262,6 +264,10 @@ struct ath_node {
 
 	bool sleeping;
 	bool no_ps_filter;
+
+#ifdef CONFIG_ATH9K_STATION_STATISTICS
+	struct ath_rx_rate_stats rx_rate_stats;
+#endif
 };
 
 struct ath_tx_control {
@@ -455,10 +461,8 @@ bool ath9k_csa_is_finished(struct ath_softc *sc);
 
 void ath_tx_complete_poll_work(struct work_struct *work);
 void ath_reset_work(struct work_struct *work);
-void ath_hw_check(struct work_struct *work);
+bool ath_hw_check(struct ath_softc *sc);
 void ath_hw_pll_work(struct work_struct *work);
-void ath_rx_poll(unsigned long data);
-void ath_start_rx_poll(struct ath_softc *sc, u8 nbeacon);
 void ath_paprd_calibrate(struct work_struct *work);
 void ath_ani_calibrate(unsigned long data);
 void ath_start_ani(struct ath_softc *sc);
@@ -687,6 +691,7 @@ void ath_ant_comb_scan(struct ath_softc *sc, struct ath_rx_status *rs);
 #define DEFAULT_CACHELINE       32
 #define ATH_CABQ_READY_TIME     80      /* % of beacon interval */
 #define ATH_TXPOWER_MAX         100     /* .5 dBm units */
+#define MAX_GTT_CNT             5
 
 enum sc_op_flags {
 	SC_OP_INVALID,
@@ -722,15 +727,14 @@ struct ath_softc {
 	spinlock_t sc_pcu_lock;
 	struct mutex mutex;
 	struct work_struct paprd_work;
-	struct work_struct hw_check_work;
 	struct work_struct hw_reset_work;
 	struct completion paprd_complete;
 	wait_queue_head_t tx_wait;
 
-	unsigned int hw_busy_count;
 	unsigned long sc_flags;
 	unsigned long driver_data;
 
+	u8 gtt_cnt;
 	u32 intrstatus;
 	u16 ps_flags; /* PS_* */
 	u16 curtxpow;
@@ -761,7 +765,6 @@ struct ath_softc {
 	struct ath_beacon_config cur_beacon_conf;
 	struct delayed_work tx_complete_work;
 	struct delayed_work hw_pll_work;
-	struct timer_list rx_poll_timer;
 	struct timer_list sleep_timer;
 
 #ifdef CONFIG_ATH9K_BTCOEX_SUPPORT

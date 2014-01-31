@@ -25,7 +25,6 @@
 #include <net/tc_act/tc_defact.h>
 
 #define SIMP_TAB_MASK     7
-static u32 simp_idx_gen;
 static struct tcf_hashinfo simp_hash_info;
 
 #define SIMP_MAX_DATA	32
@@ -115,10 +114,9 @@ static int tcf_simp_init(struct net *net, struct nlattr *nla,
 	parm = nla_data(tb[TCA_DEF_PARMS]);
 	defdata = nla_data(tb[TCA_DEF_DATA]);
 
-	pc = tcf_hash_check(parm->index, a, bind, &simp_hash_info);
+	pc = tcf_hash_check(parm->index, a, bind);
 	if (!pc) {
-		pc = tcf_hash_create(parm->index, est, a, sizeof(*d), bind,
-				     &simp_idx_gen, &simp_hash_info);
+		pc = tcf_hash_create(parm->index, est, a, sizeof(*d), bind);
 		if (IS_ERR(pc))
 			return PTR_ERR(pc);
 
@@ -146,7 +144,7 @@ static int tcf_simp_init(struct net *net, struct nlattr *nla,
 	}
 
 	if (ret == ACT_P_CREATED)
-		tcf_hash_insert(pc, &simp_hash_info);
+		tcf_hash_insert(pc, a->ops->hinfo);
 	return ret;
 }
 
@@ -191,7 +189,6 @@ static struct tc_action_ops act_simp_ops = {
 	.kind		=	"simple",
 	.hinfo		=	&simp_hash_info,
 	.type		=	TCA_ACT_SIMP,
-	.capab		=	TCA_CAP_NONE,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_simp,
 	.dump		=	tcf_simp_dump,

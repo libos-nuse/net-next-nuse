@@ -67,6 +67,7 @@
 #include <net/icmp.h>
 #include <net/xfrm.h>
 #include <net/inet_common.h>
+#include <net/dsfield.h>
 
 #include <asm/uaccess.h>
 
@@ -412,7 +413,8 @@ static void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info)
 	 */
 	addr_type = ipv6_addr_type(&hdr->daddr);
 
-	if (ipv6_chk_addr(net, &hdr->daddr, skb->dev, 0))
+	if (ipv6_chk_addr(net, &hdr->daddr, skb->dev, 0) ||
+	    ipv6_anycast_destination(skb))
 		saddr = &hdr->daddr;
 
 	/*
@@ -553,11 +555,12 @@ static void icmpv6_echo_reply(struct sk_buff *skb)
 	struct dst_entry *dst;
 	int err = 0;
 	int hlimit;
+	u8 tclass;
 
 	saddr = &ipv6_hdr(skb)->daddr;
 
 	if (!ipv6_unicast_destination(skb) &&
-	    !(net->ipv6.anycast_src_echo_reply &&
+	    !(net->ipv6.sysctl.anycast_src_echo_reply &&
 	      ipv6_anycast_destination(skb)))
 		saddr = NULL;
 
@@ -603,8 +606,9 @@ static void icmpv6_echo_reply(struct sk_buff *skb)
 	msg.offset = 0;
 	msg.type = ICMPV6_ECHO_REPLY;
 
+	tclass = ipv6_get_dsfield(ipv6_hdr(skb));
 	err = ip6_append_data(sk, icmpv6_getfrag, &msg, skb->len + sizeof(struct icmp6hdr),
-				sizeof(struct icmp6hdr), hlimit, np->tclass, NULL, &fl6,
+				sizeof(struct icmp6hdr), hlimit, tclass, NULL, &fl6,
 				(struct rt6_info *)dst, MSG_DONTWAIT,
 				np->dontfrag);
 

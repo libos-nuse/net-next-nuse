@@ -1,7 +1,7 @@
 /*******************************************************************************
  *
  * Intel Ethernet Controller XL710 Family Linux Driver
- * Copyright(c) 2013 Intel Corporation.
+ * Copyright(c) 2013 - 2014 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -12,9 +12,8 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
@@ -43,20 +42,20 @@ static i40e_status i40e_set_mac_type(struct i40e_hw *hw)
 
 	if (hw->vendor_id == PCI_VENDOR_ID_INTEL) {
 		switch (hw->device_id) {
-		case I40E_SFP_XL710_DEVICE_ID:
-		case I40E_SFP_X710_DEVICE_ID:
-		case I40E_QEMU_DEVICE_ID:
-		case I40E_KX_A_DEVICE_ID:
-		case I40E_KX_B_DEVICE_ID:
-		case I40E_KX_C_DEVICE_ID:
-		case I40E_KX_D_DEVICE_ID:
-		case I40E_QSFP_A_DEVICE_ID:
-		case I40E_QSFP_B_DEVICE_ID:
-		case I40E_QSFP_C_DEVICE_ID:
+		case I40E_DEV_ID_SFP_XL710:
+		case I40E_DEV_ID_SFP_X710:
+		case I40E_DEV_ID_QEMU:
+		case I40E_DEV_ID_KX_A:
+		case I40E_DEV_ID_KX_B:
+		case I40E_DEV_ID_KX_C:
+		case I40E_DEV_ID_KX_D:
+		case I40E_DEV_ID_QSFP_A:
+		case I40E_DEV_ID_QSFP_B:
+		case I40E_DEV_ID_QSFP_C:
 			hw->mac.type = I40E_MAC_XL710;
 			break;
-		case I40E_VF_DEVICE_ID:
-		case I40E_VF_HV_DEVICE_ID:
+		case I40E_DEV_ID_VF:
+		case I40E_DEV_ID_VF_HV:
 			hw->mac.type = I40E_MAC_VF;
 			break;
 		default:
@@ -75,7 +74,8 @@ static i40e_status i40e_set_mac_type(struct i40e_hw *hw)
 /**
  * i40e_debug_aq
  * @hw: debug mask related to admin queue
- * @cap: pointer to adminq command descriptor
+ * @mask: debug mask
+ * @desc: pointer to admin queue descriptor
  * @buffer: pointer to command buffer
  *
  * Dumps debug log about adminq command with descriptor contents.
@@ -162,7 +162,6 @@ i40e_status i40e_aq_queue_shutdown(struct i40e_hw *hw,
 	return status;
 }
 
-
 /**
  * i40e_init_shared_code - Initialize the shared code
  * @hw: pointer to hardware structure
@@ -180,14 +179,6 @@ i40e_status i40e_init_shared_code(struct i40e_hw *hw)
 	i40e_status status = 0;
 	u32 reg;
 
-	hw->phy.get_link_info = true;
-
-	/* Determine port number */
-	reg = rd32(hw, I40E_PFGEN_PORTNUM);
-	reg = ((reg & I40E_PFGEN_PORTNUM_PORT_NUM_MASK) >>
-	       I40E_PFGEN_PORTNUM_PORT_NUM_SHIFT);
-	hw->port = (u8)reg;
-
 	i40e_set_mac_type(hw);
 
 	switch (hw->mac.type) {
@@ -197,6 +188,21 @@ i40e_status i40e_init_shared_code(struct i40e_hw *hw)
 		return I40E_ERR_DEVICE_NOT_SUPPORTED;
 		break;
 	}
+
+	hw->phy.get_link_info = true;
+
+	/* Determine port number */
+	reg = rd32(hw, I40E_PFGEN_PORTNUM);
+	reg = ((reg & I40E_PFGEN_PORTNUM_PORT_NUM_MASK) >>
+	       I40E_PFGEN_PORTNUM_PORT_NUM_SHIFT);
+	hw->port = (u8)reg;
+
+	/* Determine the PF number based on the PCI fn */
+	reg = rd32(hw, I40E_GLPCI_CAPSUP);
+	if (reg & I40E_GLPCI_CAPSUP_ARI_EN_MASK)
+		hw->pf_id = (u8)((hw->bus.device << 3) | hw->bus.func);
+	else
+		hw->pf_id = (u8)hw->bus.func;
 
 	status = i40e_init_nvm(hw);
 	return status;
@@ -248,8 +254,11 @@ i40e_status i40e_aq_mac_address_write(struct i40e_hw *hw,
 	i40e_fill_default_direct_cmd_desc(&desc,
 					  i40e_aqc_opc_mac_address_write);
 	cmd_data->command_flags = cpu_to_le16(flags);
-	memcpy(&cmd_data->mac_sal, &mac_addr[0], 4);
-	memcpy(&cmd_data->mac_sah, &mac_addr[4], 2);
+	cmd_data->mac_sah = cpu_to_le16((u16)mac_addr[0] << 8 | mac_addr[1]);
+	cmd_data->mac_sal = cpu_to_le32(((u32)mac_addr[2] << 24) |
+					((u32)mac_addr[3] << 16) |
+					((u32)mac_addr[4] << 8) |
+					mac_addr[5]);
 
 	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
 
@@ -335,6 +344,7 @@ static enum i40e_media_type i40e_get_media_type(struct i40e_hw *hw)
 i40e_status i40e_pf_reset(struct i40e_hw *hw)
 {
 	u32 cnt = 0;
+	u32 cnt1 = 0;
 	u32 reg = 0;
 	u32 grst_del;
 
@@ -355,12 +365,24 @@ i40e_status i40e_pf_reset(struct i40e_hw *hw)
 		return I40E_ERR_RESET_FAILED;
 	}
 
-	/* Determine the PF number based on the PCI fn */
-	reg = rd32(hw, I40E_GLPCI_CAPSUP);
-	if (reg & I40E_GLPCI_CAPSUP_ARI_EN_MASK)
-		hw->pf_id = (u8)((hw->bus.device << 3) | hw->bus.func);
-	else
-		hw->pf_id = (u8)hw->bus.func;
+	/* Now Wait for the FW to be ready */
+	for (cnt1 = 0; cnt1 < I40E_PF_RESET_WAIT_COUNT; cnt1++) {
+		reg = rd32(hw, I40E_GLNVM_ULD);
+		reg &= (I40E_GLNVM_ULD_CONF_CORE_DONE_MASK |
+			I40E_GLNVM_ULD_CONF_GLOBAL_DONE_MASK);
+		if (reg == (I40E_GLNVM_ULD_CONF_CORE_DONE_MASK |
+			    I40E_GLNVM_ULD_CONF_GLOBAL_DONE_MASK)) {
+			hw_dbg(hw, "Core and Global modules ready %d\n", cnt1);
+			break;
+		}
+		usleep_range(10000, 20000);
+	}
+	if (!(reg & (I40E_GLNVM_ULD_CONF_CORE_DONE_MASK |
+		     I40E_GLNVM_ULD_CONF_GLOBAL_DONE_MASK))) {
+		hw_dbg(hw, "wait for FW Reset complete timedout\n");
+		hw_dbg(hw, "I40E_GLNVM_ULD = 0x%x\n", reg);
+		return I40E_ERR_RESET_FAILED;
+	}
 
 	/* If there was a Global Reset in progress when we got here,
 	 * we don't need to do the PF Reset
@@ -386,6 +408,7 @@ i40e_status i40e_pf_reset(struct i40e_hw *hw)
 	}
 
 	i40e_clear_pxe_mode(hw);
+
 	return 0;
 }
 
@@ -576,8 +599,7 @@ i40e_status i40e_aq_get_link_info(struct i40e_hw *hw,
 		goto aq_get_link_info_exit;
 
 	/* save off old link status information */
-	memcpy(&hw->phy.link_info_old, hw_link_info,
-	       sizeof(struct i40e_link_status));
+	hw->phy.link_info_old = *hw_link_info;
 
 	/* update link status */
 	hw_link_info->phy_type = (enum i40e_aq_phy_type)resp->phy_type;
@@ -607,7 +629,7 @@ aq_get_link_info_exit:
 /**
  * i40e_aq_add_vsi
  * @hw: pointer to the hw struct
- * @vsi: pointer to a vsi context struct
+ * @vsi_ctx: pointer to a vsi context struct
  * @cmd_details: pointer to command details structure or NULL
  *
  * Add a VSI context to the hardware.
@@ -659,7 +681,8 @@ aq_add_vsi_exit:
  * @cmd_details: pointer to command details structure or NULL
  **/
 i40e_status i40e_aq_set_vsi_unicast_promiscuous(struct i40e_hw *hw,
-				u16 seid, bool set, struct i40e_asq_cmd_details *cmd_details)
+				u16 seid, bool set,
+				struct i40e_asq_cmd_details *cmd_details)
 {
 	struct i40e_aq_desc desc;
 	struct i40e_aqc_set_vsi_promiscuous_modes *cmd =
@@ -753,7 +776,7 @@ i40e_status i40e_aq_set_vsi_broadcast(struct i40e_hw *hw,
 /**
  * i40e_get_vsi_params - get VSI configuration info
  * @hw: pointer to the hw struct
- * @vsi: pointer to a vsi context struct
+ * @vsi_ctx: pointer to a vsi context struct
  * @cmd_details: pointer to command details structure or NULL
  **/
 i40e_status i40e_aq_get_vsi_params(struct i40e_hw *hw,
@@ -795,7 +818,7 @@ aq_get_vsi_params_exit:
 /**
  * i40e_aq_update_vsi_params
  * @hw: pointer to the hw struct
- * @vsi: pointer to a vsi context struct
+ * @vsi_ctx: pointer to a vsi context struct
  * @cmd_details: pointer to command details structure or NULL
  *
  * Update a VSI context.
@@ -898,7 +921,6 @@ i40e_status i40e_aq_get_firmware_version(struct i40e_hw *hw,
 /**
  * i40e_aq_send_driver_version
  * @hw: pointer to the hw struct
- * @event: driver event: driver ok, start or stop
  * @dv: driver's major, minor version
  * @cmd_details: pointer to command details structure or NULL
  *
@@ -1016,10 +1038,10 @@ i40e_status i40e_aq_add_veb(struct i40e_hw *hw, u16 uplink_seid,
  * @hw: pointer to the hw struct
  * @veb_seid: the SEID of the VEB to query
  * @switch_id: the uplink switch id
- * @floating_veb: set to true if the VEB is floating
+ * @floating: set to true if the VEB is floating
  * @statistic_index: index of the stats counter block for this VEB
  * @vebs_used: number of VEB's used by function
- * @vebs_unallocated: total VEB's not reserved by any function
+ * @vebs_free: total VEB's not reserved by any function
  * @cmd_details: pointer to command details structure or NULL
  *
  * This retrieves the parameters for a particular VEB, specified by
@@ -1156,6 +1178,8 @@ i40e_status i40e_aq_remove_macvlan(struct i40e_hw *hw, u16 seid,
  * i40e_aq_send_msg_to_vf
  * @hw: pointer to the hardware structure
  * @vfid: vf id to send msg
+ * @v_opcode: opcodes for VF-PF communication
+ * @v_retval: return error code
  * @msg: pointer to the msg buffer
  * @msglen: msg length
  * @cmd_details: pointer to command details
@@ -1533,8 +1557,8 @@ i40e_status i40e_aq_discover_capabilities(struct i40e_hw *hw,
 				struct i40e_asq_cmd_details *cmd_details)
 {
 	struct i40e_aqc_list_capabilites *cmd;
-	i40e_status status = 0;
 	struct i40e_aq_desc desc;
+	i40e_status status = 0;
 
 	cmd = (struct i40e_aqc_list_capabilites *)&desc.params.raw;
 
@@ -1700,6 +1724,7 @@ i40e_status i40e_aq_start_lldp(struct i40e_hw *hw,
  * @udp_port: the UDP port to add
  * @header_len: length of the tunneling header length in DWords
  * @protocol_index: protocol index type
+ * @filter_index: pointer to filter index
  * @cmd_details: pointer to command details structure or NULL
  **/
 i40e_status i40e_aq_add_udp_tunnel(struct i40e_hw *hw,
@@ -1717,8 +1742,7 @@ i40e_status i40e_aq_add_udp_tunnel(struct i40e_hw *hw,
 	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_add_udp_tunnel);
 
 	cmd->udp_port = cpu_to_le16(udp_port);
-	cmd->header_len = header_len;
-	cmd->protocol_index = protocol_index;
+	cmd->protocol_type = protocol_index;
 
 	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
 
@@ -1773,6 +1797,28 @@ i40e_status i40e_aq_delete_element(struct i40e_hw *hw, u16 seid,
 	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_delete_element);
 
 	cmd->seid = cpu_to_le16(seid);
+
+	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
+
+	return status;
+}
+
+/**
+ * i40e_aq_dcb_updated - DCB Updated Command
+ * @hw: pointer to the hw struct
+ * @cmd_details: pointer to command details structure or NULL
+ *
+ * EMP will return when the shared RPB settings have been
+ * recomputed and modified. The retval field in the descriptor
+ * will be set to 0 when RPB is modified.
+ **/
+i40e_status i40e_aq_dcb_updated(struct i40e_hw *hw,
+				struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	i40e_status status;
+
+	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_dcb_updated);
 
 	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
 
@@ -1855,6 +1901,40 @@ i40e_status i40e_aq_config_vsi_tc_bw(struct i40e_hw *hw,
 	return i40e_aq_tx_sched_cmd(hw, seid, (void *)bw_data, sizeof(*bw_data),
 				    i40e_aqc_opc_configure_vsi_tc_bw,
 				    cmd_details);
+}
+
+/**
+ * i40e_aq_config_switch_comp_ets - Enable/Disable/Modify ETS on the port
+ * @hw: pointer to the hw struct
+ * @seid: seid of the switching component connected to Physical Port
+ * @ets_data: Buffer holding ETS parameters
+ * @cmd_details: pointer to command details structure or NULL
+ **/
+i40e_status i40e_aq_config_switch_comp_ets(struct i40e_hw *hw,
+		u16 seid,
+		struct i40e_aqc_configure_switching_comp_ets_data *ets_data,
+		enum i40e_admin_queue_opc opcode,
+		struct i40e_asq_cmd_details *cmd_details)
+{
+	return i40e_aq_tx_sched_cmd(hw, seid, (void *)ets_data,
+				    sizeof(*ets_data), opcode, cmd_details);
+}
+
+/**
+ * i40e_aq_config_switch_comp_bw_config - Config Switch comp BW Alloc per TC
+ * @hw: pointer to the hw struct
+ * @seid: seid of the switching component
+ * @bw_data: Buffer holding enabled TCs, relative/absolute TC BW limit/credits
+ * @cmd_details: pointer to command details structure or NULL
+ **/
+i40e_status i40e_aq_config_switch_comp_bw_config(struct i40e_hw *hw,
+	u16 seid,
+	struct i40e_aqc_configure_switching_comp_bw_config_data *bw_data,
+	struct i40e_asq_cmd_details *cmd_details)
+{
+	return i40e_aq_tx_sched_cmd(hw, seid, (void *)bw_data, sizeof(*bw_data),
+			    i40e_aqc_opc_configure_switching_comp_bw_config,
+			    cmd_details);
 }
 
 /**
@@ -2110,6 +2190,69 @@ i40e_status i40e_set_filter_control(struct i40e_hw *hw,
 
 	return 0;
 }
+
+/**
+ * i40e_aq_add_rem_control_packet_filter - Add or Remove Control Packet Filter
+ * @hw: pointer to the hw struct
+ * @mac_addr: MAC address to use in the filter
+ * @ethtype: Ethertype to use in the filter
+ * @flags: Flags that needs to be applied to the filter
+ * @vsi_seid: seid of the control VSI
+ * @queue: VSI queue number to send the packet to
+ * @is_add: Add control packet filter if True else remove
+ * @stats: Structure to hold information on control filter counts
+ * @cmd_details: pointer to command details structure or NULL
+ *
+ * This command will Add or Remove control packet filter for a control VSI.
+ * In return it will update the total number of perfect filter count in
+ * the stats member.
+ **/
+i40e_status i40e_aq_add_rem_control_packet_filter(struct i40e_hw *hw,
+				u8 *mac_addr, u16 ethtype, u16 flags,
+				u16 vsi_seid, u16 queue, bool is_add,
+				struct i40e_control_filter_stats *stats,
+				struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_add_remove_control_packet_filter *cmd =
+		(struct i40e_aqc_add_remove_control_packet_filter *)
+		&desc.params.raw;
+	struct i40e_aqc_add_remove_control_packet_filter_completion *resp =
+		(struct i40e_aqc_add_remove_control_packet_filter_completion *)
+		&desc.params.raw;
+	i40e_status status;
+
+	if (vsi_seid == 0)
+		return I40E_ERR_PARAM;
+
+	if (is_add) {
+		i40e_fill_default_direct_cmd_desc(&desc,
+				i40e_aqc_opc_add_control_packet_filter);
+		cmd->queue = cpu_to_le16(queue);
+	} else {
+		i40e_fill_default_direct_cmd_desc(&desc,
+				i40e_aqc_opc_remove_control_packet_filter);
+	}
+
+	if (mac_addr)
+		memcpy(cmd->mac, mac_addr, ETH_ALEN);
+
+	cmd->etype = cpu_to_le16(ethtype);
+	cmd->flags = cpu_to_le16(flags);
+	cmd->seid = cpu_to_le16(vsi_seid);
+
+	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
+
+	if (!status && stats) {
+		stats->mac_etype_used = le16_to_cpu(resp->mac_etype_used);
+		stats->etype_used = le16_to_cpu(resp->etype_used);
+		stats->mac_etype_free = le16_to_cpu(resp->mac_etype_free);
+		stats->etype_free = le16_to_cpu(resp->etype_free);
+	}
+
+	return status;
+}
+
 /**
  * i40e_set_pci_config_data - store PCI bus info
  * @hw: pointer to hardware structure

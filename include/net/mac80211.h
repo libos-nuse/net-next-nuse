@@ -1616,8 +1616,6 @@ enum ieee80211_hw_flags {
  * @extra_beacon_tailroom: tailroom to reserve in each beacon tx skb.
  *	Can be used by drivers to add extra IEs.
  *
- * @channel_change_time: time (in microseconds) it takes to change channels.
- *
  * @max_signal: Maximum value for signal (rssi) in RX information, used
  *	only when @IEEE80211_HW_SIGNAL_UNSPEC or @IEEE80211_HW_SIGNAL_DB
  *
@@ -1699,7 +1697,6 @@ struct ieee80211_hw {
 	u32 flags;
 	unsigned int extra_tx_headroom;
 	unsigned int extra_beacon_tailroom;
-	int channel_change_time;
 	int vif_data_size;
 	int sta_data_size;
 	int chanctx_data_size;
@@ -2122,6 +2119,11 @@ void ieee80211_free_txskb(struct ieee80211_hw *hw, struct sk_buff *skb);
  * appropriately (only the last frame may have %IEEE80211_TX_STATUS_EOSP)
  * and also take care of the EOSP and MORE_DATA bits in the frame.
  * The driver may also use ieee80211_sta_eosp() in this case.
+ *
+ * Note that if the driver ever buffers frames other than QoS-data
+ * frames, it must take care to never send a non-QoS-data frame as
+ * the last frame in a service period, adding a QoS-nulldata frame
+ * after a non-QoS-data frame if needed.
  */
 
 /**
@@ -4651,5 +4653,52 @@ void ieee80211_report_wowlan_wakeup(struct ieee80211_vif *vif,
 bool ieee80211_tx_prepare_skb(struct ieee80211_hw *hw,
 			      struct ieee80211_vif *vif, struct sk_buff *skb,
 			      int band, struct ieee80211_sta **sta);
+
+/**
+ * struct ieee80211_noa_data - holds temporary data for tracking P2P NoA state
+ *
+ * @next_tsf: TSF timestamp of the next absent state change
+ * @has_next_tsf: next absent state change event pending
+ *
+ * @absent: descriptor bitmask, set if GO is currently absent
+ *
+ * private:
+ *
+ * @count: count fields from the NoA descriptors
+ * @desc: adjusted data from the NoA
+ */
+struct ieee80211_noa_data {
+	u32 next_tsf;
+	bool has_next_tsf;
+
+	u8 absent;
+
+	u8 count[IEEE80211_P2P_NOA_DESC_MAX];
+	struct {
+		u32 start;
+		u32 duration;
+		u32 interval;
+	} desc[IEEE80211_P2P_NOA_DESC_MAX];
+};
+
+/**
+ * ieee80211_parse_p2p_noa - initialize NoA tracking data from P2P IE
+ *
+ * @attr: P2P NoA IE
+ * @data: NoA tracking data
+ * @tsf: current TSF timestamp
+ *
+ * Return: number of successfully parsed descriptors
+ */
+int ieee80211_parse_p2p_noa(const struct ieee80211_p2p_noa_attr *attr,
+			    struct ieee80211_noa_data *data, u32 tsf);
+
+/**
+ * ieee80211_update_p2p_noa - get next pending P2P GO absent state change
+ *
+ * @data: NoA tracking data
+ * @tsf: current TSF timestamp
+ */
+void ieee80211_update_p2p_noa(struct ieee80211_noa_data *data, u32 tsf);
 
 #endif /* MAC80211_H */

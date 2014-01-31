@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2005 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2005 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2005 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2005 - 2014 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -276,5 +276,9 @@ static inline unsigned int SCD_QUEUE_STATUS_BITS(unsigned int chnl)
 }
 
 /*********************** END TX SCHEDULER *************************************/
+
+/* Oscillator clock */
+#define OSC_CLK				(0xa04068)
+#define OSC_CLK_FORCE_CONTROL		(0x8)
 
 #endif				/* __iwl_prph_h__ */

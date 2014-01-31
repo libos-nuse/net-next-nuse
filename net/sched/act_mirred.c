@@ -30,7 +30,6 @@
 #include <linux/if_arp.h>
 
 #define MIRRED_TAB_MASK     7
-static u32 mirred_idx_gen;
 static LIST_HEAD(mirred_list);
 static struct tcf_hashinfo mirred_hash_info;
 
@@ -102,12 +101,11 @@ static int tcf_mirred_init(struct net *net, struct nlattr *nla,
 		dev = NULL;
 	}
 
-	pc = tcf_hash_check(parm->index, a, bind, &mirred_hash_info);
+	pc = tcf_hash_check(parm->index, a, bind);
 	if (!pc) {
 		if (dev == NULL)
 			return -EINVAL;
-		pc = tcf_hash_create(parm->index, est, a, sizeof(*m), bind,
-				     &mirred_idx_gen, &mirred_hash_info);
+		pc = tcf_hash_create(parm->index, est, a, sizeof(*m), bind);
 		if (IS_ERR(pc))
 			return PTR_ERR(pc);
 		ret = ACT_P_CREATED;
@@ -133,7 +131,7 @@ static int tcf_mirred_init(struct net *net, struct nlattr *nla,
 	spin_unlock_bh(&m->tcf_lock);
 	if (ret == ACT_P_CREATED) {
 		list_add(&m->tcfm_list, &mirred_list);
-		tcf_hash_insert(pc, &mirred_hash_info);
+		tcf_hash_insert(pc, a->ops->hinfo);
 	}
 
 	return ret;
@@ -258,7 +256,6 @@ static struct tc_action_ops act_mirred_ops = {
 	.kind		=	"mirred",
 	.hinfo		=	&mirred_hash_info,
 	.type		=	TCA_ACT_MIRRED,
-	.capab		=	TCA_CAP_NONE,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_mirred,
 	.dump		=	tcf_mirred_dump,

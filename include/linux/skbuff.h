@@ -771,6 +771,11 @@ static inline __u32 skb_get_hash(struct sk_buff *skb)
 	return skb->rxhash;
 }
 
+static inline __u32 skb_get_hash_raw(const struct sk_buff *skb)
+{
+	return skb->rxhash;
+}
+
 static inline void skb_clear_hash(struct sk_buff *skb)
 {
 	skb->rxhash = 0;
@@ -827,7 +832,7 @@ static inline struct skb_shared_hwtstamps *skb_hwtstamps(struct sk_buff *skb)
  */
 static inline int skb_queue_empty(const struct sk_buff_head *list)
 {
-	return list->next == (struct sk_buff *)list;
+	return list->next == (const struct sk_buff *) list;
 }
 
 /**
@@ -840,7 +845,7 @@ static inline int skb_queue_empty(const struct sk_buff_head *list)
 static inline bool skb_queue_is_last(const struct sk_buff_head *list,
 				     const struct sk_buff *skb)
 {
-	return skb->next == (struct sk_buff *)list;
+	return skb->next == (const struct sk_buff *) list;
 }
 
 /**
@@ -853,7 +858,7 @@ static inline bool skb_queue_is_last(const struct sk_buff_head *list,
 static inline bool skb_queue_is_first(const struct sk_buff_head *list,
 				      const struct sk_buff *skb)
 {
-	return skb->prev == (struct sk_buff *)list;
+	return skb->prev == (const struct sk_buff *) list;
 }
 
 /**
@@ -2892,6 +2897,8 @@ static inline void skb_checksum_none_assert(const struct sk_buff *skb)
 }
 
 bool skb_partial_csum_set(struct sk_buff *skb, u16 start, u16 off);
+
+int skb_checksum_setup(struct sk_buff *skb, bool recalculate);
 
 u32 __skb_get_poff(const struct sk_buff *skb);
 

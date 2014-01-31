@@ -147,6 +147,9 @@ static int l2cap_sock_bind(struct socket *sock, struct sockaddr *addr, int alen)
 		    __le16_to_cpu(la.l2_psm) == L2CAP_PSM_RFCOMM)
 			chan->sec_level = BT_SECURITY_SDP;
 		break;
+	case L2CAP_CHAN_RAW:
+		chan->sec_level = BT_SECURITY_SDP;
+		break;
 	}
 
 	bacpy(&chan->src, &la.l2_bdaddr);
@@ -1410,7 +1413,7 @@ static void l2cap_sock_destruct(struct sock *sk)
 static void l2cap_skb_msg_name(struct sk_buff *skb, void *msg_name,
 			       int *msg_namelen)
 {
-	struct sockaddr_l2 *la = (struct sockaddr_l2 *) msg_name;
+	DECLARE_SOCKADDR(struct sockaddr_l2 *, la, msg_name);
 
 	memset(la, 0, sizeof(struct sockaddr_l2));
 	la->l2_family = AF_BLUETOOTH;

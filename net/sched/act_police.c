@@ -41,7 +41,6 @@ struct tcf_police {
 	container_of(pc, struct tcf_police, common)
 
 #define POL_TAB_MASK     15
-static u32 police_idx_gen;
 static struct tcf_hashinfo police_hash_info;
 
 /* old policer structure from before tc actions */
@@ -60,17 +59,18 @@ struct tc_police_compat {
 static int tcf_act_police_walker(struct sk_buff *skb, struct netlink_callback *cb,
 			      int type, struct tc_action *a)
 {
+	struct tcf_hashinfo *hinfo = a->ops->hinfo;
 	struct hlist_head *head;
 	struct tcf_common *p;
 	int err = 0, index = -1, i = 0, s_i = 0, n_i = 0;
 	struct nlattr *nest;
 
-	spin_lock_bh(&police_hash_info.lock);
+	spin_lock_bh(&hinfo->lock);
 
 	s_i = cb->args[0];
 
 	for (i = 0; i < (POL_TAB_MASK + 1); i++) {
-		head = &police_hash_info.htab[tcf_hash(i, POL_TAB_MASK)];
+		head = &hinfo->htab[tcf_hash(i, POL_TAB_MASK)];
 
 		hlist_for_each_entry_rcu(p, head, tcfc_head) {
 			index++;
@@ -95,7 +95,7 @@ static int tcf_act_police_walker(struct sk_buff *skb, struct netlink_callback *c
 		}
 	}
 done:
-	spin_unlock_bh(&police_hash_info.lock);
+	spin_unlock_bh(&hinfo->lock);
 	if (n_i)
 		cb->args[0] += n_i;
 	return n_i;
@@ -103,20 +103,6 @@ done:
 nla_put_failure:
 	nla_nest_cancel(skb, nest);
 	goto done;
-}
-
-static void tcf_police_destroy(struct tcf_police *p)
-{
-	spin_lock_bh(&police_hash_info.lock);
-	hlist_del(&p->tcf_head);
-	spin_unlock_bh(&police_hash_info.lock);
-	gen_kill_estimator(&p->tcf_bstats,
-			   &p->tcf_rate_est);
-	/*
-	 * gen_estimator est_timer() might access p->tcf_lock
-	 * or bstats, wait a RCU grace period before freeing p
-	 */
-	kfree_rcu(p, tcf_rcu);
 }
 
 static const struct nla_policy police_policy[TCA_POLICE_MAX + 1] = {
@@ -136,6 +122,7 @@ static int tcf_act_police_locate(struct net *net, struct nlattr *nla,
 	struct tc_police *parm;
 	struct tcf_police *police;
 	struct qdisc_rate_table *R_tab = NULL, *P_tab = NULL;
+	struct tcf_hashinfo *hinfo = a->ops->hinfo;
 	int size;
 
 	if (nla == NULL)
@@ -153,12 +140,8 @@ static int tcf_act_police_locate(struct net *net, struct nlattr *nla,
 	parm = nla_data(tb[TCA_POLICE_TBF]);
 
 	if (parm->index) {
-		struct tcf_common *pc;
-
-		pc = tcf_hash_lookup(parm->index, &police_hash_info);
-		if (pc != NULL) {
-			a->priv = pc;
-			police = to_police(pc);
+		if (tcf_hash_search(a, parm->index)) {
+			police = to_police(a->priv);
 			if (bind) {
 				police->tcf_bindcnt += 1;
 				police->tcf_refcnt += 1;
@@ -251,11 +234,11 @@ override:
 
 	police->tcfp_t_c = ktime_to_ns(ktime_get());
 	police->tcf_index = parm->index ? parm->index :
-		tcf_hash_new_index(&police_idx_gen, &police_hash_info);
+		tcf_hash_new_index(a->ops->hinfo);
 	h = tcf_hash(police->tcf_index, POL_TAB_MASK);
-	spin_lock_bh(&police_hash_info.lock);
-	hlist_add_head(&police->tcf_head, &police_hash_info.htab[h]);
-	spin_unlock_bh(&police_hash_info.lock);
+	spin_lock_bh(&hinfo->lock);
+	hlist_add_head(&police->tcf_head, &hinfo->htab[h]);
+	spin_unlock_bh(&hinfo->lock);
 
 	a->priv = police;
 	return ret;
@@ -273,19 +256,9 @@ failure:
 static int tcf_act_police_cleanup(struct tc_action *a, int bind)
 {
 	struct tcf_police *p = a->priv;
-	int ret = 0;
-
-	if (p != NULL) {
-		if (bind)
-			p->tcf_bindcnt--;
-
-		p->tcf_refcnt--;
-		if (p->tcf_refcnt <= 0 && !p->tcf_bindcnt) {
-			tcf_police_destroy(p);
-			ret = 1;
-		}
-	}
-	return ret;
+	if (p)
+		return tcf_hash_release(&p->common, bind, &police_hash_info);
+	return 0;
 }
 
 static int tcf_act_police(struct sk_buff *skb, const struct tc_action *a,
@@ -386,7 +359,6 @@ static struct tc_action_ops act_police_ops = {
 	.kind		=	"police",
 	.hinfo		=	&police_hash_info,
 	.type		=	TCA_ID_POLICE,
-	.capab		=	TCA_CAP_NONE,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_act_police,
 	.dump		=	tcf_act_police_dump,

@@ -700,7 +700,6 @@ static int llcp_sock_connect(struct socket *sock, struct sockaddr *_addr,
 
 	llcp_sock->dev = dev;
 	llcp_sock->local = nfc_llcp_local_get(local);
-	llcp_sock->remote_miu = llcp_sock->local->remote_miu;
 	llcp_sock->ssap = nfc_llcp_get_local_ssap(local);
 	if (llcp_sock->ssap == LLCP_SAP_MAX) {
 		ret = -ENOMEM;
@@ -770,8 +769,8 @@ static int llcp_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 	lock_sock(sk);
 
 	if (sk->sk_type == SOCK_DGRAM) {
-		struct sockaddr_nfc_llcp *addr =
-			(struct sockaddr_nfc_llcp *)msg->msg_name;
+		DECLARE_SOCKADDR(struct sockaddr_nfc_llcp *, addr,
+				 msg->msg_name);
 
 		if (msg->msg_namelen < sizeof(*addr)) {
 			release_sock(sk);
@@ -843,8 +842,8 @@ static int llcp_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 	if (sk->sk_type == SOCK_DGRAM && msg->msg_name) {
 		struct nfc_llcp_ui_cb *ui_cb = nfc_llcp_ui_skb_cb(skb);
-		struct sockaddr_nfc_llcp *sockaddr =
-			(struct sockaddr_nfc_llcp *) msg->msg_name;
+		DECLARE_SOCKADDR(struct sockaddr_nfc_llcp *, sockaddr,
+				 msg->msg_name);
 
 		msg->msg_namelen = sizeof(struct sockaddr_nfc_llcp);
 

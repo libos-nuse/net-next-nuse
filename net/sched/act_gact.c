@@ -24,13 +24,12 @@
 #include <net/tc_act/tc_gact.h>
 
 #define GACT_TAB_MASK	15
-static u32 gact_idx_gen;
 static struct tcf_hashinfo gact_hash_info;
 
 #ifdef CONFIG_GACT_PROB
 static int gact_net_rand(struct tcf_gact *gact)
 {
-	if (!gact->tcfg_pval || net_random() % gact->tcfg_pval)
+	if (!gact->tcfg_pval || prandom_u32() % gact->tcfg_pval)
 		return gact->tcf_action;
 	return gact->tcfg_paction;
 }
@@ -87,17 +86,16 @@ static int tcf_gact_init(struct net *net, struct nlattr *nla,
 	}
 #endif
 
-	pc = tcf_hash_check(parm->index, a, bind, &gact_hash_info);
+	pc = tcf_hash_check(parm->index, a, bind);
 	if (!pc) {
-		pc = tcf_hash_create(parm->index, est, a, sizeof(*gact),
-				     bind, &gact_idx_gen, &gact_hash_info);
+		pc = tcf_hash_create(parm->index, est, a, sizeof(*gact), bind);
 		if (IS_ERR(pc))
 			return PTR_ERR(pc);
 		ret = ACT_P_CREATED;
 	} else {
 		if (bind)/* dont override defaults */
 			return 0;
-		tcf_hash_release(pc, bind, &gact_hash_info);
+		tcf_hash_release(pc, bind, a->ops->hinfo);
 		if (!ovr)
 			return -EEXIST;
 	}
@@ -115,7 +113,7 @@ static int tcf_gact_init(struct net *net, struct nlattr *nla,
 #endif
 	spin_unlock_bh(&gact->tcf_lock);
 	if (ret == ACT_P_CREATED)
-		tcf_hash_insert(pc, &gact_hash_info);
+		tcf_hash_insert(pc, a->ops->hinfo);
 	return ret;
 }
 
@@ -124,7 +122,7 @@ static int tcf_gact_cleanup(struct tc_action *a, int bind)
 	struct tcf_gact *gact = a->priv;
 
 	if (gact)
-		return tcf_hash_release(&gact->common, bind, &gact_hash_info);
+		return tcf_hash_release(&gact->common, bind, a->ops->hinfo);
 	return 0;
 }
 
@@ -195,7 +193,6 @@ static struct tc_action_ops act_gact_ops = {
 	.kind		=	"gact",
 	.hinfo		=	&gact_hash_info,
 	.type		=	TCA_ACT_GACT,
-	.capab		=	TCA_CAP_NONE,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_gact,
 	.dump		=	tcf_gact_dump,

@@ -1,7 +1,7 @@
 /*******************************************************************************
  *
  * Intel Ethernet Controller XL710 Family Linux Driver
- * Copyright(c) 2013 Intel Corporation.
+ * Copyright(c) 2013 - 2014 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -12,9 +12,8 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
@@ -109,6 +108,8 @@ static struct i40e_stats i40e_gstrings_stats[] = {
 	I40E_PF_STAT("rx_oversize", stats.rx_oversize),
 	I40E_PF_STAT("rx_jabber", stats.rx_jabber),
 	I40E_PF_STAT("VF_admin_queue_requests", vf_aq_requests),
+	I40E_PF_STAT("tx_hwtstamp_timeouts", tx_hwtstamp_timeouts),
+	I40E_PF_STAT("rx_hwtstamp_cleared", rx_hwtstamp_cleared),
 };
 
 #define I40E_QUEUE_STATS_LEN(n) \
@@ -749,7 +750,36 @@ static void i40e_get_strings(struct net_device *netdev, u32 stringset,
 static int i40e_get_ts_info(struct net_device *dev,
 			    struct ethtool_ts_info *info)
 {
-	return ethtool_op_get_ts_info(dev, info);
+	struct i40e_pf *pf = i40e_netdev_to_pf(dev);
+
+	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
+				SOF_TIMESTAMPING_RX_SOFTWARE |
+				SOF_TIMESTAMPING_SOFTWARE |
+				SOF_TIMESTAMPING_TX_HARDWARE |
+				SOF_TIMESTAMPING_RX_HARDWARE |
+				SOF_TIMESTAMPING_RAW_HARDWARE;
+
+	if (pf->ptp_clock)
+		info->phc_index = ptp_clock_index(pf->ptp_clock);
+	else
+		info->phc_index = -1;
+
+	info->tx_types = (1 << HWTSTAMP_TX_OFF) | (1 << HWTSTAMP_TX_ON);
+
+	info->rx_filters = (1 << HWTSTAMP_FILTER_NONE) |
+			   (1 << HWTSTAMP_FILTER_PTP_V1_L4_SYNC) |
+			   (1 << HWTSTAMP_FILTER_PTP_V1_L4_DELAY_REQ) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_EVENT) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_L2_EVENT) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_L4_EVENT) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_SYNC) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_L2_SYNC) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_L4_SYNC) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_DELAY_REQ) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ) |
+			   (1 << HWTSTAMP_FILTER_PTP_V2_L4_DELAY_REQ);
+
+	return 0;
 }
 
 static int i40e_link_test(struct net_device *netdev, u64 *data)
@@ -1105,6 +1135,7 @@ static int i40e_get_rxnfc(struct net_device *netdev, struct ethtool_rxnfc *cmd,
 		ret = i40e_get_rss_hash_opts(pf, cmd);
 		break;
 	case ETHTOOL_GRXCLSRLCNT:
+		cmd->rule_cnt = 10;
 		ret = 0;
 		break;
 	case ETHTOOL_GRXCLSRULE:
@@ -1244,6 +1275,7 @@ static int i40e_set_rss_hash_opt(struct i40e_pf *pf, struct ethtool_rxnfc *nfc)
 }
 
 #define IP_HEADER_OFFSET 14
+#define I40E_UDPIP_DUMMY_PACKET_LEN 42
 /**
  * i40e_add_del_fdir_udpv4 - Add/Remove UDPv4 Flow Director filters for
  * a specific flow spec
@@ -1264,6 +1296,12 @@ static int i40e_add_del_fdir_udpv4(struct i40e_vsi *vsi,
 	bool err = false;
 	int ret;
 	int i;
+	char packet[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08, 0,
+			 0x45, 0, 0, 0x1c, 0, 0, 0x40, 0, 0x40, 0x11,
+			 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			 0, 0, 0, 0, 0, 0, 0, 0};
+
+	memcpy(fd_data->raw_packet, packet, I40E_UDPIP_DUMMY_PACKET_LEN);
 
 	ip = (struct iphdr *)(fd_data->raw_packet + IP_HEADER_OFFSET);
 	udp = (struct udphdr *)(fd_data->raw_packet + IP_HEADER_OFFSET
@@ -1294,6 +1332,7 @@ static int i40e_add_del_fdir_udpv4(struct i40e_vsi *vsi,
 	return err ? -EOPNOTSUPP : 0;
 }
 
+#define I40E_TCPIP_DUMMY_PACKET_LEN 54
 /**
  * i40e_add_del_fdir_tcpv4 - Add/Remove TCPv4 Flow Director filters for
  * a specific flow spec
@@ -1313,6 +1352,14 @@ static int i40e_add_del_fdir_tcpv4(struct i40e_vsi *vsi,
 	struct iphdr *ip;
 	bool err = false;
 	int ret;
+	/* Dummy packet */
+	char packet[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08, 0,
+			 0x45, 0, 0, 0x28, 0, 0, 0x40, 0, 0x40, 0x6,
+			 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			 0x80, 0x11, 0x0, 0x72, 0, 0, 0, 0};
+
+	memcpy(fd_data->raw_packet, packet, I40E_TCPIP_DUMMY_PACKET_LEN);
 
 	ip = (struct iphdr *)(fd_data->raw_packet + IP_HEADER_OFFSET);
 	tcp = (struct tcphdr *)(fd_data->raw_packet + IP_HEADER_OFFSET
@@ -1320,6 +1367,15 @@ static int i40e_add_del_fdir_tcpv4(struct i40e_vsi *vsi,
 
 	ip->daddr = fsp->h_u.tcp_ip4_spec.ip4dst;
 	tcp->dest = fsp->h_u.tcp_ip4_spec.pdst;
+	ip->saddr = fsp->h_u.tcp_ip4_spec.ip4src;
+	tcp->source = fsp->h_u.tcp_ip4_spec.psrc;
+
+	if (add) {
+		if (pf->flags & I40E_FLAG_FD_ATR_ENABLED) {
+			dev_info(&pf->pdev->dev, "Forcing ATR off, sideband rules for TCP/IPv4 flow being applied\n");
+			pf->flags &= ~I40E_FLAG_FD_ATR_ENABLED;
+		}
+	}
 
 	fd_data->pctype = I40E_FILTER_PCTYPE_NONF_IPV4_TCP_SYN;
 	ret = i40e_program_fdir_filter(fd_data, pf, add);
@@ -1333,9 +1389,6 @@ static int i40e_add_del_fdir_tcpv4(struct i40e_vsi *vsi,
 		dev_info(&pf->pdev->dev, "Filter OK for PCTYPE %d (ret = %d)\n",
 			 fd_data->pctype, ret);
 	}
-
-	ip->saddr = fsp->h_u.tcp_ip4_spec.ip4src;
-	tcp->source = fsp->h_u.tcp_ip4_spec.psrc;
 
 	fd_data->pctype = I40E_FILTER_PCTYPE_NONF_IPV4_TCP;
 
@@ -1370,6 +1423,7 @@ static int i40e_add_del_fdir_sctpv4(struct i40e_vsi *vsi,
 	return -EOPNOTSUPP;
 }
 
+#define I40E_IP_DUMMY_PACKET_LEN 34
 /**
  * i40e_add_del_fdir_ipv4 - Add/Remove IPv4 Flow Director filters for
  * a specific flow spec
@@ -1389,7 +1443,11 @@ static int i40e_add_del_fdir_ipv4(struct i40e_vsi *vsi,
 	bool err = false;
 	int ret;
 	int i;
+	char packet[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08, 0,
+			 0x45, 0, 0, 0x14, 0, 0, 0x40, 0, 0x40, 0x10,
+			 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
+	memcpy(fd_data->raw_packet, packet, I40E_IP_DUMMY_PACKET_LEN);
 	ip = (struct iphdr *)(fd_data->raw_packet + IP_HEADER_OFFSET);
 
 	ip->saddr = fsp->h_u.usr_ip4_spec.ip4src;
@@ -1458,8 +1516,8 @@ static int i40e_add_del_fdir_ethtool(struct i40e_vsi *vsi,
 	fd_data.flex_off = 0;
 	fd_data.pctype = 0;
 	fd_data.dest_vsi = vsi->id;
-	fd_data.dest_ctl = 0;
-	fd_data.fd_status = 0;
+	fd_data.dest_ctl = I40E_FILTER_PROGRAM_DESC_DEST_DIRECT_PACKET_QINDEX;
+	fd_data.fd_status = I40E_FILTER_PROGRAM_DESC_FD_STATUS_FD_ID;
 	fd_data.cnt_index = 0;
 	fd_data.fd_id = 0;
 
@@ -1502,6 +1560,7 @@ static int i40e_add_del_fdir_ethtool(struct i40e_vsi *vsi,
 
 	return ret;
 }
+
 /**
  * i40e_set_rxnfc - command to set RX flow classification rules
  * @netdev: network interface device structure
@@ -1564,7 +1623,7 @@ static void i40e_get_channels(struct net_device *dev,
 	ch->max_combined = i40e_max_channels(vsi);
 
 	/* report info for other vector */
-	ch->other_count = (pf->flags & I40E_FLAG_FDIR_ENABLED) ? 1 : 0;
+	ch->other_count = (pf->flags & I40E_FLAG_FD_SB_ENABLED) ? 1 : 0;
 	ch->max_other = ch->other_count;
 
 	/* Note: This code assumes DCB is disabled for now. */
@@ -1597,7 +1656,7 @@ static int i40e_set_channels(struct net_device *dev,
 		return -EINVAL;
 
 	/* verify other_count has not changed */
-	if (ch->other_count != ((pf->flags & I40E_FLAG_FDIR_ENABLED) ? 1 : 0))
+	if (ch->other_count != ((pf->flags & I40E_FLAG_FD_SB_ENABLED) ? 1 : 0))
 		return -EINVAL;
 
 	/* verify the number of channels does not exceed hardware limits */
@@ -1615,7 +1674,7 @@ static int i40e_set_channels(struct net_device *dev,
 	 * class queue mapping
 	 */
 	new_count = i40e_reconfig_rss_queues(pf, count);
-	if (new_count > 1)
+	if (new_count > 0)
 		return 0;
 	else
 		return -EINVAL;

@@ -79,7 +79,6 @@
 #include <net/pkt_sched.h>
 #include <linux/rculist.h>
 #include <net/flow_keys.h>
-#include <linux/reciprocal_div.h>
 #include "bonding.h"
 #include "bond_3ad.h"
 #include "bond_alb.h"
@@ -87,13 +86,11 @@
 /*---------------------------- Module parameters ----------------------------*/
 
 /* monitor all links that often (in milliseconds). <=0 disables monitoring */
-#define BOND_LINK_MON_INTERV	0
-#define BOND_LINK_ARP_INTERV	0
 
 static int max_bonds	= BOND_DEFAULT_MAX_BONDS;
 static int tx_queues	= BOND_DEFAULT_TX_QUEUES;
 static int num_peer_notif = 1;
-static int miimon	= BOND_LINK_MON_INTERV;
+static int miimon;
 static int updelay;
 static int downdelay;
 static int use_carrier	= 1;
@@ -104,7 +101,7 @@ static char *lacp_rate;
 static int min_links;
 static char *ad_select;
 static char *xmit_hash_policy;
-static int arp_interval = BOND_LINK_ARP_INTERV;
+static int arp_interval;
 static char *arp_ip_target[BOND_MAX_ARP_TARGETS];
 static char *arp_validate;
 static char *arp_all_targets;
@@ -208,67 +205,6 @@ static int arp_ip_count;
 static int bond_mode	= BOND_MODE_ROUNDROBIN;
 static int xmit_hashtype = BOND_XMIT_POLICY_LAYER2;
 static int lacp_fast;
-
-const struct bond_parm_tbl bond_lacp_tbl[] = {
-{	"slow",		AD_LACP_SLOW},
-{	"fast",		AD_LACP_FAST},
-{	NULL,		-1},
-};
-
-const struct bond_parm_tbl bond_mode_tbl[] = {
-{	"balance-rr",		BOND_MODE_ROUNDROBIN},
-{	"active-backup",	BOND_MODE_ACTIVEBACKUP},
-{	"balance-xor",		BOND_MODE_XOR},
-{	"broadcast",		BOND_MODE_BROADCAST},
-{	"802.3ad",		BOND_MODE_8023AD},
-{	"balance-tlb",		BOND_MODE_TLB},
-{	"balance-alb",		BOND_MODE_ALB},
-{	NULL,			-1},
-};
-
-const struct bond_parm_tbl xmit_hashtype_tbl[] = {
-{	"layer2",		BOND_XMIT_POLICY_LAYER2},
-{	"layer3+4",		BOND_XMIT_POLICY_LAYER34},
-{	"layer2+3",		BOND_XMIT_POLICY_LAYER23},
-{	"encap2+3",		BOND_XMIT_POLICY_ENCAP23},
-{	"encap3+4",		BOND_XMIT_POLICY_ENCAP34},
-{	NULL,			-1},
-};
-
-const struct bond_parm_tbl arp_all_targets_tbl[] = {
-{	"any",			BOND_ARP_TARGETS_ANY},
-{	"all",			BOND_ARP_TARGETS_ALL},
-{	NULL,			-1},
-};
-
-const struct bond_parm_tbl arp_validate_tbl[] = {
-{	"none",			BOND_ARP_VALIDATE_NONE},
-{	"active",		BOND_ARP_VALIDATE_ACTIVE},
-{	"backup",		BOND_ARP_VALIDATE_BACKUP},
-{	"all",			BOND_ARP_VALIDATE_ALL},
-{	NULL,			-1},
-};
-
-const struct bond_parm_tbl fail_over_mac_tbl[] = {
-{	"none",			BOND_FOM_NONE},
-{	"active",		BOND_FOM_ACTIVE},
-{	"follow",		BOND_FOM_FOLLOW},
-{	NULL,			-1},
-};
-
-const struct bond_parm_tbl pri_reselect_tbl[] = {
-{	"always",		BOND_PRI_RESELECT_ALWAYS},
-{	"better",		BOND_PRI_RESELECT_BETTER},
-{	"failure",		BOND_PRI_RESELECT_FAILURE},
-{	NULL,			-1},
-};
-
-struct bond_parm_tbl ad_select_tbl[] = {
-{	"stable",	BOND_AD_STABLE},
-{	"bandwidth",	BOND_AD_BANDWIDTH},
-{	"count",	BOND_AD_COUNT},
-{	NULL,		-1},
-};
 
 /*-------------------------- Forward declarations ---------------------------*/
 
@@ -464,6 +400,22 @@ static void bond_update_speed_duplex(struct slave *slave)
 	slave->duplex = ecmd.duplex;
 
 	return;
+}
+
+const char *bond_slave_link_status(s8 link)
+{
+	switch (link) {
+	case BOND_LINK_UP:
+		return "up";
+	case BOND_LINK_FAIL:
+		return "going down";
+	case BOND_LINK_DOWN:
+		return "down";
+	case BOND_LINK_BACK:
+		return "going back";
+	default:
+		return "unknown";
+	}
 }
 
 /*
@@ -1576,6 +1528,12 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev)
 		goto err_unregister;
 	}
 
+	res = bond_sysfs_slave_add(new_slave);
+	if (res) {
+		pr_debug("Error %d calling bond_sysfs_slave_add\n", res);
+		goto err_upper_unlink;
+	}
+
 	bond->slave_cnt++;
 	bond_compute_features(bond);
 	bond_set_carrier(bond);
@@ -1595,6 +1553,9 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev)
 	return 0;
 
 /* Undo stages on error */
+err_upper_unlink:
+	bond_upper_dev_unlink(bond_dev, slave_dev);
+
 err_unregister:
 	netdev_rx_handler_unregister(slave_dev);
 
@@ -1687,6 +1648,8 @@ static int __bond_release_one(struct net_device *bond_dev,
 	/* release the slave from its bond */
 	bond->slave_cnt--;
 
+	bond_sysfs_slave_del(slave);
+
 	bond_upper_dev_unlink(bond_dev, slave_dev);
 	/* unregister rx_handler early so bond_handle_frame wouldn't be called
 	 * for this slave anymore.
@@ -1737,7 +1700,7 @@ static int __bond_release_one(struct net_device *bond_dev,
 	}
 
 	if (all) {
-		rcu_assign_pointer(bond->curr_active_slave, NULL);
+		RCU_INIT_POINTER(bond->curr_active_slave, NULL);
 	} else if (oldcurrent == slave) {
 		/*
 		 * Note that we hold RTNL over this sequence, so there
@@ -2860,9 +2823,27 @@ static int bond_slave_netdev_event(unsigned long event,
 		 */
 		break;
 	case NETDEV_CHANGENAME:
-		/*
-		 * TODO: handle changing the primary's name
-		 */
+		/* we don't care if we don't have primary set */
+		if (!USES_PRIMARY(bond->params.mode) ||
+		    !bond->params.primary[0])
+			break;
+
+		if (slave == bond->primary_slave) {
+			/* slave's name changed - he's no longer primary */
+			bond->primary_slave = NULL;
+		} else if (!strcmp(slave_dev->name, bond->params.primary)) {
+			/* we have a new primary slave */
+			bond->primary_slave = slave;
+		} else { /* we didn't change primary - exit */
+			break;
+		}
+
+		pr_info("%s: Primary slave changed to %s, reselecting active slave.\n",
+			bond->dev->name, bond->primary_slave ? slave_dev->name :
+							       "none");
+		write_lock_bh(&bond->curr_slave_lock);
+		bond_select_active_slave(bond);
+		write_unlock_bh(&bond->curr_slave_lock);
 		break;
 	case NETDEV_FEAT_CHANGE:
 		bond_compute_features(bond);
@@ -3142,6 +3123,7 @@ static int bond_do_ioctl(struct net_device *bond_dev, struct ifreq *ifr, int cmd
 	struct ifslave k_sinfo;
 	struct ifslave __user *u_sinfo = NULL;
 	struct mii_ioctl_data *mii = NULL;
+	struct bond_opt_value newval;
 	struct net *net;
 	int res = 0;
 
@@ -3213,37 +3195,35 @@ static int bond_do_ioctl(struct net_device *bond_dev, struct ifreq *ifr, int cmd
 	if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
 
-	slave_dev = dev_get_by_name(net, ifr->ifr_slave);
+	slave_dev = __dev_get_by_name(net, ifr->ifr_slave);
 
 	pr_debug("slave_dev=%p:\n", slave_dev);
 
 	if (!slave_dev)
-		res = -ENODEV;
-	else {
-		pr_debug("slave_dev->name=%s:\n", slave_dev->name);
-		switch (cmd) {
-		case BOND_ENSLAVE_OLD:
-		case SIOCBONDENSLAVE:
-			res = bond_enslave(bond_dev, slave_dev);
-			break;
-		case BOND_RELEASE_OLD:
-		case SIOCBONDRELEASE:
-			res = bond_release(bond_dev, slave_dev);
-			break;
-		case BOND_SETHWADDR_OLD:
-		case SIOCBONDSETHWADDR:
-			bond_set_dev_addr(bond_dev, slave_dev);
-			res = 0;
-			break;
-		case BOND_CHANGE_ACTIVE_OLD:
-		case SIOCBONDCHANGEACTIVE:
-			res = bond_option_active_slave_set(bond, slave_dev);
-			break;
-		default:
-			res = -EOPNOTSUPP;
-		}
+		return -ENODEV;
 
-		dev_put(slave_dev);
+	pr_debug("slave_dev->name=%s:\n", slave_dev->name);
+	switch (cmd) {
+	case BOND_ENSLAVE_OLD:
+	case SIOCBONDENSLAVE:
+		res = bond_enslave(bond_dev, slave_dev);
+		break;
+	case BOND_RELEASE_OLD:
+	case SIOCBONDRELEASE:
+		res = bond_release(bond_dev, slave_dev);
+		break;
+	case BOND_SETHWADDR_OLD:
+	case SIOCBONDSETHWADDR:
+		bond_set_dev_addr(bond_dev, slave_dev);
+		res = 0;
+		break;
+	case BOND_CHANGE_ACTIVE_OLD:
+	case SIOCBONDCHANGEACTIVE:
+		bond_opt_initstr(&newval, slave_dev->name);
+		res = __bond_opt_set(bond, BOND_OPT_ACTIVE_SLAVE, &newval);
+		break;
+	default:
+		res = -EOPNOTSUPP;
 	}
 
 	return res;
@@ -3554,8 +3534,9 @@ static void bond_xmit_slave_id(struct bonding *bond, struct sk_buff *skb, int sl
  */
 static u32 bond_rr_gen_slave_id(struct bonding *bond)
 {
-	int packets_per_slave = bond->params.packets_per_slave;
 	u32 slave_id;
+	struct reciprocal_value reciprocal_packets_per_slave;
+	int packets_per_slave = bond->params.packets_per_slave;
 
 	switch (packets_per_slave) {
 	case 0:
@@ -3565,8 +3546,10 @@ static u32 bond_rr_gen_slave_id(struct bonding *bond)
 		slave_id = bond->rr_tx_counter;
 		break;
 	default:
+		reciprocal_packets_per_slave =
+			bond->params.reciprocal_packets_per_slave;
 		slave_id = reciprocal_divide(bond->rr_tx_counter,
-					     packets_per_slave);
+					     reciprocal_packets_per_slave);
 		break;
 	}
 	bond->rr_tx_counter++;
@@ -3692,7 +3675,8 @@ static inline int bond_slave_override(struct bonding *bond,
 }
 
 
-static u16 bond_select_queue(struct net_device *dev, struct sk_buff *skb)
+static u16 bond_select_queue(struct net_device *dev, struct sk_buff *skb,
+			     void *accel_priv)
 {
 	/*
 	 * This helper function exists to help dev_pick_tx get the correct
@@ -3900,6 +3884,9 @@ void bond_setup(struct net_device *bond_dev)
 	 * capable
 	 */
 
+	/* Don't allow bond devices to change network namespaces. */
+	bond_dev->features |= NETIF_F_NETNS_LOCAL;
+
 	bond_dev->hw_features = BOND_VLAN_FEATURES |
 				NETIF_F_HW_VLAN_CTAG_TX |
 				NETIF_F_HW_VLAN_CTAG_RX |
@@ -3982,18 +3969,20 @@ int bond_parse_parm(const char *buf, const struct bond_parm_tbl *tbl)
 static int bond_check_params(struct bond_params *params)
 {
 	int arp_validate_value, fail_over_mac_value, primary_reselect_value, i;
+	struct bond_opt_value newval, *valptr;
 	int arp_all_targets_value;
 
 	/*
 	 * Convert string parameters.
 	 */
 	if (mode) {
-		bond_mode = bond_parse_parm(mode, bond_mode_tbl);
-		if (bond_mode == -1) {
-			pr_err("Error: Invalid bonding mode \"%s\"\n",
-			       mode == NULL ? "NULL" : mode);
+		bond_opt_initstr(&newval, mode);
+		valptr = bond_opt_parse(bond_opt_get(BOND_OPT_MODE), &newval);
+		if (!valptr) {
+			pr_err("Error: Invalid bonding mode \"%s\"\n", mode);
 			return -EINVAL;
 		}
+		bond_mode = valptr->value;
 	}
 
 	if (xmit_hash_policy) {
@@ -4002,14 +3991,15 @@ static int bond_check_params(struct bond_params *params)
 			pr_info("xmit_hash_policy param is irrelevant in mode %s\n",
 			       bond_mode_name(bond_mode));
 		} else {
-			xmit_hashtype = bond_parse_parm(xmit_hash_policy,
-							xmit_hashtype_tbl);
-			if (xmit_hashtype == -1) {
+			bond_opt_initstr(&newval, xmit_hash_policy);
+			valptr = bond_opt_parse(bond_opt_get(BOND_OPT_XMIT_HASH),
+						&newval);
+			if (!valptr) {
 				pr_err("Error: Invalid xmit_hash_policy \"%s\"\n",
-				       xmit_hash_policy == NULL ? "NULL" :
 				       xmit_hash_policy);
 				return -EINVAL;
 			}
+			xmit_hashtype = valptr->value;
 		}
 	}
 
@@ -4018,26 +4008,29 @@ static int bond_check_params(struct bond_params *params)
 			pr_info("lacp_rate param is irrelevant in mode %s\n",
 				bond_mode_name(bond_mode));
 		} else {
-			lacp_fast = bond_parse_parm(lacp_rate, bond_lacp_tbl);
-			if (lacp_fast == -1) {
+			bond_opt_initstr(&newval, lacp_rate);
+			valptr = bond_opt_parse(bond_opt_get(BOND_OPT_LACP_RATE),
+						&newval);
+			if (!valptr) {
 				pr_err("Error: Invalid lacp rate \"%s\"\n",
-				       lacp_rate == NULL ? "NULL" : lacp_rate);
+				       lacp_rate);
 				return -EINVAL;
 			}
+			lacp_fast = valptr->value;
 		}
 	}
 
 	if (ad_select) {
-		params->ad_select = bond_parse_parm(ad_select, ad_select_tbl);
-		if (params->ad_select == -1) {
-			pr_err("Error: Invalid ad_select \"%s\"\n",
-			       ad_select == NULL ? "NULL" : ad_select);
+		bond_opt_initstr(&newval, lacp_rate);
+		valptr = bond_opt_parse(bond_opt_get(BOND_OPT_AD_SELECT),
+					&newval);
+		if (!valptr) {
+			pr_err("Error: Invalid ad_select \"%s\"\n", ad_select);
 			return -EINVAL;
 		}
-
-		if (bond_mode != BOND_MODE_8023AD) {
+		params->ad_select = valptr->value;
+		if (bond_mode != BOND_MODE_8023AD)
 			pr_warning("ad_select param only affects 802.3ad mode\n");
-		}
 	} else {
 		params->ad_select = BOND_AD_STABLE;
 	}
@@ -4049,9 +4042,9 @@ static int bond_check_params(struct bond_params *params)
 	}
 
 	if (miimon < 0) {
-		pr_warning("Warning: miimon module parameter (%d), not in range 0-%d, so it was reset to %d\n",
-			   miimon, INT_MAX, BOND_LINK_MON_INTERV);
-		miimon = BOND_LINK_MON_INTERV;
+		pr_warning("Warning: miimon module parameter (%d), not in range 0-%d, so it was reset to 0\n",
+			   miimon, INT_MAX);
+		miimon = 0;
 	}
 
 	if (updelay < 0) {
@@ -4108,7 +4101,8 @@ static int bond_check_params(struct bond_params *params)
 		resend_igmp = BOND_DEFAULT_RESEND_IGMP;
 	}
 
-	if (packets_per_slave < 0 || packets_per_slave > USHRT_MAX) {
+	bond_opt_initval(&newval, packets_per_slave);
+	if (!bond_opt_parse(bond_opt_get(BOND_OPT_PACKETS_PER_SLAVE), &newval)) {
 		pr_warn("Warning: packets_per_slave (%d) should be between 0 and %u resetting to 1\n",
 			packets_per_slave, USHRT_MAX);
 		packets_per_slave = 1;
@@ -4153,9 +4147,9 @@ static int bond_check_params(struct bond_params *params)
 	}
 
 	if (arp_interval < 0) {
-		pr_warning("Warning: arp_interval module parameter (%d) , not in range 0-%d, so it was reset to %d\n",
-			   arp_interval, INT_MAX, BOND_LINK_ARP_INTERV);
-		arp_interval = BOND_LINK_ARP_INTERV;
+		pr_warning("Warning: arp_interval module parameter (%d) , not in range 0-%d, so it was reset to 0\n",
+			   arp_interval, INT_MAX);
+		arp_interval = 0;
 	}
 
 	for (arp_ip_count = 0, i = 0;
@@ -4194,35 +4188,40 @@ static int bond_check_params(struct bond_params *params)
 			return -EINVAL;
 		}
 
-		arp_validate_value = bond_parse_parm(arp_validate,
-						     arp_validate_tbl);
-		if (arp_validate_value == -1) {
+		bond_opt_initstr(&newval, arp_validate);
+		valptr = bond_opt_parse(bond_opt_get(BOND_OPT_ARP_VALIDATE),
+					&newval);
+		if (!valptr) {
 			pr_err("Error: invalid arp_validate \"%s\"\n",
-			       arp_validate == NULL ? "NULL" : arp_validate);
+			       arp_validate);
 			return -EINVAL;
 		}
-	} else
+		arp_validate_value = valptr->value;
+	} else {
 		arp_validate_value = 0;
+	}
 
 	arp_all_targets_value = 0;
 	if (arp_all_targets) {
-		arp_all_targets_value = bond_parse_parm(arp_all_targets,
-							arp_all_targets_tbl);
-
-		if (arp_all_targets_value == -1) {
+		bond_opt_initstr(&newval, arp_all_targets);
+		valptr = bond_opt_parse(bond_opt_get(BOND_OPT_ARP_ALL_TARGETS),
+					&newval);
+		if (!valptr) {
 			pr_err("Error: invalid arp_all_targets_value \"%s\"\n",
 			       arp_all_targets);
 			arp_all_targets_value = 0;
+		} else {
+			arp_all_targets_value = valptr->value;
 		}
 	}
 
 	if (miimon) {
 		pr_info("MII link monitoring set to %d ms\n", miimon);
 	} else if (arp_interval) {
+		valptr = bond_opt_get_val(BOND_OPT_ARP_VALIDATE,
+					  arp_validate_value);
 		pr_info("ARP monitoring set to %d ms, validate %s, with %d target(s):",
-			arp_interval,
-			arp_validate_tbl[arp_validate_value].modename,
-			arp_ip_count);
+			arp_interval, valptr->string, arp_ip_count);
 
 		for (i = 0; i < arp_ip_count; i++)
 			pr_info(" %s", arp_ip_target[i]);
@@ -4246,27 +4245,29 @@ static int bond_check_params(struct bond_params *params)
 	}
 
 	if (primary && primary_reselect) {
-		primary_reselect_value = bond_parse_parm(primary_reselect,
-							 pri_reselect_tbl);
-		if (primary_reselect_value == -1) {
+		bond_opt_initstr(&newval, primary_reselect);
+		valptr = bond_opt_parse(bond_opt_get(BOND_OPT_PRIMARY_RESELECT),
+					&newval);
+		if (!valptr) {
 			pr_err("Error: Invalid primary_reselect \"%s\"\n",
-			       primary_reselect ==
-					NULL ? "NULL" : primary_reselect);
+			       primary_reselect);
 			return -EINVAL;
 		}
+		primary_reselect_value = valptr->value;
 	} else {
 		primary_reselect_value = BOND_PRI_RESELECT_ALWAYS;
 	}
 
 	if (fail_over_mac) {
-		fail_over_mac_value = bond_parse_parm(fail_over_mac,
-						      fail_over_mac_tbl);
-		if (fail_over_mac_value == -1) {
+		bond_opt_initstr(&newval, fail_over_mac);
+		valptr = bond_opt_parse(bond_opt_get(BOND_OPT_FAIL_OVER_MAC),
+					&newval);
+		if (!valptr) {
 			pr_err("Error: invalid fail_over_mac \"%s\"\n",
-			       arp_validate == NULL ? "NULL" : arp_validate);
+			       fail_over_mac);
 			return -EINVAL;
 		}
-
+		fail_over_mac_value = valptr->value;
 		if (bond_mode != BOND_MODE_ACTIVEBACKUP)
 			pr_warning("Warning: fail_over_mac only affects active-backup mode.\n");
 	} else {
@@ -4299,10 +4300,18 @@ static int bond_check_params(struct bond_params *params)
 	params->resend_igmp = resend_igmp;
 	params->min_links = min_links;
 	params->lp_interval = lp_interval;
-	if (packets_per_slave > 1)
-		params->packets_per_slave = reciprocal_value(packets_per_slave);
-	else
-		params->packets_per_slave = packets_per_slave;
+	params->packets_per_slave = packets_per_slave;
+	if (packets_per_slave > 0) {
+		params->reciprocal_packets_per_slave =
+			reciprocal_value(packets_per_slave);
+	} else {
+		/* reciprocal_packets_per_slave is unused if
+		 * packets_per_slave is 0 or 1, just initialize it
+		 */
+		params->reciprocal_packets_per_slave =
+			(struct reciprocal_value) { 0 };
+	}
+
 	if (primary) {
 		strncpy(params->primary, primary, IFNAMSIZ);
 		params->primary[IFNAMSIZ - 1] = 0;

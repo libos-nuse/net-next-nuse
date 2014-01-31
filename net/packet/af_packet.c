@@ -88,7 +88,7 @@
 #include <linux/virtio_net.h>
 #include <linux/errqueue.h>
 #include <linux/net_tstamp.h>
-#include <linux/reciprocal_div.h>
+#include <linux/percpu.h>
 #ifdef CONFIG_INET
 #include <net/inet_common.h>
 #endif
@@ -1168,6 +1168,47 @@ static void packet_increment_head(struct packet_ring_buffer *buff)
 	buff->head = buff->head != buff->frame_max ? buff->head+1 : 0;
 }
 
+static void packet_inc_pending(struct packet_ring_buffer *rb)
+{
+	this_cpu_inc(*rb->pending_refcnt);
+}
+
+static void packet_dec_pending(struct packet_ring_buffer *rb)
+{
+	this_cpu_dec(*rb->pending_refcnt);
+}
+
+static unsigned int packet_read_pending(const struct packet_ring_buffer *rb)
+{
+	unsigned int refcnt = 0;
+	int cpu;
+
+	/* We don't use pending refcount in rx_ring. */
+	if (rb->pending_refcnt == NULL)
+		return 0;
+
+	for_each_possible_cpu(cpu)
+		refcnt += *per_cpu_ptr(rb->pending_refcnt, cpu);
+
+	return refcnt;
+}
+
+static int packet_alloc_pending(struct packet_sock *po)
+{
+	po->rx_ring.pending_refcnt = NULL;
+
+	po->tx_ring.pending_refcnt = alloc_percpu(unsigned int);
+	if (unlikely(po->tx_ring.pending_refcnt == NULL))
+		return -ENOBUFS;
+
+	return 0;
+}
+
+static void packet_free_pending(struct packet_sock *po)
+{
+	free_percpu(po->tx_ring.pending_refcnt);
+}
+
 static bool packet_rcv_has_room(struct packet_sock *po, struct sk_buff *skb)
 {
 	struct sock *sk = &po->sk;
@@ -1220,7 +1261,7 @@ static unsigned int fanout_demux_hash(struct packet_fanout *f,
 				      struct sk_buff *skb,
 				      unsigned int num)
 {
-	return reciprocal_divide(skb->rxhash, num);
+	return reciprocal_scale(skb->rxhash, num);
 }
 
 static unsigned int fanout_demux_lb(struct packet_fanout *f,
@@ -1247,7 +1288,7 @@ static unsigned int fanout_demux_rnd(struct packet_fanout *f,
 				     struct sk_buff *skb,
 				     unsigned int num)
 {
-	return reciprocal_divide(prandom_u32(), num);
+	return prandom_u32_max(num);
 }
 
 static unsigned int fanout_demux_rollover(struct packet_fanout *f,
@@ -1269,6 +1310,13 @@ static unsigned int fanout_demux_rollover(struct packet_fanout *f,
 	} while (i != j);
 
 	return idx;
+}
+
+static unsigned int fanout_demux_qm(struct packet_fanout *f,
+				    struct sk_buff *skb,
+				    unsigned int num)
+{
+	return skb_get_queue_mapping(skb) % num;
 }
 
 static bool fanout_has_flag(struct packet_fanout *f, u16 flag)
@@ -1309,6 +1357,9 @@ static int packet_rcv_fanout(struct sk_buff *skb, struct net_device *dev,
 		break;
 	case PACKET_FANOUT_RND:
 		idx = fanout_demux_rnd(f, skb, num);
+		break;
+	case PACKET_FANOUT_QM:
+		idx = fanout_demux_qm(f, skb, num);
 		break;
 	case PACKET_FANOUT_ROLLOVER:
 		idx = fanout_demux_rollover(f, skb, 0, (unsigned int) -1, num);
@@ -1380,6 +1431,7 @@ static int fanout_add(struct sock *sk, u16 id, u16 type_flags)
 	case PACKET_FANOUT_LB:
 	case PACKET_FANOUT_CPU:
 	case PACKET_FANOUT_RND:
+	case PACKET_FANOUT_QM:
 		break;
 	default:
 		return -EINVAL;
@@ -1542,7 +1594,7 @@ static int packet_sendmsg_spkt(struct kiocb *iocb, struct socket *sock,
 			       struct msghdr *msg, size_t len)
 {
 	struct sock *sk = sock->sk;
-	struct sockaddr_pkt *saddr = (struct sockaddr_pkt *)msg->msg_name;
+	DECLARE_SOCKADDR(struct sockaddr_pkt *, saddr, msg->msg_name);
 	struct sk_buff *skb = NULL;
 	struct net_device *dev;
 	__be16 proto = 0;
@@ -1967,19 +2019,20 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 		sll->sll_ifindex = dev->ifindex;
 
 	smp_mb();
+
 #if ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE == 1
-	{
+	if (po->tp_version <= TPACKET_V2) {
 		u8 *start, *end;
 
-		if (po->tp_version <= TPACKET_V2) {
-			end = (u8 *)PAGE_ALIGN((unsigned long)h.raw
-				+ macoff + snaplen);
-			for (start = h.raw; start < end; start += PAGE_SIZE)
-				flush_dcache_page(pgv_to_page(start));
-		}
-		smp_wmb();
+		end = (u8 *) PAGE_ALIGN((unsigned long) h.raw +
+					macoff + snaplen);
+
+		for (start = h.raw; start < end; start += PAGE_SIZE)
+			flush_dcache_page(pgv_to_page(start));
 	}
+	smp_wmb();
 #endif
+
 	if (po->tp_version <= TPACKET_V2)
 		__packet_set_status(po, h.raw, status);
 	else
@@ -2008,14 +2061,13 @@ ring_is_full:
 static void tpacket_destruct_skb(struct sk_buff *skb)
 {
 	struct packet_sock *po = pkt_sk(skb->sk);
-	void *ph;
 
 	if (likely(po->tx_ring.pg_vec)) {
+		void *ph;
 		__u32 ts;
 
 		ph = skb_shinfo(skb)->destructor_arg;
-		BUG_ON(atomic_read(&po->tx_ring.pending) == 0);
-		atomic_dec(&po->tx_ring.pending);
+		packet_dec_pending(&po->tx_ring);
 
 		ts = __packet_set_timestamp(po, ph, skb);
 		__packet_set_status(po, ph, TP_STATUS_AVAILABLE | ts);
@@ -2155,7 +2207,8 @@ static int tpacket_snd(struct packet_sock *po, struct msghdr *msg)
 	__be16 proto;
 	int err, reserve = 0;
 	void *ph;
-	struct sockaddr_ll *saddr = (struct sockaddr_ll *)msg->msg_name;
+	DECLARE_SOCKADDR(struct sockaddr_ll *, saddr, msg->msg_name);
+	bool need_wait = !(msg->msg_flags & MSG_DONTWAIT);
 	int tp_len, size_max;
 	unsigned char *addr;
 	int len_sum = 0;
@@ -2198,10 +2251,10 @@ static int tpacket_snd(struct packet_sock *po, struct msghdr *msg)
 
 	do {
 		ph = packet_current_frame(po, &po->tx_ring,
-				TP_STATUS_SEND_REQUEST);
-
+					  TP_STATUS_SEND_REQUEST);
 		if (unlikely(ph == NULL)) {
-			schedule();
+			if (need_wait && need_resched())
+				schedule();
 			continue;
 		}
 
@@ -2235,7 +2288,7 @@ static int tpacket_snd(struct packet_sock *po, struct msghdr *msg)
 		skb_set_queue_mapping(skb, packet_pick_tx_queue(dev));
 		skb->destructor = tpacket_destruct_skb;
 		__packet_set_status(po, ph, TP_STATUS_SENDING);
-		atomic_inc(&po->tx_ring.pending);
+		packet_inc_pending(&po->tx_ring);
 
 		status = TP_STATUS_SEND_REQUEST;
 		err = po->xmit(skb);
@@ -2256,9 +2309,13 @@ static int tpacket_snd(struct packet_sock *po, struct msghdr *msg)
 		packet_increment_head(&po->tx_ring);
 		len_sum += tp_len;
 	} while (likely((ph != NULL) ||
-			((!(msg->msg_flags & MSG_DONTWAIT)) &&
-			 (atomic_read(&po->tx_ring.pending))))
-		);
+		/* Note: packet_read_pending() might be slow if we have
+		 * to call it as it's per_cpu variable, but in fast-path
+		 * we already short-circuit the loop with the first
+		 * condition, and luckily don't have to go that path
+		 * anyway.
+		 */
+		 (need_wait && packet_read_pending(&po->tx_ring))));
 
 	err = len_sum;
 	goto out_put;
@@ -2300,7 +2357,7 @@ static struct sk_buff *packet_alloc_skb(struct sock *sk, size_t prepad,
 static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 {
 	struct sock *sk = sock->sk;
-	struct sockaddr_ll *saddr = (struct sockaddr_ll *)msg->msg_name;
+	DECLARE_SOCKADDR(struct sockaddr_ll *, saddr, msg->msg_name);
 	struct sk_buff *skb;
 	struct net_device *dev;
 	__be16 proto;
@@ -2557,6 +2614,7 @@ static int packet_release(struct socket *sock)
 	/* Purge queues */
 
 	skb_queue_purge(&sk->sk_receive_queue);
+	packet_free_pending(po);
 	sk_refcnt_debug_release(sk);
 
 	sock_put(sk);
@@ -2567,9 +2625,12 @@ static int packet_release(struct socket *sock)
  *	Attach a packet hook.
  */
 
-static int packet_do_bind(struct sock *sk, struct net_device *dev, __be16 protocol)
+static int packet_do_bind(struct sock *sk, struct net_device *dev, __be16 proto)
 {
 	struct packet_sock *po = pkt_sk(sk);
+	const struct net_device *dev_curr;
+	__be16 proto_curr;
+	bool need_rehook;
 
 	if (po->fanout) {
 		if (dev)
@@ -2579,21 +2640,29 @@ static int packet_do_bind(struct sock *sk, struct net_device *dev, __be16 protoc
 	}
 
 	lock_sock(sk);
-
 	spin_lock(&po->bind_lock);
-	unregister_prot_hook(sk, true);
 
-	po->num = protocol;
-	po->prot_hook.type = protocol;
-	if (po->prot_hook.dev)
-		dev_put(po->prot_hook.dev);
+	proto_curr = po->prot_hook.type;
+	dev_curr = po->prot_hook.dev;
 
-	po->prot_hook.dev = dev;
-	po->ifindex = dev ? dev->ifindex : 0;
+	need_rehook = proto_curr != proto || dev_curr != dev;
 
-	packet_cached_dev_assign(po, dev);
+	if (need_rehook) {
+		unregister_prot_hook(sk, true);
 
-	if (protocol == 0)
+		po->num = proto;
+		po->prot_hook.type = proto;
+
+		if (po->prot_hook.dev)
+			dev_put(po->prot_hook.dev);
+
+		po->prot_hook.dev = dev;
+
+		po->ifindex = dev ? dev->ifindex : 0;
+		packet_cached_dev_assign(po, dev);
+	}
+
+	if (proto == 0 || !need_rehook)
 		goto out_unlock;
 
 	if (!dev || (dev->flags & IFF_UP)) {
@@ -2707,6 +2776,10 @@ static int packet_create(struct net *net, struct socket *sock, int protocol,
 	po->num = proto;
 	po->xmit = dev_queue_xmit;
 
+	err = packet_alloc_pending(po);
+	if (err)
+		goto out2;
+
 	packet_cached_dev_reset(po);
 
 	sk->sk_destruct = packet_sock_destruct;
@@ -2739,6 +2812,8 @@ static int packet_create(struct net *net, struct socket *sock, int protocol,
 	preempt_enable();
 
 	return 0;
+out2:
+	sk_free(sk);
 out:
 	return err;
 }
@@ -2858,6 +2933,7 @@ static int packet_recvmsg(struct kiocb *iocb, struct socket *sock,
 		 * in, we fill it in now.
 		 */
 		if (sock->type == SOCK_PACKET) {
+			__sockaddr_check_size(sizeof(struct sockaddr_pkt));
 			msg->msg_namelen = sizeof(struct sockaddr_pkt);
 		} else {
 			struct sockaddr_ll *sll = &PACKET_SKB_CB(skb)->sa.ll;
@@ -3584,34 +3660,26 @@ static void free_pg_vec(struct pgv *pg_vec, unsigned int order,
 
 static char *alloc_one_pg_vec_page(unsigned long order)
 {
-	char *buffer = NULL;
+	char *buffer;
 	gfp_t gfp_flags = GFP_KERNEL | __GFP_COMP |
 			  __GFP_ZERO | __GFP_NOWARN | __GFP_NORETRY;
 
 	buffer = (char *) __get_free_pages(gfp_flags, order);
-
 	if (buffer)
 		return buffer;
 
-	/*
-	 * __get_free_pages failed, fall back to vmalloc
-	 */
+	/* __get_free_pages failed, fall back to vmalloc */
 	buffer = vzalloc((1 << order) * PAGE_SIZE);
-
 	if (buffer)
 		return buffer;
 
-	/*
-	 * vmalloc failed, lets dig into swap here
-	 */
+	/* vmalloc failed, lets dig into swap here */
 	gfp_flags &= ~__GFP_NORETRY;
-	buffer = (char *)__get_free_pages(gfp_flags, order);
+	buffer = (char *) __get_free_pages(gfp_flags, order);
 	if (buffer)
 		return buffer;
 
-	/*
-	 * complete and utter failure
-	 */
+	/* complete and utter failure */
 	return NULL;
 }
 
@@ -3666,7 +3734,7 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
 	if (!closing) {
 		if (atomic_read(&po->mapped))
 			goto out;
-		if (atomic_read(&rb->pending))
+		if (packet_read_pending(rb))
 			goto out;
 	}
 

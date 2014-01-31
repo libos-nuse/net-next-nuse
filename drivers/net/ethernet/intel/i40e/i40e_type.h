@@ -1,7 +1,7 @@
 /*******************************************************************************
  *
  * Intel Ethernet Controller XL710 Family Linux Driver
- * Copyright(c) 2013 Intel Corporation.
+ * Copyright(c) 2013 - 2014 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -12,9 +12,8 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
@@ -36,25 +35,22 @@
 #include "i40e_lan_hmc.h"
 
 /* Device IDs */
-#define I40E_SFP_XL710_DEVICE_ID	0x1572
-#define I40E_SFP_X710_DEVICE_ID		0x1573
-#define I40E_QEMU_DEVICE_ID		0x1574
-#define I40E_KX_A_DEVICE_ID		0x157F
-#define I40E_KX_B_DEVICE_ID		0x1580
-#define I40E_KX_C_DEVICE_ID		0x1581
-#define I40E_KX_D_DEVICE_ID		0x1582
-#define I40E_QSFP_A_DEVICE_ID		0x1583
-#define I40E_QSFP_B_DEVICE_ID		0x1584
-#define I40E_QSFP_C_DEVICE_ID		0x1585
-#define I40E_VF_DEVICE_ID		0x154C
-#define I40E_VF_HV_DEVICE_ID		0x1571
+#define I40E_DEV_ID_SFP_XL710		0x1572
+#define I40E_DEV_ID_SFP_X710		0x1573
+#define I40E_DEV_ID_QEMU		0x1574
+#define I40E_DEV_ID_KX_A		0x157F
+#define I40E_DEV_ID_KX_B		0x1580
+#define I40E_DEV_ID_KX_C		0x1581
+#define I40E_DEV_ID_KX_D		0x1582
+#define I40E_DEV_ID_QSFP_A		0x1583
+#define I40E_DEV_ID_QSFP_B		0x1584
+#define I40E_DEV_ID_QSFP_C		0x1585
+#define I40E_DEV_ID_VF			0x154C
+#define I40E_DEV_ID_VF_HV		0x1571
 
-#define i40e_is_40G_device(d)		((d) == I40E_QSFP_A_DEVICE_ID  || \
-					 (d) == I40E_QSFP_B_DEVICE_ID  || \
-					 (d) == I40E_QSFP_C_DEVICE_ID)
-
-#define I40E_FW_API_VERSION_MAJOR  0x0001
-#define I40E_FW_API_VERSION_MINOR  0x0000
+#define i40e_is_40G_device(d)		((d) == I40E_DEV_ID_QSFP_A  || \
+					 (d) == I40E_DEV_ID_QSFP_B  || \
+					 (d) == I40E_DEV_ID_QSFP_C)
 
 #define I40E_MAX_VSI_QP			16
 #define I40E_MAX_VF_VSI			3
@@ -64,23 +60,12 @@
 /* Max default timeout in ms, */
 #define I40E_MAX_NVM_TIMEOUT		18000
 
-/* Check whether address is multicast.  This is little-endian specific check.*/
-#define I40E_IS_MULTICAST(address)	\
-	(bool)(((u8 *)(address))[0] & ((u8)0x01))
-
-/* Check whether an address is broadcast. */
-#define I40E_IS_BROADCAST(address)	\
-	((((u8 *)(address))[0] == ((u8)0xff)) && \
-	(((u8 *)(address))[1] == ((u8)0xff)))
-
 /* Switch from mc to the 2usec global time (this is the GTIME resolution) */
 #define I40E_MS_TO_GTIME(time)		(((time) * 1000) / 2)
 
 /* forward declaration */
 struct i40e_hw;
 typedef void (*I40E_ADMINQ_CALLBACK)(struct i40e_hw *, struct i40e_aq_desc *);
-
-#define I40E_ETH_LENGTH_OF_ADDRESS	6
 
 /* Data type manipulation macros. */
 
@@ -90,9 +75,10 @@ typedef void (*I40E_ADMINQ_CALLBACK)(struct i40e_hw *, struct i40e_aq_desc *);
 
 /* bitfields for Tx queue mapping in QTX_CTL */
 #define I40E_QTX_CTL_VF_QUEUE	0x0
+#define I40E_QTX_CTL_VM_QUEUE	0x1
 #define I40E_QTX_CTL_PF_QUEUE	0x2
 
-/* debug masks */
+/* debug masks - set these bits in hw->debug_mask to control output */
 enum i40e_debug_mask {
 	I40E_DEBUG_INIT			= 0x00000001,
 	I40E_DEBUG_RELEASE		= 0x00000002,
@@ -106,10 +92,10 @@ enum i40e_debug_mask {
 	I40E_DEBUG_DCB			= 0x00000400,
 	I40E_DEBUG_DIAG			= 0x00000800,
 
-	I40E_DEBUG_AQ_MESSAGE		= 0x01000000, /* for i40e_debug() */
+	I40E_DEBUG_AQ_MESSAGE		= 0x01000000,
 	I40E_DEBUG_AQ_DESCRIPTOR	= 0x02000000,
 	I40E_DEBUG_AQ_DESC_BUFFER	= 0x04000000,
-	I40E_DEBUG_AQ_COMMAND		= 0x06000000, /* for i40e_debug_aq() */
+	I40E_DEBUG_AQ_COMMAND		= 0x06000000,
 	I40E_DEBUG_AQ			= 0x0F000000,
 
 	I40E_DEBUG_USER			= 0xF0000000,
@@ -243,9 +229,9 @@ struct i40e_hw_capabilities {
 
 struct i40e_mac_info {
 	enum i40e_mac_type type;
-	u8 addr[I40E_ETH_LENGTH_OF_ADDRESS];
-	u8 perm_addr[I40E_ETH_LENGTH_OF_ADDRESS];
-	u8 san_addr[I40E_ETH_LENGTH_OF_ADDRESS];
+	u8 addr[ETH_ALEN];
+	u8 perm_addr[ETH_ALEN];
+	u8 san_addr[ETH_ALEN];
 	u16 max_fcoeq;
 };
 
@@ -514,7 +500,9 @@ enum i40e_rx_desc_status_bits {
 	I40E_RX_DESC_STATUS_FLM_SHIFT		= 11,
 	I40E_RX_DESC_STATUS_FLTSTAT_SHIFT	= 12, /* 2 BITS */
 	I40E_RX_DESC_STATUS_LPBK_SHIFT		= 14,
-	I40E_RX_DESC_STATUS_UDP_0_SHIFT		= 16
+	I40E_RX_DESC_STATUS_IPV6EXADD_SHIFT	= 15,
+	I40E_RX_DESC_STATUS_RESERVED_SHIFT	= 16, /* 2 BITS */
+	I40E_RX_DESC_STATUS_UDP_0_SHIFT		= 18
 };
 
 #define I40E_RXD_QW1_STATUS_TSYNINDX_SHIFT   I40E_RX_DESC_STATUS_TSYNINDX_SHIFT
@@ -523,7 +511,7 @@ enum i40e_rx_desc_status_bits {
 
 #define I40E_RXD_QW1_STATUS_TSYNVALID_SHIFT  I40E_RX_DESC_STATUS_TSYNVALID_SHIFT
 #define I40E_RXD_QW1_STATUS_TSYNVALID_MASK	(0x1UL << \
-					     I40E_RXD_QW1_STATUS_TSYNVALID_SHIFT)
+					 I40E_RXD_QW1_STATUS_TSYNVALID_SHIFT)
 
 enum i40e_rx_desc_fltstat_values {
 	I40E_RX_DESC_FLTSTAT_NO_DATA	= 0,
@@ -1153,17 +1141,4 @@ enum i40e_reset_type {
 	I40E_RESET_GLOBR	= 2,
 	I40E_RESET_EMPR		= 3,
 };
-
-/* IEEE 802.1AB LLDP Agent Variables from NVM */
-#define I40E_NVM_LLDP_CFG_PTR		0xF
-struct i40e_lldp_variables {
-	u16 length;
-	u16 adminstatus;
-	u16 msgfasttx;
-	u16 msgtxinterval;
-	u16 txparams;
-	u16 timers;
-	u16 crc8;
-};
-
 #endif /* _I40E_TYPE_H_ */

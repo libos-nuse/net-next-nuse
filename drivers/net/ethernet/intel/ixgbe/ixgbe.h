@@ -424,9 +424,10 @@ static inline bool ixgbe_qv_lock_napi(struct ixgbe_q_vector *q_vector)
 #ifdef BP_EXTENDED_STATS
 		q_vector->tx.ring->stats.yields++;
 #endif
-	} else
+	} else {
 		/* we don't care if someone yielded */
 		q_vector->state = IXGBE_QV_STATE_NAPI;
+	}
 	spin_unlock_bh(&q_vector->lock);
 	return rc;
 }
@@ -458,9 +459,10 @@ static inline bool ixgbe_qv_lock_poll(struct ixgbe_q_vector *q_vector)
 #ifdef BP_EXTENDED_STATS
 		q_vector->rx.ring->stats.yields++;
 #endif
-	} else
+	} else {
 		/* preserve yield marks */
 		q_vector->state |= IXGBE_QV_STATE_POLL;
+	}
 	spin_unlock_bh(&q_vector->lock);
 	return rc;
 }
@@ -583,6 +585,11 @@ static inline u16 ixgbe_desc_unused(struct ixgbe_ring *ring)
 	u16 ntu = ring->next_to_use;
 
 	return ((ntc > ntu) ? 0 : ring->count) + ntc - ntu - 1;
+}
+
+static inline void ixgbe_write_tail(struct ixgbe_ring *ring, u32 value)
+{
+	writel(value, ring->tail);
 }
 
 #define IXGBE_RX_DESC(R, i)	    \
@@ -742,6 +749,7 @@ struct ixgbe_adapter {
 #ifdef IXGBE_FCOE
 	struct ixgbe_fcoe fcoe;
 #endif /* IXGBE_FCOE */
+	u8 __iomem *io_addr; /* Mainly for iounmap use */
 	u32 wol;
 
 	u16 bd_number;
@@ -798,6 +806,7 @@ enum ixgbe_state_t {
 	__IXGBE_TESTING,
 	__IXGBE_RESETTING,
 	__IXGBE_DOWN,
+	__IXGBE_REMOVING,
 	__IXGBE_SERVICE_SCHED,
 	__IXGBE_IN_SFP_INIT,
 	__IXGBE_PTP_RUNNING,

@@ -520,10 +520,12 @@ struct bnx2x_fastpath {
 #define BNX2X_FP_STATE_IDLE		      0
 #define BNX2X_FP_STATE_NAPI		(1 << 0)    /* NAPI owns this FP */
 #define BNX2X_FP_STATE_POLL		(1 << 1)    /* poll owns this FP */
-#define BNX2X_FP_STATE_NAPI_YIELD	(1 << 2)    /* NAPI yielded this FP */
-#define BNX2X_FP_STATE_POLL_YIELD	(1 << 3)    /* poll yielded this FP */
+#define BNX2X_FP_STATE_DISABLED		(1 << 2)
+#define BNX2X_FP_STATE_NAPI_YIELD	(1 << 3)    /* NAPI yielded this FP */
+#define BNX2X_FP_STATE_POLL_YIELD	(1 << 4)    /* poll yielded this FP */
+#define BNX2X_FP_OWNED	(BNX2X_FP_STATE_NAPI | BNX2X_FP_STATE_POLL)
 #define BNX2X_FP_YIELD	(BNX2X_FP_STATE_NAPI_YIELD | BNX2X_FP_STATE_POLL_YIELD)
-#define BNX2X_FP_LOCKED	(BNX2X_FP_STATE_NAPI | BNX2X_FP_STATE_POLL)
+#define BNX2X_FP_LOCKED	(BNX2X_FP_OWNED | BNX2X_FP_STATE_DISABLED)
 #define BNX2X_FP_USER_PEND (BNX2X_FP_STATE_POLL | BNX2X_FP_STATE_POLL_YIELD)
 	/* protect state */
 	spinlock_t lock;
@@ -613,7 +615,7 @@ static inline bool bnx2x_fp_lock_napi(struct bnx2x_fastpath *fp)
 {
 	bool rc = true;
 
-	spin_lock(&fp->lock);
+	spin_lock_bh(&fp->lock);
 	if (fp->state & BNX2X_FP_LOCKED) {
 		WARN_ON(fp->state & BNX2X_FP_STATE_NAPI);
 		fp->state |= BNX2X_FP_STATE_NAPI_YIELD;
@@ -622,7 +624,7 @@ static inline bool bnx2x_fp_lock_napi(struct bnx2x_fastpath *fp)
 		/* we don't care if someone yielded */
 		fp->state = BNX2X_FP_STATE_NAPI;
 	}
-	spin_unlock(&fp->lock);
+	spin_unlock_bh(&fp->lock);
 	return rc;
 }
 
@@ -631,14 +633,16 @@ static inline bool bnx2x_fp_unlock_napi(struct bnx2x_fastpath *fp)
 {
 	bool rc = false;
 
-	spin_lock(&fp->lock);
+	spin_lock_bh(&fp->lock);
 	WARN_ON(fp->state &
 		(BNX2X_FP_STATE_POLL | BNX2X_FP_STATE_NAPI_YIELD));
 
 	if (fp->state & BNX2X_FP_STATE_POLL_YIELD)
 		rc = true;
-	fp->state = BNX2X_FP_STATE_IDLE;
-	spin_unlock(&fp->lock);
+
+	/* state ==> idle, unless currently disabled */
+	fp->state &= BNX2X_FP_STATE_DISABLED;
+	spin_unlock_bh(&fp->lock);
 	return rc;
 }
 
@@ -669,7 +673,9 @@ static inline bool bnx2x_fp_unlock_poll(struct bnx2x_fastpath *fp)
 
 	if (fp->state & BNX2X_FP_STATE_POLL_YIELD)
 		rc = true;
-	fp->state = BNX2X_FP_STATE_IDLE;
+
+	/* state ==> idle, unless currently disabled */
+	fp->state &= BNX2X_FP_STATE_DISABLED;
 	spin_unlock_bh(&fp->lock);
 	return rc;
 }
@@ -677,8 +683,22 @@ static inline bool bnx2x_fp_unlock_poll(struct bnx2x_fastpath *fp)
 /* true if a socket is polling, even if it did not get the lock */
 static inline bool bnx2x_fp_ll_polling(struct bnx2x_fastpath *fp)
 {
-	WARN_ON(!(fp->state & BNX2X_FP_LOCKED));
+	WARN_ON(!(fp->state & BNX2X_FP_OWNED));
 	return fp->state & BNX2X_FP_USER_PEND;
+}
+
+/* false if fp is currently owned */
+static inline bool bnx2x_fp_ll_disable(struct bnx2x_fastpath *fp)
+{
+	int rc = true;
+
+	spin_lock_bh(&fp->lock);
+	if (fp->state & BNX2X_FP_OWNED)
+		rc = false;
+	fp->state |= BNX2X_FP_STATE_DISABLED;
+	spin_unlock_bh(&fp->lock);
+
+	return rc;
 }
 #else
 static inline void bnx2x_fp_init_lock(struct bnx2x_fastpath *fp)
@@ -708,6 +728,10 @@ static inline bool bnx2x_fp_unlock_poll(struct bnx2x_fastpath *fp)
 static inline bool bnx2x_fp_ll_polling(struct bnx2x_fastpath *fp)
 {
 	return false;
+}
+static inline bool bnx2x_fp_ll_disable(struct bnx2x_fastpath *fp)
+{
+	return true;
 }
 #endif /* CONFIG_NET_RX_BUSY_POLL */
 
@@ -1542,6 +1566,7 @@ struct bnx2x {
 #define NO_ISCSI_FLAG			(1 << 14)
 #define NO_FCOE_FLAG			(1 << 15)
 #define BC_SUPPORTS_PFC_STATS		(1 << 17)
+#define TX_SWITCHING			(1 << 18)
 #define BC_SUPPORTS_FCOE_FEATURES	(1 << 19)
 #define USING_SINGLE_MSIX_FLAG		(1 << 20)
 #define BC_SUPPORTS_DCBX_MSG_NON_PMF	(1 << 21)
@@ -2057,7 +2082,6 @@ int bnx2x_del_all_macs(struct bnx2x *bp,
 void bnx2x_func_init(struct bnx2x *bp, struct bnx2x_func_init_params *p);
 void bnx2x_init_sb(struct bnx2x *bp, dma_addr_t mapping, int vfid,
 		    u8 vf_valid, int fw_sb_id, int igu_sb_id);
-u32 bnx2x_get_pretend_reg(struct bnx2x *bp);
 int bnx2x_get_gpio(struct bnx2x *bp, int gpio_num, u8 port);
 int bnx2x_set_gpio(struct bnx2x *bp, int gpio_num, u32 mode, u8 port);
 int bnx2x_set_mult_gpio(struct bnx2x *bp, u8 pins, u32 mode);

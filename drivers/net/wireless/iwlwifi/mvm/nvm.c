@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -367,14 +367,15 @@ static int iwl_mvm_read_external_nvm(struct iwl_mvm *mvm)
 			break;
 		}
 
+		if (WARN(section_id >= NVM_NUM_OF_SECTIONS,
+			 "Invalid NVM section ID %d\n", section_id)) {
+			ret = -EINVAL;
+			break;
+		}
+
 		temp = kmemdup(file_sec->data, section_size, GFP_KERNEL);
 		if (!temp) {
 			ret = -ENOMEM;
-			break;
-		}
-		if (WARN_ON(section_id >= NVM_NUM_OF_SECTIONS)) {
-			IWL_ERR(mvm, "Invalid NVM section ID\n");
-			ret = -EINVAL;
 			break;
 		}
 		mvm->nvm_sections[section_id].data = temp;
@@ -391,17 +392,16 @@ out:
 /* Loads the NVM data stored in mvm->nvm_sections into the NIC */
 int iwl_mvm_load_nvm_to_nic(struct iwl_mvm *mvm)
 {
-	int i, ret;
-	u16 section_id;
+	int i, ret = 0;
 	struct iwl_nvm_section *sections = mvm->nvm_sections;
 
 	IWL_DEBUG_EEPROM(mvm->trans->dev, "'Write to NVM\n");
 
-	for (i = 0; i < ARRAY_SIZE(nvm_to_read); i++) {
-		section_id = nvm_to_read[i];
-		ret = iwl_nvm_write_section(mvm, section_id,
-					    sections[section_id].data,
-					    sections[section_id].length);
+	for (i = 0; i < ARRAY_SIZE(mvm->nvm_sections); i++) {
+		if (!mvm->nvm_sections[i].data || !mvm->nvm_sections[i].length)
+			continue;
+		ret = iwl_nvm_write_section(mvm, i, sections[i].data,
+					    sections[i].length);
 		if (ret < 0) {
 			IWL_ERR(mvm, "iwl_mvm_send_cmd failed: %d\n", ret);
 			break;

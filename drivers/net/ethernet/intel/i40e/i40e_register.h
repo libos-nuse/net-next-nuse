@@ -1,7 +1,7 @@
 /*******************************************************************************
  *
  * Intel Ethernet Controller XL710 Family Linux Driver
- * Copyright(c) 2013 Intel Corporation.
+ * Copyright(c) 2013 - 2014 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -12,9 +12,8 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
@@ -2053,6 +2052,28 @@
 #define I40E_GLNVM_SRDATA_WRDATA_MASK (0xFFFF << I40E_GLNVM_SRDATA_WRDATA_SHIFT)
 #define I40E_GLNVM_SRDATA_RDDATA_SHIFT 16
 #define I40E_GLNVM_SRDATA_RDDATA_MASK (0xFFFF << I40E_GLNVM_SRDATA_RDDATA_SHIFT)
+#define I40E_GLNVM_ULD 0x000B6008
+#define I40E_GLNVM_ULD_CONF_PCIR_DONE_SHIFT 0
+#define I40E_GLNVM_ULD_CONF_PCIR_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_PCIR_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_PCIRTL_DONE_SHIFT 1
+#define I40E_GLNVM_ULD_CONF_PCIRTL_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_PCIRTL_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_LCB_DONE_SHIFT 2
+#define I40E_GLNVM_ULD_CONF_LCB_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_LCB_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_CORE_DONE_SHIFT 3
+#define I40E_GLNVM_ULD_CONF_CORE_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_CORE_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_GLOBAL_DONE_SHIFT 4
+#define I40E_GLNVM_ULD_CONF_GLOBAL_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_GLOBAL_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_POR_DONE_SHIFT 5
+#define I40E_GLNVM_ULD_CONF_POR_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_POR_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_PCIE_ANA_DONE_SHIFT 6
+#define I40E_GLNVM_ULD_CONF_PCIE_ANA_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_PCIE_ANA_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_PHY_ANA_DONE_SHIFT 7
+#define I40E_GLNVM_ULD_CONF_PHY_ANA_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_PHY_ANA_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_EMP_DONE_SHIFT 8
+#define I40E_GLNVM_ULD_CONF_EMP_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_EMP_DONE_SHIFT)
+#define I40E_GLNVM_ULD_CONF_PCIALT_DONE_SHIFT 9
+#define I40E_GLNVM_ULD_CONF_PCIALT_DONE_MASK (0x1 << I40E_GLNVM_ULD_CONF_PCIALT_DONE_SHIFT)
+
 #define I40E_GLPCI_BYTCTH 0x0009C484
 #define I40E_GLPCI_BYTCTH_PCI_COUNT_BW_BCT_SHIFT 0
 #define I40E_GLPCI_BYTCTH_PCI_COUNT_BW_BCT_MASK (0xFFFFFFFF << I40E_GLPCI_BYTCTH_PCI_COUNT_BW_BCT_SHIFT)

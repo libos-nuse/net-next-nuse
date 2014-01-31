@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2005 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2005 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -24,7 +24,6 @@
  *
  *****************************************************************************/
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <net/mac80211.h>
@@ -357,7 +356,7 @@ static int iwl_hwrate_to_plcp_idx(u32 rate_n_flags)
 				return idx;
 	}
 
-	return -1;
+	return IWL_RATE_INVALID;
 }
 
 static void rs_rate_scale_perform(struct iwl_mvm *mvm,
@@ -700,13 +699,11 @@ static int rs_rate_from_ucode_rate(const u32 ucode_rate,
 	u8 num_of_ant = get_num_of_ant_from_rate(ucode_rate);
 	u8 nss;
 
-	memset(rate, 0, sizeof(struct rs_rate));
+	memset(rate, 0, sizeof(*rate));
 	rate->index = iwl_hwrate_to_plcp_idx(ucode_rate);
 
-	if (rate->index == IWL_RATE_INVALID) {
-		rate->index = -1;
+	if (rate->index == IWL_RATE_INVALID)
 		return -EINVAL;
-	}
 
 	rate->ant = (ant_msk >> RATE_MCS_ANT_POS);
 
@@ -1591,6 +1588,8 @@ static int rs_switch_to_column(struct iwl_mvm *mvm,
 	search_tbl->column = col_id;
 	rs_set_expected_tpt_table(lq_sta, search_tbl);
 
+	lq_sta->visited_columns |= BIT(col_id);
+
 	/* Get the best matching rate if we're changing modes. e.g.
 	 * SISO->MIMO, LEGACY->SISO, MIMO->SISO
 	 */
@@ -1614,7 +1613,6 @@ static int rs_switch_to_column(struct iwl_mvm *mvm,
 	IWL_DEBUG_RATE(mvm, "Switched to column %d: Index %d\n",
 		       col_id, rate->index);
 
-	lq_sta->visited_columns |= BIT(col_id);
 	return 0;
 
 err:
@@ -2121,7 +2119,7 @@ static void rs_initialize_lq(struct iwl_mvm *mvm,
 		tbl->column = RS_COLUMN_LEGACY_ANT_B;
 
 	rs_set_expected_tpt_table(lq_sta, tbl);
-	rs_fill_lq_cmd(NULL, NULL, lq_sta, rate);
+	rs_fill_lq_cmd(mvm, sta, lq_sta, rate);
 	/* TODO restore station should remember the lq cmd */
 	iwl_mvm_send_lq_cmd(mvm, &lq_sta->lq, init);
 }
@@ -2446,10 +2444,9 @@ static void rs_build_rates_table(struct iwl_mvm *mvm,
 	struct iwl_lq_cmd *lq_cmd = &lq_sta->lq;
 	bool toggle_ant = false;
 
-	memcpy(&rate, initial_rate, sizeof(struct rs_rate));
+	memcpy(&rate, initial_rate, sizeof(rate));
 
-	if (mvm)
-		valid_tx_ant = iwl_fw_valid_tx_ant(mvm->fw);
+	valid_tx_ant = iwl_fw_valid_tx_ant(mvm->fw);
 
 	if (is_siso(&rate)) {
 		num_rates = RS_INITIAL_SISO_NUM_RATES;
@@ -2562,7 +2559,9 @@ static int rs_pretty_print_rate(char *buf, const u32 rate)
 		int index = iwl_hwrate_to_plcp_idx(rate);
 
 		return sprintf(buf, "Legacy | ANT: %s Rate: %s Mbps\n",
-			       rs_pretty_ant(ant), iwl_rate_mcs[index].mbps);
+			       rs_pretty_ant(ant),
+			       index == IWL_RATE_INVALID ? "BAD" :
+			       iwl_rate_mcs[index].mbps);
 	}
 
 	if (rate & RATE_MCS_VHT_MSK) {
@@ -2623,7 +2622,7 @@ static void rs_program_fix_rate(struct iwl_mvm *mvm,
 		struct rs_rate rate;
 		rs_rate_from_ucode_rate(lq_sta->dbg_fixed_rate,
 					lq_sta->band, &rate);
-		rs_fill_lq_cmd(NULL, NULL, lq_sta, &rate);
+		rs_fill_lq_cmd(mvm, NULL, lq_sta, &rate);
 		iwl_mvm_send_lq_cmd(lq_sta->drv, &lq_sta->lq, false);
 	}
 }

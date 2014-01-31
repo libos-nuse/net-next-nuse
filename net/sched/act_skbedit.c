@@ -28,7 +28,6 @@
 #include <net/tc_act/tc_skbedit.h>
 
 #define SKBEDIT_TAB_MASK     15
-static u32 skbedit_idx_gen;
 static struct tcf_hashinfo skbedit_hash_info;
 
 static int tcf_skbedit(struct sk_buff *skb, const struct tc_action *a,
@@ -101,10 +100,9 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 
 	parm = nla_data(tb[TCA_SKBEDIT_PARMS]);
 
-	pc = tcf_hash_check(parm->index, a, bind, &skbedit_hash_info);
+	pc = tcf_hash_check(parm->index, a, bind);
 	if (!pc) {
-		pc = tcf_hash_create(parm->index, est, a, sizeof(*d), bind,
-				     &skbedit_idx_gen, &skbedit_hash_info);
+		pc = tcf_hash_create(parm->index, est, a, sizeof(*d), bind);
 		if (IS_ERR(pc))
 			return PTR_ERR(pc);
 
@@ -114,7 +112,7 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 		d = to_skbedit(pc);
 		if (bind)
 			return 0;
-		tcf_hash_release(pc, bind, &skbedit_hash_info);
+		tcf_hash_release(pc, bind, a->ops->hinfo);
 		if (!ovr)
 			return -EEXIST;
 	}
@@ -134,7 +132,7 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 	spin_unlock_bh(&d->tcf_lock);
 
 	if (ret == ACT_P_CREATED)
-		tcf_hash_insert(pc, &skbedit_hash_info);
+		tcf_hash_insert(pc, a->ops->hinfo);
 	return ret;
 }
 
@@ -190,7 +188,6 @@ static struct tc_action_ops act_skbedit_ops = {
 	.kind		=	"skbedit",
 	.hinfo		=	&skbedit_hash_info,
 	.type		=	TCA_ACT_SKBEDIT,
-	.capab		=	TCA_CAP_NONE,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_skbedit,
 	.dump		=	tcf_skbedit_dump,

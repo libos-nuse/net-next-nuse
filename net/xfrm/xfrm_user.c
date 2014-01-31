@@ -602,7 +602,7 @@ static int xfrm_add_sa(struct sk_buff *skb, struct nlmsghdr *nlh,
 	int err;
 	struct km_event c;
 	kuid_t loginuid = audit_get_loginuid(current);
-	u32 sessionid = audit_get_sessionid(current);
+	unsigned int sessionid = audit_get_sessionid(current);
 	u32 sid;
 
 	err = verify_newsa_info(p, attrs);
@@ -681,7 +681,7 @@ static int xfrm_del_sa(struct sk_buff *skb, struct nlmsghdr *nlh,
 	struct km_event c;
 	struct xfrm_usersa_id *p = nlmsg_data(nlh);
 	kuid_t loginuid = audit_get_loginuid(current);
-	u32 sessionid = audit_get_sessionid(current);
+	unsigned int sessionid = audit_get_sessionid(current);
 	u32 sid;
 
 	x = xfrm_user_state_lookup(net, p, attrs, &err);
@@ -1395,7 +1395,7 @@ static int xfrm_add_policy(struct sk_buff *skb, struct nlmsghdr *nlh,
 	int err;
 	int excl;
 	kuid_t loginuid = audit_get_loginuid(current);
-	u32 sessionid = audit_get_sessionid(current);
+	unsigned int sessionid = audit_get_sessionid(current);
 	u32 sid;
 
 	err = verify_newpolicy_info(p);
@@ -1654,7 +1654,7 @@ static int xfrm_get_policy(struct sk_buff *skb, struct nlmsghdr *nlh,
 		}
 	} else {
 		kuid_t loginuid = audit_get_loginuid(current);
-		u32 sessionid = audit_get_sessionid(current);
+		unsigned int sessionid = audit_get_sessionid(current);
 		u32 sid;
 
 		security_task_getsecid(current, &sid);
@@ -1731,11 +1731,11 @@ static int build_aevent(struct sk_buff *skb, struct xfrm_state *x, const struct 
 		return -EMSGSIZE;
 
 	id = nlmsg_data(nlh);
-	memcpy(&id->sa_id.daddr, &x->id.daddr,sizeof(x->id.daddr));
+	memcpy(&id->sa_id.daddr, &x->id.daddr, sizeof(x->id.daddr));
 	id->sa_id.spi = x->id.spi;
 	id->sa_id.family = x->props.family;
 	id->sa_id.proto = x->id.proto;
-	memcpy(&id->saddr, &x->props.saddr,sizeof(x->props.saddr));
+	memcpy(&id->saddr, &x->props.saddr, sizeof(x->props.saddr));
 	id->reqid = x->props.reqid;
 	id->flags = c->data.aevent;
 
@@ -1824,7 +1824,7 @@ static int xfrm_new_ae(struct sk_buff *skb, struct nlmsghdr *nlh,
 	struct net *net = sock_net(skb->sk);
 	struct xfrm_state *x;
 	struct km_event c;
-	int err = - EINVAL;
+	int err = -EINVAL;
 	u32 mark = 0;
 	struct xfrm_mark m;
 	struct xfrm_aevent_id *p = nlmsg_data(nlh);
@@ -1950,7 +1950,7 @@ static int xfrm_add_pol_expire(struct sk_buff *skb, struct nlmsghdr *nlh,
 	err = 0;
 	if (up->hard) {
 		kuid_t loginuid = audit_get_loginuid(current);
-		u32 sessionid = audit_get_sessionid(current);
+		unsigned int sessionid = audit_get_sessionid(current);
 		u32 sid;
 
 		security_task_getsecid(current, &sid);
@@ -1993,7 +1993,7 @@ static int xfrm_add_sa_expire(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	if (ue->hard) {
 		kuid_t loginuid = audit_get_loginuid(current);
-		u32 sessionid = audit_get_sessionid(current);
+		unsigned int sessionid = audit_get_sessionid(current);
 		u32 sid;
 
 		security_task_getsecid(current, &sid);

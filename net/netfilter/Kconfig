@@ -428,6 +428,14 @@ config NF_TABLES
 
 	  To compile it as a module, choose M here.
 
+config NF_TABLES_INET
+	depends on NF_TABLES && IPV6
+	select NF_TABLES_IPV4
+	select NF_TABLES_IPV6
+	tristate "Netfilter nf_tables mixed IPv4/IPv6 tables support"
+	help
+	  This option enables support for a mixed IPv4/IPv6 "inet" table.
+
 config NFT_EXTHDR
 	depends on NF_TABLES
 	tristate "Netfilter nf_tables IPv6 exthdr module"
@@ -1130,6 +1138,16 @@ config NETFILTER_XT_MATCH_IPVS
 	  This option allows you to match against IPVS properties of a packet.
 
 	  If unsure, say N.
+
+config NETFILTER_XT_MATCH_L2TP
+	tristate '"l2tp" match support'
+	depends on NETFILTER_ADVANCED
+	default L2TP
+	---help---
+	This option adds an "L2TP" match, which allows you to match against
+	L2TP protocol header fields.
+
+	To compile it as a module, choose M here. If unsure, say N.
 
 config NETFILTER_XT_MATCH_LENGTH
 	tristate '"length" match support'

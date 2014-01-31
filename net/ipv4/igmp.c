@@ -211,7 +211,7 @@ static void igmp_stop_timer(struct ip_mc_list *im)
 /* It must be called with locked im->lock */
 static void igmp_start_timer(struct ip_mc_list *im, int max_delay)
 {
-	int tv = net_random() % max_delay;
+	int tv = prandom_u32() % max_delay;
 
 	im->tm_running = 1;
 	if (!mod_timer(&im->timer, jiffies+tv+2))
@@ -220,7 +220,7 @@ static void igmp_start_timer(struct ip_mc_list *im, int max_delay)
 
 static void igmp_gq_start_timer(struct in_device *in_dev)
 {
-	int tv = net_random() % in_dev->mr_maxdelay;
+	int tv = prandom_u32() % in_dev->mr_maxdelay;
 
 	in_dev->mr_gq_running = 1;
 	if (!mod_timer(&in_dev->mr_gq_timer, jiffies+tv+2))
@@ -229,7 +229,7 @@ static void igmp_gq_start_timer(struct in_device *in_dev)
 
 static void igmp_ifc_start_timer(struct in_device *in_dev, int delay)
 {
-	int tv = net_random() % delay;
+	int tv = prandom_u32() % delay;
 
 	if (!mod_timer(&in_dev->mr_ifc_timer, jiffies+tv+2))
 		in_dev_hold(in_dev);
@@ -2762,6 +2762,7 @@ static struct pernet_operations igmp_net_ops = {
 	.init = igmp_net_init,
 	.exit = igmp_net_exit,
 };
+#endif
 
 static int igmp_netdev_event(struct notifier_block *this,
 			     unsigned long event, void *ptr)
@@ -2785,8 +2786,9 @@ static struct notifier_block igmp_notifier = {
 	.notifier_call = igmp_netdev_event,
 };
 
-int __init igmp_mc_proc_init(void)
+int __init igmp_mc_init(void)
 {
+#if defined(CONFIG_PROC_FS)
 	int err;
 
 	err = register_pernet_subsys(&igmp_net_ops);
@@ -2800,5 +2802,7 @@ int __init igmp_mc_proc_init(void)
 reg_notif_fail:
 	unregister_pernet_subsys(&igmp_net_ops);
 	return err;
-}
+#else
+	return register_netdevice_notifier(&igmp_notifier);
 #endif
+}

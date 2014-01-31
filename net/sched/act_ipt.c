@@ -29,7 +29,6 @@
 
 
 #define IPT_TAB_MASK     15
-static u32 ipt_idx_gen;
 static struct tcf_hashinfo ipt_hash_info;
 
 static int ipt_init_target(struct xt_entry_target *t, char *table, unsigned int hook)
@@ -126,10 +125,9 @@ static int tcf_ipt_init(struct net *net, struct nlattr *nla, struct nlattr *est,
 	if (tb[TCA_IPT_INDEX] != NULL)
 		index = nla_get_u32(tb[TCA_IPT_INDEX]);
 
-	pc = tcf_hash_check(index, a, bind, &ipt_hash_info);
+	pc = tcf_hash_check(index, a, bind);
 	if (!pc) {
-		pc = tcf_hash_create(index, est, a, sizeof(*ipt), bind,
-				     &ipt_idx_gen, &ipt_hash_info);
+		pc = tcf_hash_create(index, est, a, sizeof(*ipt), bind);
 		if (IS_ERR(pc))
 			return PTR_ERR(pc);
 		ret = ACT_P_CREATED;
@@ -172,7 +170,7 @@ static int tcf_ipt_init(struct net *net, struct nlattr *nla, struct nlattr *est,
 	ipt->tcfi_hook  = hook;
 	spin_unlock_bh(&ipt->tcf_lock);
 	if (ret == ACT_P_CREATED)
-		tcf_hash_insert(pc, &ipt_hash_info);
+		tcf_hash_insert(pc, a->ops->hinfo);
 	return ret;
 
 err3:
@@ -288,7 +286,6 @@ static struct tc_action_ops act_ipt_ops = {
 	.kind		=	"ipt",
 	.hinfo		=	&ipt_hash_info,
 	.type		=	TCA_ACT_IPT,
-	.capab		=	TCA_CAP_NONE,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_ipt,
 	.dump		=	tcf_ipt_dump,
@@ -299,8 +296,7 @@ static struct tc_action_ops act_ipt_ops = {
 static struct tc_action_ops act_xt_ops = {
 	.kind		=	"xt",
 	.hinfo		=	&ipt_hash_info,
-	.type		=	TCA_ACT_IPT,
-	.capab		=	TCA_CAP_NONE,
+	.type		=	TCA_ACT_XT,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_ipt,
 	.dump		=	tcf_ipt_dump,

@@ -320,6 +320,9 @@ static int ping_check_bind_addr(struct sock *sk, struct inet_sock *isk,
 		if (addr_len < sizeof(*addr))
 			return -EINVAL;
 
+		if (addr->sin6_family != AF_INET6)
+			return -EINVAL;
+
 		pr_debug("ping_check_bind_addr(sk=%p,addr=%pI6c,port=%d)\n",
 			 sk, addr->sin6_addr.s6_addr, ntohs(addr->sin6_port));
 
@@ -700,7 +703,7 @@ static int ping_v4_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
 	 */
 
 	if (msg->msg_name) {
-		struct sockaddr_in *usin = (struct sockaddr_in *)msg->msg_name;
+		DECLARE_SOCKADDR(struct sockaddr_in *, usin, msg->msg_name);
 		if (msg->msg_namelen < sizeof(*usin))
 			return -EINVAL;
 		if (usin->sin_family != AF_INET)
@@ -873,7 +876,7 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 
 	/* Copy the address and add cmsg data. */
 	if (family == AF_INET) {
-		struct sockaddr_in *sin = (struct sockaddr_in *)msg->msg_name;
+		DECLARE_SOCKADDR(struct sockaddr_in *, sin, msg->msg_name);
 
 		if (sin) {
 			sin->sin_family = AF_INET;
@@ -890,8 +893,7 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	} else if (family == AF_INET6) {
 		struct ipv6_pinfo *np = inet6_sk(sk);
 		struct ipv6hdr *ip6 = ipv6_hdr(skb);
-		struct sockaddr_in6 *sin6 =
-			(struct sockaddr_in6 *)msg->msg_name;
+		DECLARE_SOCKADDR(struct sockaddr_in6 *, sin6, msg->msg_name);
 
 		if (sin6) {
 			sin6->sin6_family = AF_INET6;
@@ -907,7 +909,12 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		}
 
 		if (inet6_sk(sk)->rxopt.all)
-			pingv6_ops.ip6_datagram_recv_ctl(sk, msg, skb);
+			pingv6_ops.ip6_datagram_recv_common_ctl(sk, msg, skb);
+		if (skb->protocol == htons(ETH_P_IPV6) &&
+		    inet6_sk(sk)->rxopt.all)
+			pingv6_ops.ip6_datagram_recv_specific_ctl(sk, msg, skb);
+		else if (skb->protocol == htons(ETH_P_IP) && isk->cmsg_flags)
+			ip_cmsg_recv(msg, skb);
 #endif
 	} else {
 		BUG();

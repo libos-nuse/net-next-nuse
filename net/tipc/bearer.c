@@ -473,7 +473,7 @@ void tipc_disable_l2_media(struct tipc_bearer *b)
 /**
  * tipc_l2_send_msg - send a TIPC packet out over an Ethernet interface
  * @buf: the packet to be sent
- * @b_ptr: the bearer throught which the packet is to be sent
+ * @b_ptr: the bearer through which the packet is to be sent
  * @dest: peer destination address
  */
 int tipc_l2_send_msg(struct sk_buff *buf, struct tipc_bearer *b,
@@ -541,7 +541,7 @@ static int tipc_l2_rcv_msg(struct sk_buff *buf, struct net_device *dev,
 	if (likely(b_ptr)) {
 		if (likely(buf->pkt_type <= PACKET_BROADCAST)) {
 			buf->next = NULL;
-			tipc_recv_msg(buf, b_ptr);
+			tipc_rcv(buf, b_ptr);
 			rcu_read_unlock();
 			return NET_RX_SUCCESS;
 		}

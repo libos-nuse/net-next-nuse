@@ -661,7 +661,7 @@ static inline bool mlx4_en_cq_unlock_poll(struct mlx4_en_cq *cq)
 }
 
 /* true if a socket is polling, even if it did not get the lock */
-static inline bool mlx4_en_cq_ll_polling(struct mlx4_en_cq *cq)
+static inline bool mlx4_en_cq_busy_polling(struct mlx4_en_cq *cq)
 {
 	WARN_ON(!(cq->state & MLX4_CQ_LOCKED));
 	return cq->state & CQ_USER_PEND;
@@ -691,7 +691,7 @@ static inline bool mlx4_en_cq_unlock_poll(struct mlx4_en_cq *cq)
 	return false;
 }
 
-static inline bool mlx4_en_cq_ll_polling(struct mlx4_en_cq *cq)
+static inline bool mlx4_en_cq_busy_polling(struct mlx4_en_cq *cq)
 {
 	return false;
 }
@@ -722,7 +722,8 @@ int mlx4_en_set_cq_moder(struct mlx4_en_priv *priv, struct mlx4_en_cq *cq);
 int mlx4_en_arm_cq(struct mlx4_en_priv *priv, struct mlx4_en_cq *cq);
 
 void mlx4_en_tx_irq(struct mlx4_cq *mcq);
-u16 mlx4_en_select_queue(struct net_device *dev, struct sk_buff *skb);
+u16 mlx4_en_select_queue(struct net_device *dev, struct sk_buff *skb,
+			 void *accel_priv);
 netdev_tx_t mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev);
 
 int mlx4_en_create_tx_ring(struct mlx4_en_priv *priv,

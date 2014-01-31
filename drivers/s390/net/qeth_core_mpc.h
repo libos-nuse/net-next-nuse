@@ -104,10 +104,12 @@ enum qeth_ipa_cmds {
 	IPA_CMD_DELIP			= 0xb7,
 	IPA_CMD_SETADAPTERPARMS		= 0xb8,
 	IPA_CMD_SET_DIAG_ASS		= 0xb9,
+	IPA_CMD_SETBRIDGEPORT		= 0xbe,
 	IPA_CMD_CREATE_ADDR		= 0xc3,
 	IPA_CMD_DESTROY_ADDR		= 0xc4,
 	IPA_CMD_REGISTER_LOCAL_ADDR	= 0xd1,
 	IPA_CMD_UNREGISTER_LOCAL_ADDR	= 0xd2,
+	IPA_CMD_ADDRESS_CHANGE_NOTIF	= 0xd3,
 	IPA_CMD_UNKNOWN			= 0x00
 };
 
@@ -500,6 +502,124 @@ struct qeth_ipacmd_diagass {
 	__u8   cdata[64];
 } __attribute__ ((packed));
 
+/* SETBRIDGEPORT IPA Command:	 *********************************************/
+enum qeth_ipa_sbp_cmd {
+	IPA_SBP_QUERY_COMMANDS_SUPPORTED	= 0x00000000L,
+	IPA_SBP_RESET_BRIDGE_PORT_ROLE		= 0x00000001L,
+	IPA_SBP_SET_PRIMARY_BRIDGE_PORT		= 0x00000002L,
+	IPA_SBP_SET_SECONDARY_BRIDGE_PORT	= 0x00000004L,
+	IPA_SBP_QUERY_BRIDGE_PORTS		= 0x00000008L,
+	IPA_SBP_BRIDGE_PORT_STATE_CHANGE	= 0x00000010L,
+};
+
+struct net_if_token {
+	__u16 devnum;
+	__u8 cssid;
+	__u8 iid;
+	__u8 ssid;
+	__u8 chpid;
+	__u16 chid;
+} __packed;
+
+struct mac_addr_lnid {
+	__u8 mac[6];
+	__u16 lnid;
+} __packed;
+
+struct qeth_ipacmd_sbp_hdr {
+	__u32 supported_sbp_cmds;
+	__u32 enabled_sbp_cmds;
+	__u16 cmdlength;
+	__u16 reserved1;
+	__u32 command_code;
+	__u16 return_code;
+	__u8  used_total;
+	__u8  seq_no;
+	__u32 reserved2;
+} __packed;
+
+struct qeth_sbp_query_cmds_supp {
+	__u32 supported_cmds;
+	__u32 reserved;
+} __packed;
+
+struct qeth_sbp_reset_role {
+} __packed;
+
+struct qeth_sbp_set_primary {
+	struct net_if_token token;
+} __packed;
+
+struct qeth_sbp_set_secondary {
+} __packed;
+
+struct qeth_sbp_port_entry {
+		__u8 role;
+		__u8 state;
+		__u8 reserved1;
+		__u8 reserved2;
+		struct net_if_token token;
+} __packed;
+
+struct qeth_sbp_query_ports {
+	__u8 primary_bp_supported;
+	__u8 secondary_bp_supported;
+	__u8 num_entries;
+	__u8 entry_length;
+	struct qeth_sbp_port_entry entry[];
+} __packed;
+
+struct qeth_sbp_state_change {
+	__u8 primary_bp_supported;
+	__u8 secondary_bp_supported;
+	__u8 num_entries;
+	__u8 entry_length;
+	struct qeth_sbp_port_entry entry[];
+} __packed;
+
+struct qeth_ipacmd_setbridgeport {
+	struct qeth_ipacmd_sbp_hdr hdr;
+	union {
+		struct qeth_sbp_query_cmds_supp query_cmds_supp;
+		struct qeth_sbp_reset_role reset_role;
+		struct qeth_sbp_set_primary set_primary;
+		struct qeth_sbp_set_secondary set_secondary;
+		struct qeth_sbp_query_ports query_ports;
+		struct qeth_sbp_state_change state_change;
+	} data;
+} __packed;
+
+/* ADDRESS_CHANGE_NOTIFICATION adapter-initiated "command" *******************/
+/* Bitmask for entry->change_code. Both bits may be raised.		     */
+enum qeth_ipa_addr_change_code {
+	IPA_ADDR_CHANGE_CODE_VLANID		= 0x01,
+	IPA_ADDR_CHANGE_CODE_MACADDR		= 0x02,
+	IPA_ADDR_CHANGE_CODE_REMOVAL		= 0x80,	/* else addition */
+};
+enum qeth_ipa_addr_change_retcode {
+	IPA_ADDR_CHANGE_RETCODE_OK		= 0x0000,
+	IPA_ADDR_CHANGE_RETCODE_LOSTEVENTS	= 0x0010,
+};
+enum qeth_ipa_addr_change_lostmask {
+	IPA_ADDR_CHANGE_MASK_OVERFLOW		= 0x01,
+	IPA_ADDR_CHANGE_MASK_STATECHANGE	= 0x02,
+};
+
+struct qeth_ipacmd_addr_change_entry {
+	struct net_if_token token;
+	struct mac_addr_lnid addr_lnid;
+	__u8 change_code;
+	__u8 reserved1;
+	__u16 reserved2;
+} __packed;
+
+struct qeth_ipacmd_addr_change {
+	__u8 lost_event_mask;
+	__u8 reserved;
+	__u16 num_entries;
+	struct qeth_ipacmd_addr_change_entry entry[];
+} __packed;
+
 /* Header for each IPA command */
 struct qeth_ipacmd_hdr {
 	__u8   command;
@@ -529,6 +649,8 @@ struct qeth_ipa_cmd {
 		struct qeth_ipacmd_setadpparms		setadapterparms;
 		struct qeth_set_routing			setrtg;
 		struct qeth_ipacmd_diagass		diagass;
+		struct qeth_ipacmd_setbridgeport	sbp;
+		struct qeth_ipacmd_addr_change		addrchange;
 	} data;
 } __attribute__ ((packed));
 
