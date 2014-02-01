@@ -219,12 +219,15 @@ err:
 }
 
 struct workqueue_struct *system_wq __read_mostly;
+struct workqueue_struct *system_power_efficient_wq __read_mostly;
 /* from linux/workqueue.h */
 #define system_nrt_wq			__system_nrt_wq()
 
 static int __init init_workqueues(void)
 {
   system_wq = alloc_workqueue("events", 0, 0);
+  system_power_efficient_wq = alloc_workqueue("events_power_efficient",
+                                              WQ_POWER_EFFICIENT, 0);
   return 0;
 }
 fs_initcall(init_workqueues);

@@ -43,8 +43,8 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_fop = &empty_fops;
 	inode->__i_nlink = 1;
 	inode->i_opflags = 0;
-	inode->i_uid = 0;
-	inode->i_gid = 0;
+	inode->i_uid = make_kuid (current_user_ns (), 0);
+	inode->i_gid = make_kgid (current_user_ns (), 0);
 	atomic_set(&inode->i_writecount, 0);
 	inode->i_size = 0;
 	inode->i_blocks = 0;

@@ -36,8 +36,8 @@ struct SimTask *sim_task_create (void *private, unsigned long pid)
   struct pid *kpid = sim_malloc (sizeof (struct pid));
   if (!kpid) return NULL;
   kpid->numbers[0].nr = pid;
-  cred->fsuid = 0;
-  cred->fsgid = 0;
+  cred->fsuid = make_kuid (current_user_ns (), 0);
+  cred->fsgid = make_kgid (current_user_ns (), 0);
   cred->user = user;
   atomic_set (&cred->usage, 1);
   info->task = &task->kernel_task;

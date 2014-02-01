@@ -1,5 +1,7 @@
 #include <linux/sysfs.h>
 #include <linux/kobject.h>
+#include "sim.h"
+#include "sim-assert.h"
 
 int sysfs_create_bin_file(struct kobject *kobj,
 			  const struct bin_attribute *attr)
@@ -56,6 +58,7 @@ void sysfs_notify(struct kobject *kobj, const char *dir, const char *attr)
 {}
 int sysfs_create_dir_ns(struct kobject *kobj, const void *ns)
 {
+  kobj->sd = sim_malloc (sizeof (struct kernfs_node));
   return 0;
 }
 int sysfs_create_file_ns(struct kobject *kobj, const struct attribute *attr,
@@ -64,7 +67,7 @@ int sysfs_create_file_ns(struct kobject *kobj, const struct attribute *attr,
   return 0;
 }
 
-struct sysfs_dirent *sysfs_get(struct sysfs_dirent *sd)
+void kernfs_get(struct kernfs_node *kn)
 {
-  return NULL;
+  return;
 }
