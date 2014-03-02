@@ -469,7 +469,6 @@ static inline struct hlist_head *vxlan_fdb_head(struct vxlan_dev *vxlan,
 /* Look up Ethernet address in forwarding table */
 static struct vxlan_fdb *__vxlan_find_mac(struct vxlan_dev *vxlan,
 					const u8 *mac)
-
 {
 	struct hlist_head *head = vxlan_fdb_head(vxlan, mac);
 	struct vxlan_fdb *f;
@@ -596,10 +595,8 @@ static struct sk_buff **vxlan_gro_receive(struct sk_buff **head, struct sk_buff 
 			NAPI_GRO_CB(p)->same_flow = 0;
 			continue;
 		}
-		goto found;
 	}
 
-found:
 	type = eh->h_proto;
 
 	rcu_read_lock();
@@ -1135,7 +1132,6 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
 	struct vxlan_sock *vs;
 	struct vxlanhdr *vxh;
-	__be16 port;
 
 	/* Need Vxlan and inner Ethernet header to be present */
 	if (!pskb_may_pull(skb, VXLAN_HLEN))
@@ -1152,8 +1148,6 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 
 	if (iptunnel_pull_header(skb, VXLAN_HLEN, htons(ETH_P_TEB)))
 		goto drop;
-
-	port = inet_sk(sk)->inet_sport;
 
 	vs = rcu_dereference_sk_user_data(sk);
 	if (!vs)
@@ -1981,18 +1975,10 @@ static int vxlan_init(struct net_device *dev)
 	struct vxlan_dev *vxlan = netdev_priv(dev);
 	struct vxlan_net *vn = net_generic(dev_net(dev), vxlan_net_id);
 	struct vxlan_sock *vs;
-	int i;
 
-	dev->tstats = alloc_percpu(struct pcpu_sw_netstats);
+	dev->tstats = netdev_alloc_pcpu_stats(struct pcpu_sw_netstats);
 	if (!dev->tstats)
 		return -ENOMEM;
-
-	for_each_possible_cpu(i) {
-		struct pcpu_sw_netstats *vxlan_stats;
-		vxlan_stats = per_cpu_ptr(dev->tstats, i);
-		u64_stats_init(&vxlan_stats->syncp);
-	}
-
 
 	spin_lock(&vn->sock_lock);
 	vs = vxlan_find_sock(dev_net(dev), vxlan->dst_port);

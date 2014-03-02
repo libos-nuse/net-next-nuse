@@ -752,6 +752,9 @@ struct netdev_phys_port_id {
 	unsigned char id_len;
 };
 
+typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
+				       struct sk_buff *skb);
+
 /*
  * This structure defines the management hooks for network devices.
  * The following hooks can be defined; unless noted otherwise, they are
@@ -783,7 +786,7 @@ struct netdev_phys_port_id {
  *	Required can not be NULL.
  *
  * u16 (*ndo_select_queue)(struct net_device *dev, struct sk_buff *skb,
- *                         void *accel_priv);
+ *                         void *accel_priv, select_queue_fallback_t fallback);
  *	Called to decide which queue to when device supports multiple
  *	transmit queues.
  *
@@ -1005,7 +1008,8 @@ struct net_device_ops {
 						   struct net_device *dev);
 	u16			(*ndo_select_queue)(struct net_device *dev,
 						    struct sk_buff *skb,
-						    void *accel_priv);
+						    void *accel_priv,
+						    select_queue_fallback_t fallback);
 	void			(*ndo_change_rx_flags)(struct net_device *dev,
 						       int flags);
 	void			(*ndo_set_rx_mode)(struct net_device *dev);
@@ -1143,6 +1147,89 @@ struct net_device_ops {
 							void *priv);
 };
 
+/**
+ * enum net_device_priv_flags - &struct net_device priv_flags
+ *
+ * These are the &struct net_device, they are only set internally
+ * by drivers and used in the kernel. These flags are invisible to
+ * userspace, this means that the order of these flags can change
+ * during any kernel release.
+ *
+ * You should have a pretty good reason to be extending these flags.
+ *
+ * @IFF_802_1Q_VLAN: 802.1Q VLAN device
+ * @IFF_EBRIDGE: Ethernet bridging device
+ * @IFF_SLAVE_INACTIVE: bonding slave not the curr. active
+ * @IFF_MASTER_8023AD: bonding master, 802.3ad
+ * @IFF_MASTER_ALB: bonding master, balance-alb
+ * @IFF_BONDING: bonding master or slave
+ * @IFF_SLAVE_NEEDARP: need ARPs for validation
+ * @IFF_ISATAP: ISATAP interface (RFC4214)
+ * @IFF_MASTER_ARPMON: bonding master, ARP mon in use
+ * @IFF_WAN_HDLC: WAN HDLC device
+ * @IFF_XMIT_DST_RELEASE: dev_hard_start_xmit() is allowed to
+ *	release skb->dst
+ * @IFF_DONT_BRIDGE: disallow bridging this ether dev
+ * @IFF_DISABLE_NETPOLL: disable netpoll at run-time
+ * @IFF_MACVLAN_PORT: device used as macvlan port
+ * @IFF_BRIDGE_PORT: device used as bridge port
+ * @IFF_OVS_DATAPATH: device used as Open vSwitch datapath port
+ * @IFF_TX_SKB_SHARING: The interface supports sharing skbs on transmit
+ * @IFF_UNICAST_FLT: Supports unicast filtering
+ * @IFF_TEAM_PORT: device used as team port
+ * @IFF_SUPP_NOFCS: device supports sending custom FCS
+ * @IFF_LIVE_ADDR_CHANGE: device supports hardware address
+ *	change when it's running
+ * @IFF_MACVLAN: Macvlan device
+ */
+enum netdev_priv_flags {
+	IFF_802_1Q_VLAN			= 1<<0,
+	IFF_EBRIDGE			= 1<<1,
+	IFF_SLAVE_INACTIVE		= 1<<2,
+	IFF_MASTER_8023AD		= 1<<3,
+	IFF_MASTER_ALB			= 1<<4,
+	IFF_BONDING			= 1<<5,
+	IFF_SLAVE_NEEDARP		= 1<<6,
+	IFF_ISATAP			= 1<<7,
+	IFF_MASTER_ARPMON		= 1<<8,
+	IFF_WAN_HDLC			= 1<<9,
+	IFF_XMIT_DST_RELEASE		= 1<<10,
+	IFF_DONT_BRIDGE			= 1<<11,
+	IFF_DISABLE_NETPOLL		= 1<<12,
+	IFF_MACVLAN_PORT		= 1<<13,
+	IFF_BRIDGE_PORT			= 1<<14,
+	IFF_OVS_DATAPATH		= 1<<15,
+	IFF_TX_SKB_SHARING		= 1<<16,
+	IFF_UNICAST_FLT			= 1<<17,
+	IFF_TEAM_PORT			= 1<<18,
+	IFF_SUPP_NOFCS			= 1<<19,
+	IFF_LIVE_ADDR_CHANGE		= 1<<20,
+	IFF_MACVLAN			= 1<<21,
+};
+
+#define IFF_802_1Q_VLAN			IFF_802_1Q_VLAN
+#define IFF_EBRIDGE			IFF_EBRIDGE
+#define IFF_SLAVE_INACTIVE		IFF_SLAVE_INACTIVE
+#define IFF_MASTER_8023AD		IFF_MASTER_8023AD
+#define IFF_MASTER_ALB			IFF_MASTER_ALB
+#define IFF_BONDING			IFF_BONDING
+#define IFF_SLAVE_NEEDARP		IFF_SLAVE_NEEDARP
+#define IFF_ISATAP			IFF_ISATAP
+#define IFF_MASTER_ARPMON		IFF_MASTER_ARPMON
+#define IFF_WAN_HDLC			IFF_WAN_HDLC
+#define IFF_XMIT_DST_RELEASE		IFF_XMIT_DST_RELEASE
+#define IFF_DONT_BRIDGE			IFF_DONT_BRIDGE
+#define IFF_DISABLE_NETPOLL		IFF_DISABLE_NETPOLL
+#define IFF_MACVLAN_PORT		IFF_MACVLAN_PORT
+#define IFF_BRIDGE_PORT			IFF_BRIDGE_PORT
+#define IFF_OVS_DATAPATH		IFF_OVS_DATAPATH
+#define IFF_TX_SKB_SHARING		IFF_TX_SKB_SHARING
+#define IFF_UNICAST_FLT			IFF_UNICAST_FLT
+#define IFF_TEAM_PORT			IFF_TEAM_PORT
+#define IFF_SUPP_NOFCS			IFF_SUPP_NOFCS
+#define IFF_LIVE_ADDR_CHANGE		IFF_LIVE_ADDR_CHANGE
+#define IFF_MACVLAN			IFF_MACVLAN
+
 /*
  *	The DEVICE structure.
  *	Actually, this whole structure is a big mistake.  It mixes I/O
@@ -1275,6 +1362,10 @@ struct net_device {
 						 * that share the same link
 						 * layer address
 						 */
+	unsigned short          dev_port;	/* Used to differentiate
+						 * devices that share the same
+						 * function
+						 */
 	spinlock_t		addr_list_lock;
 	struct netdev_hw_addr_list	uc;	/* Unicast mac addresses */
 	struct netdev_hw_addr_list	mc;	/* Multicast mac addresses */
@@ -1312,13 +1403,7 @@ struct net_device {
 /*
  * Cache lines mostly used on receive path (including eth_type_trans())
  */
-	unsigned long		last_rx;	/* Time of last Rx
-						 * This should not be set in
-						 * drivers, unless really needed,
-						 * because network stack (bonding)
-						 * use it if/when necessary, to
-						 * avoid dirtying this cache line.
-						 */
+	unsigned long		last_rx;	/* Time of last Rx */
 
 	/* Interface address info used in eth_type_trans() */
 	unsigned char		*dev_addr;	/* hw address, (before bcast
@@ -1551,7 +1636,6 @@ static inline void netdev_for_each_tx_queue(struct net_device *dev,
 struct netdev_queue *netdev_pick_tx(struct net_device *dev,
 				    struct sk_buff *skb,
 				    void *accel_priv);
-u16 __netdev_pick_tx(struct net_device *dev, struct sk_buff *skb);
 
 /*
  * Net namespace inlines
@@ -1725,6 +1809,20 @@ struct pcpu_sw_netstats {
 	u64     tx_bytes;
 	struct u64_stats_sync   syncp;
 };
+
+#define netdev_alloc_pcpu_stats(type)				\
+({								\
+	typeof(type) *pcpu_stats = alloc_percpu(type);		\
+	if (pcpu_stats)	{					\
+		int i;						\
+		for_each_possible_cpu(i) {			\
+			typeof(type) *stat;			\
+			stat = per_cpu_ptr(pcpu_stats, i);	\
+			u64_stats_init(&stat->syncp);		\
+		}						\
+	}							\
+	pcpu_stats;						\
+})
 
 #include <linux/notifier.h>
 
@@ -2273,6 +2371,26 @@ static inline void netdev_tx_reset_queue(struct netdev_queue *q)
 static inline void netdev_reset_queue(struct net_device *dev_queue)
 {
 	netdev_tx_reset_queue(netdev_get_tx_queue(dev_queue, 0));
+}
+
+/**
+ * 	netdev_cap_txqueue - check if selected tx queue exceeds device queues
+ * 	@dev: network device
+ * 	@queue_index: given tx queue index
+ *
+ * 	Returns 0 if given tx queue index >= number of device tx queues,
+ * 	otherwise returns the originally passed tx queue index.
+ */
+static inline u16 netdev_cap_txqueue(struct net_device *dev, u16 queue_index)
+{
+	if (unlikely(queue_index >= dev->real_num_tx_queues)) {
+		net_warn_ratelimited("%s selects TX queue %d, but real number of TX queues is %d\n",
+				     dev->name, queue_index,
+				     dev->real_num_tx_queues);
+		return 0;
+	}
+
+	return queue_index;
 }
 
 /**
@@ -3068,7 +3186,12 @@ void netdev_change_features(struct net_device *dev);
 void netif_stacked_transfer_operstate(const struct net_device *rootdev,
 					struct net_device *dev);
 
-netdev_features_t netif_skb_features(struct sk_buff *skb);
+netdev_features_t netif_skb_dev_features(struct sk_buff *skb,
+					 const struct net_device *dev);
+static inline netdev_features_t netif_skb_features(struct sk_buff *skb)
+{
+	return netif_skb_dev_features(skb, skb->dev);
+}
 
 static inline bool net_gso_ok(netdev_features_t features, int gso_type)
 {

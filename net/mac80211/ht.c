@@ -375,7 +375,7 @@ void ieee80211_send_delba(struct ieee80211_sub_if_data *sdata,
 	mgmt->u.action.u.delba.params = cpu_to_le16(params);
 	mgmt->u.action.u.delba.reason_code = cpu_to_le16(reason_code);
 
-	ieee80211_tx_skb_tid(sdata, skb, tid);
+	ieee80211_tx_skb(sdata, skb);
 }
 
 void ieee80211_process_delba(struct ieee80211_sub_if_data *sdata,
@@ -466,7 +466,9 @@ void ieee80211_request_smps_ap_work(struct work_struct *work)
 			     u.ap.request_smps_work);
 
 	sdata_lock(sdata);
-	__ieee80211_request_smps_ap(sdata, sdata->u.ap.driver_smps_mode);
+	if (sdata_dereference(sdata->u.ap.beacon, sdata))
+		__ieee80211_request_smps_ap(sdata,
+					    sdata->u.ap.driver_smps_mode);
 	sdata_unlock(sdata);
 }
 

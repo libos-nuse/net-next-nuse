@@ -697,7 +697,6 @@ static void update_or_create_fnhe(struct fib_nh *nh, __be32 daddr, __be32 gw,
 
 out_unlock:
 	spin_unlock_bh(&fnhe_lock);
-	return;
 }
 
 static void __ip_do_redirect(struct rtable *rt, struct sk_buff *skb, struct flowi4 *fl4,
@@ -1597,6 +1596,7 @@ static int __mkroute_input(struct sk_buff *skb,
 	rth->rt_gateway	= 0;
 	rth->rt_uses_gateway = 0;
 	INIT_LIST_HEAD(&rth->rt_uncached);
+	RT_CACHE_STAT_INC(in_slow_tot);
 
 	rth->dst.input = ip_forward;
 	rth->dst.output = ip_output;
@@ -1695,10 +1695,11 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	fl4.daddr = daddr;
 	fl4.saddr = saddr;
 	err = fib_lookup(net, &fl4, &res);
-	if (err != 0)
+	if (err != 0) {
+		if (!IN_DEV_FORWARD(in_dev))
+			err = -EHOSTUNREACH;
 		goto no_route;
-
-	RT_CACHE_STAT_INC(in_slow_tot);
+	}
 
 	if (res.type == RTN_BROADCAST)
 		goto brd_input;
@@ -1712,8 +1713,10 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		goto local_input;
 	}
 
-	if (!IN_DEV_FORWARD(in_dev))
+	if (!IN_DEV_FORWARD(in_dev)) {
+		err = -EHOSTUNREACH;
 		goto no_route;
+	}
 	if (res.type != RTN_UNICAST)
 		goto martian_destination;
 
@@ -1768,6 +1771,7 @@ local_input:
 	rth->rt_gateway	= 0;
 	rth->rt_uses_gateway = 0;
 	INIT_LIST_HEAD(&rth->rt_uncached);
+	RT_CACHE_STAT_INC(in_slow_tot);
 	if (res.type == RTN_UNREACHABLE) {
 		rth->dst.input= ip_error;
 		rth->dst.error= -err;

@@ -88,17 +88,10 @@ out:
 static int br_dev_init(struct net_device *dev)
 {
 	struct net_bridge *br = netdev_priv(dev);
-	int i;
 
-	br->stats = alloc_percpu(struct pcpu_sw_netstats);
+	br->stats = netdev_alloc_pcpu_stats(struct pcpu_sw_netstats);
 	if (!br->stats)
 		return -ENOMEM;
-
-	for_each_possible_cpu(i) {
-		struct pcpu_sw_netstats *br_dev_stats;
-		br_dev_stats = per_cpu_ptr(br->stats, i);
-		u64_stats_init(&br_dev_stats->syncp);
-	}
 
 	return 0;
 }
@@ -187,8 +180,7 @@ static int br_set_mac_address(struct net_device *dev, void *p)
 
 	spin_lock_bh(&br->lock);
 	if (!ether_addr_equal(dev->dev_addr, addr->sa_data)) {
-		memcpy(dev->dev_addr, addr->sa_data, ETH_ALEN);
-		br_fdb_change_mac_address(br, addr->sa_data);
+		/* Mac address will be changed in br_stp_change_bridge_id(). */
 		br_stp_change_bridge_id(br, addr->sa_data);
 	}
 	spin_unlock_bh(&br->lock);
@@ -226,36 +218,10 @@ static void br_netpoll_cleanup(struct net_device *dev)
 		br_netpoll_disable(p);
 }
 
-static int br_netpoll_setup(struct net_device *dev, struct netpoll_info *ni,
-			    gfp_t gfp)
-{
-	struct net_bridge *br = netdev_priv(dev);
-	struct net_bridge_port *p;
-	int err = 0;
-
-	list_for_each_entry(p, &br->port_list, list) {
-		if (!p->dev)
-			continue;
-		err = br_netpoll_enable(p, gfp);
-		if (err)
-			goto fail;
-	}
-
-out:
-	return err;
-
-fail:
-	br_netpoll_cleanup(dev);
-	goto out;
-}
-
-int br_netpoll_enable(struct net_bridge_port *p, gfp_t gfp)
+static int __br_netpoll_enable(struct net_bridge_port *p, gfp_t gfp)
 {
 	struct netpoll *np;
 	int err;
-
-	if (!p->br->dev->npinfo)
-		return 0;
 
 	np = kzalloc(sizeof(*p->np), gfp);
 	if (!np)
@@ -269,6 +235,37 @@ int br_netpoll_enable(struct net_bridge_port *p, gfp_t gfp)
 
 	p->np = np;
 	return err;
+}
+
+int br_netpoll_enable(struct net_bridge_port *p, gfp_t gfp)
+{
+	if (!p->br->dev->npinfo)
+		return 0;
+
+	return __br_netpoll_enable(p, gfp);
+}
+
+static int br_netpoll_setup(struct net_device *dev, struct netpoll_info *ni,
+			    gfp_t gfp)
+{
+	struct net_bridge *br = netdev_priv(dev);
+	struct net_bridge_port *p;
+	int err = 0;
+
+	list_for_each_entry(p, &br->port_list, list) {
+		if (!p->dev)
+			continue;
+		err = __br_netpoll_enable(p, gfp);
+		if (err)
+			goto fail;
+	}
+
+out:
+	return err;
+
+fail:
+	br_netpoll_cleanup(dev);
+	goto out;
 }
 
 void br_netpoll_disable(struct net_bridge_port *p)
@@ -370,7 +367,7 @@ void br_dev_setup(struct net_device *dev)
 	br->bridge_id.prio[0] = 0x80;
 	br->bridge_id.prio[1] = 0x00;
 
-	memcpy(br->group_addr, eth_reserved_addr_base, ETH_ALEN);
+	ether_addr_copy(br->group_addr, eth_reserved_addr_base);
 
 	br->stp_enabled = BR_NO_STP;
 	br->group_fwd_mask = BR_GROUPFWD_DEFAULT;

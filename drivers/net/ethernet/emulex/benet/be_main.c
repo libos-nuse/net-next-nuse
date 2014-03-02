@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005 - 2013 Emulex
+ * Copyright (C) 2005 - 2014 Emulex
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -945,9 +945,9 @@ static struct sk_buff *be_xmit_workarounds(struct be_adapter *adapter,
 	}
 
 	/* If vlan tag is already inlined in the packet, skip HW VLAN
-	 * tagging in UMC mode
+	 * tagging in pvid-tagging mode
 	 */
-	if ((adapter->function_mode & UMC_ENABLED) &&
+	if (be_pvid_tagging_enabled(adapter) &&
 	    veh->h_vlan_proto == htons(ETH_P_8021Q))
 			*skip_hw_vlan = true;
 
@@ -1660,7 +1660,7 @@ static void be_parse_rx_compl_v1(struct be_eth_rx_compl *compl,
 	rxcp->rss_hash =
 		AMAP_GET_BITS(struct amap_eth_rx_compl_v1, rsshash, compl);
 	if (rxcp->vlanf) {
-		rxcp->vtm = AMAP_GET_BITS(struct amap_eth_rx_compl_v1, vtm,
+		rxcp->qnq = AMAP_GET_BITS(struct amap_eth_rx_compl_v1, qnq,
 					  compl);
 		rxcp->vlan_tag = AMAP_GET_BITS(struct amap_eth_rx_compl_v1, vlan_tag,
 					       compl);
@@ -1690,7 +1690,7 @@ static void be_parse_rx_compl_v0(struct be_eth_rx_compl *compl,
 	rxcp->rss_hash =
 		AMAP_GET_BITS(struct amap_eth_rx_compl_v0, rsshash, compl);
 	if (rxcp->vlanf) {
-		rxcp->vtm = AMAP_GET_BITS(struct amap_eth_rx_compl_v0, vtm,
+		rxcp->qnq = AMAP_GET_BITS(struct amap_eth_rx_compl_v0, qnq,
 					  compl);
 		rxcp->vlan_tag = AMAP_GET_BITS(struct amap_eth_rx_compl_v0, vlan_tag,
 					       compl);
@@ -1723,9 +1723,11 @@ static struct be_rx_compl_info *be_rx_compl_get(struct be_rx_obj *rxo)
 		rxcp->l4_csum = 0;
 
 	if (rxcp->vlanf) {
-		/* vlanf could be wrongly set in some cards.
-		 * ignore if vtm is not set */
-		if ((adapter->function_mode & FLEX10_MODE) && !rxcp->vtm)
+		/* In QNQ modes, if qnq bit is not set, then the packet was
+		 * tagged only with the transparent outer vlan-tag and must
+		 * not be treated as a vlan packet by host
+		 */
+		if (be_is_qnq_mode(adapter) && !rxcp->qnq)
 			rxcp->vlanf = 0;
 
 		if (!lancer_chip(adapter))
@@ -2423,6 +2425,9 @@ void be_detect_error(struct be_adapter *adapter)
 	u32 ue_lo = 0, ue_hi = 0, ue_lo_mask = 0, ue_hi_mask = 0;
 	u32 sliport_status = 0, sliport_err1 = 0, sliport_err2 = 0;
 	u32 i;
+	bool error_detected = false;
+	struct device *dev = &adapter->pdev->dev;
+	struct net_device *netdev = adapter->netdev;
 
 	if (be_hw_error(adapter))
 		return;
@@ -2434,6 +2439,21 @@ void be_detect_error(struct be_adapter *adapter)
 					SLIPORT_ERROR1_OFFSET);
 			sliport_err2 = ioread32(adapter->db +
 					SLIPORT_ERROR2_OFFSET);
+			adapter->hw_error = true;
+			/* Do not log error messages if its a FW reset */
+			if (sliport_err1 == SLIPORT_ERROR_FW_RESET1 &&
+			    sliport_err2 == SLIPORT_ERROR_FW_RESET2) {
+				dev_info(dev, "Firmware update in progress\n");
+			} else {
+				error_detected = true;
+				dev_err(dev, "Error detected in the card\n");
+				dev_err(dev, "ERR: sliport status 0x%x\n",
+					sliport_status);
+				dev_err(dev, "ERR: sliport error1 0x%x\n",
+					sliport_err1);
+				dev_err(dev, "ERR: sliport error2 0x%x\n",
+					sliport_err2);
+			}
 		}
 	} else {
 		pci_read_config_dword(adapter->pdev,
@@ -2447,51 +2467,33 @@ void be_detect_error(struct be_adapter *adapter)
 
 		ue_lo = (ue_lo & ~ue_lo_mask);
 		ue_hi = (ue_hi & ~ue_hi_mask);
-	}
 
-	/* On certain platforms BE hardware can indicate spurious UEs.
-	 * Allow the h/w to stop working completely in case of a real UE.
-	 * Hence not setting the hw_error for UE detection.
-	 */
-	if (sliport_status & SLIPORT_STATUS_ERR_MASK) {
-		adapter->hw_error = true;
-		/* Do not log error messages if its a FW reset */
-		if (sliport_err1 == SLIPORT_ERROR_FW_RESET1 &&
-		    sliport_err2 == SLIPORT_ERROR_FW_RESET2) {
-			dev_info(&adapter->pdev->dev,
-				 "Firmware update in progress\n");
-			return;
-		} else {
-			dev_err(&adapter->pdev->dev,
-				"Error detected in the card\n");
+		/* On certain platforms BE hardware can indicate spurious UEs.
+		 * Allow HW to stop working completely in case of a real UE.
+		 * Hence not setting the hw_error for UE detection.
+		 */
+
+		if (ue_lo || ue_hi) {
+			error_detected = true;
+			dev_err(dev,
+				"Unrecoverable Error detected in the adapter");
+			dev_err(dev, "Please reboot server to recover");
+			if (skyhawk_chip(adapter))
+				adapter->hw_error = true;
+			for (i = 0; ue_lo; ue_lo >>= 1, i++) {
+				if (ue_lo & 1)
+					dev_err(dev, "UE: %s bit set\n",
+						ue_status_low_desc[i]);
+			}
+			for (i = 0; ue_hi; ue_hi >>= 1, i++) {
+				if (ue_hi & 1)
+					dev_err(dev, "UE: %s bit set\n",
+						ue_status_hi_desc[i]);
+			}
 		}
 	}
-
-	if (sliport_status & SLIPORT_STATUS_ERR_MASK) {
-		dev_err(&adapter->pdev->dev,
-			"ERR: sliport status 0x%x\n", sliport_status);
-		dev_err(&adapter->pdev->dev,
-			"ERR: sliport error1 0x%x\n", sliport_err1);
-		dev_err(&adapter->pdev->dev,
-			"ERR: sliport error2 0x%x\n", sliport_err2);
-	}
-
-	if (ue_lo) {
-		for (i = 0; ue_lo; ue_lo >>= 1, i++) {
-			if (ue_lo & 1)
-				dev_err(&adapter->pdev->dev,
-				"UE: %s bit set\n", ue_status_low_desc[i]);
-		}
-	}
-
-	if (ue_hi) {
-		for (i = 0; ue_hi; ue_hi >>= 1, i++) {
-			if (ue_hi & 1)
-				dev_err(&adapter->pdev->dev,
-				"UE: %s bit set\n", ue_status_hi_desc[i]);
-		}
-	}
-
+	if (error_detected)
+		netif_carrier_off(netdev);
 }
 
 static void be_msix_disable(struct be_adapter *adapter)
@@ -2505,7 +2507,7 @@ static void be_msix_disable(struct be_adapter *adapter)
 
 static int be_msix_enable(struct be_adapter *adapter)
 {
-	int i, status, num_vec;
+	int i, num_vec;
 	struct device *dev = &adapter->pdev->dev;
 
 	/* If RoCE is supported, program the max number of NIC vectors that
@@ -2521,24 +2523,11 @@ static int be_msix_enable(struct be_adapter *adapter)
 	for (i = 0; i < num_vec; i++)
 		adapter->msix_entries[i].entry = i;
 
-	status = pci_enable_msix(adapter->pdev, adapter->msix_entries, num_vec);
-	if (status == 0) {
-		goto done;
-	} else if (status >= MIN_MSIX_VECTORS) {
-		num_vec = status;
-		status = pci_enable_msix(adapter->pdev, adapter->msix_entries,
-					 num_vec);
-		if (!status)
-			goto done;
-	}
+	num_vec = pci_enable_msix_range(adapter->pdev, adapter->msix_entries,
+					MIN_MSIX_VECTORS, num_vec);
+	if (num_vec < 0)
+		goto fail;
 
-	dev_warn(dev, "MSIx enable failed\n");
-
-	/* INTx is not supported in VFs, so fail probe if enable_msix fails */
-	if (!be_physfn(adapter))
-		return status;
-	return 0;
-done:
 	if (be_roce_supported(adapter) && num_vec > MIN_MSIX_VECTORS) {
 		adapter->num_msix_roce_vec = num_vec / 2;
 		dev_info(dev, "enabled %d MSI-x vector(s) for RoCE\n",
@@ -2549,6 +2538,14 @@ done:
 
 	dev_info(dev, "enabled %d MSI-x vector(s) for NIC\n",
 		 adapter->num_msix_vec);
+	return 0;
+
+fail:
+	dev_warn(dev, "MSIx enable failed\n");
+
+	/* INTx is not supported in VFs, so fail probe if enable_msix fails */
+	if (!be_physfn(adapter))
+		return num_vec;
 	return 0;
 }
 
@@ -3109,6 +3106,22 @@ err:
 	return status;
 }
 
+/* Converting function_mode bits on BE3 to SH mc_type enums */
+
+static u8 be_convert_mc_type(u32 function_mode)
+{
+	if (function_mode & VNIC_MODE && function_mode & FLEX10_MODE)
+		return vNIC1;
+	else if (function_mode & FLEX10_MODE)
+		return FLEX10;
+	else if (function_mode & VNIC_MODE)
+		return vNIC2;
+	else if (function_mode & UMC_ENABLED)
+		return UMC;
+	else
+		return MC_NONE;
+}
+
 /* On BE2/BE3 FW does not suggest the supported limits */
 static void BEx_get_resources(struct be_adapter *adapter,
 			      struct be_resources *res)
@@ -3129,12 +3142,23 @@ static void BEx_get_resources(struct be_adapter *adapter,
 	else
 		res->max_uc_mac = BE_VF_UC_PMAC_COUNT;
 
-	if (adapter->function_mode & FLEX10_MODE)
-		res->max_vlans = BE_NUM_VLANS_SUPPORTED/8;
-	else if (adapter->function_mode & UMC_ENABLED)
-		res->max_vlans = BE_UMC_NUM_VLANS_SUPPORTED;
-	else
+	adapter->mc_type = be_convert_mc_type(adapter->function_mode);
+
+	if (be_is_mc(adapter)) {
+		/* Assuming that there are 4 channels per port,
+		 * when multi-channel is enabled
+		 */
+		if (be_is_qnq_mode(adapter))
+			res->max_vlans = BE_NUM_VLANS_SUPPORTED/8;
+		else
+			/* In a non-qnq multichannel mode, the pvid
+			 * takes up one vlan entry
+			 */
+			res->max_vlans = (BE_NUM_VLANS_SUPPORTED / 4) - 1;
+	} else {
 		res->max_vlans = BE_NUM_VLANS_SUPPORTED;
+	}
+
 	res->max_mcast_mac = BE_MAX_MC;
 
 	/* For BE3 1Gb ports, F/W does not properly support multiple TXQs */
@@ -4417,14 +4441,32 @@ static bool be_reset_required(struct be_adapter *adapter)
 
 static char *mc_name(struct be_adapter *adapter)
 {
-	if (adapter->function_mode & FLEX10_MODE)
-		return "FLEX10";
-	else if (adapter->function_mode & VNIC_MODE)
-		return "vNIC";
-	else if (adapter->function_mode & UMC_ENABLED)
-		return "UMC";
-	else
-		return "";
+	char *str = "";	/* default */
+
+	switch (adapter->mc_type) {
+	case UMC:
+		str = "UMC";
+		break;
+	case FLEX10:
+		str = "FLEX10";
+		break;
+	case vNIC1:
+		str = "vNIC-1";
+		break;
+	case nPAR:
+		str = "nPAR";
+		break;
+	case UFP:
+		str = "UFP";
+		break;
+	case vNIC2:
+		str = "vNIC-2";
+		break;
+	default:
+		str = "";
+	}
+
+	return str;
 }
 
 static inline char *func_name(struct be_adapter *adapter)

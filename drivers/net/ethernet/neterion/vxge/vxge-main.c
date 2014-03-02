@@ -726,9 +726,6 @@ static int vxge_learn_mac(struct vxgedev *vdev, u8 *mac_header)
 	int vpath_idx = 0;
 	enum vxge_hw_status status = VXGE_HW_OK;
 	struct vxge_vpath *vpath = NULL;
-	struct __vxge_hw_device *hldev;
-
-	hldev = pci_get_drvdata(vdev->pdev);
 
 	mac_address = (u8 *)&mac_addr;
 	memcpy(mac_address, mac_header, ETH_ALEN);
@@ -2352,12 +2349,18 @@ start:
 	vdev->vxge_entries[j].entry = VXGE_ALARM_MSIX_ID;
 	vdev->vxge_entries[j].in_use = 0;
 
-	ret = pci_enable_msix(vdev->pdev, vdev->entries, vdev->intr_cnt);
-	if (ret > 0) {
+	ret = pci_enable_msix_range(vdev->pdev,
+				    vdev->entries, 3, vdev->intr_cnt);
+	if (ret < 0) {
+		ret = -ENODEV;
+		goto enable_msix_failed;
+	} else if (ret < vdev->intr_cnt) {
+		pci_disable_msix(vdev->pdev);
+
 		vxge_debug_init(VXGE_ERR,
 			"%s: MSI-X enable failed for %d vectors, ret: %d",
 			VXGE_DRIVER_NAME, vdev->intr_cnt, ret);
-		if ((max_config_vpath != VXGE_USE_DEFAULT) || (ret < 3)) {
+		if (max_config_vpath != VXGE_USE_DEFAULT) {
 			ret = -ENODEV;
 			goto enable_msix_failed;
 		}
@@ -2371,9 +2374,6 @@ start:
 		vxge_close_vpaths(vdev, temp);
 		vdev->no_of_vpath = temp;
 		goto start;
-	} else if (ret < 0) {
-		ret = -ENODEV;
-		goto enable_msix_failed;
 	}
 	return 0;
 
@@ -2443,9 +2443,6 @@ static void vxge_rem_msix_isr(struct vxgedev *vdev)
 
 static void vxge_rem_isr(struct vxgedev *vdev)
 {
-	struct __vxge_hw_device *hldev;
-	hldev = pci_get_drvdata(vdev->pdev);
-
 #ifdef CONFIG_PCI_MSI
 	if (vdev->config.intr_type == MSI_X) {
 		vxge_rem_msix_isr(vdev);

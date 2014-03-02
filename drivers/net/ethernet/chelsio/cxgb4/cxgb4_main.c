@@ -254,6 +254,8 @@ static DEFINE_PCI_DEVICE_TABLE(cxgb4_pci_tbl) = {
 	CH_DEVICE(0x5011, 4),
 	CH_DEVICE(0x5012, 4),
 	CH_DEVICE(0x5013, 4),
+	CH_DEVICE(0x5014, 4),
+	CH_DEVICE(0x5015, 4),
 	CH_DEVICE(0x5401, 4),
 	CH_DEVICE(0x5402, 4),
 	CH_DEVICE(0x5403, 4),
@@ -273,6 +275,8 @@ static DEFINE_PCI_DEVICE_TABLE(cxgb4_pci_tbl) = {
 	CH_DEVICE(0x5411, 4),
 	CH_DEVICE(0x5412, 4),
 	CH_DEVICE(0x5413, 4),
+	CH_DEVICE(0x5414, 4),
+	CH_DEVICE(0x5415, 4),
 	{ 0, }
 };
 
@@ -423,14 +427,17 @@ static void link_report(struct net_device *dev)
 		const struct port_info *p = netdev_priv(dev);
 
 		switch (p->link_cfg.speed) {
-		case SPEED_10000:
+		case 10000:
 			s = "10Gbps";
 			break;
-		case SPEED_1000:
+		case 1000:
 			s = "1000Mbps";
 			break;
-		case SPEED_100:
+		case 100:
 			s = "100Mbps";
+			break;
+		case 40000:
+			s = "40Gbps";
 			break;
 		}
 
@@ -2061,7 +2068,7 @@ static void get_regs(struct net_device *dev, struct ethtool_regs *regs,
 		0x40200, 0x40298,
 		0x402ac, 0x4033c,
 		0x403f8, 0x403fc,
-		0x41300, 0x413c4,
+		0x41304, 0x413c4,
 		0x41400, 0x4141c,
 		0x41480, 0x414d0,
 		0x44000, 0x44078,
@@ -2089,7 +2096,7 @@ static void get_regs(struct net_device *dev, struct ethtool_regs *regs,
 		0x48200, 0x48298,
 		0x482ac, 0x4833c,
 		0x483f8, 0x483fc,
-		0x49300, 0x493c4,
+		0x49304, 0x493c4,
 		0x49400, 0x4941c,
 		0x49480, 0x494d0,
 		0x4c000, 0x4c078,
@@ -2199,6 +2206,8 @@ static unsigned int from_fw_linkcaps(unsigned int type, unsigned int caps)
 	else if (type == FW_PORT_TYPE_FIBER_XFI ||
 		 type == FW_PORT_TYPE_FIBER_XAUI || type == FW_PORT_TYPE_SFP)
 		v |= SUPPORTED_FIBRE;
+	else if (type == FW_PORT_TYPE_BP40_BA)
+		v |= SUPPORTED_40000baseSR4_Full;
 
 	if (caps & FW_PORT_CAP_ANEG)
 		v |= SUPPORTED_Autoneg;
@@ -2215,6 +2224,8 @@ static unsigned int to_fw_linkcaps(unsigned int caps)
 		v |= FW_PORT_CAP_SPEED_1G;
 	if (caps & ADVERTISED_10000baseT_Full)
 		v |= FW_PORT_CAP_SPEED_10G;
+	if (caps & ADVERTISED_40000baseSR4_Full)
+		v |= FW_PORT_CAP_SPEED_40G;
 	return v;
 }
 
@@ -2263,12 +2274,14 @@ static int get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 
 static unsigned int speed_to_caps(int speed)
 {
-	if (speed == SPEED_100)
+	if (speed == 100)
 		return FW_PORT_CAP_SPEED_100M;
-	if (speed == SPEED_1000)
+	if (speed == 1000)
 		return FW_PORT_CAP_SPEED_1G;
-	if (speed == SPEED_10000)
+	if (speed == 10000)
 		return FW_PORT_CAP_SPEED_10G;
+	if (speed == 40000)
+		return FW_PORT_CAP_SPEED_40G;
 	return 0;
 }
 
@@ -2296,8 +2309,10 @@ static int set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 	if (cmd->autoneg == AUTONEG_DISABLE) {
 		cap = speed_to_caps(speed);
 
-		if (!(lc->supported & cap) || (speed == SPEED_1000) ||
-		    (speed == SPEED_10000))
+		if (!(lc->supported & cap) ||
+		    (speed == 1000) ||
+		    (speed == 10000) ||
+		    (speed == 40000))
 			return -EINVAL;
 		lc->requested_speed = cap;
 		lc->advertising = 0;
@@ -3765,6 +3780,7 @@ static void uld_attach(struct adapter *adap, unsigned int uld)
 	lli.dbfifo_int_thresh = dbfifo_int_thresh;
 	lli.sge_pktshift = adap->sge.pktshift;
 	lli.enable_fw_ofld_conn = adap->flags & FW_OFLD_CONN;
+	lli.ulptx_memwrite_dsgl = adap->params.ulptx_memwrite_dsgl;
 
 	handle = ulds[uld].add(&lli);
 	if (IS_ERR(handle)) {
@@ -5370,6 +5386,21 @@ static int adap_init0(struct adapter *adap)
 	(void) t4_set_params(adap, adap->mbox, adap->fn, 0, 1, params, val);
 
 	/*
+	 * Find out whether we're allowed to use the T5+ ULPTX MEMWRITE DSGL
+	 * capability.  Earlier versions of the firmware didn't have the
+	 * ULPTX_MEMWRITE_DSGL so we'll interpret a query failure as no
+	 * permission to use ULPTX MEMWRITE DSGL.
+	 */
+	if (is_t4(adap->params.chip)) {
+		adap->params.ulptx_memwrite_dsgl = false;
+	} else {
+		params[0] = FW_PARAM_DEV(ULPTX_MEMWRITE_DSGL);
+		ret = t4_query_params(adap, adap->mbox, adap->fn, 0,
+				      1, params, val);
+		adap->params.ulptx_memwrite_dsgl = (ret == 0 && val[0] != 0);
+	}
+
+	/*
 	 * Get device capabilities so we can determine what resources we need
 	 * to manage.
 	 */
@@ -5603,9 +5634,10 @@ static const struct pci_error_handlers cxgb4_eeh = {
 	.resume         = eeh_resume,
 };
 
-static inline bool is_10g_port(const struct link_config *lc)
+static inline bool is_x_10g_port(const struct link_config *lc)
 {
-	return (lc->supported & FW_PORT_CAP_SPEED_10G) != 0;
+	return (lc->supported & FW_PORT_CAP_SPEED_10G) != 0 ||
+	       (lc->supported & FW_PORT_CAP_SPEED_40G) != 0;
 }
 
 static inline void init_rspq(struct sge_rspq *q, u8 timer_idx, u8 pkt_cnt_idx,
@@ -5629,7 +5661,7 @@ static void cfg_queues(struct adapter *adap)
 	int i, q10g = 0, n10g = 0, qidx = 0;
 
 	for_each_port(adap, i)
-		n10g += is_10g_port(&adap2pinfo(adap, i)->link_cfg);
+		n10g += is_x_10g_port(&adap2pinfo(adap, i)->link_cfg);
 
 	/*
 	 * We default to 1 queue per non-10G port and up to # of cores queues
@@ -5644,7 +5676,7 @@ static void cfg_queues(struct adapter *adap)
 		struct port_info *pi = adap2pinfo(adap, i);
 
 		pi->first_qset = qidx;
-		pi->nqsets = is_10g_port(&pi->link_cfg) ? q10g : 1;
+		pi->nqsets = is_x_10g_port(&pi->link_cfg) ? q10g : 1;
 		qidx += pi->nqsets;
 	}
 
@@ -5737,7 +5769,7 @@ static void reduce_ethqs(struct adapter *adap, int n)
 static int enable_msix(struct adapter *adap)
 {
 	int ofld_need = 0;
-	int i, err, want, need;
+	int i, want, need;
 	struct sge *s = &adap->sge;
 	unsigned int nchan = adap->params.nports;
 	struct msix_entry entries[MAX_INGQ + 1];
@@ -5753,32 +5785,30 @@ static int enable_msix(struct adapter *adap)
 	}
 	need = adap->params.nports + EXTRA_VECS + ofld_need;
 
-	while ((err = pci_enable_msix(adap->pdev, entries, want)) >= need)
-		want = err;
+	want = pci_enable_msix_range(adap->pdev, entries, need, want);
+	if (want < 0)
+		return want;
 
-	if (!err) {
-		/*
-		 * Distribute available vectors to the various queue groups.
-		 * Every group gets its minimum requirement and NIC gets top
-		 * priority for leftovers.
-		 */
-		i = want - EXTRA_VECS - ofld_need;
-		if (i < s->max_ethqsets) {
-			s->max_ethqsets = i;
-			if (i < s->ethqsets)
-				reduce_ethqs(adap, i);
-		}
-		if (is_offload(adap)) {
-			i = want - EXTRA_VECS - s->max_ethqsets;
-			i -= ofld_need - nchan;
-			s->ofldqsets = (i / nchan) * nchan;  /* round down */
-		}
-		for (i = 0; i < want; ++i)
-			adap->msix_info[i].vec = entries[i].vector;
-	} else if (err > 0)
-		dev_info(adap->pdev_dev,
-			 "only %d MSI-X vectors left, not using MSI-X\n", err);
-	return err;
+	/*
+	 * Distribute available vectors to the various queue groups.
+	 * Every group gets its minimum requirement and NIC gets top
+	 * priority for leftovers.
+	 */
+	i = want - EXTRA_VECS - ofld_need;
+	if (i < s->max_ethqsets) {
+		s->max_ethqsets = i;
+		if (i < s->ethqsets)
+			reduce_ethqs(adap, i);
+	}
+	if (is_offload(adap)) {
+		i = want - EXTRA_VECS - s->max_ethqsets;
+		i -= ofld_need - nchan;
+		s->ofldqsets = (i / nchan) * nchan;  /* round down */
+	}
+	for (i = 0; i < want; ++i)
+		adap->msix_info[i].vec = entries[i].vector;
+
+	return 0;
 }
 
 #undef EXTRA_VECS
@@ -5801,11 +5831,6 @@ static int init_rss(struct adapter *adap)
 
 static void print_port_info(const struct net_device *dev)
 {
-	static const char *base[] = {
-		"R XFI", "R XAUI", "T SGMII", "T XFI", "T XAUI", "KX4", "CX4",
-		"KX", "KR", "R SFP+", "KR/KX", "KR/KX/KX4"
-	};
-
 	char buf[80];
 	char *bufp = buf;
 	const char *spd = "";
@@ -5823,9 +5848,11 @@ static void print_port_info(const struct net_device *dev)
 		bufp += sprintf(bufp, "1000/");
 	if (pi->link_cfg.supported & FW_PORT_CAP_SPEED_10G)
 		bufp += sprintf(bufp, "10G/");
+	if (pi->link_cfg.supported & FW_PORT_CAP_SPEED_40G)
+		bufp += sprintf(bufp, "40G/");
 	if (bufp != buf)
 		--bufp;
-	sprintf(bufp, "BASE-%s", base[pi->port_type]);
+	sprintf(bufp, "BASE-%s", t4_get_port_type_description(pi->port_type));
 
 	netdev_info(dev, "Chelsio %s rev %d %s %sNIC PCIe x%d%s%s\n",
 		    adap->params.vpd.id,
@@ -5833,8 +5860,8 @@ static void print_port_info(const struct net_device *dev)
 		    is_offload(adap) ? "R" : "", adap->params.pci.width, spd,
 		    (adap->flags & USING_MSIX) ? " MSI-X" :
 		    (adap->flags & USING_MSI) ? " MSI" : "");
-	netdev_info(dev, "S/N: %s, E/C: %s\n",
-		    adap->params.vpd.sn, adap->params.vpd.ec);
+	netdev_info(dev, "S/N: %s, P/N: %s\n",
+		    adap->params.vpd.sn, adap->params.vpd.pn);
 }
 
 static void enable_pcie_relaxed_ordering(struct pci_dev *dev)
