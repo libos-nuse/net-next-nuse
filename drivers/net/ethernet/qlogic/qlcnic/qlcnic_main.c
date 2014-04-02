@@ -21,6 +21,9 @@
 #include <linux/aer.h>
 #include <linux/log2.h>
 #include <linux/pci.h>
+#ifdef CONFIG_QLCNIC_VXLAN
+#include <net/vxlan.h>
+#endif
 
 MODULE_DESCRIPTION("QLogic 1/10 GbE Converged/Intelligent Ethernet Driver");
 MODULE_LICENSE("GPL");
@@ -461,6 +464,37 @@ static int qlcnic_get_phys_port_id(struct net_device *netdev,
 	return 0;
 }
 
+#ifdef CONFIG_QLCNIC_VXLAN
+static void qlcnic_add_vxlan_port(struct net_device *netdev,
+				  sa_family_t sa_family, __be16 port)
+{
+	struct qlcnic_adapter *adapter = netdev_priv(netdev);
+	struct qlcnic_hardware_context *ahw = adapter->ahw;
+
+	/* Adapter supports only one VXLAN port. Use very first port
+	 * for enabling offload
+	 */
+	if (!qlcnic_encap_rx_offload(adapter) || ahw->vxlan_port)
+		return;
+
+	ahw->vxlan_port = ntohs(port);
+	adapter->flags |= QLCNIC_ADD_VXLAN_PORT;
+}
+
+static void qlcnic_del_vxlan_port(struct net_device *netdev,
+				  sa_family_t sa_family, __be16 port)
+{
+	struct qlcnic_adapter *adapter = netdev_priv(netdev);
+	struct qlcnic_hardware_context *ahw = adapter->ahw;
+
+	if (!qlcnic_encap_rx_offload(adapter) || !ahw->vxlan_port ||
+	    (ahw->vxlan_port != ntohs(port)))
+		return;
+
+	adapter->flags |= QLCNIC_DEL_VXLAN_PORT;
+}
+#endif
+
 static const struct net_device_ops qlcnic_netdev_ops = {
 	.ndo_open	   = qlcnic_open,
 	.ndo_stop	   = qlcnic_close,
@@ -479,6 +513,10 @@ static const struct net_device_ops qlcnic_netdev_ops = {
 	.ndo_fdb_del		= qlcnic_fdb_del,
 	.ndo_fdb_dump		= qlcnic_fdb_dump,
 	.ndo_get_phys_port_id	= qlcnic_get_phys_port_id,
+#ifdef CONFIG_QLCNIC_VXLAN
+	.ndo_add_vxlan_port	= qlcnic_add_vxlan_port,
+	.ndo_del_vxlan_port	= qlcnic_del_vxlan_port,
+#endif
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller = qlcnic_poll_controller,
 #endif
@@ -825,9 +863,10 @@ static int qlcnic_82xx_setup_intr(struct qlcnic_adapter *adapter)
 
 		if (!(adapter->flags & QLCNIC_MSIX_ENABLED)) {
 			qlcnic_disable_multi_tx(adapter);
+			adapter->drv_sds_rings = QLCNIC_SINGLE_RING;
 
 			err = qlcnic_enable_msi_legacy(adapter);
-			if (!err)
+			if (err)
 				return err;
 		}
 	}
@@ -1942,6 +1981,11 @@ qlcnic_attach(struct qlcnic_adapter *adapter)
 
 	qlcnic_create_sysfs_entries(adapter);
 
+#ifdef CONFIG_QLCNIC_VXLAN
+	if (qlcnic_encap_rx_offload(adapter))
+		vxlan_get_rx_port(netdev);
+#endif
+
 	adapter->is_up = QLCNIC_ADAPTER_UP_MAGIC;
 	return 0;
 
@@ -2203,6 +2247,19 @@ qlcnic_setup_netdev(struct qlcnic_adapter *adapter, struct net_device *netdev,
 
 	if (adapter->ahw->capabilities & QLCNIC_FW_CAPABILITY_HW_LRO)
 		netdev->features |= NETIF_F_LRO;
+
+	if (qlcnic_encap_tx_offload(adapter)) {
+		netdev->features |= NETIF_F_GSO_UDP_TUNNEL;
+
+		/* encapsulation Tx offload supported by Adapter */
+		netdev->hw_enc_features = NETIF_F_IP_CSUM        |
+					  NETIF_F_GSO_UDP_TUNNEL |
+					  NETIF_F_TSO            |
+					  NETIF_F_TSO6;
+	}
+
+	if (qlcnic_encap_rx_offload(adapter))
+		netdev->hw_enc_features |= NETIF_F_RXCSUM;
 
 	netdev->hw_features = netdev->features;
 	netdev->priv_flags |= IFF_UNICAST_FLT;
@@ -3872,7 +3929,7 @@ int qlcnic_validate_rings(struct qlcnic_adapter *adapter, __u32 ring_cnt,
 		strcpy(buf, "Tx");
 	}
 
-	if (!qlcnic_use_msi_x && !qlcnic_use_msi) {
+	if (!QLCNIC_IS_MSI_FAMILY(adapter)) {
 		netdev_err(netdev, "No RSS/TSS support in INT-x mode\n");
 		return -EINVAL;
 	}

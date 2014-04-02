@@ -86,6 +86,9 @@ static void tcp_event_new_data_sent(struct sock *sk, const struct sk_buff *skb)
 	    icsk->icsk_pending == ICSK_TIME_LOSS_PROBE) {
 		tcp_rearm_rto(sk);
 	}
+
+	NET_ADD_STATS(sock_net(sk), LINUX_MIB_TCPORIGDATASENT,
+		      tcp_skb_pcount(skb));
 }
 
 /* SND.NXT, if window was not shrunk.
@@ -777,6 +780,17 @@ void tcp_release_cb(struct sock *sk)
 	if (flags & (1UL << TCP_TSQ_DEFERRED))
 		tcp_tsq_handler(sk);
 
+	/* Here begins the tricky part :
+	 * We are called from release_sock() with :
+	 * 1) BH disabled
+	 * 2) sk_lock.slock spinlock held
+	 * 3) socket owned by us (sk->sk_lock.owned == 1)
+	 *
+	 * But following code is meant to be called from BH handlers,
+	 * so we should keep BH disabled, but early release socket ownership
+	 */
+	sock_release_ownership(sk);
+
 	if (flags & (1UL << TCP_WRITE_TIMER_DEFERRED)) {
 		tcp_write_timer_handler(sk);
 		__sock_put(sk);
@@ -870,8 +884,8 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 
 		if (unlikely(skb->fclone == SKB_FCLONE_ORIG &&
 			     fclone->fclone == SKB_FCLONE_CLONE))
-			NET_INC_STATS_BH(sock_net(sk),
-					 LINUX_MIB_TCPSPURIOUS_RTX_HOSTQUEUES);
+			NET_INC_STATS(sock_net(sk),
+				      LINUX_MIB_TCPSPURIOUS_RTX_HOSTQUEUES);
 
 		if (unlikely(skb_cloned(skb)))
 			skb = pskb_copy(skb, gfp_mask);
@@ -879,6 +893,8 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 			skb = skb_clone(skb, gfp_mask);
 		if (unlikely(!skb))
 			return -ENOBUFS;
+		/* Our usage of tstamp should remain private */
+		skb->tstamp.tv64 = 0;
 	}
 
 	inet = inet_sk(sk);
@@ -1421,7 +1437,7 @@ static void tcp_minshall_update(struct tcp_sock *tp, unsigned int mss_now,
  *    With Minshall's modification: all sent small packets are ACKed.
  */
 static bool tcp_nagle_check(bool partial, const struct tcp_sock *tp,
-			    unsigned int mss_now, int nonagle)
+			    int nonagle)
 {
 	return partial &&
 		((nonagle & TCP_NAGLE_CORK) ||
@@ -1453,7 +1469,7 @@ static unsigned int tcp_mss_split_point(const struct sock *sk,
 	 * to include this last segment in this skb.
 	 * Otherwise, we'll split the skb at last MSS boundary
 	 */
-	if (tcp_nagle_check(partial != 0, tp, mss_now, nonagle))
+	if (tcp_nagle_check(partial != 0, tp, nonagle))
 		return needed - partial;
 
 	return needed;
@@ -1516,7 +1532,7 @@ static inline bool tcp_nagle_test(const struct tcp_sock *tp, const struct sk_buf
 	if (tcp_urg_mode(tp) || (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN))
 		return true;
 
-	if (!tcp_nagle_check(skb->len < cur_mss, tp, cur_mss, nonagle))
+	if (!tcp_nagle_check(skb->len < cur_mss, tp, nonagle))
 		return true;
 
 	return false;
@@ -2355,6 +2371,7 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	unsigned int cur_mss;
+	int err;
 
 	/* Inconslusive MTU probe */
 	if (icsk->icsk_mtup.probe_size) {
@@ -2418,11 +2435,15 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
 		     skb_headroom(skb) >= 0xFFFF)) {
 		struct sk_buff *nskb = __pskb_copy(skb, MAX_TCP_HEADER,
 						   GFP_ATOMIC);
-		return nskb ? tcp_transmit_skb(sk, nskb, 0, GFP_ATOMIC) :
-			      -ENOBUFS;
+		err = nskb ? tcp_transmit_skb(sk, nskb, 0, GFP_ATOMIC) :
+			     -ENOBUFS;
 	} else {
-		return tcp_transmit_skb(sk, skb, 1, GFP_ATOMIC);
+		err = tcp_transmit_skb(sk, skb, 1, GFP_ATOMIC);
 	}
+
+	if (likely(!err))
+		TCP_SKB_CB(skb)->sacked |= TCPCB_EVER_RETRANS;
+	return err;
 }
 
 int tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
@@ -2433,7 +2454,8 @@ int tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
 	if (err == 0) {
 		/* Update global TCP statistics. */
 		TCP_INC_STATS(sock_net(sk), TCP_MIB_RETRANSSEGS);
-
+		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_SYN)
+			NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPSYNRETRANS);
 		tp->total_retrans++;
 
 #if FASTRETRANS_DEBUG > 0
@@ -2719,7 +2741,7 @@ struct sk_buff *tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 	int tcp_header_size;
 	int mss;
 
-	skb = sock_wmalloc(sk, MAX_TCP_HEADER + 15, 1, GFP_ATOMIC);
+	skb = sock_wmalloc(sk, MAX_TCP_HEADER, 1, GFP_ATOMIC);
 	if (unlikely(!skb)) {
 		dst_release(dst);
 		return NULL;
@@ -2789,7 +2811,7 @@ struct sk_buff *tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 	th->window = htons(min(req->rcv_wnd, 65535U));
 	tcp_options_write((__be32 *)(th + 1), tp, &opts);
 	th->doff = (tcp_header_size >> 2);
-	TCP_ADD_STATS(sock_net(sk), TCP_MIB_OUTSEGS, tcp_skb_pcount(skb));
+	TCP_INC_STATS_BH(sock_net(sk), TCP_MIB_OUTSEGS);
 
 #ifdef CONFIG_TCP_MD5SIG
 	/* Okay, we have all we need - do the md5 hash if needed */
@@ -2926,7 +2948,12 @@ static int tcp_send_syn_data(struct sock *sk, struct sk_buff *syn)
 	space = __tcp_mtu_to_mss(sk, inet_csk(sk)->icsk_pmtu_cookie) -
 		MAX_TCP_OPTION_SPACE;
 
-	syn_data = skb_copy_expand(syn, skb_headroom(syn), space,
+	space = min_t(size_t, space, fo->size);
+
+	/* limit to order-0 allocations */
+	space = min_t(size_t, space, SKB_MAX_HEAD(MAX_TCP_HEADER));
+
+	syn_data = skb_copy_expand(syn, MAX_TCP_HEADER, space,
 				   sk->sk_allocation);
 	if (syn_data == NULL)
 		goto fallback;
@@ -2956,9 +2983,15 @@ static int tcp_send_syn_data(struct sock *sk, struct sk_buff *syn)
 	tcp_connect_queue_skb(sk, data);
 	fo->copied = data->len;
 
+	/* syn_data is about to be sent, we need to take current time stamps
+	 * for the packets that are in write queue : SYN packet and DATA
+	 */
+	skb_mstamp_get(&syn->skb_mstamp);
+	data->skb_mstamp = syn->skb_mstamp;
+
 	if (tcp_transmit_skb(sk, syn_data, 0, sk->sk_allocation) == 0) {
 		tp->syn_data = (fo->copied > 0);
-		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPFASTOPENACTIVE);
+		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPORIGDATASENT);
 		goto done;
 	}
 	syn_data = NULL;

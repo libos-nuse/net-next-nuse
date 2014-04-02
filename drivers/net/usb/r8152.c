@@ -21,9 +21,10 @@
 #include <linux/list.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <net/ip6_checksum.h>
 
 /* Version Information */
-#define DRIVER_VERSION "v1.05.0 (2014/02/18)"
+#define DRIVER_VERSION "v1.06.0 (2014/03/03)"
 #define DRIVER_AUTHOR "Realtek linux nic maintainers <nic_swsd@realtek.com>"
 #define DRIVER_DESC "Realtek RTL8152/RTL8153 Based USB Ethernet Adapters"
 #define MODULENAME "r8152"
@@ -59,7 +60,7 @@
 #define PLA_TCR0		0xe610
 #define PLA_TCR1		0xe612
 #define PLA_TXFIFO_CTRL		0xe618
-#define PLA_RSTTELLY		0xe800
+#define PLA_RSTTALLY		0xe800
 #define PLA_CR			0xe813
 #define PLA_CRWECR		0xe81c
 #define PLA_CONFIG12		0xe81e	/* CONFIG1, CONFIG2 */
@@ -71,7 +72,7 @@
 #define PLA_MISC_0		0xe858
 #define PLA_MISC_1		0xe85a
 #define PLA_OCP_GPHY_BASE	0xe86c
-#define PLA_TELLYCNT		0xe890
+#define PLA_TALLYCNT		0xe890
 #define PLA_SFF_STS_7		0xe8de
 #define PLA_PHYSTATUS		0xe908
 #define PLA_BP_BA		0xfc26
@@ -178,6 +179,9 @@
 
 /* PLA_TCR1 */
 #define VERSION_MASK		0x7cf0
+
+/* PLA_RSTTALLY */
+#define TALLY_RESET		0x0001
 
 /* PLA_CR */
 #define CR_RST			0x10
@@ -447,6 +451,7 @@ enum rtl8152_flags {
 	RTL8152_LINK_CHG,
 	SELECTIVE_SUSPEND,
 	PHY_RESET,
+	SCHEDULE_TASKLET,
 };
 
 /* Define these values to match your device */
@@ -463,11 +468,37 @@ enum rtl8152_flags {
 #define REALTEK_USB_DEVICE(vend, prod)	\
 	USB_DEVICE_INTERFACE_CLASS(vend, prod, USB_CLASS_VENDOR_SPEC)
 
+struct tally_counter {
+	__le64	tx_packets;
+	__le64	rx_packets;
+	__le64	tx_errors;
+	__le32	rx_errors;
+	__le16	rx_missed;
+	__le16	align_errors;
+	__le32	tx_one_collision;
+	__le32	tx_multi_collision;
+	__le64	rx_unicast;
+	__le64	rx_broadcast;
+	__le32	rx_multicast;
+	__le16	tx_aborted;
+	__le16	tx_underun;
+};
+
 struct rx_desc {
 	__le32 opts1;
 #define RX_LEN_MASK			0x7fff
+
 	__le32 opts2;
+#define RD_UDP_CS			(1 << 23)
+#define RD_TCP_CS			(1 << 22)
+#define RD_IPV6_CS			(1 << 20)
+#define RD_IPV4_CS			(1 << 19)
+
 	__le32 opts3;
+#define IPF				(1 << 23) /* IP checksum fail */
+#define UDPF				(1 << 22) /* UDP checksum fail */
+#define TCPF				(1 << 21) /* TCP checksum fail */
+
 	__le32 opts4;
 	__le32 opts5;
 	__le32 opts6;
@@ -477,13 +508,21 @@ struct tx_desc {
 	__le32 opts1;
 #define TX_FS			(1 << 31) /* First segment of a packet */
 #define TX_LS			(1 << 30) /* Final segment of a packet */
-#define TX_LEN_MASK		0x3ffff
+#define GTSENDV4		(1 << 28)
+#define GTSENDV6		(1 << 27)
+#define GTTCPHO_SHIFT		18
+#define GTTCPHO_MAX		0x7fU
+#define TX_LEN_MAX		0x3ffffU
 
 	__le32 opts2;
 #define UDP_CS			(1 << 31) /* Calculate UDP/IP checksum */
 #define TCP_CS			(1 << 30) /* Calculate TCP/IP checksum */
 #define IPV4_CS			(1 << 29) /* Calculate IPv4 checksum */
 #define IPV6_CS			(1 << 28) /* Calculate IPv6 checksum */
+#define MSS_SHIFT		17
+#define MSS_MAX			0x7ffU
+#define TCPHO_SHIFT		17
+#define TCPHO_MAX		0x7ffU
 };
 
 struct r8152;
@@ -550,11 +589,20 @@ enum rtl_version {
 	RTL_VER_MAX
 };
 
+enum tx_csum_stat {
+	TX_CSUM_SUCCESS = 0,
+	TX_CSUM_TSO,
+	TX_CSUM_NONE
+};
+
 /* Maximum number of multicast addresses to filter (vs. Rx-all-multicast).
  * The RTL chips use a 64 element hash table based on the Ethernet CRC.
  */
 static const int multicast_filter_limit = 32;
 static unsigned int rx_buf_sz = 16384;
+
+#define RTL_LIMITED_TSO_SIZE	(rx_buf_sz - sizeof(struct tx_desc) - \
+				 VLAN_ETH_HLEN - VLAN_HLEN)
 
 static
 int get_registers(struct r8152 *tp, u16 value, u16 index, u16 size, void *data)
@@ -593,6 +641,7 @@ int set_registers(struct r8152 *tp, u16 value, u16 index, u16 size, void *data)
 			       value, index, tmp, size, 500);
 
 	kfree(tmp);
+
 	return ret;
 }
 
@@ -959,15 +1008,9 @@ static int rtl8152_set_mac_address(struct net_device *netdev, void *p)
 	return 0;
 }
 
-static struct net_device_stats *rtl8152_get_stats(struct net_device *dev)
-{
-	return &dev->stats;
-}
-
 static void read_bulk_callback(struct urb *urb)
 {
 	struct net_device *netdev;
-	unsigned long flags;
 	int status = urb->status;
 	struct rx_agg *agg;
 	struct r8152 *tp;
@@ -1001,9 +1044,9 @@ static void read_bulk_callback(struct urb *urb)
 		if (urb->actual_length < ETH_ZLEN)
 			break;
 
-		spin_lock_irqsave(&tp->rx_lock, flags);
+		spin_lock(&tp->rx_lock);
 		list_add_tail(&agg->list, &tp->rx_done);
-		spin_unlock_irqrestore(&tp->rx_lock, flags);
+		spin_unlock(&tp->rx_lock);
 		tasklet_schedule(&tp->tl);
 		return;
 	case -ESHUTDOWN:
@@ -1026,9 +1069,9 @@ static void read_bulk_callback(struct urb *urb)
 	if (result == -ENODEV) {
 		netif_device_detach(tp->netdev);
 	} else if (result) {
-		spin_lock_irqsave(&tp->rx_lock, flags);
+		spin_lock(&tp->rx_lock);
 		list_add_tail(&agg->list, &tp->rx_done);
-		spin_unlock_irqrestore(&tp->rx_lock, flags);
+		spin_unlock(&tp->rx_lock);
 		tasklet_schedule(&tp->tl);
 	}
 }
@@ -1036,7 +1079,7 @@ static void read_bulk_callback(struct urb *urb)
 static void write_bulk_callback(struct urb *urb)
 {
 	struct net_device_stats *stats;
-	unsigned long flags;
+	struct net_device *netdev;
 	struct tx_agg *agg;
 	struct r8152 *tp;
 	int status = urb->status;
@@ -1049,23 +1092,24 @@ static void write_bulk_callback(struct urb *urb)
 	if (!tp)
 		return;
 
-	stats = rtl8152_get_stats(tp->netdev);
+	netdev = tp->netdev;
+	stats = &netdev->stats;
 	if (status) {
 		if (net_ratelimit())
-			netdev_warn(tp->netdev, "Tx status %d\n", status);
+			netdev_warn(netdev, "Tx status %d\n", status);
 		stats->tx_errors += agg->skb_num;
 	} else {
 		stats->tx_packets += agg->skb_num;
 		stats->tx_bytes += agg->skb_len;
 	}
 
-	spin_lock_irqsave(&tp->tx_lock, flags);
+	spin_lock(&tp->tx_lock);
 	list_add_tail(&agg->list, &tp->tx_free);
-	spin_unlock_irqrestore(&tp->tx_lock, flags);
+	spin_unlock(&tp->tx_lock);
 
 	usb_autopm_put_interface_async(tp->intf);
 
-	if (!netif_carrier_ok(tp->netdev))
+	if (!netif_carrier_ok(netdev))
 		return;
 
 	if (!test_bit(WORK_ENABLE, &tp->flags))
@@ -1075,7 +1119,7 @@ static void write_bulk_callback(struct urb *urb)
 		return;
 
 	if (!skb_queue_empty(&tp->tx_queue))
-		schedule_delayed_work(&tp->schedule, 0);
+		tasklet_schedule(&tp->tl);
 }
 
 static void intr_callback(struct urb *urb)
@@ -1270,6 +1314,9 @@ static struct tx_agg *r8152_get_tx_agg(struct r8152 *tp)
 	struct tx_agg *agg = NULL;
 	unsigned long flags;
 
+	if (list_empty(&tp->tx_free))
+		return NULL;
+
 	spin_lock_irqsave(&tp->tx_lock, flags);
 	if (!list_empty(&tp->tx_free)) {
 		struct list_head *cursor;
@@ -1283,24 +1330,138 @@ static struct tx_agg *r8152_get_tx_agg(struct r8152 *tp)
 	return agg;
 }
 
-static void
-r8152_tx_csum(struct r8152 *tp, struct tx_desc *desc, struct sk_buff *skb)
+static inline __be16 get_protocol(struct sk_buff *skb)
 {
-	memset(desc, 0, sizeof(*desc));
+	__be16 protocol;
 
-	desc->opts1 = cpu_to_le32((skb->len & TX_LEN_MASK) | TX_FS | TX_LS);
+	if (skb->protocol == htons(ETH_P_8021Q))
+		protocol = vlan_eth_hdr(skb)->h_vlan_encapsulated_proto;
+	else
+		protocol = skb->protocol;
 
-	if (skb->ip_summed == CHECKSUM_PARTIAL) {
-		__be16 protocol;
+	return protocol;
+}
+
+/*
+ * r8152_csum_workaround()
+ * The hw limites the value the transport offset. When the offset is out of the
+ * range, calculate the checksum by sw.
+ */
+static void r8152_csum_workaround(struct r8152 *tp, struct sk_buff *skb,
+				  struct sk_buff_head *list)
+{
+	if (skb_shinfo(skb)->gso_size) {
+		netdev_features_t features = tp->netdev->features;
+		struct sk_buff_head seg_list;
+		struct sk_buff *segs, *nskb;
+
+		features &= ~(NETIF_F_IP_CSUM | NETIF_F_SG | NETIF_F_TSO);
+		segs = skb_gso_segment(skb, features);
+		if (IS_ERR(segs) || !segs)
+			goto drop;
+
+		__skb_queue_head_init(&seg_list);
+
+		do {
+			nskb = segs;
+			segs = segs->next;
+			nskb->next = NULL;
+			__skb_queue_tail(&seg_list, nskb);
+		} while (segs);
+
+		skb_queue_splice(&seg_list, list);
+		dev_kfree_skb(skb);
+	} else if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		if (skb_checksum_help(skb) < 0)
+			goto drop;
+
+		__skb_queue_head(list, skb);
+	} else {
+		struct net_device_stats *stats;
+
+drop:
+		stats = &tp->netdev->stats;
+		stats->tx_dropped++;
+		dev_kfree_skb(skb);
+	}
+}
+
+/*
+ * msdn_giant_send_check()
+ * According to the document of microsoft, the TCP Pseudo Header excludes the
+ * packet length for IPv6 TCP large packets.
+ */
+static int msdn_giant_send_check(struct sk_buff *skb)
+{
+	const struct ipv6hdr *ipv6h;
+	struct tcphdr *th;
+	int ret;
+
+	ret = skb_cow_head(skb, 0);
+	if (ret)
+		return ret;
+
+	ipv6h = ipv6_hdr(skb);
+	th = tcp_hdr(skb);
+
+	th->check = 0;
+	th->check = ~tcp_v6_check(0, &ipv6h->saddr, &ipv6h->daddr, 0);
+
+	return ret;
+}
+
+static int r8152_tx_csum(struct r8152 *tp, struct tx_desc *desc,
+			 struct sk_buff *skb, u32 len, u32 transport_offset)
+{
+	u32 mss = skb_shinfo(skb)->gso_size;
+	u32 opts1, opts2 = 0;
+	int ret = TX_CSUM_SUCCESS;
+
+	WARN_ON_ONCE(len > TX_LEN_MAX);
+
+	opts1 = len | TX_FS | TX_LS;
+
+	if (mss) {
+		if (transport_offset > GTTCPHO_MAX) {
+			netif_warn(tp, tx_err, tp->netdev,
+				   "Invalid transport offset 0x%x for TSO\n",
+				   transport_offset);
+			ret = TX_CSUM_TSO;
+			goto unavailable;
+		}
+
+		switch (get_protocol(skb)) {
+		case htons(ETH_P_IP):
+			opts1 |= GTSENDV4;
+			break;
+
+		case htons(ETH_P_IPV6):
+			if (msdn_giant_send_check(skb)) {
+				ret = TX_CSUM_TSO;
+				goto unavailable;
+			}
+			opts1 |= GTSENDV6;
+			break;
+
+		default:
+			WARN_ON_ONCE(1);
+			break;
+		}
+
+		opts1 |= transport_offset << GTTCPHO_SHIFT;
+		opts2 |= min(mss, MSS_MAX) << MSS_SHIFT;
+	} else if (skb->ip_summed == CHECKSUM_PARTIAL) {
 		u8 ip_protocol;
-		u32 opts2 = 0;
 
-		if (skb->protocol == htons(ETH_P_8021Q))
-			protocol = vlan_eth_hdr(skb)->h_vlan_encapsulated_proto;
-		else
-			protocol = skb->protocol;
+		if (transport_offset > TCPHO_MAX) {
+			netif_warn(tp, tx_err, tp->netdev,
+				   "Invalid transport offset 0x%x\n",
+				   transport_offset);
+			ret = TX_CSUM_NONE;
+			goto unavailable;
+		}
 
-		switch (protocol) {
+		switch (get_protocol(skb)) {
 		case htons(ETH_P_IP):
 			opts2 |= IPV4_CS;
 			ip_protocol = ip_hdr(skb)->protocol;
@@ -1316,30 +1477,33 @@ r8152_tx_csum(struct r8152 *tp, struct tx_desc *desc, struct sk_buff *skb)
 			break;
 		}
 
-		if (ip_protocol == IPPROTO_TCP) {
+		if (ip_protocol == IPPROTO_TCP)
 			opts2 |= TCP_CS;
-			opts2 |= (skb_transport_offset(skb) & 0x7fff) << 17;
-		} else if (ip_protocol == IPPROTO_UDP) {
+		else if (ip_protocol == IPPROTO_UDP)
 			opts2 |= UDP_CS;
-		} else {
+		else
 			WARN_ON_ONCE(1);
-		}
 
-		desc->opts2 = cpu_to_le32(opts2);
+		opts2 |= transport_offset << TCPHO_SHIFT;
 	}
+
+	desc->opts2 = cpu_to_le32(opts2);
+	desc->opts1 = cpu_to_le32(opts1);
+
+unavailable:
+	return ret;
 }
 
 static int r8152_tx_agg_fill(struct r8152 *tp, struct tx_agg *agg)
 {
 	struct sk_buff_head skb_head, *tx_queue = &tp->tx_queue;
-	unsigned long flags;
 	int remain, ret;
 	u8 *tx_data;
 
 	__skb_queue_head_init(&skb_head);
-	spin_lock_irqsave(&tx_queue->lock, flags);
+	spin_lock(&tx_queue->lock);
 	skb_queue_splice_init(tx_queue, &skb_head);
-	spin_unlock_irqrestore(&tx_queue->lock, flags);
+	spin_unlock(&tx_queue->lock);
 
 	tx_data = agg->head;
 	agg->skb_num = agg->skb_len = 0;
@@ -1349,47 +1513,65 @@ static int r8152_tx_agg_fill(struct r8152 *tp, struct tx_agg *agg)
 		struct tx_desc *tx_desc;
 		struct sk_buff *skb;
 		unsigned int len;
+		u32 offset;
 
 		skb = __skb_dequeue(&skb_head);
 		if (!skb)
 			break;
 
-		remain -= sizeof(*tx_desc);
-		len = skb->len;
-		if (remain < len) {
+		len = skb->len + sizeof(*tx_desc);
+
+		if (len > remain) {
 			__skb_queue_head(&skb_head, skb);
 			break;
 		}
 
 		tx_data = tx_agg_align(tx_data);
 		tx_desc = (struct tx_desc *)tx_data;
+
+		offset = (u32)skb_transport_offset(skb);
+
+		if (r8152_tx_csum(tp, tx_desc, skb, skb->len, offset)) {
+			r8152_csum_workaround(tp, skb, &skb_head);
+			continue;
+		}
+
 		tx_data += sizeof(*tx_desc);
 
-		r8152_tx_csum(tp, tx_desc, skb);
-		memcpy(tx_data, skb->data, len);
-		agg->skb_num++;
-		agg->skb_len += len;
-		dev_kfree_skb_any(skb);
+		len = skb->len;
+		if (skb_copy_bits(skb, 0, tx_data, len) < 0) {
+			struct net_device_stats *stats = &tp->netdev->stats;
+
+			stats->tx_dropped++;
+			dev_kfree_skb_any(skb);
+			tx_data -= sizeof(*tx_desc);
+			continue;
+		}
 
 		tx_data += len;
+		agg->skb_len += len;
+		agg->skb_num++;
+
+		dev_kfree_skb_any(skb);
+
 		remain = rx_buf_sz - (int)(tx_agg_align(tx_data) - agg->head);
 	}
 
 	if (!skb_queue_empty(&skb_head)) {
-		spin_lock_irqsave(&tx_queue->lock, flags);
+		spin_lock(&tx_queue->lock);
 		skb_queue_splice(&skb_head, tx_queue);
-		spin_unlock_irqrestore(&tx_queue->lock, flags);
+		spin_unlock(&tx_queue->lock);
 	}
 
-	netif_tx_lock_bh(tp->netdev);
+	netif_tx_lock(tp->netdev);
 
 	if (netif_queue_stopped(tp->netdev) &&
 	    skb_queue_len(&tp->tx_queue) < tp->tx_qlen)
 		netif_wake_queue(tp->netdev);
 
-	netif_tx_unlock_bh(tp->netdev);
+	netif_tx_unlock(tp->netdev);
 
-	ret = usb_autopm_get_interface(tp->intf);
+	ret = usb_autopm_get_interface_async(tp->intf);
 	if (ret < 0)
 		goto out_tx_fill;
 
@@ -1397,12 +1579,43 @@ static int r8152_tx_agg_fill(struct r8152 *tp, struct tx_agg *agg)
 			  agg->head, (int)(tx_data - (u8 *)agg->head),
 			  (usb_complete_t)write_bulk_callback, agg);
 
-	ret = usb_submit_urb(agg->urb, GFP_KERNEL);
+	ret = usb_submit_urb(agg->urb, GFP_ATOMIC);
 	if (ret < 0)
-		usb_autopm_put_interface(tp->intf);
+		usb_autopm_put_interface_async(tp->intf);
 
 out_tx_fill:
 	return ret;
+}
+
+static u8 r8152_rx_csum(struct r8152 *tp, struct rx_desc *rx_desc)
+{
+	u8 checksum = CHECKSUM_NONE;
+	u32 opts2, opts3;
+
+	if (tp->version == RTL_VER_01)
+		goto return_result;
+
+	opts2 = le32_to_cpu(rx_desc->opts2);
+	opts3 = le32_to_cpu(rx_desc->opts3);
+
+	if (opts2 & RD_IPV4_CS) {
+		if (opts3 & IPF)
+			checksum = CHECKSUM_NONE;
+		else if ((opts2 & RD_UDP_CS) && (opts3 & UDPF))
+			checksum = CHECKSUM_NONE;
+		else if ((opts2 & RD_TCP_CS) && (opts3 & TCPF))
+			checksum = CHECKSUM_NONE;
+		else
+			checksum = CHECKSUM_UNNECESSARY;
+	} else if (RD_IPV6_CS) {
+		if ((opts2 & RD_UDP_CS) && !(opts3 & UDPF))
+			checksum = CHECKSUM_UNNECESSARY;
+		else if ((opts2 & RD_TCP_CS) && !(opts3 & TCPF))
+			checksum = CHECKSUM_UNNECESSARY;
+	}
+
+return_result:
+	return checksum;
 }
 
 static void rx_bottom(struct r8152 *tp)
@@ -1439,7 +1652,7 @@ static void rx_bottom(struct r8152 *tp)
 
 		while (urb->actual_length > len_used) {
 			struct net_device *netdev = tp->netdev;
-			struct net_device_stats *stats;
+			struct net_device_stats *stats = &netdev->stats;
 			unsigned int pkt_len;
 			struct sk_buff *skb;
 
@@ -1451,16 +1664,16 @@ static void rx_bottom(struct r8152 *tp)
 			if (urb->actual_length < len_used)
 				break;
 
-			stats = rtl8152_get_stats(netdev);
-
 			pkt_len -= CRC_SIZE;
 			rx_data += sizeof(struct rx_desc);
 
 			skb = netdev_alloc_skb_ip_align(netdev, pkt_len);
 			if (!skb) {
 				stats->rx_dropped++;
-				break;
+				goto find_next_rx;
 			}
+
+			skb->ip_summed = r8152_rx_csum(tp, rx_desc);
 			memcpy(skb->data, rx_data, pkt_len);
 			skb_put(skb, pkt_len);
 			skb->protocol = eth_type_trans(skb, netdev);
@@ -1468,6 +1681,7 @@ static void rx_bottom(struct r8152 *tp)
 			stats->rx_packets++;
 			stats->rx_bytes += pkt_len;
 
+find_next_rx:
 			rx_data = rx_agg_align(rx_data + pkt_len + CRC_SIZE);
 			rx_desc = (struct rx_desc *)rx_data;
 			len_used = (int)(rx_data - (u8 *)agg->head);
@@ -1501,19 +1715,18 @@ static void tx_bottom(struct r8152 *tp)
 
 		res = r8152_tx_agg_fill(tp, agg);
 		if (res) {
-			struct net_device_stats *stats;
-			struct net_device *netdev;
-			unsigned long flags;
-
-			netdev = tp->netdev;
-			stats = rtl8152_get_stats(netdev);
+			struct net_device *netdev = tp->netdev;
 
 			if (res == -ENODEV) {
 				netif_device_detach(netdev);
 			} else {
+				struct net_device_stats *stats = &netdev->stats;
+				unsigned long flags;
+
 				netif_warn(tp, tx_err, netdev,
 					   "failed tx_urb %d\n", res);
 				stats->tx_dropped += agg->skb_num;
+
 				spin_lock_irqsave(&tp->tx_lock, flags);
 				list_add_tail(&agg->list, &tp->tx_free);
 				spin_unlock_irqrestore(&tp->tx_lock, flags);
@@ -1540,6 +1753,7 @@ static void bottom_half(unsigned long data)
 		return;
 
 	rx_bottom(tp);
+	tx_bottom(tp);
 }
 
 static
@@ -1556,16 +1770,15 @@ static void rtl_drop_queued_tx(struct r8152 *tp)
 {
 	struct net_device_stats *stats = &tp->netdev->stats;
 	struct sk_buff_head skb_head, *tx_queue = &tp->tx_queue;
-	unsigned long flags;
 	struct sk_buff *skb;
 
 	if (skb_queue_empty(tx_queue))
 		return;
 
 	__skb_queue_head_init(&skb_head);
-	spin_lock_irqsave(&tx_queue->lock, flags);
+	spin_lock_bh(&tx_queue->lock);
 	skb_queue_splice_init(tx_queue, &skb_head);
-	spin_unlock_irqrestore(&tx_queue->lock, flags);
+	spin_unlock_bh(&tx_queue->lock);
 
 	while ((skb = __skb_dequeue(&skb_head))) {
 		dev_kfree_skb(skb);
@@ -1636,7 +1849,7 @@ static void _rtl8152_set_rx_mode(struct net_device *netdev)
 }
 
 static netdev_tx_t rtl8152_start_xmit(struct sk_buff *skb,
-					    struct net_device *netdev)
+					struct net_device *netdev)
 {
 	struct r8152 *tp = netdev_priv(netdev);
 
@@ -1644,12 +1857,16 @@ static netdev_tx_t rtl8152_start_xmit(struct sk_buff *skb,
 
 	skb_queue_tail(&tp->tx_queue, skb);
 
-	if (list_empty(&tp->tx_free) &&
-	    skb_queue_len(&tp->tx_queue) > tp->tx_qlen)
+	if (!list_empty(&tp->tx_free)) {
+		if (test_bit(SELECTIVE_SUSPEND, &tp->flags)) {
+			set_bit(SCHEDULE_TASKLET, &tp->flags);
+			schedule_delayed_work(&tp->schedule, 0);
+		} else {
+			usb_mark_last_busy(tp->udev);
+			tasklet_schedule(&tp->tl);
+		}
+	} else if (skb_queue_len(&tp->tx_queue) > tp->tx_qlen)
 		netif_stop_queue(netdev);
-
-	if (!list_empty(&tp->tx_free))
-		schedule_delayed_work(&tp->schedule, 0);
 
 	return NETDEV_TX_OK;
 }
@@ -1833,7 +2050,6 @@ static void r8152_power_cut_en(struct r8152 *tp, bool enable)
 	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_PM_CTRL_STATUS);
 	ocp_data &= ~RESUME_INDICATE;
 	ocp_write_word(tp, MCU_TYPE_USB, USB_PM_CTRL_STATUS, ocp_data);
-
 }
 
 #define WAKE_ANY (WAKE_PHY | WAKE_MAGIC | WAKE_UCAST | WAKE_BCAST | WAKE_MCAST)
@@ -2013,8 +2229,8 @@ static void r8152b_hw_phy_cfg(struct r8152 *tp)
 
 static void r8152b_exit_oob(struct r8152 *tp)
 {
-	u32	ocp_data;
-	int	i;
+	u32 ocp_data;
+	int i;
 
 	ocp_data = ocp_read_dword(tp, MCU_TYPE_PLA, PLA_RCR);
 	ocp_data &= ~RCR_ACPT_ALL;
@@ -2530,8 +2746,11 @@ static void rtl_work_func_t(struct work_struct *work)
 	if (test_bit(RTL8152_SET_RX_MODE, &tp->flags))
 		_rtl8152_set_rx_mode(tp->netdev);
 
-	if (tp->speed & LINK_STATUS)
-		tx_bottom(tp);
+	if (test_bit(SCHEDULE_TASKLET, &tp->flags) &&
+	    (tp->speed & LINK_STATUS)) {
+		clear_bit(SCHEDULE_TASKLET, &tp->flags);
+		tasklet_schedule(&tp->tl);
+	}
 
 	if (test_bit(PHY_RESET, &tp->flags))
 		rtl_phy_reset(tp);
@@ -2573,6 +2792,7 @@ static int rtl8152_open(struct net_device *netdev)
 	netif_carrier_off(netdev);
 	netif_start_queue(netdev);
 	set_bit(WORK_ENABLE, &tp->flags);
+
 	res = usb_submit_urb(tp->intr_urb, GFP_KERNEL);
 	if (res) {
 		if (res == -ENODEV)
@@ -2671,6 +2891,15 @@ static void r8152b_enable_fc(struct r8152 *tp)
 	r8152_mdio_write(tp, MII_ADVERTISE, anar);
 }
 
+static void rtl_tally_reset(struct r8152 *tp)
+{
+	u32 ocp_data;
+
+	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_RSTTALLY);
+	ocp_data |= TALLY_RESET;
+	ocp_write_word(tp, MCU_TYPE_PLA, PLA_RSTTALLY, ocp_data);
+}
+
 static void r8152b_init(struct r8152 *tp)
 {
 	u32 ocp_data;
@@ -2697,6 +2926,7 @@ static void r8152b_init(struct r8152 *tp)
 	r8152b_enable_eee(tp);
 	r8152b_enable_aldps(tp);
 	r8152b_enable_fc(tp);
+	rtl_tally_reset(tp);
 
 	/* enable rx aggregation */
 	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_USB_CTRL);
@@ -2764,6 +2994,7 @@ static void r8153_init(struct r8152 *tp)
 	r8153_enable_eee(tp);
 	r8153_enable_aldps(tp);
 	r8152b_enable_fc(tp);
+	rtl_tally_reset(tp);
 }
 
 static int rtl8152_suspend(struct usb_interface *intf, pm_message_t message)
@@ -2904,6 +3135,64 @@ out:
 	return ret;
 }
 
+static const char rtl8152_gstrings[][ETH_GSTRING_LEN] = {
+	"tx_packets",
+	"rx_packets",
+	"tx_errors",
+	"rx_errors",
+	"rx_missed",
+	"align_errors",
+	"tx_single_collisions",
+	"tx_multi_collisions",
+	"rx_unicast",
+	"rx_broadcast",
+	"rx_multicast",
+	"tx_aborted",
+	"tx_underrun",
+};
+
+static int rtl8152_get_sset_count(struct net_device *dev, int sset)
+{
+	switch (sset) {
+	case ETH_SS_STATS:
+		return ARRAY_SIZE(rtl8152_gstrings);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+static void rtl8152_get_ethtool_stats(struct net_device *dev,
+				      struct ethtool_stats *stats, u64 *data)
+{
+	struct r8152 *tp = netdev_priv(dev);
+	struct tally_counter tally;
+
+	generic_ocp_read(tp, PLA_TALLYCNT, sizeof(tally), &tally, MCU_TYPE_PLA);
+
+	data[0] = le64_to_cpu(tally.tx_packets);
+	data[1] = le64_to_cpu(tally.rx_packets);
+	data[2] = le64_to_cpu(tally.tx_errors);
+	data[3] = le32_to_cpu(tally.rx_errors);
+	data[4] = le16_to_cpu(tally.rx_missed);
+	data[5] = le16_to_cpu(tally.align_errors);
+	data[6] = le32_to_cpu(tally.tx_one_collision);
+	data[7] = le32_to_cpu(tally.tx_multi_collision);
+	data[8] = le64_to_cpu(tally.rx_unicast);
+	data[9] = le64_to_cpu(tally.rx_broadcast);
+	data[10] = le32_to_cpu(tally.rx_multicast);
+	data[11] = le16_to_cpu(tally.tx_aborted);
+	data[12] = le16_to_cpu(tally.tx_underun);
+}
+
+static void rtl8152_get_strings(struct net_device *dev, u32 stringset, u8 *data)
+{
+	switch (stringset) {
+	case ETH_SS_STATS:
+		memcpy(data, *rtl8152_gstrings, sizeof(rtl8152_gstrings));
+		break;
+	}
+}
+
 static struct ethtool_ops ops = {
 	.get_drvinfo = rtl8152_get_drvinfo,
 	.get_settings = rtl8152_get_settings,
@@ -2913,6 +3202,9 @@ static struct ethtool_ops ops = {
 	.set_msglevel = rtl8152_set_msglevel,
 	.get_wol = rtl8152_get_wol,
 	.set_wol = rtl8152_set_wol,
+	.get_strings = rtl8152_get_strings,
+	.get_sset_count = rtl8152_get_sset_count,
+	.get_ethtool_stats = rtl8152_get_ethtool_stats,
 };
 
 static int rtl8152_ioctl(struct net_device *netdev, struct ifreq *rq, int cmd)
@@ -3075,6 +3367,12 @@ static int rtl8152_probe(struct usb_interface *intf,
 	struct net_device *netdev;
 	int ret;
 
+	if (udev->actconfig->desc.bConfigurationValue != 1) {
+		usb_driver_set_configuration(udev, 1);
+		return -ENODEV;
+	}
+
+	usb_reset_device(udev);
 	netdev = alloc_etherdev(sizeof(struct r8152));
 	if (!netdev) {
 		dev_err(&intf->dev, "Out of memory\n");
@@ -3099,9 +3397,15 @@ static int rtl8152_probe(struct usb_interface *intf,
 	netdev->netdev_ops = &rtl8152_netdev_ops;
 	netdev->watchdog_timeo = RTL8152_TX_TIMEOUT;
 
-	netdev->features |= NETIF_F_IP_CSUM;
-	netdev->hw_features = NETIF_F_IP_CSUM;
+	netdev->features |= NETIF_F_RXCSUM | NETIF_F_IP_CSUM | NETIF_F_SG |
+			    NETIF_F_TSO | NETIF_F_FRAGLIST | NETIF_F_IPV6_CSUM |
+			    NETIF_F_TSO6;
+	netdev->hw_features = NETIF_F_RXCSUM | NETIF_F_IP_CSUM | NETIF_F_SG |
+			      NETIF_F_TSO | NETIF_F_FRAGLIST |
+			      NETIF_F_IPV6_CSUM | NETIF_F_TSO6;
+
 	SET_ETHTOOL_OPS(netdev, &ops);
+	netif_set_gso_max_size(netdev, RTL_LIMITED_TSO_SIZE);
 
 	tp->mii.dev = netdev;
 	tp->mii.mdio_read = read_mii_word;
@@ -3158,9 +3462,9 @@ static void rtl8152_disconnect(struct usb_interface *intf)
 
 /* table of devices that work with this driver */
 static struct usb_device_id rtl8152_table[] = {
-	{REALTEK_USB_DEVICE(VENDOR_ID_REALTEK, PRODUCT_ID_RTL8152)},
-	{REALTEK_USB_DEVICE(VENDOR_ID_REALTEK, PRODUCT_ID_RTL8153)},
-	{REALTEK_USB_DEVICE(VENDOR_ID_SAMSUNG, PRODUCT_ID_SAMSUNG)},
+	{USB_DEVICE(VENDOR_ID_REALTEK, PRODUCT_ID_RTL8152)},
+	{USB_DEVICE(VENDOR_ID_REALTEK, PRODUCT_ID_RTL8153)},
+	{USB_DEVICE(VENDOR_ID_SAMSUNG, PRODUCT_ID_SAMSUNG)},
 	{}
 };
 

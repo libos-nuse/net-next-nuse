@@ -872,6 +872,8 @@ static int bnx2x_rx_int(struct bnx2x_fastpath *fp, int budget)
 	if (unlikely(bp->panic))
 		return 0;
 #endif
+	if (budget <= 0)
+		return rx_pkt;
 
 	bd_cons = fp->rx_bd_cons;
 	bd_prod = fp->rx_bd_prod;
@@ -2802,6 +2804,9 @@ int bnx2x_nic_load(struct bnx2x *bp, int load_mode)
 	if (CNIC_ENABLED(bp))
 		bnx2x_load_cnic(bp);
 
+	if (IS_PF(bp))
+		bnx2x_schedule_sp_rtnl(bp, BNX2X_SP_RTNL_GET_DRV_VERSION, 0);
+
 	if (IS_PF(bp) && SHMEM2_HAS(bp, drv_capabilities_flag)) {
 		/* mark driver is loaded in shmem2 */
 		u32 val;
@@ -3027,6 +3032,10 @@ int bnx2x_nic_unload(struct bnx2x *bp, int unload_mode, bool keep_link)
 
 	bp->state = BNX2X_STATE_CLOSED;
 	bp->cnic_loaded = false;
+
+	/* Clear driver version indication in shmem */
+	if (IS_PF(bp))
+		bnx2x_update_mng_version(bp);
 
 	/* Check if there are pending parity attentions. If there are - set
 	 * RECOVERY_IN_PROGRESS.
@@ -3875,7 +3884,9 @@ netdev_tx_t bnx2x_start_xmit(struct sk_buff *skb, struct net_device *dev)
 						     xmit_type);
 		}
 
-		/* Add the macs to the parsing BD this is a vf */
+		/* Add the macs to the parsing BD if this is a vf or if
+		 * Tx Switching is enabled.
+		 */
 		if (IS_VF(bp)) {
 			/* override GRE parameters in BD */
 			bnx2x_set_fw_mac_addr(&pbd_e2->data.mac_addr.src_hi,
@@ -3883,6 +3894,11 @@ netdev_tx_t bnx2x_start_xmit(struct sk_buff *skb, struct net_device *dev)
 					      &pbd_e2->data.mac_addr.src_lo,
 					      eth->h_source);
 
+			bnx2x_set_fw_mac_addr(&pbd_e2->data.mac_addr.dst_hi,
+					      &pbd_e2->data.mac_addr.dst_mid,
+					      &pbd_e2->data.mac_addr.dst_lo,
+					      eth->h_dest);
+		} else if (bp->flags & TX_SWITCHING) {
 			bnx2x_set_fw_mac_addr(&pbd_e2->data.mac_addr.dst_hi,
 					      &pbd_e2->data.mac_addr.dst_mid,
 					      &pbd_e2->data.mac_addr.dst_lo,

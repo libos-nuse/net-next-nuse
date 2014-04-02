@@ -444,11 +444,11 @@ static inline u32 skb_mstamp_us_delta(const struct skb_mstamp *t1,
  *	@skb_iif: ifindex of device we arrived on
  *	@tc_index: Traffic control index
  *	@tc_verd: traffic control verdict
- *	@rxhash: the packet hash computed on receive
+ *	@hash: the packet hash
  *	@queue_mapping: Queue mapping for multiqueue devices
  *	@ndisc_nodetype: router type (from link layer)
  *	@ooo_okay: allow the mapping of a socket to a queue to be changed
- *	@l4_rxhash: indicate rxhash is a canonical 4-tuple hash over transport
+ *	@l4_hash: indicate hash is a canonical 4-tuple hash over transport
  *		ports.
  *	@wifi_acked_valid: wifi_acked was set
  *	@wifi_acked: whether frame was acked on wifi or not
@@ -537,7 +537,7 @@ struct sk_buff {
 
 	int			skb_iif;
 
-	__u32			rxhash;
+	__u32			hash;
 
 	__be16			vlan_proto;
 	__u16			vlan_tci;
@@ -556,7 +556,7 @@ struct sk_buff {
 #endif
 	__u8			pfmemalloc:1;
 	__u8			ooo_okay:1;
-	__u8			l4_rxhash:1;
+	__u8			l4_hash:1;
 	__u8			wifi_acked_valid:1;
 	__u8			wifi_acked:1;
 	__u8			no_fcs:1;
@@ -815,40 +815,40 @@ enum pkt_hash_types {
 static inline void
 skb_set_hash(struct sk_buff *skb, __u32 hash, enum pkt_hash_types type)
 {
-	skb->l4_rxhash = (type == PKT_HASH_TYPE_L4);
-	skb->rxhash = hash;
+	skb->l4_hash = (type == PKT_HASH_TYPE_L4);
+	skb->hash = hash;
 }
 
 void __skb_get_hash(struct sk_buff *skb);
 static inline __u32 skb_get_hash(struct sk_buff *skb)
 {
-	if (!skb->l4_rxhash)
+	if (!skb->l4_hash)
 		__skb_get_hash(skb);
 
-	return skb->rxhash;
+	return skb->hash;
 }
 
 static inline __u32 skb_get_hash_raw(const struct sk_buff *skb)
 {
-	return skb->rxhash;
+	return skb->hash;
 }
 
 static inline void skb_clear_hash(struct sk_buff *skb)
 {
-	skb->rxhash = 0;
-	skb->l4_rxhash = 0;
+	skb->hash = 0;
+	skb->l4_hash = 0;
 }
 
 static inline void skb_clear_hash_if_not_l4(struct sk_buff *skb)
 {
-	if (!skb->l4_rxhash)
+	if (!skb->l4_hash)
 		skb_clear_hash(skb);
 }
 
 static inline void skb_copy_hash(struct sk_buff *to, const struct sk_buff *from)
 {
-	to->rxhash = from->rxhash;
-	to->l4_rxhash = from->l4_rxhash;
+	to->hash = from->hash;
+	to->l4_hash = from->l4_hash;
 };
 
 #ifdef NET_SKBUFF_DATA_USES_OFFSET
@@ -2508,8 +2508,8 @@ int skb_splice_bits(struct sk_buff *skb, unsigned int offset,
 		    unsigned int flags);
 void skb_copy_and_csum_dev(const struct sk_buff *skb, u8 *to);
 unsigned int skb_zerocopy_headlen(const struct sk_buff *from);
-void skb_zerocopy(struct sk_buff *to, const struct sk_buff *from,
-		  int len, int hlen);
+int skb_zerocopy(struct sk_buff *to, struct sk_buff *from,
+		 int len, int hlen);
 void skb_split(struct sk_buff *skb, struct sk_buff *skb1, const u32 len);
 int skb_shift(struct sk_buff *tgt, struct sk_buff *skb, int shiftlen);
 void skb_scrub_packet(struct sk_buff *skb, bool xnet);
@@ -2629,8 +2629,6 @@ static inline ktime_t net_invalid_timestamp(void)
 {
 	return ktime_set(0, 0);
 }
-
-void skb_timestamping_init(void);
 
 #ifdef CONFIG_NETWORK_PHY_TIMESTAMPING
 
@@ -2782,7 +2780,7 @@ static inline void nf_reset(struct sk_buff *skb)
 
 static inline void nf_reset_trace(struct sk_buff *skb)
 {
-#if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE)
+#if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE) || defined(CONFIG_NF_TABLES)
 	skb->nf_trace = 0;
 #endif
 }
@@ -2798,6 +2796,9 @@ static inline void __nf_copy(struct sk_buff *dst, const struct sk_buff *src)
 #ifdef CONFIG_BRIDGE_NETFILTER
 	dst->nf_bridge  = src->nf_bridge;
 	nf_bridge_get(src->nf_bridge);
+#endif
+#if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE) || defined(CONFIG_NF_TABLES)
+	dst->nf_trace = src->nf_trace;
 #endif
 }
 
@@ -2829,6 +2830,19 @@ static inline void skb_copy_secmark(struct sk_buff *to, const struct sk_buff *fr
 static inline void skb_init_secmark(struct sk_buff *skb)
 { }
 #endif
+
+static inline bool skb_irq_freeable(const struct sk_buff *skb)
+{
+	return !skb->destructor &&
+#if IS_ENABLED(CONFIG_XFRM)
+		!skb->sp &&
+#endif
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+		!skb->nfct &&
+#endif
+		!skb->_skb_refdst &&
+		!skb_has_frag_list(skb);
+}
 
 static inline void skb_set_queue_mapping(struct sk_buff *skb, u16 queue_mapping)
 {

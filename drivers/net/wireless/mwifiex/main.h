@@ -116,7 +116,7 @@ enum {
 #define MWIFIEX_TYPE_DATA				0
 #define MWIFIEX_TYPE_EVENT				3
 
-#define MAX_BITMAP_RATES_SIZE			10
+#define MAX_BITMAP_RATES_SIZE			18
 
 #define MAX_CHANNEL_BAND_BG     14
 #define MAX_CHANNEL_BAND_A      165
@@ -145,7 +145,6 @@ struct mwifiex_dbg {
 	u32 num_cmd_assoc_success;
 	u32 num_cmd_assoc_failure;
 	u32 num_tx_timeout;
-	u32 num_cmd_timeout;
 	u16 timeout_cmd_id;
 	u16 timeout_cmd_act;
 	u16 last_cmd_id[DBG_CMD_NUM];
@@ -193,6 +192,8 @@ struct mwifiex_add_ba_param {
 	u32 tx_win_size;
 	u32 rx_win_size;
 	u32 timeout;
+	u8 tx_amsdu;
+	u8 rx_amsdu;
 };
 
 struct mwifiex_tx_aggr {
@@ -561,6 +562,7 @@ struct mwifiex_tx_ba_stream_tbl {
 	int tid;
 	u8 ra[ETH_ALEN];
 	enum mwifiex_ba_status ba_status;
+	u8 amsdu;
 };
 
 struct mwifiex_rx_reorder_tbl;
@@ -575,10 +577,12 @@ struct mwifiex_rx_reorder_tbl {
 	struct list_head list;
 	int tid;
 	u8 ta[ETH_ALEN];
+	int init_win;
 	int start_win;
 	int win_size;
 	void **rx_reorder_ptr;
 	struct reorder_tmr_cnxt timer_context;
+	u8 amsdu;
 	u8 flags;
 };
 
@@ -719,7 +723,7 @@ struct mwifiex_adapter {
 	struct cmd_ctrl_node *curr_cmd;
 	/* spin lock for command */
 	spinlock_t mwifiex_cmd_lock;
-	u32 num_cmd_timeout;
+	u8 is_cmd_timedout;
 	u16 last_init_cmd;
 	struct timer_list cmd_timer;
 	struct list_head cmd_free_q;
@@ -770,15 +774,16 @@ struct mwifiex_adapter {
 	u16 hs_activate_wait_q_woken;
 	wait_queue_head_t hs_activate_wait_q;
 	bool is_suspended;
+	bool hs_enabling;
 	u8 event_body[MAX_EVENT_SIZE];
 	u32 hw_dot_11n_dev_cap;
 	u8 hw_dev_mcs_support;
+	u8 user_dev_mcs_support;
 	u8 adhoc_11n_enabled;
 	u8 sec_chan_offset;
 	struct mwifiex_dbg dbg;
 	u8 arp_filter[ARP_FILTER_MAX_BUF_SIZE];
 	u32 arp_filter_size;
-	u16 cmd_wait_q_required;
 	struct mwifiex_wait_queue cmd_wait_q;
 	u8 scan_wait_q_woken;
 	spinlock_t queue_lock;		/* lock for tx queues */
@@ -802,6 +807,7 @@ struct mwifiex_adapter {
 	atomic_t pending_bridged_pkts;
 	struct semaphore *card_sem;
 	bool ext_scan;
+	u8 fw_api_ver;
 	u8 fw_key_api_major_ver, fw_key_api_minor_ver;
 };
 
@@ -838,11 +844,8 @@ int mwifiex_process_event(struct mwifiex_adapter *adapter);
 int mwifiex_complete_cmd(struct mwifiex_adapter *adapter,
 			 struct cmd_ctrl_node *cmd_node);
 
-int mwifiex_send_cmd_async(struct mwifiex_private *priv, uint16_t cmd_no,
-			   u16 cmd_action, u32 cmd_oid, void *data_buf);
-
-int mwifiex_send_cmd_sync(struct mwifiex_private *priv, uint16_t cmd_no,
-			  u16 cmd_action, u32 cmd_oid, void *data_buf);
+int mwifiex_send_cmd(struct mwifiex_private *priv, u16 cmd_no,
+		     u16 cmd_action, u32 cmd_oid, void *data_buf, bool sync);
 
 void mwifiex_cmd_timeout_func(unsigned long function_context);
 
@@ -930,6 +933,7 @@ int mwifiex_ret_802_11_associate(struct mwifiex_private *priv,
 void mwifiex_reset_connect_state(struct mwifiex_private *priv, u16 reason);
 u8 mwifiex_band_to_radio_type(u8 band);
 int mwifiex_deauthenticate(struct mwifiex_private *priv, u8 *mac);
+void mwifiex_deauthenticate_all(struct mwifiex_adapter *adapter);
 int mwifiex_adhoc_start(struct mwifiex_private *priv,
 			struct cfg80211_ssid *adhoc_ssid);
 int mwifiex_adhoc_join(struct mwifiex_private *priv,

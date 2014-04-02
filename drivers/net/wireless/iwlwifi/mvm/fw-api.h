@@ -70,7 +70,7 @@
 #include "fw-api-mac.h"
 #include "fw-api-power.h"
 #include "fw-api-d3.h"
-#include "fw-api-bt-coex.h"
+#include "fw-api-coex.h"
 
 /* maximal number of Tx queues in any platform */
 #define IWL_MVM_MAX_QUEUES	20
@@ -95,6 +95,7 @@ enum {
 	/* PHY context commands */
 	PHY_CONTEXT_CMD = 0x8,
 	DBG_CFG = 0x9,
+	ANTENNA_COUPLING_NOTIFICATION = 0xa,
 
 	/* station table */
 	ADD_STA_KEY = 0x17,
@@ -306,7 +307,6 @@ struct iwl_phy_cfg_cmd {
 #define PHY_CFG_RX_CHAIN_B	BIT(13)
 #define PHY_CFG_RX_CHAIN_C	BIT(14)
 
-#define NVM_MAX_NUM_SECTIONS	11
 
 /* Target of the NVM_ACCESS_CMD */
 enum {
@@ -318,8 +318,11 @@ enum {
 /* Section types for NVM_ACCESS_CMD */
 enum {
 	NVM_SECTION_TYPE_SW = 1,
+	NVM_SECTION_TYPE_REGULATORY = 3,
 	NVM_SECTION_TYPE_CALIBRATION = 4,
 	NVM_SECTION_TYPE_PRODUCTION = 5,
+	NVM_SECTION_TYPE_MAC_OVERRIDE = 11,
+	NVM_MAX_NUM_SECTIONS = 12,
 };
 
 /**
@@ -710,6 +713,7 @@ enum {
 	TE_V2_NOTIF_HOST_FRAG_END = BIT(5),
 	TE_V2_NOTIF_INTERNAL_FRAG_START = BIT(6),
 	TE_V2_NOTIF_INTERNAL_FRAG_END = BIT(7),
+	T2_V2_START_IMMEDIATELY = BIT(11),
 
 	TE_V2_NOTIF_MSK = 0xff,
 

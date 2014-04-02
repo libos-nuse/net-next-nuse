@@ -2556,11 +2556,10 @@ static int ql_tso(struct sk_buff *skb, struct ob_mac_tso_iocb_req *mac_iocb_ptr)
 
 	if (skb_is_gso(skb)) {
 		int err;
-		if (skb_header_cloned(skb)) {
-			err = pskb_expand_head(skb, 0, 0, GFP_ATOMIC);
-			if (err)
-				return err;
-		}
+
+		err = skb_cow_head(skb, 0);
+		if (err < 0)
+			return err;
 
 		mac_iocb_ptr->opcode = OPCODE_OB_MAC_TSO_IOCB;
 		mac_iocb_ptr->flags3 |= OB_MAC_TSO_IOCB_IC;
@@ -4757,7 +4756,9 @@ static int qlge_probe(struct pci_dev *pdev,
 	ndev->features = ndev->hw_features;
 	ndev->vlan_features = ndev->hw_features;
 	/* vlan gets same features (except vlan filter) */
-	ndev->vlan_features &= ~NETIF_F_HW_VLAN_CTAG_FILTER;
+	ndev->vlan_features &= ~(NETIF_F_HW_VLAN_CTAG_FILTER |
+				 NETIF_F_HW_VLAN_CTAG_TX |
+				 NETIF_F_HW_VLAN_CTAG_RX);
 
 	if (test_bit(QL_DMA64, &qdev->flags))
 		ndev->features |= NETIF_F_HIGHDMA;

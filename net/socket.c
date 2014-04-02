@@ -72,6 +72,7 @@
 #include <linux/if_bridge.h>
 #include <linux/if_frad.h>
 #include <linux/if_vlan.h>
+#include <linux/ptp_classify.h>
 #include <linux/init.h>
 #include <linux/poll.h>
 #include <linux/cache.h>
@@ -450,16 +451,17 @@ EXPORT_SYMBOL(sockfd_lookup);
 
 static struct socket *sockfd_lookup_light(int fd, int *err, int *fput_needed)
 {
-	struct file *file;
+	struct fd f = fdget(fd);
 	struct socket *sock;
 
 	*err = -EBADF;
-	file = fget_light(fd, fput_needed);
-	if (file) {
-		sock = sock_from_file(file, err);
-		if (sock)
+	if (f.file) {
+		sock = sock_from_file(f.file, err);
+		if (likely(sock)) {
+			*fput_needed = f.flags;
 			return sock;
-		fput_light(file, *fput_needed);
+		}
+		fdput(f);
 	}
 	return NULL;
 }
@@ -1985,6 +1987,10 @@ static int copy_msghdr_from_user(struct msghdr *kmsg,
 {
 	if (copy_from_user(kmsg, umsg, sizeof(struct msghdr)))
 		return -EFAULT;
+
+	if (kmsg->msg_namelen < 0)
+		return -EINVAL;
+
 	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
 		kmsg->msg_namelen = sizeof(struct sockaddr_storage);
 	return 0;
@@ -2680,9 +2686,7 @@ static int __init sock_init(void)
 		goto out;
 #endif
 
-#ifdef CONFIG_NETWORK_PHY_TIMESTAMPING
-	skb_timestamping_init();
-#endif
+	ptp_classifier_init();
 
 out:
 	return err;

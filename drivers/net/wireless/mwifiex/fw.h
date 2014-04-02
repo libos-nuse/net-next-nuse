@@ -202,6 +202,11 @@ enum MWIFIEX_802_11_PRIVACY_FILTER {
 
 #define MWIFIEX_DEF_AMPDU	IEEE80211_HT_AMPDU_PARM_FACTOR
 
+#define GET_RXSTBC(x) (x & IEEE80211_HT_CAP_RX_STBC)
+#define MWIFIEX_RX_STBC1	0x0100
+#define MWIFIEX_RX_STBC12	0x0200
+#define MWIFIEX_RX_STBC123	0x0300
+
 /* dev_cap bitmap
  * BIT
  * 0-16		reserved
@@ -236,8 +241,21 @@ enum MWIFIEX_802_11_PRIVACY_FILTER {
  */
 #define MWIFIEX_FW_DEF_HTTXCFG (BIT(1) | BIT(4) | BIT(5) | BIT(6))
 
+/* 11AC Tx and Rx MCS map for 1x1 mode:
+ * IEEE80211_VHT_MCS_SUPPORT_0_9 for stream 1
+ * IEEE80211_VHT_MCS_NOT_SUPPORTED for remaining 7 streams
+ */
+#define MWIFIEX_11AC_MCS_MAP_1X1	0xfffefffe
+
+/* 11AC Tx and Rx MCS map for 2x2 mode:
+ * IEEE80211_VHT_MCS_SUPPORT_0_9 for stream 1 and 2
+ * IEEE80211_VHT_MCS_NOT_SUPPORTED for remaining 6 streams
+ */
+#define MWIFIEX_11AC_MCS_MAP_2X2	0xfffafffa
+
 #define GET_RXMCSSUPP(DevMCSSupported) (DevMCSSupported & 0x0f)
 #define SETHT_MCS32(x) (x[4] |= 1)
+#define HT_STREAM_1X1	0x11
 #define HT_STREAM_2X2	0x22
 
 #define SET_SECONDARYCHAN(RadioType, SECCHAN) (RadioType |= (SECCHAN << 4))
@@ -501,6 +519,8 @@ enum P2P_MODES {
 #define ACT_TDLS_DELETE            0x00
 #define ACT_TDLS_CREATE            0x01
 #define ACT_TDLS_CONFIG            0x02
+
+#define MWIFIEX_FW_V15		   15
 
 struct mwifiex_ie_types_header {
 	__le16 type;
@@ -1090,6 +1110,7 @@ struct mwifiex_rate_scope {
 	__le16 hr_dsss_rate_bitmap;
 	__le16 ofdm_rate_bitmap;
 	__le16 ht_mcs_rate_bitmap[8];
+	__le16 vht_mcs_rate_bitmap[8];
 } __packed;
 
 struct mwifiex_rate_drop_pattern {

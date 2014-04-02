@@ -46,8 +46,8 @@
 #include "mlx5_core.h"
 
 #define DRIVER_NAME "mlx5_core"
-#define DRIVER_VERSION "1.0"
-#define DRIVER_RELDATE	"June 2013"
+#define DRIVER_VERSION "2.2-1"
+#define DRIVER_RELDATE	"Feb 2014"
 
 MODULE_AUTHOR("Eli Cohen <eli@mellanox.com>");
 MODULE_DESCRIPTION("Mellanox ConnectX-IB HCA core library");
@@ -531,7 +531,6 @@ static int __init init(void)
 
 	return 0;
 
-	mlx5_health_cleanup();
 err_debug:
 	mlx5_unregister_debugfs();
 	return err;

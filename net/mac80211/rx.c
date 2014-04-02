@@ -333,6 +333,8 @@ ieee80211_add_rx_radiotap_header(struct ieee80211_local *local,
 		/* in VHT, STBC is binary */
 		if (status->flag & RX_FLAG_STBC_MASK)
 			*pos |= IEEE80211_RADIOTAP_VHT_FLAG_STBC;
+		if (status->vht_flag & RX_VHT_FLAG_BF)
+			*pos |= IEEE80211_RADIOTAP_VHT_FLAG_BEAMFORMED;
 		pos++;
 		/* bandwidth */
 		if (status->vht_flag & RX_VHT_FLAG_80MHZ)
@@ -1092,6 +1094,13 @@ static void sta_ps_end(struct sta_info *sta)
 	       sta->sta.addr, sta->sta.aid);
 
 	if (test_sta_flag(sta, WLAN_STA_PS_DRIVER)) {
+		/*
+		 * Clear the flag only if the other one is still set
+		 * so that the TX path won't start TX'ing new frames
+		 * directly ... In the case that the driver flag isn't
+		 * set ieee80211_sta_ps_deliver_wakeup() will clear it.
+		 */
+		clear_sta_flag(sta, WLAN_STA_PS_STA);
 		ps_dbg(sta->sdata, "STA %pM aid %d driver-ps-blocked\n",
 		       sta->sta.addr, sta->sta.aid);
 		return;
@@ -1238,6 +1247,7 @@ ieee80211_rx_h_sta_process(struct ieee80211_rx_data *rx)
 		if (ieee80211_is_data(hdr->frame_control)) {
 			sta->last_rx_rate_idx = status->rate_idx;
 			sta->last_rx_rate_flag = status->flag;
+			sta->last_rx_rate_vht_flag = status->vht_flag;
 			sta->last_rx_rate_vht_nss = status->vht_nss;
 		}
 	}
@@ -1954,7 +1964,10 @@ ieee80211_deliver_skb(struct ieee80211_rx_data *rx)
 		/* deliver to local stack */
 		skb->protocol = eth_type_trans(skb, dev);
 		memset(skb->cb, 0, sizeof(skb->cb));
-		netif_receive_skb(skb);
+		if (rx->local->napi)
+			napi_gro_receive(rx->local->napi, skb);
+		else
+			netif_receive_skb(skb);
 	}
 
 	if (xmit_skb) {

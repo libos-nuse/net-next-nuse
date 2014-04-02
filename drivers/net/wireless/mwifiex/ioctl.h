@@ -177,6 +177,7 @@ struct mwifiex_ds_rx_reorder_tbl {
 struct mwifiex_ds_tx_ba_stream_tbl {
 	u16 tid;
 	u8 ra[ETH_ALEN];
+	u8 amsdu;
 };
 
 #define DBG_CMD_NUM	5
@@ -209,7 +210,7 @@ struct mwifiex_debug_info {
 	u32 num_cmd_assoc_success;
 	u32 num_cmd_assoc_failure;
 	u32 num_tx_timeout;
-	u32 num_cmd_timeout;
+	u8 is_cmd_timedout;
 	u16 timeout_cmd_id;
 	u16 timeout_cmd_act;
 	u16 last_cmd_id[DBG_CMD_NUM];

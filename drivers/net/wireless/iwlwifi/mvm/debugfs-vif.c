@@ -312,6 +312,11 @@ static ssize_t iwl_dbgfs_reduced_txp_write(struct ieee80211_vif *vif,
 	mutex_lock(&mvm->mutex);
 
 	mvmsta = iwl_mvm_sta_from_staid_protected(mvm, mvmvif->ap_sta_id);
+	if (IS_ERR_OR_NULL(mvmsta)) {
+		mutex_unlock(&mvm->mutex);
+		return -ENOTCONN;
+	}
+
 	mvmsta->bt_reduced_txpower_dbg = false;
 	ret = iwl_mvm_bt_coex_reduced_txp(mvm, mvmvif->ap_sta_id,
 					  reduced_tx_power);
@@ -591,7 +596,7 @@ void iwl_mvm_vif_dbgfs_register(struct iwl_mvm *mvm, struct ieee80211_vif *vif)
 	    iwlmvm_mod_params.power_scheme != IWL_POWER_SCHEME_CAM &&
 	    ((vif->type == NL80211_IFTYPE_STATION && !vif->p2p) ||
 	     (vif->type == NL80211_IFTYPE_STATION && vif->p2p &&
-	      mvm->fw->ucode_capa.flags & IWL_UCODE_TLV_FLAGS_P2P_PS)))
+	      mvm->fw->ucode_capa.flags & IWL_UCODE_TLV_FLAGS_BSS_P2P_PS_DCM)))
 		MVM_DEBUGFS_ADD_FILE_VIF(pm_params, mvmvif->dbgfs_dir, S_IWUSR |
 					 S_IRUSR);
 

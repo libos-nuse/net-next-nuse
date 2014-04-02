@@ -63,13 +63,6 @@ struct wireless_dev;
 void netdev_set_default_ethtool_ops(struct net_device *dev,
 				    const struct ethtool_ops *ops);
 
-/* hardware address assignment types */
-#define NET_ADDR_PERM		0	/* address is permanent (default) */
-#define NET_ADDR_RANDOM		1	/* address is generated randomly */
-#define NET_ADDR_STOLEN		2	/* address is stolen from other device */
-#define NET_ADDR_SET		3	/* address is set using
-					 * dev_set_mac_address() */
-
 /* Backlog congestion levels */
 #define NET_RX_SUCCESS		0	/* keep 'em coming, baby */
 #define NET_RX_DROP		1	/* packet dropped */
@@ -1037,8 +1030,7 @@ struct net_device_ops {
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	void                    (*ndo_poll_controller)(struct net_device *dev);
 	int			(*ndo_netpoll_setup)(struct net_device *dev,
-						     struct netpoll_info *info,
-						     gfp_t gfp);
+						     struct netpoll_info *info);
 	void			(*ndo_netpoll_cleanup)(struct net_device *dev);
 #endif
 #ifdef CONFIG_NET_RX_BUSY_POLL
@@ -1311,9 +1303,13 @@ struct net_device {
 	int			iflink;
 
 	struct net_device_stats	stats;
-	atomic_long_t		rx_dropped; /* dropped packets by core network
-					     * Do not use this in drivers.
-					     */
+
+	/* dropped packets by core network, Do not use this in drivers */
+	atomic_long_t		rx_dropped;
+	atomic_long_t		tx_dropped;
+
+	/* Stats to monitor carrier on<->off transitions */
+	atomic_t		carrier_changes;
 
 #ifdef CONFIG_WIRELESS_EXT
 	/* List of functions to handle Wireless Extensions (instead of ioctl).
@@ -1812,7 +1808,7 @@ struct pcpu_sw_netstats {
 
 #define netdev_alloc_pcpu_stats(type)				\
 ({								\
-	typeof(type) *pcpu_stats = alloc_percpu(type);		\
+	typeof(type) __percpu *pcpu_stats = alloc_percpu(type); \
 	if (pcpu_stats)	{					\
 		int i;						\
 		for_each_possible_cpu(i) {			\
@@ -1979,9 +1975,6 @@ struct net_device *__dev_get_by_index(struct net *net, int ifindex);
 struct net_device *dev_get_by_index_rcu(struct net *net, int ifindex);
 int netdev_get_name(struct net *net, char *name, int ifindex);
 int dev_restart(struct net_device *dev);
-#ifdef CONFIG_NETPOLL_TRAP
-int netpoll_trap(void);
-#endif
 int skb_gro_receive(struct sk_buff **head, struct sk_buff *skb);
 
 static inline unsigned int skb_gro_offset(const struct sk_buff *skb)
@@ -2019,11 +2012,6 @@ static inline void *skb_gro_header_slow(struct sk_buff *skb, unsigned int hlen,
 	NAPI_GRO_CB(skb)->frag0 = NULL;
 	NAPI_GRO_CB(skb)->frag0_len = 0;
 	return skb->data + offset;
-}
-
-static inline void *skb_gro_mac_header(struct sk_buff *skb)
-{
-	return NAPI_GRO_CB(skb)->frag0 ?: skb_mac_header(skb);
 }
 
 static inline void *skb_gro_network_header(struct sk_buff *skb)
@@ -2186,12 +2174,6 @@ static inline void netif_tx_start_all_queues(struct net_device *dev)
 
 static inline void netif_tx_wake_queue(struct netdev_queue *dev_queue)
 {
-#ifdef CONFIG_NETPOLL_TRAP
-	if (netpoll_trap()) {
-		netif_tx_start_queue(dev_queue);
-		return;
-	}
-#endif
 	if (test_and_clear_bit(__QUEUE_STATE_DRV_XOFF, &dev_queue->state))
 		__netif_schedule(dev_queue->qdisc);
 }
@@ -2435,10 +2417,6 @@ static inline void netif_start_subqueue(struct net_device *dev, u16 queue_index)
 static inline void netif_stop_subqueue(struct net_device *dev, u16 queue_index)
 {
 	struct netdev_queue *txq = netdev_get_tx_queue(dev, queue_index);
-#ifdef CONFIG_NETPOLL_TRAP
-	if (netpoll_trap())
-		return;
-#endif
 	netif_tx_stop_queue(txq);
 }
 
@@ -2473,10 +2451,6 @@ static inline bool netif_subqueue_stopped(const struct net_device *dev,
 static inline void netif_wake_subqueue(struct net_device *dev, u16 queue_index)
 {
 	struct netdev_queue *txq = netdev_get_tx_queue(dev, queue_index);
-#ifdef CONFIG_NETPOLL_TRAP
-	if (netpoll_trap())
-		return;
-#endif
 	if (test_and_clear_bit(__QUEUE_STATE_DRV_XOFF, &txq->state))
 		__netif_schedule(txq->qdisc);
 }
@@ -2646,6 +2620,7 @@ int dev_get_phys_port_id(struct net_device *dev,
 int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 			struct netdev_queue *txq);
 int dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
+bool is_skb_forwardable(struct net_device *dev, struct sk_buff *skb);
 
 extern int		netdev_budget;
 
@@ -2926,6 +2901,11 @@ static inline void netif_tx_unlock_bh(struct net_device *dev)
 	}						\
 }
 
+#define HARD_TX_TRYLOCK(dev, txq)			\
+	(((dev->features & NETIF_F_LLTX) == 0) ?	\
+		__netif_tx_trylock(txq) :		\
+		true )
+
 #define HARD_TX_UNLOCK(dev, txq) {			\
 	if ((dev->features & NETIF_F_LLTX) == 0) {	\
 		__netif_tx_unlock(txq);			\
@@ -3109,7 +3089,7 @@ struct sk_buff *skb_gso_segment(struct sk_buff *skb, netdev_features_t features)
 {
 	return __skb_gso_segment(skb, features, true);
 }
-__be16 skb_network_protocol(struct sk_buff *skb);
+__be16 skb_network_protocol(struct sk_buff *skb, int *depth);
 
 static inline bool can_checksum_protocol(netdev_features_t features,
 					 __be16 protocol)

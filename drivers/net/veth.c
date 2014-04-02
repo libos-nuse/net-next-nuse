@@ -156,10 +156,10 @@ static u64 veth_stats_one(struct pcpu_vstats *result, struct net_device *dev)
 		unsigned int start;
 
 		do {
-			start = u64_stats_fetch_begin_bh(&stats->syncp);
+			start = u64_stats_fetch_begin_irq(&stats->syncp);
 			packets = stats->packets;
 			bytes = stats->bytes;
-		} while (u64_stats_fetch_retry_bh(&stats->syncp, start));
+		} while (u64_stats_fetch_retry_irq(&stats->syncp, start));
 		result->packets += packets;
 		result->bytes += bytes;
 	}
@@ -277,7 +277,11 @@ static void veth_setup(struct net_device *dev)
 	dev->ethtool_ops = &veth_ethtool_ops;
 	dev->features |= NETIF_F_LLTX;
 	dev->features |= VETH_FEATURES;
-	dev->vlan_features = dev->features;
+	dev->vlan_features = dev->features &
+			     ~(NETIF_F_HW_VLAN_CTAG_TX |
+			       NETIF_F_HW_VLAN_STAG_TX |
+			       NETIF_F_HW_VLAN_CTAG_RX |
+			       NETIF_F_HW_VLAN_STAG_RX);
 	dev->destructor = veth_dev_free;
 
 	dev->hw_features = VETH_FEATURES;

@@ -722,7 +722,7 @@ static struct slave *rlb_choose_channel(struct sk_buff *skb, struct bonding *bon
 			client_info->ntt = 0;
 		}
 
-		if (!vlan_get_tag(skb, &client_info->vlan_id))
+		if (vlan_get_tag(skb, &client_info->vlan_id))
 			client_info->vlan_id = 0;
 
 		if (!client_info->assigned) {
@@ -1005,7 +1005,7 @@ static void alb_send_lp_vid(struct slave *slave, u8 mac_addr[],
 	memset(&pkt, 0, size);
 	ether_addr_copy(pkt.mac_dst, mac_addr);
 	ether_addr_copy(pkt.mac_src, mac_addr);
-	pkt.type = cpu_to_be16(ETH_P_LOOP);
+	pkt.type = cpu_to_be16(ETH_P_LOOPBACK);
 
 	skb = dev_alloc_skb(size);
 	if (!skb)
@@ -1464,7 +1464,7 @@ int bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 	}
 
 	/* no suitable interface, frame not sent */
-	kfree_skb(skb);
+	dev_kfree_skb_any(skb);
 out:
 	return NETDEV_TX_OK;
 }

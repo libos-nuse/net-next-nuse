@@ -1944,8 +1944,9 @@ void tcp_enter_loss(struct sock *sk, int how)
 		if (skb == tcp_send_head(sk))
 			break;
 
-		if (TCP_SKB_CB(skb)->sacked & TCPCB_RETRANS)
+		if (TCP_SKB_CB(skb)->sacked & TCPCB_SACKED_RETRANS)
 			tp->undo_marker = 0;
+
 		TCP_SKB_CB(skb)->sacked &= (~TCPCB_TAGBITS)|TCPCB_SACKED_ACKED;
 		if (!(TCP_SKB_CB(skb)->sacked&TCPCB_SACKED_ACKED) || how) {
 			TCP_SKB_CB(skb)->sacked &= ~TCPCB_SACKED_ACKED;
@@ -3066,6 +3067,7 @@ static int tcp_clean_rtx_queue(struct sock *sk, int prior_fackets,
 			flag |= FLAG_RETRANS_DATA_ACKED;
 		} else {
 			last_ackt = skb->skb_mstamp;
+			WARN_ON_ONCE(last_ackt.v64 == 0);
 			if (!first_ackt.v64)
 				first_ackt = last_ackt;
 
@@ -5393,9 +5395,12 @@ static bool tcp_rcv_fastopen_synack(struct sock *sk, struct sk_buff *synack,
 				break;
 		}
 		tcp_rearm_rto(sk);
+		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPFASTOPENACTIVEFAIL);
 		return true;
 	}
 	tp->syn_data_acked = tp->syn_data;
+	if (tp->syn_data_acked)
+		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPFASTOPENACTIVE);
 	return false;
 }
 

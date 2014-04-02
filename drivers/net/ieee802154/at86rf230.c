@@ -31,6 +31,7 @@
 #include <linux/spi/spi.h>
 #include <linux/spi/at86rf230.h>
 #include <linux/skbuff.h>
+#include <linux/of_gpio.h>
 
 #include <net/mac802154.h>
 #include <net/wpan-phy.h>
@@ -244,6 +245,7 @@ static bool is_rf212(struct at86rf230_local *local)
 #define STATE_TX_ON		0x09
 /* 0x0a - 0x0e */			/* 0x0a - UNSUPPORTED_ATTRIBUTE */
 #define STATE_SLEEP		0x0F
+#define STATE_PREP_DEEP_SLEEP	0x10
 #define STATE_BUSY_RX_AACK	0x11
 #define STATE_BUSY_TX_ARET	0x12
 #define STATE_RX_AACK_ON	0x16
@@ -573,7 +575,7 @@ at86rf230_start(struct ieee802154_dev *dev)
 	if (rc)
 		return rc;
 
-	rc = at86rf230_state(dev, STATE_FORCE_TX_ON);
+	rc = at86rf230_state(dev, STATE_TX_ON);
 	if (rc)
 		return rc;
 
@@ -654,12 +656,12 @@ at86rf230_xmit(struct ieee802154_dev *dev, struct sk_buff *skb)
 	int rc;
 	unsigned long flags;
 
-	spin_lock(&lp->lock);
+	spin_lock_irqsave(&lp->lock, flags);
 	if  (lp->irq_busy) {
-		spin_unlock(&lp->lock);
+		spin_unlock_irqrestore(&lp->lock, flags);
 		return -EBUSY;
 	}
-	spin_unlock(&lp->lock);
+	spin_unlock_irqrestore(&lp->lock, flags);
 
 	might_sleep();
 
@@ -744,30 +746,31 @@ at86rf230_set_hw_addr_filt(struct ieee802154_dev *dev,
 	struct at86rf230_local *lp = dev->priv;
 
 	if (changed & IEEE802515_AFILT_SADDR_CHANGED) {
+		u16 addr = le16_to_cpu(filt->short_addr);
+
 		dev_vdbg(&lp->spi->dev,
 			"at86rf230_set_hw_addr_filt called for saddr\n");
-		__at86rf230_write(lp, RG_SHORT_ADDR_0, filt->short_addr);
-		__at86rf230_write(lp, RG_SHORT_ADDR_1, filt->short_addr >> 8);
+		__at86rf230_write(lp, RG_SHORT_ADDR_0, addr);
+		__at86rf230_write(lp, RG_SHORT_ADDR_1, addr >> 8);
 	}
 
 	if (changed & IEEE802515_AFILT_PANID_CHANGED) {
+		u16 pan = le16_to_cpu(filt->pan_id);
+
 		dev_vdbg(&lp->spi->dev,
 			"at86rf230_set_hw_addr_filt called for pan id\n");
-		__at86rf230_write(lp, RG_PAN_ID_0, filt->pan_id);
-		__at86rf230_write(lp, RG_PAN_ID_1, filt->pan_id >> 8);
+		__at86rf230_write(lp, RG_PAN_ID_0, pan);
+		__at86rf230_write(lp, RG_PAN_ID_1, pan >> 8);
 	}
 
 	if (changed & IEEE802515_AFILT_IEEEADDR_CHANGED) {
+		u8 i, addr[8];
+
+		memcpy(addr, &filt->ieee_addr, 8);
 		dev_vdbg(&lp->spi->dev,
 			"at86rf230_set_hw_addr_filt called for IEEE addr\n");
-		at86rf230_write_subreg(lp, SR_IEEE_ADDR_0, filt->ieee_addr[7]);
-		at86rf230_write_subreg(lp, SR_IEEE_ADDR_1, filt->ieee_addr[6]);
-		at86rf230_write_subreg(lp, SR_IEEE_ADDR_2, filt->ieee_addr[5]);
-		at86rf230_write_subreg(lp, SR_IEEE_ADDR_3, filt->ieee_addr[4]);
-		at86rf230_write_subreg(lp, SR_IEEE_ADDR_4, filt->ieee_addr[3]);
-		at86rf230_write_subreg(lp, SR_IEEE_ADDR_5, filt->ieee_addr[2]);
-		at86rf230_write_subreg(lp, SR_IEEE_ADDR_6, filt->ieee_addr[1]);
-		at86rf230_write_subreg(lp, SR_IEEE_ADDR_7, filt->ieee_addr[0]);
+		for (i = 0; i < 8; i++)
+			__at86rf230_write(lp, RG_IEEE_ADDR_0 + i, addr[i]);
 	}
 
 	if (changed & IEEE802515_AFILT_PANC_CHANGED) {
@@ -786,7 +789,6 @@ static int
 at86rf212_set_txpower(struct ieee802154_dev *dev, int db)
 {
 	struct at86rf230_local *lp = dev->priv;
-	int rc;
 
 	/* typical maximum output is 5dBm with RG_PHY_TX_PWR 0x60, lower five
 	 * bits decrease power in 1dB steps. 0x60 represents extra PA gain of
@@ -799,11 +801,7 @@ at86rf212_set_txpower(struct ieee802154_dev *dev, int db)
 
 	db = -(db - 5);
 
-	rc = __at86rf230_write(lp, RG_PHY_TX_PWR, 0x60 | db);
-	if (rc)
-		return rc;
-
-	return 0;
+	return __at86rf230_write(lp, RG_PHY_TX_PWR, 0x60 | db);
 }
 
 static int
@@ -917,8 +915,8 @@ static void at86rf230_irqwork(struct work_struct *work)
 	status &= ~IRQ_TRX_UR; /* FIXME: possibly handle ???*/
 
 	if (status & IRQ_TRX_END) {
-		spin_lock_irqsave(&lp->lock, flags);
 		status &= ~IRQ_TRX_END;
+		spin_lock_irqsave(&lp->lock, flags);
 		if (lp->is_tx) {
 			lp->is_tx = 0;
 			spin_unlock_irqrestore(&lp->lock, flags);
@@ -947,10 +945,11 @@ static void at86rf230_irqwork_level(struct work_struct *work)
 static irqreturn_t at86rf230_isr(int irq, void *data)
 {
 	struct at86rf230_local *lp = data;
+	unsigned long flags;
 
-	spin_lock(&lp->lock);
+	spin_lock_irqsave(&lp->lock, flags);
 	lp->irq_busy = 1;
-	spin_unlock(&lp->lock);
+	spin_unlock_irqrestore(&lp->lock, flags);
 
 	schedule_work(&lp->irqwork);
 
@@ -1037,6 +1036,40 @@ static int at86rf230_hw_init(struct at86rf230_local *lp)
 	return 0;
 }
 
+static struct at86rf230_platform_data *
+at86rf230_get_pdata(struct spi_device *spi)
+{
+	struct at86rf230_platform_data *pdata;
+	const char *irq_type;
+
+	if (!IS_ENABLED(CONFIG_OF) || !spi->dev.of_node)
+		return spi->dev.platform_data;
+
+	pdata = devm_kzalloc(&spi->dev, sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		goto done;
+
+	pdata->rstn = of_get_named_gpio(spi->dev.of_node, "reset-gpio", 0);
+	pdata->slp_tr = of_get_named_gpio(spi->dev.of_node, "sleep-gpio", 0);
+
+	pdata->irq_type = IRQF_TRIGGER_RISING;
+	of_property_read_string(spi->dev.of_node, "irq-type", &irq_type);
+	if (!strcmp(irq_type, "level-high"))
+		pdata->irq_type = IRQF_TRIGGER_HIGH;
+	else if (!strcmp(irq_type, "level-low"))
+		pdata->irq_type = IRQF_TRIGGER_LOW;
+	else if (!strcmp(irq_type, "edge-rising"))
+		pdata->irq_type = IRQF_TRIGGER_RISING;
+	else if (!strcmp(irq_type, "edge-falling"))
+		pdata->irq_type = IRQF_TRIGGER_FALLING;
+	else
+		dev_warn(&spi->dev, "wrong irq-type specified using edge-rising\n");
+
+	spi->dev.platform_data = pdata;
+done:
+	return pdata;
+}
+
 static int at86rf230_probe(struct spi_device *spi)
 {
 	struct at86rf230_platform_data *pdata;
@@ -1055,15 +1088,17 @@ static int at86rf230_probe(struct spi_device *spi)
 		return -EINVAL;
 	}
 
-	pdata = spi->dev.platform_data;
+	pdata = at86rf230_get_pdata(spi);
 	if (!pdata) {
 		dev_err(&spi->dev, "no platform_data\n");
 		return -EINVAL;
 	}
 
-	rc = gpio_request(pdata->rstn, "rstn");
-	if (rc)
-		return rc;
+	if (gpio_is_valid(pdata->rstn)) {
+		rc = gpio_request(pdata->rstn, "rstn");
+		if (rc)
+			return rc;
+	}
 
 	if (gpio_is_valid(pdata->slp_tr)) {
 		rc = gpio_request(pdata->slp_tr, "slp_tr");
@@ -1071,9 +1106,11 @@ static int at86rf230_probe(struct spi_device *spi)
 			goto err_slp_tr;
 	}
 
-	rc = gpio_direction_output(pdata->rstn, 1);
-	if (rc)
-		goto err_gpio_dir;
+	if (gpio_is_valid(pdata->rstn)) {
+		rc = gpio_direction_output(pdata->rstn, 1);
+		if (rc)
+			goto err_gpio_dir;
+	}
 
 	if (gpio_is_valid(pdata->slp_tr)) {
 		rc = gpio_direction_output(pdata->slp_tr, 0);
@@ -1082,11 +1119,13 @@ static int at86rf230_probe(struct spi_device *spi)
 	}
 
 	/* Reset */
-	msleep(1);
-	gpio_set_value(pdata->rstn, 0);
-	msleep(1);
-	gpio_set_value(pdata->rstn, 1);
-	msleep(1);
+	if (gpio_is_valid(pdata->rstn)) {
+		udelay(1);
+		gpio_set_value(pdata->rstn, 0);
+		udelay(1);
+		gpio_set_value(pdata->rstn, 1);
+		usleep_range(120, 240);
+	}
 
 	rc = __at86rf230_detect_device(spi, &man_id, &part, &version);
 	if (rc < 0)
@@ -1112,6 +1151,10 @@ static int at86rf230_probe(struct spi_device *spi)
 		chip = "at86rf212";
 		if (version == 1)
 			ops = &at86rf212_ops;
+		break;
+	case 11:
+		chip = "at86rf233";
+		ops = &at86rf230_ops;
 		break;
 	default:
 		chip = "UNKNOWN";
@@ -1196,7 +1239,8 @@ err_gpio_dir:
 	if (gpio_is_valid(pdata->slp_tr))
 		gpio_free(pdata->slp_tr);
 err_slp_tr:
-	gpio_free(pdata->rstn);
+	if (gpio_is_valid(pdata->rstn))
+		gpio_free(pdata->rstn);
 	return rc;
 }
 
@@ -1205,6 +1249,8 @@ static int at86rf230_remove(struct spi_device *spi)
 	struct at86rf230_local *lp = spi_get_drvdata(spi);
 	struct at86rf230_platform_data *pdata = spi->dev.platform_data;
 
+	/* mask all at86rf230 irq's */
+	at86rf230_write_subreg(lp, SR_IRQ_MASK, 0);
 	ieee802154_unregister_device(lp->dev);
 
 	free_irq(spi->irq, lp);
@@ -1212,7 +1258,8 @@ static int at86rf230_remove(struct spi_device *spi)
 
 	if (gpio_is_valid(pdata->slp_tr))
 		gpio_free(pdata->slp_tr);
-	gpio_free(pdata->rstn);
+	if (gpio_is_valid(pdata->rstn))
+		gpio_free(pdata->rstn);
 
 	mutex_destroy(&lp->bmux);
 	ieee802154_free_device(lp->dev);
@@ -1221,8 +1268,19 @@ static int at86rf230_remove(struct spi_device *spi)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_OF)
+static struct of_device_id at86rf230_of_match[] = {
+	{ .compatible = "atmel,at86rf230", },
+	{ .compatible = "atmel,at86rf231", },
+	{ .compatible = "atmel,at86rf233", },
+	{ .compatible = "atmel,at86rf212", },
+	{ },
+};
+#endif
+
 static struct spi_driver at86rf230_driver = {
 	.driver = {
+		.of_match_table = of_match_ptr(at86rf230_of_match),
 		.name	= "at86rf230",
 		.owner	= THIS_MODULE,
 	},

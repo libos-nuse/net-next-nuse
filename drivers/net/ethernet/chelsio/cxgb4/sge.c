@@ -93,6 +93,16 @@
  */
 #define TX_QCHECK_PERIOD (HZ / 2)
 
+/* SGE Hung Ingress DMA Threshold Warning time (in Hz) and Warning Repeat Rate
+ * (in RX_QCHECK_PERIOD multiples).  If we find one of the SGE Ingress DMA
+ * State Machines in the same state for this amount of time (in HZ) then we'll
+ * issue a warning about a potential hang.  We'll repeat the warning as the
+ * SGE Ingress DMA Channel appears to be hung every N RX_QCHECK_PERIODs till
+ * the situation clears.  If the situation clears, we'll note that as well.
+ */
+#define SGE_IDMA_WARN_THRESH (1 * HZ)
+#define SGE_IDMA_WARN_REPEAT (20 * RX_QCHECK_PERIOD)
+
 /*
  * Max number of Tx descriptors to be reclaimed by the Tx timer.
  */
@@ -373,7 +383,7 @@ static void free_tx_desc(struct adapter *adap, struct sge_txq *q,
 		if (d->skb) {                       /* an SGL is present */
 			if (unmap)
 				unmap_sgl(dev, d->skb, d->sgl, q);
-			kfree_skb(d->skb);
+			dev_consume_skb_any(d->skb);
 			d->skb = NULL;
 		}
 		++d;
@@ -850,9 +860,10 @@ static void cxgb_pio_copy(u64 __iomem *dst, u64 *src)
 static inline void ring_tx_db(struct adapter *adap, struct sge_txq *q, int n)
 {
 	unsigned int *wr, index;
+	unsigned long flags;
 
 	wmb();            /* write descriptors before telling HW */
-	spin_lock(&q->db_lock);
+	spin_lock_irqsave(&q->db_lock, flags);
 	if (!q->db_disabled) {
 		if (is_t4(adap->params.chip)) {
 			t4_write_reg(adap, MYPF_REG(SGE_PF_KDOORBELL),
@@ -868,9 +879,10 @@ static inline void ring_tx_db(struct adapter *adap, struct sge_txq *q, int n)
 				writel(n,  adap->bar2 + q->udb + 8);
 			wmb();
 		}
-	}
+	} else
+		q->db_pidx_inc += n;
 	q->db_pidx = q->pidx;
-	spin_unlock(&q->db_lock);
+	spin_unlock_irqrestore(&q->db_lock, flags);
 }
 
 /**
@@ -997,7 +1009,7 @@ netdev_tx_t t4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 	 * anything shorter than an Ethernet header.
 	 */
 	if (unlikely(skb->len < ETH_HLEN)) {
-out_free:	dev_kfree_skb(skb);
+out_free:	dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
 	}
 
@@ -1041,7 +1053,6 @@ out_free:	dev_kfree_skb(skb);
 	end = (u64 *)wr + flits;
 
 	len = immediate ? skb->len : 0;
-	len += sizeof(*cpl);
 	ssi = skb_shinfo(skb);
 	if (ssi->gso_size) {
 		struct cpl_tx_pkt_lso *lso = (void *)wr;
@@ -1069,6 +1080,7 @@ out_free:	dev_kfree_skb(skb);
 		q->tso++;
 		q->tx_cso += ssi->gso_segs;
 	} else {
+		len += sizeof(*cpl);
 		wr->op_immdlen = htonl(FW_WR_OP(FW_ETH_TX_PKT_WR) |
 				       FW_WR_IMMDLEN(len));
 		cpl = (void *)(wr + 1);
@@ -1092,7 +1104,7 @@ out_free:	dev_kfree_skb(skb);
 
 	if (immediate) {
 		inline_tx_skb(skb, &q->q, cpl + 1);
-		dev_kfree_skb(skb);
+		dev_consume_skb_any(skb);
 	} else {
 		int last_desc;
 
@@ -2008,7 +2020,7 @@ irq_handler_t t4_intr_handler(struct adapter *adap)
 static void sge_rx_timer_cb(unsigned long data)
 {
 	unsigned long m;
-	unsigned int i, cnt[2];
+	unsigned int i, idma_same_state_cnt[2];
 	struct adapter *adap = (struct adapter *)data;
 	struct sge *s = &adap->sge;
 
@@ -2031,21 +2043,64 @@ static void sge_rx_timer_cb(unsigned long data)
 		}
 
 	t4_write_reg(adap, SGE_DEBUG_INDEX, 13);
-	cnt[0] = t4_read_reg(adap, SGE_DEBUG_DATA_HIGH);
-	cnt[1] = t4_read_reg(adap, SGE_DEBUG_DATA_LOW);
+	idma_same_state_cnt[0] = t4_read_reg(adap, SGE_DEBUG_DATA_HIGH);
+	idma_same_state_cnt[1] = t4_read_reg(adap, SGE_DEBUG_DATA_LOW);
 
-	for (i = 0; i < 2; i++)
-		if (cnt[i] >= s->starve_thres) {
-			if (s->idma_state[i] || cnt[i] == 0xffffffff)
-				continue;
-			s->idma_state[i] = 1;
-			t4_write_reg(adap, SGE_DEBUG_INDEX, 11);
-			m = t4_read_reg(adap, SGE_DEBUG_DATA_LOW) >> (i * 16);
-			dev_warn(adap->pdev_dev,
-				 "SGE idma%u starvation detected for "
-				 "queue %lu\n", i, m & 0xffff);
-		} else if (s->idma_state[i])
-			s->idma_state[i] = 0;
+	for (i = 0; i < 2; i++) {
+		u32 debug0, debug11;
+
+		/* If the Ingress DMA Same State Counter ("timer") is less
+		 * than 1s, then we can reset our synthesized Stall Timer and
+		 * continue.  If we have previously emitted warnings about a
+		 * potential stalled Ingress Queue, issue a note indicating
+		 * that the Ingress Queue has resumed forward progress.
+		 */
+		if (idma_same_state_cnt[i] < s->idma_1s_thresh) {
+			if (s->idma_stalled[i] >= SGE_IDMA_WARN_THRESH)
+				CH_WARN(adap, "SGE idma%d, queue%u,resumed after %d sec\n",
+					i, s->idma_qid[i],
+					s->idma_stalled[i]/HZ);
+			s->idma_stalled[i] = 0;
+			continue;
+		}
+
+		/* Synthesize an SGE Ingress DMA Same State Timer in the Hz
+		 * domain.  The first time we get here it'll be because we
+		 * passed the 1s Threshold; each additional time it'll be
+		 * because the RX Timer Callback is being fired on its regular
+		 * schedule.
+		 *
+		 * If the stall is below our Potential Hung Ingress Queue
+		 * Warning Threshold, continue.
+		 */
+		if (s->idma_stalled[i] == 0)
+			s->idma_stalled[i] = HZ;
+		else
+			s->idma_stalled[i] += RX_QCHECK_PERIOD;
+
+		if (s->idma_stalled[i] < SGE_IDMA_WARN_THRESH)
+			continue;
+
+		/* We'll issue a warning every SGE_IDMA_WARN_REPEAT Hz */
+		if (((s->idma_stalled[i] - HZ) % SGE_IDMA_WARN_REPEAT) != 0)
+			continue;
+
+		/* Read and save the SGE IDMA State and Queue ID information.
+		 * We do this every time in case it changes across time ...
+		 */
+		t4_write_reg(adap, SGE_DEBUG_INDEX, 0);
+		debug0 = t4_read_reg(adap, SGE_DEBUG_DATA_LOW);
+		s->idma_state[i] = (debug0 >> (i * 9)) & 0x3f;
+
+		t4_write_reg(adap, SGE_DEBUG_INDEX, 11);
+		debug11 = t4_read_reg(adap, SGE_DEBUG_DATA_LOW);
+		s->idma_qid[i] = (debug11 >> (i * 16)) & 0xffff;
+
+		CH_WARN(adap, "SGE idma%u, queue%u, maybe stuck state%u %dsecs (debug0=%#x, debug11=%#x)\n",
+			i, s->idma_qid[i], s->idma_state[i],
+			s->idma_stalled[i]/HZ, debug0, debug11);
+		t4_sge_decode_idma_state(adap, s->idma_state[i]);
+	}
 
 	mod_timer(&s->rx_timer, jiffies + RX_QCHECK_PERIOD);
 }
@@ -2596,11 +2651,19 @@ static int t4_sge_init_soft(struct adapter *adap)
 	fl_small_mtu = READ_FL_BUF(RX_SMALL_MTU_BUF);
 	fl_large_mtu = READ_FL_BUF(RX_LARGE_MTU_BUF);
 
+	/* We only bother using the Large Page logic if the Large Page Buffer
+	 * is larger than our Page Size Buffer.
+	 */
+	if (fl_large_pg <= fl_small_pg)
+		fl_large_pg = 0;
+
 	#undef READ_FL_BUF
 
+	/* The Page Size Buffer must be exactly equal to our Page Size and the
+	 * Large Page Size Buffer should be 0 (per above) or a power of 2.
+	 */
 	if (fl_small_pg != PAGE_SIZE ||
-	    (fl_large_pg != 0 && (fl_large_pg < fl_small_pg ||
-				  (fl_large_pg & (fl_large_pg-1)) != 0))) {
+	    (fl_large_pg & (fl_large_pg-1)) != 0) {
 		dev_err(adap->pdev_dev, "bad SGE FL page buffer sizes [%d, %d]\n",
 			fl_small_pg, fl_large_pg);
 		return -EINVAL;
@@ -2715,8 +2778,8 @@ static int t4_sge_init_hard(struct adapter *adap)
 int t4_sge_init(struct adapter *adap)
 {
 	struct sge *s = &adap->sge;
-	u32 sge_control;
-	int ret;
+	u32 sge_control, sge_conm_ctrl;
+	int ret, egress_threshold;
 
 	/*
 	 * Ingress Padding Boundary and Egress Status Page Size are set up by
@@ -2741,15 +2804,24 @@ int t4_sge_init(struct adapter *adap)
 	 * SGE's Egress Congestion Threshold.  If it isn't, then we can get
 	 * stuck waiting for new packets while the SGE is waiting for us to
 	 * give it more Free List entries.  (Note that the SGE's Egress
-	 * Congestion Threshold is in units of 2 Free List pointers.)
+	 * Congestion Threshold is in units of 2 Free List pointers.) For T4,
+	 * there was only a single field to control this.  For T5 there's the
+	 * original field which now only applies to Unpacked Mode Free List
+	 * buffers and a new field which only applies to Packed Mode Free List
+	 * buffers.
 	 */
-	s->fl_starve_thres
-		= EGRTHRESHOLD_GET(t4_read_reg(adap, SGE_CONM_CTRL))*2 + 1;
+	sge_conm_ctrl = t4_read_reg(adap, SGE_CONM_CTRL);
+	if (is_t4(adap->params.chip))
+		egress_threshold = EGRTHRESHOLD_GET(sge_conm_ctrl);
+	else
+		egress_threshold = EGRTHRESHOLDPACKING_GET(sge_conm_ctrl);
+	s->fl_starve_thres = 2*egress_threshold + 1;
 
 	setup_timer(&s->rx_timer, sge_rx_timer_cb, (unsigned long)adap);
 	setup_timer(&s->tx_timer, sge_tx_timer_cb, (unsigned long)adap);
-	s->starve_thres = core_ticks_per_usec(adap) * 1000000;  /* 1 s */
-	s->idma_state[0] = s->idma_state[1] = 0;
+	s->idma_1s_thresh = core_ticks_per_usec(adap) * 1000000;  /* 1 s */
+	s->idma_stalled[0] = 0;
+	s->idma_stalled[1] = 0;
 	spin_lock_init(&s->intrq_lock);
 
 	return 0;

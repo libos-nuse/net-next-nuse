@@ -34,7 +34,7 @@
 #include "be_hw.h"
 #include "be_roce.h"
 
-#define DRV_VER			"10.0.600.0u"
+#define DRV_VER			"10.2u"
 #define DRV_NAME		"be2net"
 #define BE_NAME			"Emulex BladeEngine2"
 #define BE3_NAME		"Emulex BladeEngine3"
@@ -261,9 +261,10 @@ struct be_tx_obj {
 /* Struct to remember the pages posted for rx frags */
 struct be_rx_page_info {
 	struct page *page;
+	/* set to page-addr for last frag of the page & frag-addr otherwise */
 	DEFINE_DMA_UNMAP_ADDR(bus);
 	u16 page_offset;
-	bool last_page_user;
+	bool last_frag;		/* last frag of the page */
 };
 
 struct be_rx_stats {
@@ -295,6 +296,7 @@ struct be_rx_compl_info {
 	u8 qnq;
 	u8 pkt_type;
 	u8 ip_frag;
+	u8 tunneled;
 };
 
 struct be_rx_obj {
@@ -349,13 +351,16 @@ struct be_drv_stats {
 	u32 roce_drops_crc;
 };
 
+/* A vlan-id of 0xFFFF must be used to clear transparent vlan-tagging */
+#define BE_RESET_VLAN_TAG_ID	0xFFFF
+
 struct be_vf_cfg {
 	unsigned char mac_addr[ETH_ALEN];
 	int if_handle;
 	int pmac_id;
-	u16 def_vid;
 	u16 vlan_tag;
 	u32 tx_rate;
+	u32 plink_tracking;
 };
 
 enum vf_state {
@@ -367,10 +372,11 @@ enum vf_state {
 #define BE_FLAGS_WORKER_SCHEDULED		(1 << 3)
 #define BE_FLAGS_VLAN_PROMISC			(1 << 4)
 #define BE_FLAGS_NAPI_ENABLED			(1 << 9)
-#define BE_UC_PMAC_COUNT		30
-#define BE_VF_UC_PMAC_COUNT		2
 #define BE_FLAGS_QNQ_ASYNC_EVT_RCVD		(1 << 11)
+#define BE_FLAGS_VXLAN_OFFLOADS			(1 << 12)
 
+#define BE_UC_PMAC_COUNT			30
+#define BE_VF_UC_PMAC_COUNT			2
 /* Ethtool set_dump flags */
 #define LANCER_INITIATE_FW_DUMP			0x1
 
@@ -490,6 +496,7 @@ struct be_adapter {
 	u32 sli_family;
 	u8 hba_port_num;
 	u16 pvid;
+	__be16 vxlan_port;
 	struct phy_info phy;
 	u8 wol_cap;
 	bool wol_en;

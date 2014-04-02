@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel 10 Gigabit PCI Express Linux driver
-  Copyright(c) 1999 - 2013 Intel Corporation.
+  Copyright(c) 1999 - 2014 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -20,6 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
+  Linux NICS <linux.nics@intel.com>
   e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
 
@@ -110,6 +111,7 @@ s32 ixgbe_get_device_caps_generic(struct ixgbe_hw *hw, u16 *device_caps);
 s32 ixgbe_set_fw_drv_ver_generic(struct ixgbe_hw *hw, u8 maj, u8 min,
 				 u8 build, u8 ver);
 void ixgbe_clear_tx_pending(struct ixgbe_hw *hw);
+bool ixgbe_mng_enabled(struct ixgbe_hw *hw);
 
 void ixgbe_set_rxpba_generic(struct ixgbe_hw *hw, int num_pb,
 			     u32 headroom, int strategy);
@@ -128,6 +130,11 @@ s32 ixgbe_get_thermal_sensor_data_generic(struct ixgbe_hw *hw);
 s32 ixgbe_init_thermal_sensor_thresh_generic(struct ixgbe_hw *hw);
 
 #define IXGBE_FAILED_READ_REG 0xffffffffU
+#define IXGBE_FAILED_READ_CFG_DWORD 0xffffffffU
+#define IXGBE_FAILED_READ_CFG_WORD 0xffffU
+
+u16 ixgbe_read_pci_cfg_word(struct ixgbe_hw *hw, u32 reg);
+void ixgbe_write_pci_cfg_word(struct ixgbe_hw *hw, u32 reg, u16 value);
 
 static inline bool ixgbe_removed(void __iomem *addr)
 {

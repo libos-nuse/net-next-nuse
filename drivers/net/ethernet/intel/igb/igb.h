@@ -41,6 +41,7 @@
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
 #include <linux/pci.h>
+#include <linux/mdio.h>
 
 struct igb_adapter;
 
@@ -433,6 +434,7 @@ struct igb_adapter {
 	struct delayed_work ptp_overflow_work;
 	struct work_struct ptp_tx_work;
 	struct sk_buff *ptp_tx_skb;
+	struct hwtstamp_config tstamp_config;
 	unsigned long ptp_tx_start;
 	unsigned long last_rx_ptp_check;
 	spinlock_t tmreg_lock;
@@ -455,6 +457,7 @@ struct igb_adapter {
 	unsigned long link_check_timeout;
 	int copper_tries;
 	struct e1000_info ei;
+	u16 eee_advert;
 };
 
 #define IGB_FLAG_HAS_MSI		(1 << 0)
@@ -471,6 +474,7 @@ struct igb_adapter {
 #define IGB_FLAG_MAS_CAPABLE		(1 << 11)
 #define IGB_FLAG_MAS_ENABLE		(1 << 12)
 #define IGB_FLAG_HAS_MSIX		(1 << 13)
+#define IGB_FLAG_EEE			(1 << 14)
 
 /* Media Auto Sense */
 #define IGB_MAS_ENABLE_0		0X0001
@@ -488,7 +492,8 @@ struct igb_adapter {
 enum e1000_state_t {
 	__IGB_TESTING,
 	__IGB_RESETTING,
-	__IGB_DOWN
+	__IGB_DOWN,
+	__IGB_PTP_TX_IN_PROGRESS,
 };
 
 enum igb_boards {
@@ -542,8 +547,8 @@ static inline void igb_ptp_rx_hwtstamp(struct igb_ring *rx_ring,
 	rx_ring->last_rx_timestamp = jiffies;
 }
 
-int igb_ptp_hwtstamp_ioctl(struct net_device *netdev, struct ifreq *ifr,
-			   int cmd);
+int igb_ptp_set_ts_config(struct net_device *netdev, struct ifreq *ifr);
+int igb_ptp_get_ts_config(struct net_device *netdev, struct ifreq *ifr);
 #ifdef CONFIG_IGB_HWMON
 void igb_sysfs_exit(struct igb_adapter *adapter);
 int igb_sysfs_init(struct igb_adapter *adapter);

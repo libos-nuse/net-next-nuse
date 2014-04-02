@@ -360,13 +360,12 @@ static DEFINE_PCI_DEVICE_TABLE(iwl_hw_card_ids) = {
 /* 7265 Series */
 	{IWL_PCI_DEVICE(0x095A, 0x5010, iwl7265_2ac_cfg)},
 	{IWL_PCI_DEVICE(0x095A, 0x5110, iwl7265_2ac_cfg)},
-	{IWL_PCI_DEVICE(0x095A, 0x5112, iwl7265_2ac_cfg)},
 	{IWL_PCI_DEVICE(0x095A, 0x5100, iwl7265_2ac_cfg)},
-	{IWL_PCI_DEVICE(0x095A, 0x510A, iwl7265_2ac_cfg)},
 	{IWL_PCI_DEVICE(0x095B, 0x5310, iwl7265_2ac_cfg)},
-	{IWL_PCI_DEVICE(0x095B, 0x5302, iwl7265_2ac_cfg)},
+	{IWL_PCI_DEVICE(0x095B, 0x5302, iwl7265_n_cfg)},
 	{IWL_PCI_DEVICE(0x095B, 0x5210, iwl7265_2ac_cfg)},
 	{IWL_PCI_DEVICE(0x095A, 0x5012, iwl7265_2ac_cfg)},
+	{IWL_PCI_DEVICE(0x095A, 0x5412, iwl7265_2ac_cfg)},
 	{IWL_PCI_DEVICE(0x095A, 0x5410, iwl7265_2ac_cfg)},
 	{IWL_PCI_DEVICE(0x095A, 0x5400, iwl7265_2ac_cfg)},
 	{IWL_PCI_DEVICE(0x095A, 0x1010, iwl7265_2ac_cfg)},
@@ -448,7 +447,8 @@ static void set_dflt_pwr_limit(struct iwl_trans *trans, struct pci_dev *pdev)
 
 	pxsx_handle = ACPI_HANDLE(&pdev->dev);
 	if (!pxsx_handle) {
-		IWL_ERR(trans, "Could not retrieve root port ACPI handle");
+		IWL_DEBUG_INFO(trans,
+			       "Could not retrieve root port ACPI handle");
 		return;
 	}
 
@@ -560,7 +560,7 @@ static int iwl_pci_resume(struct device *device)
 	iwl_enable_rfkill_int(trans);
 
 	hw_rfkill = iwl_is_rfkill_set(trans);
-	iwl_op_mode_hw_rf_kill(trans->op_mode, hw_rfkill);
+	iwl_trans_pcie_rf_kill(trans, hw_rfkill);
 
 	return 0;
 }

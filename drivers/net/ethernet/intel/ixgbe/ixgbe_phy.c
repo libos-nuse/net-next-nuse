@@ -20,6 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
+  Linux NICS <linux.nics@intel.com>
   e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
 
@@ -106,7 +107,7 @@ s32 ixgbe_identify_phy_generic(struct ixgbe_hw *hw)
  * have this bit just return false since the link can not be blocked
  * via this method.
  **/
-s32 ixgbe_check_reset_blocked(struct ixgbe_hw *hw)
+bool ixgbe_check_reset_blocked(struct ixgbe_hw *hw)
 {
 	u32 mmngc;
 

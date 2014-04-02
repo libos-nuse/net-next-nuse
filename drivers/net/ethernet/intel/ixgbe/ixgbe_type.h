@@ -20,6 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
+  Linux NICS <linux.nics@intel.com>
   e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
 
@@ -1792,6 +1793,9 @@ enum {
 #define IXGBE_EEPROM_RD_BUFFER_MAX_COUNT 512 /* EEPROM words # read in burst */
 #define IXGBE_EEPROM_WR_BUFFER_MAX_COUNT 256 /* EEPROM words # wr in burst */
 
+#define IXGBE_EEPROM_CTRL_2	1 /* EEPROM CTRL word 2 */
+#define IXGBE_EEPROM_CCD_BIT	2 /* EEPROM Core Clock Disable bit */
+
 #ifndef IXGBE_EEPROM_GRANT_ATTEMPTS
 #define IXGBE_EEPROM_GRANT_ATTEMPTS 1000 /* EEPROM # attempts to gain grant */
 #endif
@@ -2660,7 +2664,6 @@ enum ixgbe_sfp_type {
 enum ixgbe_media_type {
 	ixgbe_media_type_unknown = 0,
 	ixgbe_media_type_fiber,
-	ixgbe_media_type_fiber_fixed,
 	ixgbe_media_type_fiber_qsfp,
 	ixgbe_media_type_fiber_lco,
 	ixgbe_media_type_copper,
@@ -2918,7 +2921,6 @@ struct ixgbe_mac_operations {
 	s32 (*set_fw_drv_ver)(struct ixgbe_hw *, u8, u8, u8, u8);
 	s32 (*get_thermal_sensor_data)(struct ixgbe_hw *);
 	s32 (*init_thermal_sensor_thresh)(struct ixgbe_hw *hw);
-	bool (*mng_fw_enabled)(struct ixgbe_hw *hw);
 };
 
 struct ixgbe_phy_operations {
@@ -3049,7 +3051,6 @@ struct ixgbe_hw {
 	bool				adapter_stopped;
 	bool				force_full_reset;
 	bool				allow_unsupported_sfp;
-	bool				mng_fw_enabled;
 	bool				wol_enabled;
 };
 

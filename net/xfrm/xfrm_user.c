@@ -32,11 +32,6 @@
 #include <linux/in6.h>
 #endif
 
-static inline int aead_len(struct xfrm_algo_aead *alg)
-{
-	return sizeof(*alg) + ((alg->alg_key_len + 7) / 8);
-}
-
 static int verify_one_alg(struct nlattr **attrs, enum xfrm_attr_type_t type)
 {
 	struct nlattr *rt = attrs[type];
@@ -904,7 +899,7 @@ static int xfrm_dump_sa(struct sk_buff *skb, struct netlink_callback *cb)
 
 	if (!cb->args[0]) {
 		struct nlattr *attrs[XFRMA_MAX+1];
-		struct xfrm_filter *filter = NULL;
+		struct xfrm_address_filter *filter = NULL;
 		u8 proto = 0;
 		int err;
 
@@ -915,12 +910,12 @@ static int xfrm_dump_sa(struct sk_buff *skb, struct netlink_callback *cb)
 		if (err < 0)
 			return err;
 
-		if (attrs[XFRMA_FILTER]) {
+		if (attrs[XFRMA_ADDRESS_FILTER]) {
 			filter = kmalloc(sizeof(*filter), GFP_KERNEL);
 			if (filter == NULL)
 				return -ENOMEM;
 
-			memcpy(filter, nla_data(attrs[XFRMA_FILTER]),
+			memcpy(filter, nla_data(attrs[XFRMA_ADDRESS_FILTER]),
 			       sizeof(*filter));
 		}
 
@@ -1251,7 +1246,7 @@ static int copy_from_user_sec_ctx(struct xfrm_policy *pol, struct nlattr **attrs
 		return 0;
 
 	uctx = nla_data(rt);
-	return security_xfrm_policy_alloc(&pol->security, uctx);
+	return security_xfrm_policy_alloc(&pol->security, uctx, GFP_KERNEL);
 }
 
 static void copy_templates(struct xfrm_policy *xp, struct xfrm_user_tmpl *ut,
@@ -1656,7 +1651,7 @@ static int xfrm_get_policy(struct sk_buff *skb, struct nlmsghdr *nlh,
 		if (rt) {
 			struct xfrm_user_sec_ctx *uctx = nla_data(rt);
 
-			err = security_xfrm_policy_alloc(&ctx, uctx);
+			err = security_xfrm_policy_alloc(&ctx, uctx, GFP_KERNEL);
 			if (err)
 				return err;
 		}
@@ -1958,7 +1953,7 @@ static int xfrm_add_pol_expire(struct sk_buff *skb, struct nlmsghdr *nlh,
 		if (rt) {
 			struct xfrm_user_sec_ctx *uctx = nla_data(rt);
 
-			err = security_xfrm_policy_alloc(&ctx, uctx);
+			err = security_xfrm_policy_alloc(&ctx, uctx, GFP_KERNEL);
 			if (err)
 				return err;
 		}
@@ -2334,7 +2329,7 @@ static const struct nla_policy xfrma_policy[XFRMA_MAX+1] = {
 	[XFRMA_REPLAY_ESN_VAL]	= { .len = sizeof(struct xfrm_replay_state_esn) },
 	[XFRMA_SA_EXTRA_FLAGS]	= { .type = NLA_U32 },
 	[XFRMA_PROTO]		= { .type = NLA_U8 },
-	[XFRMA_FILTER]		= { .len = sizeof(struct xfrm_filter) },
+	[XFRMA_ADDRESS_FILTER]	= { .len = sizeof(struct xfrm_address_filter) },
 };
 
 static const struct xfrm_link {

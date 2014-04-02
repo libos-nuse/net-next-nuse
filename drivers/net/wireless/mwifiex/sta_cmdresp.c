@@ -158,8 +158,8 @@ static int mwifiex_ret_802_11_rssi_info(struct mwifiex_private *priv,
 
 	priv->subsc_evt_rssi_state = EVENT_HANDLED;
 
-	mwifiex_send_cmd_async(priv, HostCmd_CMD_802_11_SUBSCRIBE_EVENT,
-			       0, 0, subsc_evt);
+	mwifiex_send_cmd(priv, HostCmd_CMD_802_11_SUBSCRIBE_EVENT,
+			 0, 0, subsc_evt, false);
 
 	return 0;
 }
@@ -304,6 +304,15 @@ static int mwifiex_ret_tx_rate_cfg(struct mwifiex_private *priv,
 				priv->bitmap_rates[2 + i] =
 					le16_to_cpu(rate_scope->
 						    ht_mcs_rate_bitmap[i]);
+
+			if (priv->adapter->fw_api_ver == MWIFIEX_FW_V15) {
+				for (i = 0; i < ARRAY_SIZE(rate_scope->
+							   vht_mcs_rate_bitmap);
+				     i++)
+					priv->bitmap_rates[10 + i] =
+					    le16_to_cpu(rate_scope->
+							vht_mcs_rate_bitmap[i]);
+			}
 			break;
 			/* Add RATE_DROP tlv here */
 		}
@@ -317,9 +326,8 @@ static int mwifiex_ret_tx_rate_cfg(struct mwifiex_private *priv,
 	if (priv->is_data_rate_auto)
 		priv->data_rate = 0;
 	else
-		return mwifiex_send_cmd_async(priv,
-					      HostCmd_CMD_802_11_TX_RATE_QUERY,
-					      HostCmd_ACT_GEN_GET, 0, NULL);
+		return mwifiex_send_cmd(priv, HostCmd_CMD_802_11_TX_RATE_QUERY,
+					HostCmd_ACT_GEN_GET, 0, NULL, false);
 
 	return 0;
 }

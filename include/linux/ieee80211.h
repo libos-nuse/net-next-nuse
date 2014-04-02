@@ -154,6 +154,10 @@ static inline u16 ieee80211_sn_sub(u16 sn1, u16 sn2)
    802.11e clarifies the figure in section 7.1.2. The frame body is
    up to 2304 octets long (maximum MSDU size) plus any crypt overhead. */
 #define IEEE80211_MAX_DATA_LEN		2304
+/* 802.11ad extends maximum MSDU size for DMG (freq > 40Ghz) networks
+ * to 7920 bytes, see 8.2.3 General frame format
+ */
+#define IEEE80211_MAX_DATA_LEN_DMG	7920
 /* 30 byte 4 addr hdr, 2 byte QoS, 2304 byte MSDU, 12 byte crypt, 4 byte FCS */
 #define IEEE80211_MAX_FRAME_LEN		2352
 
@@ -2305,42 +2309,6 @@ static inline bool ieee80211_is_public_action(struct ieee80211_hdr *hdr,
 	if (!ieee80211_is_action(hdr->frame_control))
 		return false;
 	return mgmt->u.action.category == WLAN_CATEGORY_PUBLIC;
-}
-
-/**
- * ieee80211_dsss_chan_to_freq - get channel center frequency
- * @channel: the DSSS channel
- *
- * Convert IEEE802.11 DSSS channel to the center frequency (MHz).
- * Ref IEEE 802.11-2007 section 15.6
- */
-static inline int ieee80211_dsss_chan_to_freq(int channel)
-{
-	if ((channel > 0) && (channel < 14))
-		return 2407 + (channel * 5);
-	else if (channel == 14)
-		return 2484;
-	else
-		return -1;
-}
-
-/**
- * ieee80211_freq_to_dsss_chan - get channel
- * @freq: the frequency
- *
- * Convert frequency (MHz) to IEEE802.11 DSSS channel
- * Ref IEEE 802.11-2007 section 15.6
- *
- * This routine selects the channel with the closest center frequency.
- */
-static inline int ieee80211_freq_to_dsss_chan(int freq)
-{
-	if ((freq >= 2410) && (freq < 2475))
-		return (freq - 2405) / 5;
-	else if ((freq >= 2482) && (freq < 2487))
-		return 14;
-	else
-		return -1;
 }
 
 /**
