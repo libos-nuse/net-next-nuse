@@ -519,11 +519,18 @@ enum netdev_queue_state_t {
 	__QUEUE_STATE_DRV_XOFF,
 	__QUEUE_STATE_STACK_XOFF,
 	__QUEUE_STATE_FROZEN,
-#define QUEUE_STATE_ANY_XOFF ((1 << __QUEUE_STATE_DRV_XOFF)		| \
-			      (1 << __QUEUE_STATE_STACK_XOFF))
-#define QUEUE_STATE_ANY_XOFF_OR_FROZEN (QUEUE_STATE_ANY_XOFF		| \
-					(1 << __QUEUE_STATE_FROZEN))
 };
+
+#define QUEUE_STATE_DRV_XOFF	(1 << __QUEUE_STATE_DRV_XOFF)
+#define QUEUE_STATE_STACK_XOFF	(1 << __QUEUE_STATE_STACK_XOFF)
+#define QUEUE_STATE_FROZEN	(1 << __QUEUE_STATE_FROZEN)
+
+#define QUEUE_STATE_ANY_XOFF	(QUEUE_STATE_DRV_XOFF | QUEUE_STATE_STACK_XOFF)
+#define QUEUE_STATE_ANY_XOFF_OR_FROZEN (QUEUE_STATE_ANY_XOFF | \
+					QUEUE_STATE_FROZEN)
+#define QUEUE_STATE_DRV_XOFF_OR_FROZEN (QUEUE_STATE_DRV_XOFF | \
+					QUEUE_STATE_FROZEN)
+
 /*
  * __QUEUE_STATE_DRV_XOFF is used by drivers to stop the transmit queue.  The
  * netif_tx_* functions below are used to manipulate this flag.  The
@@ -2252,9 +2259,16 @@ static inline bool netif_xmit_stopped(const struct netdev_queue *dev_queue)
 	return dev_queue->state & QUEUE_STATE_ANY_XOFF;
 }
 
-static inline bool netif_xmit_frozen_or_stopped(const struct netdev_queue *dev_queue)
+static inline bool
+netif_xmit_frozen_or_stopped(const struct netdev_queue *dev_queue)
 {
 	return dev_queue->state & QUEUE_STATE_ANY_XOFF_OR_FROZEN;
+}
+
+static inline bool
+netif_xmit_frozen_or_drv_stopped(const struct netdev_queue *dev_queue)
+{
+	return dev_queue->state & QUEUE_STATE_DRV_XOFF_OR_FROZEN;
 }
 
 static inline void netdev_tx_sent_queue(struct netdev_queue *dev_queue,
@@ -2619,6 +2633,7 @@ int dev_get_phys_port_id(struct net_device *dev,
 			 struct netdev_phys_port_id *ppid);
 int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 			struct netdev_queue *txq);
+int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
 int dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
 bool is_skb_forwardable(struct net_device *dev, struct sk_buff *skb);
 

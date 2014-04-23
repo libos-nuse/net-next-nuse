@@ -15,8 +15,9 @@
  * of_get_phy_mode - Get phy mode for given device_node
  * @np:	Pointer to the given device_node
  *
- * The function gets phy interface string from property 'phy-mode',
- * and return its index in phy_modes table, or errno in error case.
+ * The function gets phy interface string from property 'phy-mode' or
+ * 'phy-connection-type', and return its index in phy_modes table, or errno in
+ * error case.
  */
 int of_get_phy_mode(struct device_node *np)
 {
@@ -24,6 +25,8 @@ int of_get_phy_mode(struct device_node *np)
 	int err, i;
 
 	err = of_property_read_string(np, "phy-mode", &pm);
+	if (err < 0)
+		err = of_property_read_string(np, "phy-connection-type", &pm);
 	if (err < 0)
 		return err;
 

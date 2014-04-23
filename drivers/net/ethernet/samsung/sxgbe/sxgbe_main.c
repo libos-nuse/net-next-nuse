@@ -425,8 +425,8 @@ dmamem_err:
  * @rx_rsize: ring size
  * Description:  this function initializes the DMA RX descriptor
  */
-void free_rx_ring(struct device *dev, struct sxgbe_rx_queue *rx_ring,
-		  int rx_rsize)
+static void free_rx_ring(struct device *dev, struct sxgbe_rx_queue *rx_ring,
+			 int rx_rsize)
 {
 	dma_free_coherent(dev, rx_rsize * sizeof(struct sxgbe_rx_norm_desc),
 			  rx_ring->dma_rx, rx_ring->dma_rx_phy);
@@ -519,8 +519,8 @@ error:
  * @tx_rsize: ring size
  * Description:  this function initializes the DMA TX descriptor
  */
-void free_tx_ring(struct device *dev, struct sxgbe_tx_queue *tx_ring,
-		  int tx_rsize)
+static void free_tx_ring(struct device *dev, struct sxgbe_tx_queue *tx_ring,
+			 int tx_rsize)
 {
 	dma_free_coherent(dev, tx_rsize * sizeof(struct sxgbe_tx_norm_desc),
 			  tx_ring->dma_tx, tx_ring->dma_tx_phy);
@@ -1218,11 +1218,10 @@ static int sxgbe_release(struct net_device *dev)
 
 	return 0;
 }
-
 /* Prepare first Tx descriptor for doing TSO operation */
-void sxgbe_tso_prepare(struct sxgbe_priv_data *priv,
-		       struct sxgbe_tx_norm_desc *first_desc,
-		       struct sk_buff *skb)
+static void sxgbe_tso_prepare(struct sxgbe_priv_data *priv,
+			      struct sxgbe_tx_norm_desc *first_desc,
+			      struct sk_buff *skb)
 {
 	unsigned int total_hdr_len, tcp_hdr_len;
 
@@ -1910,40 +1909,6 @@ static void sxgbe_set_rx_mode(struct net_device *dev)
 		   readl(ioaddr + SXGBE_HASH_LOW));
 }
 
-/**
- * sxgbe_config - entry point for changing configuration mode passed on by
- * ifconfig
- * @dev : pointer to the device structure
- * @map : pointer to the device mapping structure
- * Description:
- * This function is a driver entry point which gets called by the kernel
- * whenever some device configuration is changed.
- * Return value:
- * This function returns 0 if success and appropriate error otherwise.
- */
-static int sxgbe_config(struct net_device *dev, struct ifmap *map)
-{
-	struct sxgbe_priv_data *priv = netdev_priv(dev);
-
-	/* Can't act on a running interface */
-	if (dev->flags & IFF_UP)
-		return -EBUSY;
-
-	/* Don't allow changing the I/O address */
-	if (map->base_addr != (unsigned long)priv->ioaddr) {
-		netdev_warn(dev, "can't change I/O address\n");
-		return -EOPNOTSUPP;
-	}
-
-	/* Don't allow changing the IRQ */
-	if (map->irq != priv->irq) {
-		netdev_warn(dev, "not change IRQ number %d\n", priv->irq);
-		return -EOPNOTSUPP;
-	}
-
-	return 0;
-}
-
 #ifdef CONFIG_NET_POLL_CONTROLLER
 /**
  * sxgbe_poll_controller - entry point for polling receive by device
@@ -2005,7 +1970,6 @@ static const struct net_device_ops sxgbe_netdev_ops = {
 	.ndo_set_rx_mode	= sxgbe_set_rx_mode,
 	.ndo_tx_timeout		= sxgbe_tx_timeout,
 	.ndo_do_ioctl		= sxgbe_ioctl,
-	.ndo_set_config		= sxgbe_config,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= sxgbe_poll_controller,
 #endif
@@ -2113,11 +2077,11 @@ struct sxgbe_priv_data *sxgbe_drv_probe(struct device *device,
 	/* allocate memory resources for Descriptor rings */
 	ret = txring_mem_alloc(priv);
 	if (ret)
-		goto error_free_netdev;
+		goto error_free_hw;
 
 	ret = rxring_mem_alloc(priv);
 	if (ret)
-		goto error_free_netdev;
+		goto error_free_hw;
 
 	ndev->netdev_ops = &sxgbe_netdev_ops;
 
@@ -2163,7 +2127,7 @@ struct sxgbe_priv_data *sxgbe_drv_probe(struct device *device,
 	if (IS_ERR(priv->sxgbe_clk)) {
 		netdev_warn(ndev, "%s: warning: cannot get CSR clock\n",
 			    __func__);
-		goto error_clk_get;
+		goto error_napi_del;
 	}
 
 	/* If a specific clk_csr value is passed from the platform
@@ -2182,24 +2146,27 @@ struct sxgbe_priv_data *sxgbe_drv_probe(struct device *device,
 	if (ret < 0) {
 		netdev_dbg(ndev, "%s: MDIO bus (id: %d) registration failed\n",
 			   __func__, priv->plat->bus_id);
-		goto error_mdio_register;
+		goto error_clk_put;
 	}
 
 	ret = register_netdev(ndev);
 	if (ret) {
 		pr_err("%s: ERROR %i registering the device\n", __func__, ret);
-		goto error_netdev_register;
+		goto error_mdio_unregister;
 	}
 
 	sxgbe_check_ether_addr(priv);
 
 	return priv;
 
-error_mdio_register:
+error_mdio_unregister:
+	sxgbe_mdio_unregister(ndev);
+error_clk_put:
 	clk_put(priv->sxgbe_clk);
-error_clk_get:
-error_netdev_register:
+error_napi_del:
 	netif_napi_del(&priv->napi);
+error_free_hw:
+	kfree(priv->hw);
 error_free_netdev:
 	free_netdev(ndev);
 
@@ -2224,11 +2191,15 @@ int sxgbe_drv_remove(struct net_device *ndev)
 	priv->hw->mac->enable_tx(priv->ioaddr, false);
 	priv->hw->mac->enable_rx(priv->ioaddr, false);
 
-	netif_napi_del(&priv->napi);
+	unregister_netdev(ndev);
 
 	sxgbe_mdio_unregister(ndev);
 
-	unregister_netdev(ndev);
+	clk_put(priv->sxgbe_clk);
+
+	netif_napi_del(&priv->napi);
+
+	kfree(priv->hw);
 
 	free_netdev(ndev);
 

@@ -2033,11 +2033,13 @@ static void be_tx_compl_clean(struct be_adapter *adapter)
 	bool dummy_wrb;
 	int i, pending_txqs;
 
-	/* Wait for a max of 200ms for all the tx-completions to arrive. */
+	/* Stop polling for compls when HW has been silent for 10ms */
 	do {
 		pending_txqs = adapter->num_tx_qs;
 
 		for_all_tx_queues(adapter, txo, i) {
+			cmpl = 0;
+			num_wrbs = 0;
 			txq = &txo->q;
 			while ((txcp = be_tx_compl_get(&txo->cq))) {
 				end_idx =
@@ -2050,14 +2052,13 @@ static void be_tx_compl_clean(struct be_adapter *adapter)
 			if (cmpl) {
 				be_cq_notify(adapter, txo->cq.id, false, cmpl);
 				atomic_sub(num_wrbs, &txq->used);
-				cmpl = 0;
-				num_wrbs = 0;
+				timeo = 0;
 			}
 			if (atomic_read(&txq->used) == 0)
 				pending_txqs--;
 		}
 
-		if (pending_txqs == 0 || ++timeo > 200)
+		if (pending_txqs == 0 || ++timeo > 10 || be_hw_error(adapter))
 			break;
 
 		mdelay(1);
@@ -2725,6 +2726,12 @@ static int be_close(struct net_device *netdev)
 	struct be_eq_obj *eqo;
 	int i;
 
+	/* This protection is needed as be_close() may be called even when the
+	 * adapter is in cleared state (after eeh perm failure)
+	 */
+	if (!(adapter->flags & BE_FLAGS_SETUP_DONE))
+		return 0;
+
 	be_roce_dev_close(adapter);
 
 	if (adapter->flags & BE_FLAGS_NAPI_ENABLED) {
@@ -2767,7 +2774,8 @@ static int be_rx_qs_create(struct be_adapter *adapter)
 {
 	struct be_rx_obj *rxo;
 	int rc, i, j;
-	u8 rsstable[128];
+	u8 rss_hkey[RSS_HASH_KEY_LEN];
+	struct rss_info *rss = &adapter->rss_info;
 
 	for_all_rx_queues(adapter, rxo, i) {
 		rc = be_queue_alloc(adapter, &rxo->q, RX_Q_LEN,
@@ -2792,30 +2800,36 @@ static int be_rx_qs_create(struct be_adapter *adapter)
 	}
 
 	if (be_multi_rxq(adapter)) {
-		for (j = 0; j < 128; j += adapter->num_rx_qs - 1) {
+		for (j = 0; j < RSS_INDIR_TABLE_LEN;
+			j += adapter->num_rx_qs - 1) {
 			for_all_rss_queues(adapter, rxo, i) {
-				if ((j + i) >= 128)
+				if ((j + i) >= RSS_INDIR_TABLE_LEN)
 					break;
-				rsstable[j + i] = rxo->rss_id;
+				rss->rsstable[j + i] = rxo->rss_id;
+				rss->rss_queue[j + i] = i;
 			}
 		}
-		adapter->rss_flags = RSS_ENABLE_TCP_IPV4 | RSS_ENABLE_IPV4 |
-					RSS_ENABLE_TCP_IPV6 | RSS_ENABLE_IPV6;
+		rss->rss_flags = RSS_ENABLE_TCP_IPV4 | RSS_ENABLE_IPV4 |
+			RSS_ENABLE_TCP_IPV6 | RSS_ENABLE_IPV6;
 
 		if (!BEx_chip(adapter))
-			adapter->rss_flags |= RSS_ENABLE_UDP_IPV4 |
-						RSS_ENABLE_UDP_IPV6;
+			rss->rss_flags |= RSS_ENABLE_UDP_IPV4 |
+				RSS_ENABLE_UDP_IPV6;
 	} else {
 		/* Disable RSS, if only default RX Q is created */
-		adapter->rss_flags = RSS_ENABLE_NONE;
+		rss->rss_flags = RSS_ENABLE_NONE;
 	}
 
-	rc = be_cmd_rss_config(adapter, rsstable, adapter->rss_flags,
-			       128);
+	get_random_bytes(rss_hkey, RSS_HASH_KEY_LEN);
+	rc = be_cmd_rss_config(adapter, rss->rsstable,
+			       rss->rss_flags,
+			       128, rss_hkey);
 	if (rc) {
-		adapter->rss_flags = RSS_ENABLE_NONE;
+		rss->rss_flags = RSS_ENABLE_NONE;
 		return rc;
 	}
+
+	memcpy(rss->rss_hkey, rss_hkey, RSS_HASH_KEY_LEN);
 
 	/* First time posting */
 	for_all_rx_queues(adapter, rxo, i)
@@ -3055,6 +3069,7 @@ static int be_clear(struct be_adapter *adapter)
 	be_clear_queues(adapter);
 
 	be_msix_disable(adapter);
+	adapter->flags &= ~BE_FLAGS_SETUP_DONE;
 	return 0;
 }
 
@@ -3559,6 +3574,7 @@ static int be_setup(struct be_adapter *adapter)
 		adapter->phy.fc_autoneg = 1;
 
 	be_schedule_worker(adapter);
+	adapter->flags |= BE_FLAGS_SETUP_DONE;
 	return 0;
 err:
 	be_clear(adapter);
