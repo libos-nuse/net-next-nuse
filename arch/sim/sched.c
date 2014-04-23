@@ -316,3 +316,8 @@ u64 local_clock(void)
 {
 	return sched_clock();
 }
+
+void __sched schedule_preempt_disabled(void)
+{
+  return;
+}

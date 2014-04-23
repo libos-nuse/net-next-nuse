@@ -66,8 +66,3 @@ int sysfs_create_file_ns(struct kobject *kobj, const struct attribute *attr,
 {
   return 0;
 }
-
-void kernfs_get(struct kernfs_node *kn)
-{
-  return;
-}
