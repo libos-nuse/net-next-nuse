@@ -12,7 +12,7 @@ check_pkgs:
 testbin: bake check_pkgs
 	@mkdir -p buildtop/build/bin_dce
 	cd buildtop ; \
-	../bake/bake.py configure -e dce-linux-inkernel -e dce-umip-dev
+	../bake/bake.py configure -e dce-linux-inkernel $(BAKECONF_PARAMS)
 	cd buildtop ; \
 	../bake/bake.py show --enabledTree | grep -v  -E "pygoocanvas|graphviz|python-dev" | grep Missing && (echo "required packages are missing") || echo ""
 	cd buildtop ; \
