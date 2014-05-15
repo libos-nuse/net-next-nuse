@@ -18,6 +18,7 @@
 #include "altera_utils.h"
 #include "altera_tse.h"
 #include "altera_msgdmahw.h"
+#include "altera_msgdma.h"
 
 /* No initialization work to do for MSGDMA */
 int msgdma_initialize(struct altera_tse_private *priv)
@@ -29,13 +30,15 @@ void msgdma_uninitialize(struct altera_tse_private *priv)
 {
 }
 
+void msgdma_start_rxdma(struct altera_tse_private *priv)
+{
+}
+
 void msgdma_reset(struct altera_tse_private *priv)
 {
 	int counter;
-	struct msgdma_csr *txcsr =
-		(struct msgdma_csr *)priv->tx_dma_csr;
-	struct msgdma_csr *rxcsr =
-		(struct msgdma_csr *)priv->rx_dma_csr;
+	struct msgdma_csr *txcsr = priv->tx_dma_csr;
+	struct msgdma_csr *rxcsr = priv->rx_dma_csr;
 
 	/* Reset Rx mSGDMA */
 	iowrite32(MSGDMA_CSR_STAT_MASK, &rxcsr->status);
@@ -133,8 +136,7 @@ u32 msgdma_tx_completions(struct altera_tse_private *priv)
 	u32 ready = 0;
 	u32 inuse;
 	u32 status;
-	struct msgdma_csr *txcsr =
-		(struct msgdma_csr *)priv->tx_dma_csr;
+	struct msgdma_csr *txcsr = priv->tx_dma_csr;
 
 	/* Get number of sent descriptors */
 	inuse = ioread32(&txcsr->rw_fill_level) & 0xffff;
@@ -154,7 +156,7 @@ u32 msgdma_tx_completions(struct altera_tse_private *priv)
 
 /* Put buffer to the mSGDMA RX FIFO
  */
-int msgdma_add_rx_desc(struct altera_tse_private *priv,
+void msgdma_add_rx_desc(struct altera_tse_private *priv,
 			struct tse_buffer *rxbuffer)
 {
 	struct msgdma_extended_desc *desc = priv->rx_dma_desc;
@@ -175,7 +177,6 @@ int msgdma_add_rx_desc(struct altera_tse_private *priv,
 	iowrite32(0, &desc->burst_seq_num);
 	iowrite32(0x00010001, &desc->stride);
 	iowrite32(control, &desc->control);
-	return 1;
 }
 
 /* status is returned on upper 16 bits,
@@ -186,10 +187,8 @@ u32 msgdma_rx_status(struct altera_tse_private *priv)
 	u32 rxstatus = 0;
 	u32 pktlength;
 	u32 pktstatus;
-	struct msgdma_csr *rxcsr =
-		(struct msgdma_csr *)priv->rx_dma_csr;
-	struct msgdma_response *rxresp =
-		(struct msgdma_response *)priv->rx_dma_resp;
+	struct msgdma_csr *rxcsr = priv->rx_dma_csr;
+	struct msgdma_response *rxresp = priv->rx_dma_resp;
 
 	if (ioread32(&rxcsr->resp_fill_level) & 0xffff) {
 		pktlength = ioread32(&rxresp->bytes_transferred);

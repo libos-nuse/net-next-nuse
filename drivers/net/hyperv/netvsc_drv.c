@@ -235,11 +235,12 @@ static void netvsc_xmit_completion(void *context)
 {
 	struct hv_netvsc_packet *packet = (struct hv_netvsc_packet *)context;
 	struct sk_buff *skb = (struct sk_buff *)
-		(unsigned long)packet->completion.send.send_completion_tid;
+		(unsigned long)packet->send_completion_tid;
+	u32 index = packet->send_buf_index;
 
 	kfree(packet);
 
-	if (skb)
+	if (skb && (index == NETVSC_INVALID_INDEX))
 		dev_kfree_skb_any(skb);
 }
 
@@ -425,9 +426,9 @@ static int netvsc_start_xmit(struct sk_buff *skb, struct net_device *net)
 				(num_data_pgs * sizeof(struct hv_page_buffer)));
 
 	/* Set the completion routine */
-	packet->completion.send.send_completion = netvsc_xmit_completion;
-	packet->completion.send.send_completion_ctx = packet;
-	packet->completion.send.send_completion_tid = (unsigned long)skb;
+	packet->send_completion = netvsc_xmit_completion;
+	packet->send_completion_ctx = packet;
+	packet->send_completion_tid = (unsigned long)skb;
 
 	isvlan = packet->vlan_tci & VLAN_TAG_PRESENT;
 
@@ -465,6 +466,10 @@ static int netvsc_start_xmit(struct sk_buff *skb, struct net_device *net)
 	 */
 	if (skb_is_gso(skb))
 		goto do_lso;
+
+	if ((skb->ip_summed == CHECKSUM_NONE) ||
+	    (skb->ip_summed == CHECKSUM_UNNECESSARY))
+		goto do_send;
 
 	rndis_msg_size += NDIS_CSUM_PPI_SIZE;
 	ppi = init_ppi_data(rndis_msg, NDIS_CSUM_PPI_SIZE,
@@ -638,9 +643,8 @@ int netvsc_recv_callback(struct hv_device *device_obj,
 		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q),
 				       packet->vlan_tci);
 
-	skb_record_rx_queue(skb, packet->xfer_page_pkt->channel->
-			    offermsg.offer.sub_channel_index %
-			    net->real_num_rx_queues);
+	skb_record_rx_queue(skb, packet->channel->
+			    offermsg.offer.sub_channel_index);
 
 	net->stats.rx_packets++;
 	net->stats.rx_bytes += packet->total_data_buflen;
@@ -806,7 +810,7 @@ static int netvsc_probe(struct hv_device *dev,
 	net->features = NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_SG | NETIF_F_RXCSUM |
 			NETIF_F_IP_CSUM | NETIF_F_TSO;
 
-	SET_ETHTOOL_OPS(net, &ethtool_ops);
+	net->ethtool_ops = &ethtool_ops;
 	SET_NETDEV_DEV(net, &dev->device);
 
 	/* Notify the netvsc driver of the new device */
@@ -823,8 +827,6 @@ static int netvsc_probe(struct hv_device *dev,
 	nvdev = hv_get_drvdata(dev);
 	netif_set_real_num_tx_queues(net, nvdev->num_chn);
 	netif_set_real_num_rx_queues(net, nvdev->num_chn);
-	dev_info(&dev->device, "real num tx,rx queues:%u, %u\n",
-		 net->real_num_tx_queues, net->real_num_rx_queues);
 
 	ret = register_netdev(net);
 	if (ret != 0) {

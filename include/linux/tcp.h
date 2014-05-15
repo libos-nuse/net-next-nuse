@@ -230,6 +230,7 @@ struct tcp_sock {
 	u32	snd_cwnd_clamp; /* Do not allow snd_cwnd to grow above this */
 	u32	snd_cwnd_used;
 	u32	snd_cwnd_stamp;
+	u32	lsnd_pending;	/* packets inflight or unsent since last xmit */
 	u32	prior_cwnd;	/* Congestion window at start of Recovery. */
 	u32	prr_delivered;	/* Number of newly delivered packets to
 				 * receiver in Recovery. */
@@ -363,11 +364,6 @@ static inline bool tcp_passive_fastopen(const struct sock *sk)
 {
 	return (sk->sk_state == TCP_SYN_RECV &&
 		tcp_sk(sk)->fastopen_rsk != NULL);
-}
-
-static inline bool fastopen_cookie_present(struct tcp_fastopen_cookie *foc)
-{
-	return foc->len != -1;
 }
 
 extern void tcp_sock_destruct(struct sock *sk);

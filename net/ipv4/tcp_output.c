@@ -627,7 +627,7 @@ static unsigned int tcp_synack_options(struct sock *sk,
 		if (unlikely(!ireq->tstamp_ok))
 			remaining -= TCPOLEN_SACKPERM_ALIGNED;
 	}
-	if (foc != NULL) {
+	if (foc != NULL && foc->len >= 0) {
 		u32 need = TCPOLEN_EXP_FASTOPEN_BASE + foc->len;
 		need = (need + 3) & ~3U;  /* Align to 32 bits */
 		if (remaining >= need) {
@@ -1402,12 +1402,13 @@ static void tcp_cwnd_application_limited(struct sock *sk)
 	tp->snd_cwnd_stamp = tcp_time_stamp;
 }
 
-/* Congestion window validation. (RFC2861) */
-static void tcp_cwnd_validate(struct sock *sk)
+static void tcp_cwnd_validate(struct sock *sk, u32 unsent_segs)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
-	if (tp->packets_out >= tp->snd_cwnd) {
+	tp->lsnd_pending = tp->packets_out + unsent_segs;
+
+	if (tcp_is_cwnd_limited(sk)) {
 		/* Network is feed fully. */
 		tp->snd_cwnd_used = 0;
 		tp->snd_cwnd_stamp = tcp_time_stamp;
@@ -1880,7 +1881,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct sk_buff *skb;
-	unsigned int tso_segs, sent_pkts;
+	unsigned int tso_segs, sent_pkts, unsent_segs = 0;
 	int cwnd_quota;
 	int result;
 
@@ -1924,7 +1925,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 				break;
 		} else {
 			if (!push_one && tcp_tso_should_defer(sk, skb))
-				break;
+				goto compute_unsent_segs;
 		}
 
 		/* TCP Small Queues :
@@ -1949,8 +1950,14 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			 * there is no smp_mb__after_set_bit() yet
 			 */
 			smp_mb__after_clear_bit();
-			if (atomic_read(&sk->sk_wmem_alloc) > limit)
+			if (atomic_read(&sk->sk_wmem_alloc) > limit) {
+				u32 unsent_bytes;
+
+compute_unsent_segs:
+				unsent_bytes = tp->write_seq - tp->snd_nxt;
+				unsent_segs = DIV_ROUND_UP(unsent_bytes, mss_now);
 				break;
+			}
 		}
 
 		limit = mss_now;
@@ -1990,7 +1997,7 @@ repair:
 		/* Send one loss probe per tail loss episode. */
 		if (push_one != 2)
 			tcp_schedule_loss_probe(sk);
-		tcp_cwnd_validate(sk);
+		tcp_cwnd_validate(sk, unsent_segs);
 		return false;
 	}
 	return (push_one == 2) || (!tp->packets_out && tcp_send_head(sk));
@@ -2481,8 +2488,14 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
 		err = tcp_transmit_skb(sk, skb, 1, GFP_ATOMIC);
 	}
 
-	if (likely(!err))
+	if (likely(!err)) {
 		TCP_SKB_CB(skb)->sacked |= TCPCB_EVER_RETRANS;
+		/* Update global TCP statistics. */
+		TCP_INC_STATS(sock_net(sk), TCP_MIB_RETRANSSEGS);
+		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_SYN)
+			NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPSYNRETRANS);
+		tp->total_retrans++;
+	}
 	return err;
 }
 
@@ -2492,12 +2505,6 @@ int tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
 	int err = __tcp_retransmit_skb(sk, skb);
 
 	if (err == 0) {
-		/* Update global TCP statistics. */
-		TCP_INC_STATS(sock_net(sk), TCP_MIB_RETRANSSEGS);
-		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_SYN)
-			NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPSYNRETRANS);
-		tp->total_retrans++;
-
 #if FASTRETRANS_DEBUG > 0
 		if (TCP_SKB_CB(skb)->sacked & TCPCB_SACKED_RETRANS) {
 			net_dbg_ratelimited("retrans_out leaked\n");
@@ -2795,27 +2802,6 @@ struct sk_buff *tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 	mss = dst_metric_advmss(dst);
 	if (tp->rx_opt.user_mss && tp->rx_opt.user_mss < mss)
 		mss = tp->rx_opt.user_mss;
-
-	if (req->rcv_wnd == 0) { /* ignored for retransmitted syns */
-		__u8 rcv_wscale;
-		/* Set this up on the first call only */
-		req->window_clamp = tp->window_clamp ? : dst_metric(dst, RTAX_WINDOW);
-
-		/* limit the window selection if the user enforce a smaller rx buffer */
-		if (sk->sk_userlocks & SOCK_RCVBUF_LOCK &&
-		    (req->window_clamp > tcp_full_space(sk) || req->window_clamp == 0))
-			req->window_clamp = tcp_full_space(sk);
-
-		/* tcp_full_space because it is guaranteed to be the first packet */
-		tcp_select_initial_window(tcp_full_space(sk),
-			mss - (ireq->tstamp_ok ? TCPOLEN_TSTAMP_ALIGNED : 0),
-			&req->rcv_wnd,
-			&req->window_clamp,
-			ireq->wscale_ok,
-			&rcv_wscale,
-			dst_metric(dst, RTAX_INITRWND));
-		ireq->rcv_wscale = rcv_wscale;
-	}
 
 	memset(&opts, 0, sizeof(opts));
 #ifdef CONFIG_SYN_COOKIES

@@ -37,16 +37,101 @@
 #define BPF_CALL	0x80	/* function call */
 #define BPF_EXIT	0x90	/* function return */
 
+/* Placeholder/dummy for 0 */
+#define BPF_0		0
+
+/* Register numbers */
+enum {
+	BPF_REG_0 = 0,
+	BPF_REG_1,
+	BPF_REG_2,
+	BPF_REG_3,
+	BPF_REG_4,
+	BPF_REG_5,
+	BPF_REG_6,
+	BPF_REG_7,
+	BPF_REG_8,
+	BPF_REG_9,
+	BPF_REG_10,
+	__MAX_BPF_REG,
+};
+
 /* BPF has 10 general purpose 64-bit registers and stack frame. */
-#define MAX_BPF_REG	11
+#define MAX_BPF_REG	__MAX_BPF_REG
+
+/* ArgX, context and stack frame pointer register positions. Note,
+ * Arg1, Arg2, Arg3, etc are used as argument mappings of function
+ * calls in BPF_CALL instruction.
+ */
+#define BPF_REG_ARG1	BPF_REG_1
+#define BPF_REG_ARG2	BPF_REG_2
+#define BPF_REG_ARG3	BPF_REG_3
+#define BPF_REG_ARG4	BPF_REG_4
+#define BPF_REG_ARG5	BPF_REG_5
+#define BPF_REG_CTX	BPF_REG_6
+#define BPF_REG_FP	BPF_REG_10
+
+/* Additional register mappings for converted user programs. */
+#define BPF_REG_A	BPF_REG_0
+#define BPF_REG_X	BPF_REG_7
+#define BPF_REG_TMP	BPF_REG_8
 
 /* BPF program can access up to 512 bytes of stack space. */
 #define MAX_BPF_STACK	512
 
-/* Arg1, context and stack frame pointer register positions. */
-#define ARG1_REG	1
-#define CTX_REG		6
-#define FP_REG		10
+/* bpf_add|sub|...: a += x, bpf_mov: a = x */
+#define BPF_ALU64_REG(op, a, x) \
+	((struct sock_filter_int) {BPF_ALU64|BPF_OP(op)|BPF_X, a, x, 0, 0})
+#define BPF_ALU32_REG(op, a, x) \
+	((struct sock_filter_int) {BPF_ALU|BPF_OP(op)|BPF_X, a, x, 0, 0})
+
+/* bpf_add|sub|...: a += imm, bpf_mov: a = imm */
+#define BPF_ALU64_IMM(op, a, imm) \
+	((struct sock_filter_int) {BPF_ALU64|BPF_OP(op)|BPF_K, a, 0, 0, imm})
+#define BPF_ALU32_IMM(op, a, imm) \
+	((struct sock_filter_int) {BPF_ALU|BPF_OP(op)|BPF_K, a, 0, 0, imm})
+
+/* R0 = *(uint *) (skb->data + off) */
+#define BPF_LD_ABS(size, off) \
+	((struct sock_filter_int) {BPF_LD|BPF_SIZE(size)|BPF_ABS, 0, 0, 0, off})
+
+/* R0 = *(uint *) (skb->data + x + off) */
+#define BPF_LD_IND(size, x, off) \
+	((struct sock_filter_int) {BPF_LD|BPF_SIZE(size)|BPF_IND, 0, x, 0, off})
+
+/* a = *(uint *) (x + off) */
+#define BPF_LDX_MEM(sz, a, x, off) \
+	((struct sock_filter_int) {BPF_LDX|BPF_SIZE(sz)|BPF_MEM, a, x, off, 0})
+
+/* if (a 'op' x) goto pc+off */
+#define BPF_JMP_REG(op, a, x, off) \
+	((struct sock_filter_int) {BPF_JMP|BPF_OP(op)|BPF_X, a, x, off, 0})
+
+/* if (a 'op' imm) goto pc+off */
+#define BPF_JMP_IMM(op, a, imm, off) \
+	((struct sock_filter_int) {BPF_JMP|BPF_OP(op)|BPF_K, a, 0, off, imm})
+
+#define BPF_EXIT_INSN() \
+	((struct sock_filter_int) {BPF_JMP|BPF_EXIT, 0, 0, 0, 0})
+
+static inline int size_to_bpf(int size)
+{
+	switch (size) {
+	case 1:
+		return BPF_B;
+	case 2:
+		return BPF_H;
+	case 4:
+		return BPF_W;
+	case 8:
+		return BPF_DW;
+	default:
+		return -EINVAL;
+	}
+}
+
+/* Macro to invoke filter function. */
+#define SK_RUN_FILTER(filter, ctx)  (*filter->bpf_func)(ctx, filter->insnsi)
 
 struct sock_filter_int {
 	__u8	code;		/* opcode */
@@ -96,9 +181,6 @@ static inline unsigned int sk_filter_size(unsigned int proglen)
 
 #define sk_filter_proglen(fprog)			\
 		(fprog->len * sizeof(fprog->filter[0]))
-
-#define SK_RUN_FILTER(filter, ctx)			\
-		(*filter->bpf_func)(ctx, filter->insnsi)
 
 int sk_filter(struct sock *sk, struct sk_buff *skb);
 

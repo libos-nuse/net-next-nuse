@@ -174,6 +174,7 @@ struct bond_params {
 	int resend_igmp;
 	int lp_interval;
 	int packets_per_slave;
+	int tlb_dynamic_lb;
 	struct reciprocal_value reciprocal_packets_per_slave;
 };
 
@@ -181,8 +182,6 @@ struct bond_parm_tbl {
 	char *modename;
 	int mode;
 };
-
-#define BOND_MAX_MODENAME_LEN 20
 
 struct slave {
 	struct net_device *dev; /* first - useful for panic debug */
@@ -204,7 +203,7 @@ struct slave {
 	u32    speed;
 	u16    queue_id;
 	u8     perm_hwaddr[ETH_ALEN];
-	struct ad_slave_info ad_info; /* HUGE - better to dynamically alloc */
+	struct ad_slave_info *ad_info;
 	struct tlb_slave_info tlb_info;
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	struct netpoll *np;
@@ -395,8 +394,7 @@ static inline int slave_do_arp_validate(struct bonding *bond,
 	return bond->params.arp_validate & (1 << bond_slave_state(slave));
 }
 
-static inline int slave_do_arp_validate_only(struct bonding *bond,
-					     struct slave *slave)
+static inline int slave_do_arp_validate_only(struct bonding *bond)
 {
 	return bond->params.arp_validate & BOND_ARP_FILTER;
 }
@@ -487,7 +485,14 @@ static inline bool slave_can_tx(struct slave *slave)
 		return false;
 }
 
-struct bond_net;
+struct bond_net {
+	struct net		*net;	/* Associated network namespace */
+	struct list_head	dev_list;
+#ifdef CONFIG_PROC_FS
+	struct proc_dir_entry	*proc_dir;
+#endif
+	struct class_attribute	class_attr_bonding_masters;
+};
 
 int bond_arp_rcv(const struct sk_buff *skb, struct bonding *bond, struct slave *slave);
 void bond_dev_queue_xmit(struct bonding *bond, struct sk_buff *skb, struct net_device *slave_dev);
@@ -499,7 +504,7 @@ int bond_sysfs_slave_add(struct slave *slave);
 void bond_sysfs_slave_del(struct slave *slave);
 int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev);
 int bond_release(struct net_device *bond_dev, struct net_device *slave_dev);
-int bond_xmit_hash(struct bonding *bond, struct sk_buff *skb, int count);
+u32 bond_xmit_hash(struct bonding *bond, struct sk_buff *skb);
 void bond_select_active_slave(struct bonding *bond);
 void bond_change_active_slave(struct bonding *bond, struct slave *new_active);
 void bond_create_debugfs(void);
@@ -515,15 +520,6 @@ void bond_netlink_fini(void);
 struct net_device *bond_option_active_slave_get_rcu(struct bonding *bond);
 struct net_device *bond_option_active_slave_get(struct bonding *bond);
 const char *bond_slave_link_status(s8 link);
-
-struct bond_net {
-	struct net *		net;	/* Associated network namespace */
-	struct list_head	dev_list;
-#ifdef CONFIG_PROC_FS
-	struct proc_dir_entry *	proc_dir;
-#endif
-	struct class_attribute	class_attr_bonding_masters;
-};
 
 #ifdef CONFIG_PROC_FS
 void bond_create_proc_entry(struct bonding *bond);

@@ -239,25 +239,28 @@ static void macvlan_process_broadcast(struct work_struct *w)
 static void macvlan_broadcast_enqueue(struct macvlan_port *port,
 				      struct sk_buff *skb)
 {
+	struct sk_buff *nskb;
 	int err = -ENOMEM;
 
-	skb = skb_clone(skb, GFP_ATOMIC);
-	if (!skb)
+	nskb = skb_clone(skb, GFP_ATOMIC);
+	if (!nskb)
 		goto err;
 
 	spin_lock(&port->bc_queue.lock);
 	if (skb_queue_len(&port->bc_queue) < skb->dev->tx_queue_len) {
-		__skb_queue_tail(&port->bc_queue, skb);
+		__skb_queue_tail(&port->bc_queue, nskb);
 		err = 0;
 	}
 	spin_unlock(&port->bc_queue.lock);
 
 	if (err)
-		goto err;
+		goto free_nskb;
 
 	schedule_work(&port->bc_work);
 	return;
 
+free_nskb:
+	kfree_skb(nskb);
 err:
 	atomic_long_inc(&skb->dev->rx_dropped);
 }
@@ -329,11 +332,9 @@ static int macvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 	const struct macvlan_dev *vlan = netdev_priv(dev);
 	const struct macvlan_port *port = vlan->port;
 	const struct macvlan_dev *dest;
-	__u8 ip_summed = skb->ip_summed;
 
 	if (vlan->mode == MACVLAN_MODE_BRIDGE) {
 		const struct ethhdr *eth = (void *)skb->data;
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 		/* send to other bridge ports directly */
 		if (is_multicast_ether_addr(eth->h_dest)) {
@@ -351,7 +352,6 @@ static int macvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 xmit_world:
-	skb->ip_summed = ip_summed;
 	skb->dev = vlan->lowerdev;
 	return dev_queue_xmit(skb);
 }
@@ -1089,6 +1089,13 @@ static int macvlan_device_event(struct notifier_block *unused,
 		list_for_each_entry(vlan, &port->vlans, list) {
 			vlan->dev->gso_max_size = dev->gso_max_size;
 			netdev_update_features(vlan->dev);
+		}
+		break;
+	case NETDEV_CHANGEMTU:
+		list_for_each_entry(vlan, &port->vlans, list) {
+			if (vlan->dev->mtu <= dev->mtu)
+				continue;
+			dev_set_mtu(vlan->dev, dev->mtu);
 		}
 		break;
 	case NETDEV_UNREGISTER:

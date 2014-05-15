@@ -1,28 +1,25 @@
-/*******************************************************************************
-
-  Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2014 Intel Corporation.
-
-  This program is free software; you can redistribute it and/or modify it
-  under the terms and conditions of the GNU General Public License,
-  version 2, as published by the Free Software Foundation.
-
-  This program is distributed in the hope it will be useful, but WITHOUT
-  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-  more details.
-
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, see <http://www.gnu.org/licenses/>.
-
-  The full GNU General Public License is included in this distribution in
-  the file called "COPYING".
-
-  Contact Information:
-  e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
-
-*******************************************************************************/
+/* Intel(R) Gigabit Ethernet Linux driver
+ * Copyright(c) 2007-2014 Intel Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, see <http://www.gnu.org/licenses/>.
+ *
+ * The full GNU General Public License is included in this distribution in
+ * the file called "COPYING".
+ *
+ * Contact Information:
+ * e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
+ * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+ */
 
 /* e1000_82575
  * e1000_82576
@@ -73,9 +70,8 @@ static s32  igb_validate_nvm_checksum_82580(struct e1000_hw *hw);
 static s32  igb_update_nvm_checksum_82580(struct e1000_hw *hw);
 static s32 igb_validate_nvm_checksum_i350(struct e1000_hw *hw);
 static s32 igb_update_nvm_checksum_i350(struct e1000_hw *hw);
-static const u16 e1000_82580_rxpbs_table[] =
-	{ 36, 72, 144, 1, 2, 4, 8, 16,
-	  35, 70, 140 };
+static const u16 e1000_82580_rxpbs_table[] = {
+	36, 72, 144, 1, 2, 4, 8, 16, 35, 70, 140 };
 
 /**
  *  igb_sgmii_uses_mdio_82575 - Determine if I2C pins are for external MDIO
@@ -526,7 +522,7 @@ out:
 static s32 igb_get_invariants_82575(struct e1000_hw *hw)
 {
 	struct e1000_mac_info *mac = &hw->mac;
-	struct e1000_dev_spec_82575 * dev_spec = &hw->dev_spec._82575;
+	struct e1000_dev_spec_82575 *dev_spec = &hw->dev_spec._82575;
 	s32 ret_val;
 	u32 ctrl_ext = 0;
 	u32 link_mode = 0;
@@ -1180,8 +1176,8 @@ static void igb_release_swfw_sync_82575(struct e1000_hw *hw, u16 mask)
 {
 	u32 swfw_sync;
 
-	while (igb_get_hw_semaphore(hw) != 0);
-	/* Empty */
+	while (igb_get_hw_semaphore(hw) != 0)
+		; /* Empty */
 
 	swfw_sync = rd32(E1000_SW_FW_SYNC);
 	swfw_sync &= ~mask;
@@ -1216,7 +1212,7 @@ static s32 igb_get_cfg_done_82575(struct e1000_hw *hw)
 	while (timeout) {
 		if (rd32(E1000_EEMNGCTL) & mask)
 			break;
-		msleep(1);
+		usleep_range(1000, 2000);
 		timeout--;
 	}
 	if (!timeout)
@@ -1269,7 +1265,7 @@ static s32 igb_check_for_link_82575(struct e1000_hw *hw)
 
 	if (hw->phy.media_type != e1000_media_type_copper) {
 		ret_val = igb_get_pcs_speed_and_duplex_82575(hw, &speed,
-		                                             &duplex);
+							     &duplex);
 		/* Use this flag to determine if link needs to be checked or
 		 * not.  If  we have link clear the flag so that we do not
 		 * continue to check for link.
@@ -1316,7 +1312,7 @@ void igb_power_up_serdes_link_82575(struct e1000_hw *hw)
 
 	/* flush the write to verify completion */
 	wrfl();
-	msleep(1);
+	usleep_range(1000, 2000);
 }
 
 /**
@@ -1411,7 +1407,7 @@ void igb_shutdown_serdes_link_82575(struct e1000_hw *hw)
 
 		/* flush the write to verify completion */
 		wrfl();
-		msleep(1);
+		usleep_range(1000, 2000);
 	}
 }
 
@@ -1436,9 +1432,8 @@ static s32 igb_reset_hw_82575(struct e1000_hw *hw)
 
 	/* set the completion timeout for interface */
 	ret_val = igb_set_pcie_completion_timeout(hw);
-	if (ret_val) {
+	if (ret_val)
 		hw_dbg("PCI-E Set completion timeout has failed.\n");
-	}
 
 	hw_dbg("Masking off all interrupts\n");
 	wr32(E1000_IMC, 0xffffffff);
@@ -1447,7 +1442,7 @@ static s32 igb_reset_hw_82575(struct e1000_hw *hw)
 	wr32(E1000_TCTL, E1000_TCTL_PSP);
 	wrfl();
 
-	msleep(10);
+	usleep_range(10000, 20000);
 
 	ctrl = rd32(E1000_CTRL);
 
@@ -1676,7 +1671,7 @@ static s32 igb_setup_serdes_link_82575(struct e1000_hw *hw)
 		    hw->mac.type == e1000_82576) {
 			ret_val = hw->nvm.ops.read(hw, NVM_COMPAT, 1, &data);
 			if (ret_val) {
-				printk(KERN_DEBUG "NVM Read Error\n\n");
+				hw_dbg(KERN_DEBUG "NVM Read Error\n\n");
 				return ret_val;
 			}
 
@@ -1689,7 +1684,7 @@ static s32 igb_setup_serdes_link_82575(struct e1000_hw *hw)
 		 * link either autoneg or be forced to 1000/Full
 		 */
 		ctrl_reg |= E1000_CTRL_SPD_1000 | E1000_CTRL_FRCSPD |
-		            E1000_CTRL_FD | E1000_CTRL_FRCDPX;
+				E1000_CTRL_FD | E1000_CTRL_FRCDPX;
 
 		/* set speed of 1000/Full if speed/duplex is forced */
 		reg |= E1000_PCS_LCTL_FSV_1000 | E1000_PCS_LCTL_FDV_FULL;
@@ -1925,7 +1920,7 @@ void igb_rx_fifo_flush_82575(struct e1000_hw *hw)
 	}
 	/* Poll all queues to verify they have shut down */
 	for (ms_wait = 0; ms_wait < 10; ms_wait++) {
-		msleep(1);
+		usleep_range(1000, 2000);
 		rx_enabled = 0;
 		for (i = 0; i < 4; i++)
 			rx_enabled |= rd32(E1000_RXDCTL(i));
@@ -1953,7 +1948,7 @@ void igb_rx_fifo_flush_82575(struct e1000_hw *hw)
 	wr32(E1000_RCTL, temp_rctl);
 	wr32(E1000_RCTL, temp_rctl | E1000_RCTL_EN);
 	wrfl();
-	msleep(2);
+	usleep_range(2000, 3000);
 
 	/* Enable RX queues that were previously enabled and restore our
 	 * previous state
@@ -2005,14 +2000,14 @@ static s32 igb_set_pcie_completion_timeout(struct e1000_hw *hw)
 	 * 16ms to 55ms
 	 */
 	ret_val = igb_read_pcie_cap_reg(hw, PCIE_DEVICE_CONTROL2,
-	                                &pcie_devctl2);
+					&pcie_devctl2);
 	if (ret_val)
 		goto out;
 
 	pcie_devctl2 |= PCIE_DEVICE_CONTROL2_16ms;
 
 	ret_val = igb_write_pcie_cap_reg(hw, PCIE_DEVICE_CONTROL2,
-	                                 &pcie_devctl2);
+					 &pcie_devctl2);
 out:
 	/* disable completion timeout resend */
 	gcr &= ~E1000_GCR_CMPL_TMOUT_RESEND;
@@ -2241,7 +2236,7 @@ static s32 igb_reset_hw_82580(struct e1000_hw *hw)
 	wr32(E1000_TCTL, E1000_TCTL_PSP);
 	wrfl();
 
-	msleep(10);
+	usleep_range(10000, 11000);
 
 	/* Determine whether or not a global dev reset is requested */
 	if (global_device_reset &&
@@ -2259,7 +2254,7 @@ static s32 igb_reset_hw_82580(struct e1000_hw *hw)
 
 	/* Add delay to insure DEV_RST has time to complete */
 	if (global_device_reset)
-		msleep(5);
+		usleep_range(5000, 6000);
 
 	ret_val = igb_get_auto_rd_done(hw);
 	if (ret_val) {
@@ -2436,8 +2431,7 @@ static s32 igb_update_nvm_checksum_82580(struct e1000_hw *hw)
 
 	ret_val = hw->nvm.ops.read(hw, NVM_COMPATIBILITY_REG_3, 1, &nvm_data);
 	if (ret_val) {
-		hw_dbg("NVM Read Error while updating checksum"
-			" compatibility bit.\n");
+		hw_dbg("NVM Read Error while updating checksum compatibility bit.\n");
 		goto out;
 	}
 
@@ -2447,8 +2441,7 @@ static s32 igb_update_nvm_checksum_82580(struct e1000_hw *hw)
 		ret_val = hw->nvm.ops.write(hw, NVM_COMPATIBILITY_REG_3, 1,
 					&nvm_data);
 		if (ret_val) {
-			hw_dbg("NVM Write Error while updating checksum"
-				" compatibility bit.\n");
+			hw_dbg("NVM Write Error while updating checksum compatibility bit.\n");
 			goto out;
 		}
 	}

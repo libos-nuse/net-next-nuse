@@ -20,6 +20,7 @@
 #include <linux/kthread.h>
 #include <linux/slab.h>
 #include <net/iucv/af_iucv.h>
+#include <net/dsfield.h>
 
 #include <asm/ebcdic.h>
 #include <asm/io.h>
@@ -3670,42 +3671,56 @@ void qeth_qdio_output_handler(struct ccw_device *ccwdev,
 }
 EXPORT_SYMBOL_GPL(qeth_qdio_output_handler);
 
+/**
+ * Note: Function assumes that we have 4 outbound queues.
+ */
 int qeth_get_priority_queue(struct qeth_card *card, struct sk_buff *skb,
 			int ipv, int cast_type)
 {
-	if (!ipv && (card->info.type == QETH_CARD_TYPE_OSD ||
-		     card->info.type == QETH_CARD_TYPE_OSX))
-		return card->qdio.default_out_queue;
-	switch (card->qdio.no_out_queues) {
-	case 4:
-		if (cast_type && card->info.is_multicast_different)
-			return card->info.is_multicast_different &
-				(card->qdio.no_out_queues - 1);
-		if (card->qdio.do_prio_queueing && (ipv == 4)) {
-			const u8 tos = ip_hdr(skb)->tos;
+	__be16 *tci;
+	u8 tos;
 
-			if (card->qdio.do_prio_queueing ==
-				QETH_PRIO_Q_ING_TOS) {
-				if (tos & IP_TOS_NOTIMPORTANT)
-					return 3;
-				if (tos & IP_TOS_HIGHRELIABILITY)
-					return 2;
-				if (tos & IP_TOS_HIGHTHROUGHPUT)
-					return 1;
-				if (tos & IP_TOS_LOWDELAY)
-					return 0;
-			}
-			if (card->qdio.do_prio_queueing ==
-				QETH_PRIO_Q_ING_PREC)
-				return 3 - (tos >> 6);
-		} else if (card->qdio.do_prio_queueing && (ipv == 6)) {
-			/* TODO: IPv6!!! */
+	if (cast_type && card->info.is_multicast_different)
+		return card->info.is_multicast_different &
+			(card->qdio.no_out_queues - 1);
+
+	switch (card->qdio.do_prio_queueing) {
+	case QETH_PRIO_Q_ING_TOS:
+	case QETH_PRIO_Q_ING_PREC:
+		switch (ipv) {
+		case 4:
+			tos = ipv4_get_dsfield(ip_hdr(skb));
+			break;
+		case 6:
+			tos = ipv6_get_dsfield(ipv6_hdr(skb));
+			break;
+		default:
+			return card->qdio.default_out_queue;
 		}
-		return card->qdio.default_out_queue;
-	case 1: /* fallthrough for single-out-queue 1920-device */
+		if (card->qdio.do_prio_queueing == QETH_PRIO_Q_ING_PREC)
+			return ~tos >> 6 & 3;
+		if (tos & IPTOS_MINCOST)
+			return 3;
+		if (tos & IPTOS_RELIABILITY)
+			return 2;
+		if (tos & IPTOS_THROUGHPUT)
+			return 1;
+		if (tos & IPTOS_LOWDELAY)
+			return 0;
+		break;
+	case QETH_PRIO_Q_ING_SKB:
+		if (skb->priority > 5)
+			return 0;
+		return ~skb->priority >> 1 & 3;
+	case QETH_PRIO_Q_ING_VLAN:
+		tci = &((struct ethhdr *)skb->data)->h_proto;
+		if (*tci == ETH_P_8021Q)
+			return ~*(tci + 1) >> (VLAN_PRIO_SHIFT + 1) & 3;
+		break;
 	default:
-		return card->qdio.default_out_queue;
+		break;
 	}
+	return card->qdio.default_out_queue;
 }
 EXPORT_SYMBOL_GPL(qeth_get_priority_queue);
 
@@ -5824,7 +5839,7 @@ static int __init qeth_core_init(void)
 	if (rc)
 		goto out_err;
 	qeth_core_root_dev = root_device_register("qeth");
-	rc = PTR_RET(qeth_core_root_dev);
+	rc = PTR_ERR_OR_ZERO(qeth_core_root_dev);
 	if (rc)
 		goto register_err;
 	qeth_core_header_cache = kmem_cache_create("qeth_hdr",
