@@ -31,3 +31,7 @@ bool ns_capable(struct user_namespace *ns, int cap)
 {
   return true;
 }
+bool file_ns_capable(const struct file *file, struct user_namespace *ns, int cap)
+{
+  return true;
+}
