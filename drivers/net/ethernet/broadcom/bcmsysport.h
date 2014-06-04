@@ -29,16 +29,16 @@
 /* Default RX buffer allocation size */
 #define RX_BUF_LENGTH		2048
 
-/* Body(1500) + EH_SIZE(14) + VLANTAG(4) + BRCMTAG(6) + FCS(4) = 1528.
+/* Body(1500) + EH_SIZE(14) + VLANTAG(4) + BRCMTAG(4) + FCS(4) = 1526.
  * 1536 is multiple of 256 bytes
  */
-#define ENET_BRCM_TAG_LEN	6
-#define ENET_PAD		8
+#define ENET_BRCM_TAG_LEN	4
+#define ENET_PAD		10
 #define UMAC_MAX_MTU_SIZE	(ETH_DATA_LEN + ETH_HLEN + VLAN_HLEN + \
 				 ENET_BRCM_TAG_LEN + ETH_FCS_LEN + ENET_PAD)
 
 /* Transmit status block */
-struct tsb {
+struct bcm_tsb {
 	u32 pcp_dei_vid;
 #define PCP_DEI_MASK		0xf
 #define VID_SHIFT		4
@@ -56,7 +56,7 @@ struct tsb {
 /* Receive status block uses the same
  * definitions as the DMA descriptor
  */
-struct rsb {
+struct bcm_rsb {
 	u32 rx_status_len;
 	u32 brcm_egress_tag;
 };
@@ -656,6 +656,7 @@ struct bcm_sysport_priv {
 	unsigned int		rx_c_index;
 
 	/* PHY device */
+	struct device_node	*phy_dn;
 	struct phy_device	*phydev;
 	phy_interface_t		phy_interface;
 	int			old_pause;

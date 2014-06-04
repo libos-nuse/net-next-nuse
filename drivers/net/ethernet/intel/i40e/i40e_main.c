@@ -356,6 +356,7 @@ static struct rtnl_link_stats64 *i40e_get_netdev_stats_struct(
 					     struct rtnl_link_stats64 *stats)
 {
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_ring *tx_ring, *rx_ring;
 	struct i40e_vsi *vsi = np->vsi;
 	struct rtnl_link_stats64 *vsi_stats = i40e_get_vsi_stats_struct(vsi);
 	int i;
@@ -368,7 +369,6 @@ static struct rtnl_link_stats64 *i40e_get_netdev_stats_struct(
 
 	rcu_read_lock();
 	for (i = 0; i < vsi->num_queue_pairs; i++) {
-		struct i40e_ring *tx_ring, *rx_ring;
 		u64 bytes, packets;
 		unsigned int start;
 
@@ -2415,6 +2415,7 @@ static int i40e_vsi_configure_rx(struct i40e_vsi *vsi)
  **/
 static void i40e_vsi_config_dcb_rings(struct i40e_vsi *vsi)
 {
+	struct i40e_ring *tx_ring, *rx_ring;
 	u16 qoffset, qcount;
 	int i, n;
 
@@ -2428,8 +2429,8 @@ static void i40e_vsi_config_dcb_rings(struct i40e_vsi *vsi)
 		qoffset = vsi->tc_config.tc_info[n].qoffset;
 		qcount = vsi->tc_config.tc_info[n].qcount;
 		for (i = qoffset; i < (qoffset + qcount); i++) {
-			struct i40e_ring *rx_ring = vsi->rx_rings[i];
-			struct i40e_ring *tx_ring = vsi->tx_rings[i];
+			rx_ring = vsi->rx_rings[i];
+			tx_ring = vsi->tx_rings[i];
 			rx_ring->dcb_tc = n;
 			tx_ring->dcb_tc = n;
 		}
@@ -2567,7 +2568,6 @@ static void i40e_enable_misc_int_causes(struct i40e_hw *hw)
 	      I40E_PFINT_ICR0_ENA_PCI_EXCEPTION_MASK |
 	      I40E_PFINT_ICR0_ENA_GPIO_MASK          |
 	      I40E_PFINT_ICR0_ENA_TIMESYNC_MASK      |
-	      I40E_PFINT_ICR0_ENA_STORM_DETECT_MASK  |
 	      I40E_PFINT_ICR0_ENA_HMC_ERR_MASK       |
 	      I40E_PFINT_ICR0_ENA_VFLR_MASK          |
 	      I40E_PFINT_ICR0_ENA_ADMINQ_MASK;
@@ -4333,7 +4333,7 @@ int i40e_vsi_open(struct i40e_vsi *vsi)
 			 dev_driver_string(&pf->pdev->dev));
 		err = i40e_vsi_request_irq(vsi, int_name);
 	} else {
-		err = EINVAL;
+		err = -EINVAL;
 		goto err_setup_rx;
 	}
 
@@ -4711,8 +4711,7 @@ void i40e_fdir_check_and_reenable(struct i40e_pf *pf)
 	    (pf->flags & I40E_FLAG_FD_SB_ENABLED))
 		return;
 	fcnt_prog = i40e_get_current_fd_count(pf);
-	fcnt_avail = pf->hw.fdir_shared_filter_count +
-					       pf->fdir_pf_filter_count;
+	fcnt_avail = i40e_get_fd_cnt_all(pf);
 	if (fcnt_prog < (fcnt_avail - I40E_FDIR_BUFFER_HEAD_ROOM)) {
 		if ((pf->flags & I40E_FLAG_FD_SB_ENABLED) &&
 		    (pf->auto_disable_flags & I40E_FLAG_FD_SB_ENABLED)) {
@@ -5368,8 +5367,10 @@ static void i40e_reset_and_rebuild(struct i40e_pf *pf, bool reinit)
 	 * because the reset will make them disappear.
 	 */
 	ret = i40e_pf_reset(hw);
-	if (ret)
+	if (ret) {
 		dev_info(&pf->pdev->dev, "PF reset failed, %d\n", ret);
+		goto end_core_reset;
+	}
 	pf->pfr_count++;
 
 	if (test_bit(__I40E_DOWN, &pf->state))
@@ -5948,14 +5949,12 @@ static void i40e_vsi_clear_rings(struct i40e_vsi *vsi)
  **/
 static int i40e_alloc_rings(struct i40e_vsi *vsi)
 {
+	struct i40e_ring *tx_ring, *rx_ring;
 	struct i40e_pf *pf = vsi->back;
 	int i;
 
 	/* Set basic values in the rings to be used later during open() */
 	for (i = 0; i < vsi->alloc_queue_pairs; i++) {
-		struct i40e_ring *tx_ring;
-		struct i40e_ring *rx_ring;
-
 		/* allocate space for both Tx and Rx in one shot */
 		tx_ring = kzalloc(sizeof(struct i40e_ring) * 2, GFP_KERNEL);
 		if (!tx_ring)
@@ -6368,6 +6367,10 @@ static int i40e_sw_init(struct i40e_pf *pf)
 		    I40E_FLAG_MSIX_ENABLED    |
 		    I40E_FLAG_RX_1BUF_ENABLED;
 
+	/* Set default ITR */
+	pf->rx_itr_default = I40E_ITR_DYNAMIC | I40E_ITR_RX_DEF;
+	pf->tx_itr_default = I40E_ITR_DYNAMIC | I40E_ITR_TX_DEF;
+
 	/* Depending on PF configurations, it is possible that the RSS
 	 * maximum might end up larger than the available queues
 	 */
@@ -6720,7 +6723,7 @@ static const struct net_device_ops i40e_netdev_ops = {
 	.ndo_set_features	= i40e_set_features,
 	.ndo_set_vf_mac		= i40e_ndo_set_vf_mac,
 	.ndo_set_vf_vlan	= i40e_ndo_set_vf_port_vlan,
-	.ndo_set_vf_tx_rate	= i40e_ndo_set_vf_bw,
+	.ndo_set_vf_rate	= i40e_ndo_set_vf_bw,
 	.ndo_get_vf_config	= i40e_ndo_get_vf_config,
 	.ndo_set_vf_link_state	= i40e_ndo_set_vf_link_state,
 #ifdef CONFIG_I40E_VXLAN
@@ -6832,7 +6835,6 @@ static void i40e_vsi_delete(struct i40e_vsi *vsi)
 		return;
 
 	i40e_aq_delete_element(&vsi->back->hw, vsi->seid, NULL);
-	return;
 }
 
 /**
@@ -7572,8 +7574,6 @@ void i40e_veb_release(struct i40e_veb *veb)
 
 	i40e_aq_delete_element(&pf->hw, veb->seid, NULL);
 	i40e_veb_clear(veb);
-
-	return;
 }
 
 /**
@@ -8054,7 +8054,6 @@ static void i40e_determine_queue_usage(struct i40e_pf *pf)
 	}
 
 	pf->queues_left = queues_left;
-	return;
 }
 
 /**
@@ -8364,6 +8363,7 @@ static int i40e_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		}
 	}
 
+#ifdef CONFIG_PCI_IOV
 	/* prep for VF support */
 	if ((pf->flags & I40E_FLAG_SRIOV_ENABLED) &&
 	    (pf->flags & I40E_FLAG_MSIX_ENABLED) &&
@@ -8386,6 +8386,7 @@ static int i40e_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 					 err);
 		}
 	}
+#endif /* CONFIG_PCI_IOV */
 
 	pfs_found++;
 

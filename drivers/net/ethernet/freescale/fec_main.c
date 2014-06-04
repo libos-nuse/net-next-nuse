@@ -54,6 +54,7 @@
 #include <linux/of_net.h>
 #include <linux/regulator/consumer.h>
 #include <linux/if_vlan.h>
+#include <linux/pinctrl/consumer.h>
 
 #include <asm/cacheflush.h>
 
@@ -1255,6 +1256,49 @@ static int fec_enet_mdio_write(struct mii_bus *bus, int mii_id, int regnum,
 	return 0;
 }
 
+static int fec_enet_clk_enable(struct net_device *ndev, bool enable)
+{
+	struct fec_enet_private *fep = netdev_priv(ndev);
+	int ret;
+
+	if (enable) {
+		ret = clk_prepare_enable(fep->clk_ahb);
+		if (ret)
+			return ret;
+		ret = clk_prepare_enable(fep->clk_ipg);
+		if (ret)
+			goto failed_clk_ipg;
+		if (fep->clk_enet_out) {
+			ret = clk_prepare_enable(fep->clk_enet_out);
+			if (ret)
+				goto failed_clk_enet_out;
+		}
+		if (fep->clk_ptp) {
+			ret = clk_prepare_enable(fep->clk_ptp);
+			if (ret)
+				goto failed_clk_ptp;
+		}
+	} else {
+		clk_disable_unprepare(fep->clk_ahb);
+		clk_disable_unprepare(fep->clk_ipg);
+		if (fep->clk_enet_out)
+			clk_disable_unprepare(fep->clk_enet_out);
+		if (fep->clk_ptp)
+			clk_disable_unprepare(fep->clk_ptp);
+	}
+
+	return 0;
+failed_clk_ptp:
+	if (fep->clk_enet_out)
+		clk_disable_unprepare(fep->clk_enet_out);
+failed_clk_enet_out:
+		clk_disable_unprepare(fep->clk_ipg);
+failed_clk_ipg:
+		clk_disable_unprepare(fep->clk_ahb);
+
+	return ret;
+}
+
 static int fec_enet_mii_probe(struct net_device *ndev)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
@@ -1364,7 +1408,7 @@ static int fec_enet_mii_init(struct platform_device *pdev)
 	 * Reference Manual has an error on this, and gets fixed on i.MX6Q
 	 * document.
 	 */
-	fep->phy_speed = DIV_ROUND_UP(clk_get_rate(fep->clk_ahb), 5000000);
+	fep->phy_speed = DIV_ROUND_UP(clk_get_rate(fep->clk_ipg), 5000000);
 	if (id_entry->driver_data & FEC_QUIRK_ENET_MAC)
 		fep->phy_speed--;
 	fep->phy_speed <<= 1;
@@ -1773,6 +1817,11 @@ fec_enet_open(struct net_device *ndev)
 	struct fec_enet_private *fep = netdev_priv(ndev);
 	int ret;
 
+	pinctrl_pm_select_default_state(&fep->pdev->dev);
+	ret = fec_enet_clk_enable(ndev, true);
+	if (ret)
+		return ret;
+
 	/* I should reset the ring buffers here, but I don't yet know
 	 * a simple way to do that.
 	 */
@@ -1811,6 +1860,8 @@ fec_enet_close(struct net_device *ndev)
 		phy_disconnect(fep->phy_dev);
 	}
 
+	fec_enet_clk_enable(ndev, false);
+	pinctrl_pm_select_sleep_state(&fep->pdev->dev);
 	fec_enet_free_buffers(ndev);
 
 	return 0;
@@ -2114,6 +2165,9 @@ fec_probe(struct platform_device *pdev)
 		fep->pause_flag |= FEC_PAUSE_FLAG_AUTONEG;
 #endif
 
+	/* Select default pin state */
+	pinctrl_pm_select_default_state(&pdev->dev);
+
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	fep->hwp = devm_ioremap_resource(&pdev->dev, r);
 	if (IS_ERR(fep->hwp)) {
@@ -2164,25 +2218,9 @@ fec_probe(struct platform_device *pdev)
 		fep->bufdesc_ex = 0;
 	}
 
-	ret = clk_prepare_enable(fep->clk_ahb);
+	ret = fec_enet_clk_enable(ndev, true);
 	if (ret)
 		goto failed_clk;
-
-	ret = clk_prepare_enable(fep->clk_ipg);
-	if (ret)
-		goto failed_clk_ipg;
-
-	if (fep->clk_enet_out) {
-		ret = clk_prepare_enable(fep->clk_enet_out);
-		if (ret)
-			goto failed_clk_enet_out;
-	}
-
-	if (fep->clk_ptp) {
-		ret = clk_prepare_enable(fep->clk_ptp);
-		if (ret)
-			goto failed_clk_ptp;
-	}
 
 	fep->reg_phy = devm_regulator_get(&pdev->dev, "phy");
 	if (!IS_ERR(fep->reg_phy)) {
@@ -2225,6 +2263,8 @@ fec_probe(struct platform_device *pdev)
 
 	/* Carrier starts down, phylib will bring it up */
 	netif_carrier_off(ndev);
+	fec_enet_clk_enable(ndev, false);
+	pinctrl_pm_select_sleep_state(&pdev->dev);
 
 	ret = register_netdev(ndev);
 	if (ret)
@@ -2244,15 +2284,7 @@ failed_init:
 	if (fep->reg_phy)
 		regulator_disable(fep->reg_phy);
 failed_regulator:
-	if (fep->clk_ptp)
-		clk_disable_unprepare(fep->clk_ptp);
-failed_clk_ptp:
-	if (fep->clk_enet_out)
-		clk_disable_unprepare(fep->clk_enet_out);
-failed_clk_enet_out:
-	clk_disable_unprepare(fep->clk_ipg);
-failed_clk_ipg:
-	clk_disable_unprepare(fep->clk_ahb);
+	fec_enet_clk_enable(ndev, false);
 failed_clk:
 failed_ioremap:
 	free_netdev(ndev);
@@ -2272,14 +2304,9 @@ fec_drv_remove(struct platform_device *pdev)
 	del_timer_sync(&fep->time_keep);
 	if (fep->reg_phy)
 		regulator_disable(fep->reg_phy);
-	if (fep->clk_ptp)
-		clk_disable_unprepare(fep->clk_ptp);
 	if (fep->ptp_clock)
 		ptp_clock_unregister(fep->ptp_clock);
-	if (fep->clk_enet_out)
-		clk_disable_unprepare(fep->clk_enet_out);
-	clk_disable_unprepare(fep->clk_ipg);
-	clk_disable_unprepare(fep->clk_ahb);
+	fec_enet_clk_enable(ndev, false);
 	free_netdev(ndev);
 
 	return 0;
@@ -2296,12 +2323,8 @@ fec_suspend(struct device *dev)
 		fec_stop(ndev);
 		netif_device_detach(ndev);
 	}
-	if (fep->clk_ptp)
-		clk_disable_unprepare(fep->clk_ptp);
-	if (fep->clk_enet_out)
-		clk_disable_unprepare(fep->clk_enet_out);
-	clk_disable_unprepare(fep->clk_ipg);
-	clk_disable_unprepare(fep->clk_ahb);
+	fec_enet_clk_enable(ndev, false);
+	pinctrl_pm_select_sleep_state(&fep->pdev->dev);
 
 	if (fep->reg_phy)
 		regulator_disable(fep->reg_phy);
@@ -2322,25 +2345,10 @@ fec_resume(struct device *dev)
 			return ret;
 	}
 
-	ret = clk_prepare_enable(fep->clk_ahb);
+	pinctrl_pm_select_default_state(&fep->pdev->dev);
+	ret = fec_enet_clk_enable(ndev, true);
 	if (ret)
-		goto failed_clk_ahb;
-
-	ret = clk_prepare_enable(fep->clk_ipg);
-	if (ret)
-		goto failed_clk_ipg;
-
-	if (fep->clk_enet_out) {
-		ret = clk_prepare_enable(fep->clk_enet_out);
-		if (ret)
-			goto failed_clk_enet_out;
-	}
-
-	if (fep->clk_ptp) {
-		ret = clk_prepare_enable(fep->clk_ptp);
-		if (ret)
-			goto failed_clk_ptp;
-	}
+		goto failed_clk;
 
 	if (netif_running(ndev)) {
 		fec_restart(ndev, fep->full_duplex);
@@ -2349,14 +2357,7 @@ fec_resume(struct device *dev)
 
 	return 0;
 
-failed_clk_ptp:
-	if (fep->clk_enet_out)
-		clk_disable_unprepare(fep->clk_enet_out);
-failed_clk_enet_out:
-	clk_disable_unprepare(fep->clk_ipg);
-failed_clk_ipg:
-	clk_disable_unprepare(fep->clk_ahb);
-failed_clk_ahb:
+failed_clk:
 	if (fep->reg_phy)
 		regulator_disable(fep->reg_phy);
 	return ret;

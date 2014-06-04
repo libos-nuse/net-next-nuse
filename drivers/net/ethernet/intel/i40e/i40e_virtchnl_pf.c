@@ -354,6 +354,7 @@ static int i40e_config_vsi_rx_queue(struct i40e_vf *vf, u16 vsi_idx,
 	rx_ctx.tphhead_ena = 1;
 	rx_ctx.lrxqthresh = 2;
 	rx_ctx.crcstrip = 1;
+	rx_ctx.prefena = 1;
 
 	/* clear the context in the HMC */
 	ret = i40e_clear_lan_rx_queue_context(hw, pf_queue_id);
@@ -842,6 +843,10 @@ void i40e_free_vfs(struct i40e_pf *pf)
 	kfree(pf->vf);
 	pf->vf = NULL;
 
+	/* This check is for when the driver is unloaded while VFs are
+	 * assigned. Setting the number of VFs to 0 through sysfs is caught
+	 * before this function ever gets called.
+	 */
 	if (!i40e_vfs_are_assigned(pf)) {
 		pci_disable_sriov(pf->pdev);
 		/* Acknowledge VFLR for all VFS. Without this, VFs will fail to
@@ -978,7 +983,12 @@ int i40e_pci_sriov_configure(struct pci_dev *pdev, int num_vfs)
 	if (num_vfs)
 		return i40e_pci_sriov_enable(pdev, num_vfs);
 
-	i40e_free_vfs(pf);
+	if (!i40e_vfs_are_assigned(pf)) {
+		i40e_free_vfs(pf);
+	} else {
+		dev_warn(&pdev->dev, "Unable to free VFs because some are assigned to VMs.\n");
+		return -EINVAL;
+	}
 	return 0;
 }
 
@@ -2188,6 +2198,8 @@ error_pvid:
 	return ret;
 }
 
+#define I40E_BW_CREDIT_DIVISOR 50     /* 50Mbps per BW credit */
+#define I40E_MAX_BW_INACTIVE_ACCUM 4  /* device can accumulate 4 credits max */
 /**
  * i40e_ndo_set_vf_bw
  * @netdev: network interface device structure
@@ -2196,7 +2208,8 @@ error_pvid:
  *
  * configure vf tx rate
  **/
-int i40e_ndo_set_vf_bw(struct net_device *netdev, int vf_id, int tx_rate)
+int i40e_ndo_set_vf_bw(struct net_device *netdev, int vf_id, int min_tx_rate,
+		       int max_tx_rate)
 {
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
 	struct i40e_pf *pf = np->vsi->back;
@@ -2210,6 +2223,12 @@ int i40e_ndo_set_vf_bw(struct net_device *netdev, int vf_id, int tx_rate)
 		dev_err(&pf->pdev->dev, "Invalid VF Identifier %d.\n", vf_id);
 		ret = -EINVAL;
 		goto error;
+	}
+
+	if (min_tx_rate) {
+		dev_err(&pf->pdev->dev, "Invalid min tx rate (%d) (greater than 0) specified for vf %d.\n",
+			min_tx_rate, vf_id);
+		return -EINVAL;
 	}
 
 	vf = &(pf->vf[vf_id]);
@@ -2234,23 +2253,29 @@ int i40e_ndo_set_vf_bw(struct net_device *netdev, int vf_id, int tx_rate)
 		break;
 	}
 
-	if (tx_rate > speed) {
-		dev_err(&pf->pdev->dev, "Invalid tx rate %d specified for vf %d.",
-			tx_rate, vf->vf_id);
+	if (max_tx_rate > speed) {
+		dev_err(&pf->pdev->dev, "Invalid max tx rate %d specified for vf %d.",
+			max_tx_rate, vf->vf_id);
 		ret = -EINVAL;
 		goto error;
 	}
 
+	if ((max_tx_rate < 50) && (max_tx_rate > 0)) {
+		dev_warn(&pf->pdev->dev, "Setting max Tx rate to minimum usable value of 50Mbps.\n");
+		max_tx_rate = 50;
+	}
+
 	/* Tx rate credits are in values of 50Mbps, 0 is disabled*/
-	ret = i40e_aq_config_vsi_bw_limit(&pf->hw, vsi->seid, tx_rate / 50, 0,
-					  NULL);
+	ret = i40e_aq_config_vsi_bw_limit(&pf->hw, vsi->seid,
+					  max_tx_rate / I40E_BW_CREDIT_DIVISOR,
+					  I40E_MAX_BW_INACTIVE_ACCUM, NULL);
 	if (ret) {
-		dev_err(&pf->pdev->dev, "Unable to set tx rate, error code %d.\n",
+		dev_err(&pf->pdev->dev, "Unable to set max tx rate, error code %d.\n",
 			ret);
 		ret = -EIO;
 		goto error;
 	}
-	vf->tx_rate = tx_rate;
+	vf->tx_rate = max_tx_rate;
 error:
 	return ret;
 }
@@ -2292,7 +2317,8 @@ int i40e_ndo_get_vf_config(struct net_device *netdev,
 
 	memcpy(&ivi->mac, vf->default_lan_addr.addr, ETH_ALEN);
 
-	ivi->tx_rate = vf->tx_rate;
+	ivi->max_tx_rate = vf->tx_rate;
+	ivi->min_tx_rate = 0;
 	ivi->vlan = le16_to_cpu(vsi->info.pvid) & I40E_VLAN_MASK;
 	ivi->qos = (le16_to_cpu(vsi->info.pvid) & I40E_PRIORITY_MASK) >>
 		   I40E_VLAN_PRIORITY_SHIFT;

@@ -1704,7 +1704,7 @@ static int stmmac_open(struct net_device *dev)
 		if (ret) {
 			pr_err("%s: Cannot attach to PHY (error: %d)\n",
 			       __func__, ret);
-			goto phy_error;
+			return ret;
 		}
 	}
 
@@ -1753,7 +1753,7 @@ static int stmmac_open(struct net_device *dev)
 	}
 
 	/* Request the IRQ lines */
-	if (priv->lpi_irq != -ENXIO) {
+	if (priv->lpi_irq > 0) {
 		ret = request_irq(priv->lpi_irq, stmmac_interrupt, IRQF_SHARED,
 				  dev->name, dev);
 		if (unlikely(ret < 0)) {
@@ -1779,8 +1779,6 @@ init_error:
 dma_desc_error:
 	if (priv->phydev)
 		phy_disconnect(priv->phydev);
-phy_error:
-	clk_disable_unprepare(priv->stmmac_clk);
 
 	return ret;
 }
@@ -1815,7 +1813,7 @@ static int stmmac_release(struct net_device *dev)
 	free_irq(dev->irq, dev);
 	if (priv->wol_irq != dev->irq)
 		free_irq(priv->wol_irq, dev);
-	if (priv->lpi_irq != -ENXIO)
+	if (priv->lpi_irq > 0)
 		free_irq(priv->lpi_irq, dev);
 
 	/* Stop TX/RX DMA and clear the descriptors */

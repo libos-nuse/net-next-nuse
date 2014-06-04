@@ -189,6 +189,43 @@ struct ieee80211_chanctx_conf {
 };
 
 /**
+ * enum ieee80211_chanctx_switch_mode - channel context switch mode
+ * @CHANCTX_SWMODE_REASSIGN_VIF: Both old and new contexts already
+ *	exist (and will continue to exist), but the virtual interface
+ *	needs to be switched from one to the other.
+ * @CHANCTX_SWMODE_SWAP_CONTEXTS: The old context exists but will stop
+ *      to exist with this call, the new context doesn't exist but
+ *      will be active after this call, the virtual interface switches
+ *      from the old to the new (note that the driver may of course
+ *      implement this as an on-the-fly chandef switch of the existing
+ *      hardware context, but the mac80211 pointer for the old context
+ *      will cease to exist and only the new one will later be used
+ *      for changes/removal.)
+ */
+enum ieee80211_chanctx_switch_mode {
+	CHANCTX_SWMODE_REASSIGN_VIF,
+	CHANCTX_SWMODE_SWAP_CONTEXTS,
+};
+
+/**
+ * struct ieee80211_vif_chanctx_switch - vif chanctx switch information
+ *
+ * This is structure is used to pass information about a vif that
+ * needs to switch from one chanctx to another.  The
+ * &ieee80211_chanctx_switch_mode defines how the switch should be
+ * done.
+ *
+ * @vif: the vif that should be switched from old_ctx to new_ctx
+ * @old_ctx: the old context to which the vif was assigned
+ * @new_ctx: the new context to which the vif must be assigned
+ */
+struct ieee80211_vif_chanctx_switch {
+	struct ieee80211_vif *vif;
+	struct ieee80211_chanctx_conf *old_ctx;
+	struct ieee80211_chanctx_conf *new_ctx;
+};
+
+/**
  * enum ieee80211_bss_change - BSS change notification flags
  *
  * These flags are used with the bss_info_changed() callback
@@ -1113,7 +1150,9 @@ enum ieee80211_vif_flags {
  * @addr: address of this interface
  * @p2p: indicates whether this AP or STA interface is a p2p
  *	interface, i.e. a GO or p2p-sta respectively
- * @csa_active: marks whether a channel switch is going on
+ * @csa_active: marks whether a channel switch is going on. Internally it is
+ *	write-protected by sdata_lock and local->mtx so holding either is fine
+ *	for read access.
  * @driver_flags: flags/capabilities the driver has for this interface,
  *	these need to be set (or cleared) when the interface is added
  *	or, if supported by the driver, the interface type is changed
@@ -1374,6 +1413,7 @@ struct ieee80211_sta_rates {
  *	the station moves to associated state.
  * @smps_mode: current SMPS mode (off, static or dynamic)
  * @rates: rate control selection table
+ * @tdls: indicates whether the STA is a TDLS peer
  */
 struct ieee80211_sta {
 	u32 supp_rates[IEEE80211_NUM_BANDS];
@@ -1388,6 +1428,7 @@ struct ieee80211_sta {
 	enum ieee80211_sta_rx_bandwidth bandwidth;
 	enum ieee80211_smps_mode smps_mode;
 	struct ieee80211_sta_rates __rcu *rates;
+	bool tdls;
 
 	/* must be last */
 	u8 drv_priv[0] __aligned(sizeof(void *));
@@ -2732,6 +2773,11 @@ enum ieee80211_roc_type {
  *	to vif. Possible use is for hw queue remapping.
  * @unassign_vif_chanctx: Notifies device driver about channel context being
  *	unbound from vif.
+ * @switch_vif_chanctx: switch a number of vifs from one chanctx to
+ *	another, as specified in the list of
+ *	@ieee80211_vif_chanctx_switch passed to the driver, according
+ *	to the mode defined in &ieee80211_chanctx_switch_mode.
+ *
  * @start_ap: Start operation on the AP interface, this is called after all the
  *	information in bss_conf is set and beacon can be retrieved. A channel
  *	context is bound before this is called. Note that if the driver uses
@@ -2765,6 +2811,10 @@ enum ieee80211_roc_type {
  *	information in bss_conf is set up and the beacon can be retrieved. A
  *	channel context is bound before this is called.
  * @leave_ibss: Leave the IBSS again.
+ *
+ * @get_expected_throughput: extract the expected throughput towards the
+ *	specified station. The returned value is expressed in Kbps. It returns 0
+ *	if the RC algorithm does not have proper data to provide.
  */
 struct ieee80211_ops {
 	void (*tx)(struct ieee80211_hw *hw,
@@ -2944,6 +2994,10 @@ struct ieee80211_ops {
 	void (*unassign_vif_chanctx)(struct ieee80211_hw *hw,
 				     struct ieee80211_vif *vif,
 				     struct ieee80211_chanctx_conf *ctx);
+	int (*switch_vif_chanctx)(struct ieee80211_hw *hw,
+				  struct ieee80211_vif_chanctx_switch *vifs,
+				  int n_vifs,
+				  enum ieee80211_chanctx_switch_mode mode);
 
 	void (*restart_complete)(struct ieee80211_hw *hw);
 
@@ -2958,6 +3012,7 @@ struct ieee80211_ops {
 
 	int (*join_ibss)(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
 	void (*leave_ibss)(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
+	u32 (*get_expected_throughput)(struct ieee80211_sta *sta);
 };
 
 /**
@@ -3407,6 +3462,47 @@ void ieee80211_tx_status_irqsafe(struct ieee80211_hw *hw,
  */
 void ieee80211_report_low_ack(struct ieee80211_sta *sta, u32 num_packets);
 
+#define IEEE80211_MAX_CSA_COUNTERS_NUM 2
+
+/**
+ * struct ieee80211_mutable_offsets - mutable beacon offsets
+ * @tim_offset: position of TIM element
+ * @tim_length: size of TIM element
+ * @csa_counter_offs: array of IEEE80211_MAX_CSA_COUNTERS_NUM offsets
+ *	to CSA counters.  This array can contain zero values which
+ *	should be ignored.
+ */
+struct ieee80211_mutable_offsets {
+	u16 tim_offset;
+	u16 tim_length;
+
+	u16 csa_counter_offs[IEEE80211_MAX_CSA_COUNTERS_NUM];
+};
+
+/**
+ * ieee80211_beacon_get_template - beacon template generation function
+ * @hw: pointer obtained from ieee80211_alloc_hw().
+ * @vif: &struct ieee80211_vif pointer from the add_interface callback.
+ * @offs: &struct ieee80211_mutable_offsets pointer to struct that will
+ *	receive the offsets that may be updated by the driver.
+ *
+ * If the driver implements beaconing modes, it must use this function to
+ * obtain the beacon template.
+ *
+ * This function should be used if the beacon frames are generated by the
+ * device, and then the driver must use the returned beacon as the template
+ * The driver or the device are responsible to update the DTIM and, when
+ * applicable, the CSA count.
+ *
+ * The driver is responsible for freeing the returned skb.
+ *
+ * Return: The beacon template. %NULL on error.
+ */
+struct sk_buff *
+ieee80211_beacon_get_template(struct ieee80211_hw *hw,
+			      struct ieee80211_vif *vif,
+			      struct ieee80211_mutable_offsets *offs);
+
 /**
  * ieee80211_beacon_get_tim - beacon generation function
  * @hw: pointer obtained from ieee80211_alloc_hw().
@@ -3418,16 +3514,12 @@ void ieee80211_report_low_ack(struct ieee80211_sta *sta, u32 num_packets);
  *	Set to 0 if invalid (in non-AP modes).
  *
  * If the driver implements beaconing modes, it must use this function to
- * obtain the beacon frame/template.
+ * obtain the beacon frame.
  *
  * If the beacon frames are generated by the host system (i.e., not in
  * hardware/firmware), the driver uses this function to get each beacon
- * frame from mac80211 -- it is responsible for calling this function
- * before the beacon is needed (e.g. based on hardware interrupt).
- *
- * If the beacon frames are generated by the device, then the driver
- * must use the returned beacon as the template and change the TIM IE
- * according to the current DTIM parameters/TIM bitmap.
+ * frame from mac80211 -- it is responsible for calling this function exactly
+ * once before the beacon is needed (e.g. based on hardware interrupt).
  *
  * The driver is responsible for freeing the returned skb.
  *
@@ -3451,6 +3543,20 @@ static inline struct sk_buff *ieee80211_beacon_get(struct ieee80211_hw *hw,
 {
 	return ieee80211_beacon_get_tim(hw, vif, NULL, NULL);
 }
+
+/**
+ * ieee80211_csa_update_counter - request mac80211 to decrement the csa counter
+ * @vif: &struct ieee80211_vif pointer from the add_interface callback.
+ *
+ * The csa counter should be updated after each beacon transmission.
+ * This function is called implicitly when
+ * ieee80211_beacon_get/ieee80211_beacon_get_tim are called, however if the
+ * beacon frames are generated by the device, the driver should call this
+ * function after each beacon transmission to sync mac80211's csa counters.
+ *
+ * Return: new csa counter value
+ */
+u8 ieee80211_csa_update_counter(struct ieee80211_vif *vif);
 
 /**
  * ieee80211_csa_finish - notify mac80211 about channel switch
@@ -4480,6 +4586,8 @@ struct rate_control_ops {
 	void (*add_sta_debugfs)(void *priv, void *priv_sta,
 				struct dentry *dir);
 	void (*remove_sta_debugfs)(void *priv, void *priv_sta);
+
+	u32 (*get_expected_throughput)(void *priv_sta);
 };
 
 static inline int rate_supported(struct ieee80211_sta *sta,

@@ -421,6 +421,7 @@ static void ath_node_attach(struct ath_softc *sc, struct ieee80211_sta *sta,
 	an->sc = sc;
 	an->sta = sta;
 	an->vif = vif;
+	memset(&an->key_idx, 0, sizeof(an->key_idx));
 
 	ath_tx_node_init(sc, an);
 }
@@ -1461,8 +1462,10 @@ static int ath9k_sta_add(struct ieee80211_hw *hw,
 		return 0;
 
 	key = ath_key_config(common, vif, sta, &ps_key);
-	if (key > 0)
+	if (key > 0) {
 		an->ps_key = key;
+		an->key_idx[0] = key;
+	}
 
 	return 0;
 }
@@ -1480,6 +1483,7 @@ static void ath9k_del_ps_key(struct ath_softc *sc,
 
 	ath_key_delete(common, &ps_key);
 	an->ps_key = 0;
+	an->key_idx[0] = 0;
 }
 
 static int ath9k_sta_remove(struct ieee80211_hw *hw,
@@ -1494,6 +1498,19 @@ static int ath9k_sta_remove(struct ieee80211_hw *hw,
 	return 0;
 }
 
+static void ath9k_sta_set_tx_filter(struct ath_hw *ah,
+				    struct ath_node *an,
+				    bool set)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(an->key_idx); i++) {
+		if (!an->key_idx[i])
+			continue;
+		ath9k_hw_set_tx_filter(ah, an->key_idx[i], set);
+	}
+}
+
 static void ath9k_sta_notify(struct ieee80211_hw *hw,
 			 struct ieee80211_vif *vif,
 			 enum sta_notify_cmd cmd,
@@ -1506,8 +1523,10 @@ static void ath9k_sta_notify(struct ieee80211_hw *hw,
 	case STA_NOTIFY_SLEEP:
 		an->sleeping = true;
 		ath_tx_aggr_sleep(sta, sc, an);
+		ath9k_sta_set_tx_filter(sc->sc_ah, an, true);
 		break;
 	case STA_NOTIFY_AWAKE:
+		ath9k_sta_set_tx_filter(sc->sc_ah, an, false);
 		an->sleeping = false;
 		ath_tx_aggr_wakeup(sc, an);
 		break;
@@ -1563,7 +1582,8 @@ static int ath9k_set_key(struct ieee80211_hw *hw,
 {
 	struct ath_softc *sc = hw->priv;
 	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
-	int ret = 0;
+	struct ath_node *an = NULL;
+	int ret = 0, i;
 
 	if (ath9k_modparam_nohwcrypt)
 		return -ENOSPC;
@@ -1585,13 +1605,16 @@ static int ath9k_set_key(struct ieee80211_hw *hw,
 
 	mutex_lock(&sc->mutex);
 	ath9k_ps_wakeup(sc);
-	ath_dbg(common, CONFIG, "Set HW Key\n");
+	ath_dbg(common, CONFIG, "Set HW Key %d\n", cmd);
+	if (sta)
+		an = (struct ath_node *)sta->drv_priv;
 
 	switch (cmd) {
 	case SET_KEY:
 		if (sta)
 			ath9k_del_ps_key(sc, vif, sta);
 
+		key->hw_key_idx = 0;
 		ret = ath_key_config(common, vif, sta, key);
 		if (ret >= 0) {
 			key->hw_key_idx = ret;
@@ -1604,9 +1627,27 @@ static int ath9k_set_key(struct ieee80211_hw *hw,
 				key->flags |= IEEE80211_KEY_FLAG_SW_MGMT_TX;
 			ret = 0;
 		}
+		if (an && key->hw_key_idx) {
+			for (i = 0; i < ARRAY_SIZE(an->key_idx); i++) {
+				if (an->key_idx[i])
+					continue;
+				an->key_idx[i] = key->hw_key_idx;
+				break;
+			}
+			WARN_ON(i == ARRAY_SIZE(an->key_idx));
+		}
 		break;
 	case DISABLE_KEY:
 		ath_key_delete(common, key);
+		if (an) {
+			for (i = 0; i < ARRAY_SIZE(an->key_idx); i++) {
+				if (an->key_idx[i] != key->hw_key_idx)
+					continue;
+				an->key_idx[i] = 0;
+				break;
+			}
+		}
+		key->hw_key_idx = 0;
 		break;
 	default:
 		ret = -EINVAL;
@@ -1716,7 +1757,6 @@ out:
 void ath9k_update_p2p_ps(struct ath_softc *sc, struct ieee80211_vif *vif)
 {
 	struct ath_vif *avp = (void *)vif->drv_priv;
-	unsigned long flags;
 	u32 tsf;
 
 	if (!sc->p2p_ps_timer)
@@ -1726,14 +1766,9 @@ void ath9k_update_p2p_ps(struct ath_softc *sc, struct ieee80211_vif *vif)
 		return;
 
 	sc->p2p_ps_vif = avp;
-
-	spin_lock_irqsave(&sc->sc_pm_lock, flags);
-	if (!(sc->ps_flags & PS_BEACON_SYNC)) {
-		tsf = ath9k_hw_gettsf32(sc->sc_ah);
-		ieee80211_parse_p2p_noa(&vif->bss_conf.p2p_noa_attr, &avp->noa, tsf);
-		ath9k_update_p2p_ps_timer(sc, avp);
-	}
-	spin_unlock_irqrestore(&sc->sc_pm_lock, flags);
+	tsf = ath9k_hw_gettsf32(sc->sc_ah);
+	ieee80211_parse_p2p_noa(&vif->bss_conf.p2p_noa_attr, &avp->noa, tsf);
+	ath9k_update_p2p_ps_timer(sc, avp);
 }
 
 static void ath9k_bss_info_changed(struct ieee80211_hw *hw,
@@ -1750,6 +1785,7 @@ static void ath9k_bss_info_changed(struct ieee80211_hw *hw,
 	struct ath_hw *ah = sc->sc_ah;
 	struct ath_common *common = ath9k_hw_common(ah);
 	struct ath_vif *avp = (void *)vif->drv_priv;
+	unsigned long flags;
 	int slottime;
 
 	ath9k_ps_wakeup(sc);
@@ -1812,7 +1848,10 @@ static void ath9k_bss_info_changed(struct ieee80211_hw *hw,
 
 	if (changed & BSS_CHANGED_P2P_PS) {
 		spin_lock_bh(&sc->sc_pcu_lock);
-		ath9k_update_p2p_ps(sc, vif);
+		spin_lock_irqsave(&sc->sc_pm_lock, flags);
+		if (!(sc->ps_flags & PS_BEACON_SYNC))
+			ath9k_update_p2p_ps(sc, vif);
+		spin_unlock_irqrestore(&sc->sc_pm_lock, flags);
 		spin_unlock_bh(&sc->sc_pcu_lock);
 	}
 
@@ -2191,14 +2230,6 @@ static void ath9k_sw_scan_complete(struct ieee80211_hw *hw)
 	clear_bit(ATH_OP_SCANNING, &common->op_flags);
 }
 
-static void ath9k_channel_switch_beacon(struct ieee80211_hw *hw,
-					struct ieee80211_vif *vif,
-					struct cfg80211_chan_def *chandef)
-{
-	/* depend on vif->csa_active only */
-	return;
-}
-
 struct ieee80211_ops ath9k_ops = {
 	.tx 		    = ath9k_tx,
 	.start 		    = ath9k_start,
@@ -2246,5 +2277,4 @@ struct ieee80211_ops ath9k_ops = {
 #endif
 	.sw_scan_start	    = ath9k_sw_scan_start,
 	.sw_scan_complete   = ath9k_sw_scan_complete,
-	.channel_switch_beacon     = ath9k_channel_switch_beacon,
 };

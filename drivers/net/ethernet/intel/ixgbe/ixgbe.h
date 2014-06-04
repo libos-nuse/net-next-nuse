@@ -362,7 +362,7 @@ struct ixgbe_ring_container {
 	for (pos = (head).ring; pos != NULL; pos = pos->next)
 
 #define MAX_RX_PACKET_BUFFERS ((adapter->flags & IXGBE_FLAG_DCB_ENABLED) \
-                              ? 8 : 1)
+			      ? 8 : 1)
 #define MAX_TX_PACKET_BUFFERS MAX_RX_PACKET_BUFFERS
 
 /* MAX_Q_VECTORS of these are allocated,
@@ -957,6 +957,7 @@ static inline struct netdev_queue *txring_txq(const struct ixgbe_ring *ring)
 }
 
 void ixgbe_ptp_init(struct ixgbe_adapter *adapter);
+void ixgbe_ptp_suspend(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_stop(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_overflow_check(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_rx_hang(struct ixgbe_adapter *adapter);

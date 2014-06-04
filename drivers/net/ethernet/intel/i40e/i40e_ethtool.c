@@ -112,7 +112,6 @@ static struct i40e_stats i40e_gstrings_stats[] = {
 	I40E_PF_STAT("rx_oversize", stats.rx_oversize),
 	I40E_PF_STAT("rx_jabber", stats.rx_jabber),
 	I40E_PF_STAT("VF_admin_queue_requests", vf_aq_requests),
-	I40E_PF_STAT("tx_hwtstamp_timeouts", tx_hwtstamp_timeouts),
 	I40E_PF_STAT("rx_hwtstamp_cleared", rx_hwtstamp_cleared),
 	/* LPI stats */
 	I40E_PF_STAT("tx_lpi_status", stats.tx_lpi_status),
@@ -122,8 +121,9 @@ static struct i40e_stats i40e_gstrings_stats[] = {
 };
 
 #define I40E_QUEUE_STATS_LEN(n) \
-  ((((struct i40e_netdev_priv *)netdev_priv((n)))->vsi->num_queue_pairs + \
-    ((struct i40e_netdev_priv *)netdev_priv((n)))->vsi->num_queue_pairs) * 2)
+	(((struct i40e_netdev_priv *)netdev_priv((n)))->vsi->num_queue_pairs \
+	    * 2 /* Tx and Rx together */                                     \
+	    * (sizeof(struct i40e_queue_stats) / sizeof(u64)))
 #define I40E_GLOBAL_STATS_LEN	ARRAY_SIZE(i40e_gstrings_stats)
 #define I40E_NETDEV_STATS_LEN   ARRAY_SIZE(i40e_gstrings_net_stats)
 #define I40E_VSI_STATS_LEN(n)   (I40E_NETDEV_STATS_LEN + \
@@ -633,6 +633,7 @@ static void i40e_get_ethtool_stats(struct net_device *netdev,
 				   struct ethtool_stats *stats, u64 *data)
 {
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_ring *tx_ring, *rx_ring;
 	struct i40e_vsi *vsi = np->vsi;
 	struct i40e_pf *pf = vsi->back;
 	int i = 0;
@@ -650,8 +651,7 @@ static void i40e_get_ethtool_stats(struct net_device *netdev,
 	}
 	rcu_read_lock();
 	for (j = 0; j < vsi->num_queue_pairs; j++) {
-		struct i40e_ring *tx_ring = ACCESS_ONCE(vsi->tx_rings[j]);
-		struct i40e_ring *rx_ring;
+		tx_ring = ACCESS_ONCE(vsi->tx_rings[j]);
 
 		if (!tx_ring)
 			continue;
@@ -1009,14 +1009,13 @@ static int i40e_get_coalesce(struct net_device *netdev,
 	ec->rx_max_coalesced_frames_irq = vsi->work_limit;
 
 	if (ITR_IS_DYNAMIC(vsi->rx_itr_setting))
-		ec->rx_coalesce_usecs = 1;
-	else
-		ec->rx_coalesce_usecs = vsi->rx_itr_setting;
+		ec->use_adaptive_rx_coalesce = 1;
 
 	if (ITR_IS_DYNAMIC(vsi->tx_itr_setting))
-		ec->tx_coalesce_usecs = 1;
-	else
-		ec->tx_coalesce_usecs = vsi->tx_itr_setting;
+		ec->use_adaptive_tx_coalesce = 1;
+
+	ec->rx_coalesce_usecs = vsi->rx_itr_setting & ~I40E_ITR_DYNAMIC;
+	ec->tx_coalesce_usecs = vsi->tx_itr_setting & ~I40E_ITR_DYNAMIC;
 
 	return 0;
 }
@@ -1035,37 +1034,27 @@ static int i40e_set_coalesce(struct net_device *netdev,
 	if (ec->tx_max_coalesced_frames_irq || ec->rx_max_coalesced_frames_irq)
 		vsi->work_limit = ec->tx_max_coalesced_frames_irq;
 
-	switch (ec->rx_coalesce_usecs) {
-	case 0:
-		vsi->rx_itr_setting = 0;
-		break;
-	case 1:
-		vsi->rx_itr_setting = (I40E_ITR_DYNAMIC |
-				       ITR_REG_TO_USEC(I40E_ITR_RX_DEF));
-		break;
-	default:
-		if ((ec->rx_coalesce_usecs < (I40E_MIN_ITR << 1)) ||
-		    (ec->rx_coalesce_usecs > (I40E_MAX_ITR << 1)))
-			return -EINVAL;
+	if ((ec->rx_coalesce_usecs >= (I40E_MIN_ITR << 1)) &&
+	    (ec->rx_coalesce_usecs <= (I40E_MAX_ITR << 1)))
 		vsi->rx_itr_setting = ec->rx_coalesce_usecs;
-		break;
-	}
+	else
+		return -EINVAL;
 
-	switch (ec->tx_coalesce_usecs) {
-	case 0:
-		vsi->tx_itr_setting = 0;
-		break;
-	case 1:
-		vsi->tx_itr_setting = (I40E_ITR_DYNAMIC |
-				       ITR_REG_TO_USEC(I40E_ITR_TX_DEF));
-		break;
-	default:
-		if ((ec->tx_coalesce_usecs < (I40E_MIN_ITR << 1)) ||
-		    (ec->tx_coalesce_usecs > (I40E_MAX_ITR << 1)))
-			return -EINVAL;
+	if ((ec->tx_coalesce_usecs >= (I40E_MIN_ITR << 1)) &&
+	    (ec->tx_coalesce_usecs <= (I40E_MAX_ITR << 1)))
 		vsi->tx_itr_setting = ec->tx_coalesce_usecs;
-		break;
-	}
+	else
+		return -EINVAL;
+
+	if (ec->use_adaptive_rx_coalesce)
+		vsi->rx_itr_setting |= I40E_ITR_DYNAMIC;
+	else
+		vsi->rx_itr_setting &= ~I40E_ITR_DYNAMIC;
+
+	if (ec->use_adaptive_tx_coalesce)
+		vsi->tx_itr_setting |= I40E_ITR_DYNAMIC;
+	else
+		vsi->tx_itr_setting &= ~I40E_ITR_DYNAMIC;
 
 	vector = vsi->base_vector;
 	for (i = 0; i < vsi->num_q_vectors; i++, vector++) {
@@ -1142,8 +1131,7 @@ static int i40e_get_ethtool_fdir_all(struct i40e_pf *pf,
 	int cnt = 0;
 
 	/* report total rule count */
-	cmd->data = pf->hw.fdir_shared_filter_count +
-		    pf->fdir_pf_filter_count;
+	cmd->data = i40e_get_fd_cnt_all(pf);
 
 	hlist_for_each_entry_safe(rule, node2,
 				  &pf->fdir_filter_list, fdir_node) {
@@ -1176,10 +1164,6 @@ static int i40e_get_ethtool_fdir_entry(struct i40e_pf *pf,
 			(struct ethtool_rx_flow_spec *)&cmd->fs;
 	struct i40e_fdir_filter *rule = NULL;
 	struct hlist_node *node2;
-
-	/* report total rule count */
-	cmd->data = pf->hw.fdir_shared_filter_count +
-		    pf->fdir_pf_filter_count;
 
 	hlist_for_each_entry_safe(rule, node2,
 				  &pf->fdir_filter_list, fdir_node) {
@@ -1231,6 +1215,8 @@ static int i40e_get_rxnfc(struct net_device *netdev, struct ethtool_rxnfc *cmd,
 		break;
 	case ETHTOOL_GRXCLSRLCNT:
 		cmd->rule_cnt = pf->fdir_pf_active_filters;
+		/* report total rule count */
+		cmd->data = i40e_get_fd_cnt_all(pf);
 		ret = 0;
 		break;
 	case ETHTOOL_GRXCLSRULE:
@@ -1299,16 +1285,12 @@ static int i40e_set_rss_hash_opt(struct i40e_pf *pf, struct ethtool_rxnfc *nfc)
 	case UDP_V4_FLOW:
 		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
 		case 0:
-			hena &=
-			~(((u64)1 << I40E_FILTER_PCTYPE_NONF_UNICAST_IPV4_UDP) |
-			((u64)1 << I40E_FILTER_PCTYPE_NONF_MULTICAST_IPV4_UDP) |
-			((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV4));
+			hena &= ~(((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV4_UDP) |
+				  ((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV4));
 			break;
 		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
-			hena |=
-			(((u64)1 << I40E_FILTER_PCTYPE_NONF_UNICAST_IPV4_UDP)  |
-			((u64)1 << I40E_FILTER_PCTYPE_NONF_MULTICAST_IPV4_UDP) |
-			((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV4));
+			hena |= (((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV4_UDP) |
+				  ((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV4));
 			break;
 		default:
 			return -EINVAL;
@@ -1317,16 +1299,12 @@ static int i40e_set_rss_hash_opt(struct i40e_pf *pf, struct ethtool_rxnfc *nfc)
 	case UDP_V6_FLOW:
 		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
 		case 0:
-			hena &=
-			~(((u64)1 << I40E_FILTER_PCTYPE_NONF_UNICAST_IPV6_UDP) |
-			((u64)1 << I40E_FILTER_PCTYPE_NONF_MULTICAST_IPV6_UDP) |
-			((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV6));
+			hena &= ~(((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV6_UDP) |
+				  ((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV6));
 			break;
 		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
-			hena |=
-			(((u64)1 << I40E_FILTER_PCTYPE_NONF_UNICAST_IPV6_UDP)  |
-			((u64)1 << I40E_FILTER_PCTYPE_NONF_MULTICAST_IPV6_UDP) |
-			((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV6));
+			hena |= (((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV6_UDP) |
+				 ((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV6));
 			break;
 		default:
 			return -EINVAL;

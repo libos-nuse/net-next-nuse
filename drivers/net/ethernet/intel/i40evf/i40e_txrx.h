@@ -1,7 +1,7 @@
 /*******************************************************************************
  *
  * Intel Ethernet Controller XL710 Family Linux Virtual Function Driver
- * Copyright(c) 2013 Intel Corporation.
+ * Copyright(c) 2013 - 2014 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -11,6 +11,9 @@
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
@@ -24,7 +27,7 @@
 #ifndef _I40E_TXRX_H_
 #define _I40E_TXRX_H_
 
-/* Interrupt Throttling and Rate Limiting (storm control) Goodies */
+/* Interrupt Throttling and Rate Limiting Goodies */
 
 #define I40E_MAX_ITR               0x0FF0  /* reg uses 2 usec resolution */
 #define I40E_MIN_ITR               0x0004  /* reg uses 2 usec resolution */
@@ -66,16 +69,11 @@ enum i40e_dyn_idx_t {
 
 /* Supported RSS offloads */
 #define I40E_DEFAULT_RSS_HENA ( \
-	((u64)1 << I40E_FILTER_PCTYPE_NONF_UNICAST_IPV4_UDP) | \
-	((u64)1 << I40E_FILTER_PCTYPE_NONF_MULTICAST_IPV4_UDP) | \
 	((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV4_UDP) | \
 	((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV4_SCTP) | \
-	((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV4_TCP_SYN) | \
 	((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV4_TCP) | \
 	((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV4_OTHER) | \
 	((u64)1 << I40E_FILTER_PCTYPE_FRAG_IPV4) | \
-	((u64)1 << I40E_FILTER_PCTYPE_NONF_UNICAST_IPV6_UDP) | \
-	((u64)1 << I40E_FILTER_PCTYPE_NONF_MULTICAST_IPV6_UDP) | \
 	((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV6_UDP) | \
 	((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV6_TCP_SYN) | \
 	((u64)1 << I40E_FILTER_PCTYPE_NONF_IPV6_TCP) | \

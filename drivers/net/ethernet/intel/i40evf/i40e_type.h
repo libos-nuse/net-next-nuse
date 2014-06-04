@@ -12,6 +12,9 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  *
@@ -100,15 +103,6 @@ enum i40e_debug_mask {
 
 	I40E_DEBUG_ALL			= 0xFFFFFFFF
 };
-
-/* PCI Bus Info */
-#define I40E_PCI_LINK_WIDTH_1		0x10
-#define I40E_PCI_LINK_WIDTH_2		0x20
-#define I40E_PCI_LINK_WIDTH_4		0x40
-#define I40E_PCI_LINK_WIDTH_8		0x80
-#define I40E_PCI_LINK_SPEED_2500	0x1
-#define I40E_PCI_LINK_SPEED_5000	0x2
-#define I40E_PCI_LINK_SPEED_8000	0x3
 
 /* These are structs for managing the hardware information and the operations.
  * The structures of function pointers are filled out at init time when we
@@ -872,18 +866,14 @@ struct i40e_filter_program_desc {
 
 /* Packet Classifier Types for filters */
 enum i40e_filter_pctype {
-	/* Note: Values 0-28 are reserved for future use */
-	I40E_FILTER_PCTYPE_NONF_UNICAST_IPV4_UDP	= 29,
-	I40E_FILTER_PCTYPE_NONF_MULTICAST_IPV4_UDP	= 30,
+	/* Note: Values 0-30 are reserved for future use */
 	I40E_FILTER_PCTYPE_NONF_IPV4_UDP		= 31,
-	I40E_FILTER_PCTYPE_NONF_IPV4_TCP_SYN		= 32,
+	/* Note: Value 32 is reserved for future use */
 	I40E_FILTER_PCTYPE_NONF_IPV4_TCP		= 33,
 	I40E_FILTER_PCTYPE_NONF_IPV4_SCTP		= 34,
 	I40E_FILTER_PCTYPE_NONF_IPV4_OTHER		= 35,
 	I40E_FILTER_PCTYPE_FRAG_IPV4			= 36,
-	/* Note: Values 37-38 are reserved for future use */
-	I40E_FILTER_PCTYPE_NONF_UNICAST_IPV6_UDP	= 39,
-	I40E_FILTER_PCTYPE_NONF_MULTICAST_IPV6_UDP	= 40,
+	/* Note: Values 37-40 are reserved for future use */
 	I40E_FILTER_PCTYPE_NONF_IPV6_UDP		= 41,
 	I40E_FILTER_PCTYPE_NONF_IPV6_TCP_SYN		= 42,
 	I40E_FILTER_PCTYPE_NONF_IPV6_TCP		= 43,
@@ -1026,8 +1016,8 @@ struct i40e_hw_port_stats {
 	u64 mac_short_packet_dropped;	/* mspdc */
 	u64 checksum_error;		/* xec */
 	/* EEE LPI */
-	bool tx_lpi_status;
-	bool rx_lpi_status;
+	u32 tx_lpi_status;
+	u32 rx_lpi_status;
 	u64 tx_lpi_count;		/* etlpic */
 	u64 rx_lpi_count;		/* erlpic */
 };

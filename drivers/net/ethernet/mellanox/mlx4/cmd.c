@@ -1262,12 +1262,12 @@ static struct mlx4_cmd_info cmd_info[] = {
 	},
 	{
 		.opcode = MLX4_CMD_UPDATE_QP,
-		.has_inbox = false,
+		.has_inbox = true,
 		.has_outbox = false,
 		.out_is_imm = false,
 		.encode_slave_id = false,
 		.verify = NULL,
-		.wrapper = mlx4_CMD_EPERM_wrapper
+		.wrapper = mlx4_UPDATE_QP_wrapper
 	},
 	{
 		.opcode = MLX4_CMD_GET_OP_REQ,
@@ -1887,9 +1887,9 @@ void mlx4_master_comm_channel(struct work_struct *work)
 			if (toggle != slt) {
 				if (master->slave_state[slave].comm_toggle
 				    != slt) {
-					printk(KERN_INFO "slave %d out of sync. read toggle %d, state toggle %d. Resynching.\n",
-					       slave, slt,
-					       master->slave_state[slave].comm_toggle);
+					pr_info("slave %d out of sync. read toggle %d, state toggle %d. Resynching.\n",
+						slave, slt,
+						master->slave_state[slave].comm_toggle);
 					master->slave_state[slave].comm_toggle =
 						slt;
 				}
@@ -2486,11 +2486,12 @@ int mlx4_get_vf_config(struct mlx4_dev *dev, int port, int vf, struct ifla_vf_in
 	ivf->mac[4] = ((s_info->mac >> (1*8)) & 0xff);
 	ivf->mac[5] = ((s_info->mac)  & 0xff);
 
-	ivf->vlan	= s_info->default_vlan;
-	ivf->qos	= s_info->default_qos;
-	ivf->tx_rate	= s_info->tx_rate;
-	ivf->spoofchk	= s_info->spoofchk;
-	ivf->linkstate	= s_info->link_state;
+	ivf->vlan		= s_info->default_vlan;
+	ivf->qos		= s_info->default_qos;
+	ivf->max_tx_rate	= s_info->tx_rate;
+	ivf->min_tx_rate	= 0;
+	ivf->spoofchk		= s_info->spoofchk;
+	ivf->linkstate		= s_info->link_state;
 
 	return 0;
 }

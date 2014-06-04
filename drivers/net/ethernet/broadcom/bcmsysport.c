@@ -457,7 +457,7 @@ static unsigned int bcm_sysport_desc_rx(struct bcm_sysport_priv *priv,
 	struct sk_buff *skb;
 	unsigned int p_index;
 	u16 len, status;
-	struct rsb *rsb;
+	struct bcm_rsb *rsb;
 
 	/* Determine how much we should process since last call */
 	p_index = rdma_readl(priv, RDMA_PROD_INDEX);
@@ -479,10 +479,10 @@ static unsigned int bcm_sysport_desc_rx(struct bcm_sysport_priv *priv,
 		cb = &priv->rx_cbs[priv->rx_read_ptr];
 		skb = cb->skb;
 		dma_unmap_single(kdev, dma_unmap_addr(cb, dma_addr),
-				dma_unmap_len(cb, dma_len), DMA_FROM_DEVICE);
+				RX_BUF_LENGTH, DMA_FROM_DEVICE);
 
 		/* Extract the Receive Status Block prepended */
-		rsb = (struct rsb *)skb->data;
+		rsb = (struct bcm_rsb *)skb->data;
 		len = (rsb->rx_status_len >> DESC_LEN_SHIFT) & DESC_LEN_MASK;
 		status = (rsb->rx_status_len >> DESC_STATUS_SHIFT) &
 			DESC_STATUS_MASK;
@@ -759,7 +759,7 @@ static irqreturn_t bcm_sysport_tx_isr(int irq, void *dev_id)
 static int bcm_sysport_insert_tsb(struct sk_buff *skb, struct net_device *dev)
 {
 	struct sk_buff *nskb;
-	struct tsb *tsb;
+	struct bcm_tsb *tsb;
 	u32 csum_info;
 	u8 ip_proto;
 	u16 csum_start;
@@ -777,7 +777,7 @@ static int bcm_sysport_insert_tsb(struct sk_buff *skb, struct net_device *dev)
 		skb = nskb;
 	}
 
-	tsb = (struct tsb *)skb_push(skb, sizeof(*tsb));
+	tsb = (struct bcm_tsb *)skb_push(skb, sizeof(*tsb));
 	/* Zero-out TSB by default */
 	memset(tsb, 0, sizeof(*tsb));
 
@@ -821,6 +821,7 @@ static netdev_tx_t bcm_sysport_xmit(struct sk_buff *skb,
 	struct bcm_sysport_cb *cb;
 	struct netdev_queue *txq;
 	struct dma_desc *desc;
+	unsigned int skb_len;
 	dma_addr_t mapping;
 	u32 len_status;
 	u16 queue;
@@ -848,10 +849,25 @@ static netdev_tx_t bcm_sysport_xmit(struct sk_buff *skb,
 		}
 	}
 
-	mapping = dma_map_single(kdev, skb->data, skb->len, DMA_TO_DEVICE);
+	/* The Ethernet switch we are interfaced with needs packets to be at
+	 * least 64 bytes (including FCS) otherwise they will be discarded when
+	 * they enter the switch port logic. When Broadcom tags are enabled, we
+	 * need to make sure that packets are at least 68 bytes
+	 * (including FCS and tag) because the length verification is done after
+	 * the Broadcom tag is stripped off the ingress packet.
+	 */
+	if (skb_padto(skb, ETH_ZLEN + ENET_BRCM_TAG_LEN)) {
+		ret = NETDEV_TX_OK;
+		goto out;
+	}
+
+	skb_len = skb->len < ETH_ZLEN + ENET_BRCM_TAG_LEN ?
+			ETH_ZLEN + ENET_BRCM_TAG_LEN : skb->len;
+
+	mapping = dma_map_single(kdev, skb->data, skb_len, DMA_TO_DEVICE);
 	if (dma_mapping_error(kdev, mapping)) {
 		netif_err(priv, tx_err, dev, "DMA map failed at %p (len=%d)\n",
-				skb->data, skb->len);
+				skb->data, skb_len);
 		ret = NETDEV_TX_OK;
 		goto out;
 	}
@@ -860,14 +876,14 @@ static netdev_tx_t bcm_sysport_xmit(struct sk_buff *skb,
 	cb = &ring->cbs[ring->curr_desc];
 	cb->skb = skb;
 	dma_unmap_addr_set(cb, dma_addr, mapping);
-	dma_unmap_len_set(cb, dma_len, skb->len);
+	dma_unmap_len_set(cb, dma_len, skb_len);
 
 	/* Fetch a descriptor entry from our pool */
 	desc = ring->desc_cpu;
 
 	desc->addr_lo = lower_32_bits(mapping);
 	len_status = upper_32_bits(mapping) & DESC_ADDR_HI_MASK;
-	len_status |= (skb->len << DESC_LEN_SHIFT);
+	len_status |= (skb_len << DESC_LEN_SHIFT);
 	len_status |= (DESC_SOP | DESC_EOP | TX_STATUS_APP_CRC) <<
 			DESC_STATUS_SHIFT;
 	if (skb->ip_summed == CHECKSUM_PARTIAL)
@@ -959,15 +975,16 @@ static void bcm_sysport_adj_link(struct net_device *dev)
 	if (!phydev->pause)
 		cmd_bits |= CMD_RX_PAUSE_IGNORE | CMD_TX_PAUSE_IGNORE;
 
-	reg = umac_readl(priv, UMAC_CMD);
-	reg &= ~((CMD_SPEED_MASK << CMD_SPEED_SHIFT) |
+	if (changed) {
+		reg = umac_readl(priv, UMAC_CMD);
+		reg &= ~((CMD_SPEED_MASK << CMD_SPEED_SHIFT) |
 			CMD_HD_EN | CMD_RX_PAUSE_IGNORE |
 			CMD_TX_PAUSE_IGNORE);
-	reg |= cmd_bits;
-	umac_writel(priv, reg, UMAC_CMD);
+		reg |= cmd_bits;
+		umac_writel(priv, reg, UMAC_CMD);
 
-	if (changed)
 		phy_print_status(priv->phydev);
+	}
 }
 
 static int bcm_sysport_init_tx_ring(struct bcm_sysport_priv *priv,
@@ -1227,6 +1244,12 @@ static inline void umac_enable_set(struct bcm_sysport_priv *priv,
 	else
 		reg &= ~(CMD_RX_EN | CMD_TX_EN);
 	umac_writel(priv, reg, UMAC_CMD);
+
+	/* UniMAC stops on a packet boundary, wait for a full-sized packet
+	 * to be processed (1 msec).
+	 */
+	if (enable == 0)
+		usleep_range(1000, 2000);
 }
 
 static inline int umac_reset(struct bcm_sysport_priv *priv)
@@ -1304,8 +1327,8 @@ static int bcm_sysport_open(struct net_device *dev)
 	/* Read CRC forward */
 	priv->crc_fwd = !!(umac_readl(priv, UMAC_CMD) & CMD_CRC_FWD);
 
-	priv->phydev = of_phy_connect_fixed_link(dev, bcm_sysport_adj_link,
-							priv->phy_interface);
+	priv->phydev = of_phy_connect(dev, priv->phy_dn, bcm_sysport_adj_link,
+					0, priv->phy_interface);
 	if (!priv->phydev) {
 		netdev_err(dev, "could not attach to PHY\n");
 		return -ENODEV;
@@ -1528,6 +1551,19 @@ static int bcm_sysport_probe(struct platform_device *pdev)
 	if (priv->phy_interface < 0)
 		priv->phy_interface = PHY_INTERFACE_MODE_GMII;
 
+	/* In the case of a fixed PHY, the DT node associated
+	 * to the PHY is the Ethernet MAC DT node.
+	 */
+	if (of_phy_is_fixed_link(dn)) {
+		ret = of_phy_register_fixed_link(dn);
+		if (ret) {
+			dev_err(&pdev->dev, "failed to register fixed PHY\n");
+			goto err;
+		}
+
+		priv->phy_dn = dn;
+	}
+
 	/* Initialize netdevice members */
 	macaddr = of_get_mac_address(dn);
 	if (!macaddr || !is_valid_ether_addr(macaddr)) {
@@ -1548,8 +1584,8 @@ static int bcm_sysport_probe(struct platform_device *pdev)
 				NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
 
 	/* Set the needed headroom once and for all */
-	BUILD_BUG_ON(sizeof(struct tsb) != 8);
-	dev->needed_headroom += sizeof(struct tsb);
+	BUILD_BUG_ON(sizeof(struct bcm_tsb) != 8);
+	dev->needed_headroom += sizeof(struct bcm_tsb);
 
 	/* We are interfaced to a switch which handles the multicast
 	 * filtering for us, so we do not support programming any
