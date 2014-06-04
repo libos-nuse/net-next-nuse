@@ -25,6 +25,11 @@ u32 prandom_u32(void)
 void prandom_seed(u32 entropy)
 {}
 
+void prandom_bytes(void *buf, int bytes)
+{
+  return get_random_bytes (buf, bytes);
+}
+
 #include <linux/sysctl.h>
 
 static int nothing;
