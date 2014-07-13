@@ -273,3 +273,9 @@ const struct pipe_buf_operations nosteal_pipe_buf_ops = {
 	.steal = generic_pipe_buf_nosteal,
 	.get = generic_pipe_buf_get,
 };
+
+ssize_t
+generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
+{
+        return 0;
+}

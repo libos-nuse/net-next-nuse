@@ -75,7 +75,6 @@ void *sim_task_get_private (struct SimTask *task)
 
 int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 {
-  sim_assert (flags == CLONE_KERNEL);
   struct SimTask *task = sim_task_start ((void (*)(void*))fn, arg);  
   return task->kernel_task.pid;
 }

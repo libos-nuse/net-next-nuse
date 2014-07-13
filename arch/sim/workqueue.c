@@ -51,7 +51,7 @@ workqueue_function (void *context)
                                                      struct work_struct, entry);
          work_func_t f = work->func;
          list_del_init(&work->entry);
-         work_clear_pending (work);
+         clear_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(work));
          f(work);
        }
     }
@@ -128,7 +128,7 @@ bool cancel_work_sync(struct work_struct *work)
     {
       // work was queued. now unqueued.
       list_del_init(&work->entry);
-      work_clear_pending (work);
+      clear_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(work));
       retval = 1;
     }
   return retval;

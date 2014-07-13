@@ -130,7 +130,7 @@ quiet_cmd_cc = CC   $@
 quiet_cmd_linkko = KO   $@
       cmd_linkko = $(CC) -shared -o $@ -nostdlib $^
 quiet_cmd_builtin = BUILTIN   $@
-      cmd_builtin = mkdir -p $(dir $@); if test -n "$($@)"; then for f in $($@); \
+      cmd_builtin = mkdir -p $(dir $(srctree)/$@); if test -n "$($(srctree)/$@)"; then for f in $($(srctree)/$@); \
 		    do $(AR) Tcru $@ $$f; done; else $(AR) Tcru $@; fi
 
 %/builtin.o:
