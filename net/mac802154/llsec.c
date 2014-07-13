@@ -285,6 +285,7 @@ int mac802154_llsec_key_del(struct mac802154_llsec *sec,
 		mkey = container_of(pos->key, struct mac802154_llsec_key, key);
 
 		if (llsec_key_id_equal(&pos->id, key)) {
+			list_del_rcu(&pos->list);
 			llsec_key_put(mkey);
 			return 0;
 		}
@@ -537,6 +538,7 @@ static int llsec_recover_addr(struct mac802154_llsec *sec,
 			      struct ieee802154_addr *addr)
 {
 	__le16 caddr = sec->params.coord_shortaddr;
+
 	addr->pan_id = sec->params.pan_id;
 
 	if (caddr == cpu_to_le16(IEEE802154_ADDR_BROADCAST)) {

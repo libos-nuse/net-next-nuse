@@ -1001,12 +1001,6 @@ static netdev_features_t bond_fix_features(struct net_device *dev,
 	netdev_features_t mask;
 	struct slave *slave;
 
-	if (!bond_has_slaves(bond)) {
-		/* Disable adding VLANs to empty bond. But why? --mq */
-		features |= NETIF_F_VLAN_CHALLENGED;
-		return features;
-	}
-
 	mask = features;
 	features &= ~NETIF_F_ONE_FOR_ALL;
 	features |= NETIF_F_ALL_FOR_ALL;
@@ -1025,10 +1019,14 @@ static netdev_features_t bond_fix_features(struct net_device *dev,
 				 NETIF_F_FRAGLIST | NETIF_F_ALL_TSO | \
 				 NETIF_F_HIGHDMA | NETIF_F_LRO)
 
+#define BOND_ENC_FEATURES	(NETIF_F_ALL_CSUM | NETIF_F_SG | NETIF_F_RXCSUM |\
+				 NETIF_F_TSO | NETIF_F_GSO_UDP_TUNNEL)
+
 static void bond_compute_features(struct bonding *bond)
 {
 	unsigned int flags, dst_release_flag = IFF_XMIT_DST_RELEASE;
 	netdev_features_t vlan_features = BOND_VLAN_FEATURES;
+	netdev_features_t enc_features  = BOND_ENC_FEATURES;
 	struct net_device *bond_dev = bond->dev;
 	struct list_head *iter;
 	struct slave *slave;
@@ -1044,6 +1042,9 @@ static void bond_compute_features(struct bonding *bond)
 		vlan_features = netdev_increment_features(vlan_features,
 			slave->dev->vlan_features, BOND_VLAN_FEATURES);
 
+		enc_features = netdev_increment_features(enc_features,
+							 slave->dev->hw_enc_features,
+							 BOND_ENC_FEATURES);
 		dst_release_flag &= slave->dev->priv_flags;
 		if (slave->dev->hard_header_len > max_hard_header_len)
 			max_hard_header_len = slave->dev->hard_header_len;
@@ -1054,6 +1055,7 @@ static void bond_compute_features(struct bonding *bond)
 
 done:
 	bond_dev->vlan_features = vlan_features;
+	bond_dev->hw_enc_features = enc_features;
 	bond_dev->hard_header_len = max_hard_header_len;
 	bond_dev->gso_max_segs = gso_max_segs;
 	netif_set_gso_max_size(bond_dev, gso_max_size);
@@ -1752,13 +1754,6 @@ static int __bond_release_one(struct net_device *bond_dev,
 	if (!bond_has_slaves(bond)) {
 		bond_set_carrier(bond);
 		eth_hw_addr_random(bond_dev);
-
-		if (vlan_uses_dev(bond_dev)) {
-			pr_warn("%s: Warning: clearing HW address of %s while it still has VLANs\n",
-				bond_dev->name, bond_dev->name);
-			pr_warn("%s: When re-adding slaves, make sure the bond's HW address matches its VLANs\n",
-				bond_dev->name);
-		}
 	}
 
 	unblock_netpoll_tx();
@@ -2206,9 +2201,9 @@ static void bond_arp_send(struct net_device *slave_dev, int arp_op,
  * When the path is validated, collect any vlan information in the
  * path.
  */
-static bool bond_verify_device_path(struct net_device *start_dev,
-				    struct net_device *end_dev,
-				    struct bond_vlan_tag *tags)
+bool bond_verify_device_path(struct net_device *start_dev,
+			     struct net_device *end_dev,
+			     struct bond_vlan_tag *tags)
 {
 	struct net_device *upper;
 	struct list_head  *iter;
@@ -3945,15 +3940,8 @@ void bond_setup(struct net_device *bond_dev)
 	/* Initialize the device options */
 	bond_dev->tx_queue_len = 0;
 	bond_dev->flags |= IFF_MASTER|IFF_MULTICAST;
-	bond_dev->priv_flags |= IFF_BONDING;
+	bond_dev->priv_flags |= IFF_BONDING | IFF_UNICAST_FLT;
 	bond_dev->priv_flags &= ~(IFF_XMIT_DST_RELEASE | IFF_TX_SKB_SHARING);
-
-	/* At first, we block adding VLANs. That's the only way to
-	 * prevent problems that occur when adding VLANs over an
-	 * empty bond. The block will be removed once non-challenged
-	 * slaves are enslaved.
-	 */
-	bond_dev->features |= NETIF_F_VLAN_CHALLENGED;
 
 	/* don't acquire bond device's netif_tx_lock when
 	 * transmitting */
@@ -3975,6 +3963,7 @@ void bond_setup(struct net_device *bond_dev)
 				NETIF_F_HW_VLAN_CTAG_FILTER;
 
 	bond_dev->hw_features &= ~(NETIF_F_ALL_CSUM & ~NETIF_F_HW_CSUM);
+	bond_dev->hw_features |= NETIF_F_GSO_UDP_TUNNEL;
 	bond_dev->features |= bond_dev->hw_features;
 }
 

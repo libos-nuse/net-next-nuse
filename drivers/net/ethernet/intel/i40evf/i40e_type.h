@@ -35,13 +35,11 @@
 #include "i40e_lan_hmc.h"
 
 /* Device IDs */
-#define I40E_DEV_ID_SFP_XL710	0x1572
-#define I40E_DEV_ID_SFP_X710		0x1573
+#define I40E_DEV_ID_SFP_XL710		0x1572
 #define I40E_DEV_ID_QEMU		0x1574
 #define I40E_DEV_ID_KX_A		0x157F
 #define I40E_DEV_ID_KX_B		0x1580
 #define I40E_DEV_ID_KX_C		0x1581
-#define I40E_DEV_ID_KX_D		0x1582
 #define I40E_DEV_ID_QSFP_A		0x1583
 #define I40E_DEV_ID_QSFP_B		0x1584
 #define I40E_DEV_ID_QSFP_C		0x1585
@@ -52,6 +50,9 @@
 					 (d) == I40E_DEV_ID_QSFP_B  || \
 					 (d) == I40E_DEV_ID_QSFP_C)
 
+/* I40E_MASK is a macro used on 32 bit registers */
+#define I40E_MASK(mask, shift) (mask << shift)
+
 #define I40E_MAX_VSI_QP			16
 #define I40E_MAX_VF_VSI			3
 #define I40E_MAX_CHAINED_RX_BUFFERS	5
@@ -60,8 +61,8 @@
 /* Max default timeout in ms, */
 #define I40E_MAX_NVM_TIMEOUT		18000
 
-/* Switch from mc to the 2usec global time (this is the GTIME resolution) */
-#define I40E_MS_TO_GTIME(time)		(((time) * 1000) / 2)
+/* Switch from ms to the 1usec global time (this is the GTIME resolution) */
+#define I40E_MS_TO_GTIME(time)		((time) * 1000)
 
 /* forward declaration */
 struct i40e_hw;
@@ -139,6 +140,14 @@ enum i40e_fc_mode {
 	I40E_FC_DEFAULT
 };
 
+enum i40e_set_fc_aq_failures {
+	I40E_SET_FC_AQ_FAIL_NONE = 0,
+	I40E_SET_FC_AQ_FAIL_GET = 1,
+	I40E_SET_FC_AQ_FAIL_SET = 2,
+	I40E_SET_FC_AQ_FAIL_UPDATE = 4,
+	I40E_SET_FC_AQ_FAIL_SET_UPDATE = 6
+};
+
 enum i40e_vsi_type {
 	I40E_VSI_MAIN = 0,
 	I40E_VSI_VMDQ1,
@@ -165,6 +174,7 @@ struct i40e_link_status {
 	u8 an_info;
 	u8 ext_info;
 	u8 loopback;
+	bool an_enabled;
 	/* is Link Status Event notification to SW enabled */
 	bool lse_enable;
 	u16 max_frame_size;
@@ -492,9 +502,6 @@ union i40e_32byte_rx_desc {
 	} wb;  /* writeback */
 };
 
-#define I40E_RXD_QW1_STATUS_SHIFT	0
-#define I40E_RXD_QW1_STATUS_MASK	(0x7FFFUL << I40E_RXD_QW1_STATUS_SHIFT)
-
 enum i40e_rx_desc_status_bits {
 	/* Note: These are predefined bit offsets */
 	I40E_RX_DESC_STATUS_DD_SHIFT		= 0,
@@ -511,8 +518,13 @@ enum i40e_rx_desc_status_bits {
 	I40E_RX_DESC_STATUS_LPBK_SHIFT		= 14,
 	I40E_RX_DESC_STATUS_IPV6EXADD_SHIFT	= 15,
 	I40E_RX_DESC_STATUS_RESERVED_SHIFT	= 16, /* 2 BITS */
-	I40E_RX_DESC_STATUS_UDP_0_SHIFT		= 18
+	I40E_RX_DESC_STATUS_UDP_0_SHIFT		= 18,
+	I40E_RX_DESC_STATUS_LAST /* this entry must be last!!! */
 };
+
+#define I40E_RXD_QW1_STATUS_SHIFT	0
+#define I40E_RXD_QW1_STATUS_MASK	(((1 << I40E_RX_DESC_STATUS_LAST) - 1) \
+					 << I40E_RXD_QW1_STATUS_SHIFT)
 
 #define I40E_RXD_QW1_STATUS_TSYNINDX_SHIFT   I40E_RX_DESC_STATUS_TSYNINDX_SHIFT
 #define I40E_RXD_QW1_STATUS_TSYNINDX_MASK	(0x3UL << \
@@ -541,7 +553,8 @@ enum i40e_rx_desc_error_bits {
 	I40E_RX_DESC_ERROR_IPE_SHIFT		= 3,
 	I40E_RX_DESC_ERROR_L4E_SHIFT		= 4,
 	I40E_RX_DESC_ERROR_EIPE_SHIFT		= 5,
-	I40E_RX_DESC_ERROR_OVERSIZE_SHIFT	= 6
+	I40E_RX_DESC_ERROR_OVERSIZE_SHIFT	= 6,
+	I40E_RX_DESC_ERROR_PPRS_SHIFT		= 7
 };
 
 enum i40e_rx_desc_error_l3l4e_fcoe_masks {
@@ -662,7 +675,6 @@ enum i40e_rx_desc_ext_status_bits {
 	I40E_RX_DESC_EXT_STATUS_L2TAG3P_SHIFT	= 1,
 	I40E_RX_DESC_EXT_STATUS_FLEXBL_SHIFT	= 2, /* 2 BITS */
 	I40E_RX_DESC_EXT_STATUS_FLEXBH_SHIFT	= 4, /* 2 BITS */
-	I40E_RX_DESC_EXT_STATUS_FTYPE_SHIFT	= 6, /* 3 BITS */
 	I40E_RX_DESC_EXT_STATUS_FDLONGB_SHIFT	= 9,
 	I40E_RX_DESC_EXT_STATUS_FCOELONGB_SHIFT	= 10,
 	I40E_RX_DESC_EXT_STATUS_PELONGB_SHIFT	= 11,
@@ -875,7 +887,6 @@ enum i40e_filter_pctype {
 	I40E_FILTER_PCTYPE_FRAG_IPV4			= 36,
 	/* Note: Values 37-40 are reserved for future use */
 	I40E_FILTER_PCTYPE_NONF_IPV6_UDP		= 41,
-	I40E_FILTER_PCTYPE_NONF_IPV6_TCP_SYN		= 42,
 	I40E_FILTER_PCTYPE_NONF_IPV6_TCP		= 43,
 	I40E_FILTER_PCTYPE_NONF_IPV6_SCTP		= 44,
 	I40E_FILTER_PCTYPE_NONF_IPV6_OTHER		= 45,
@@ -955,6 +966,16 @@ struct i40e_vsi_context {
 	struct i40e_aqc_vsi_properties_data info;
 };
 
+struct i40e_veb_context {
+	u16 seid;
+	u16 uplink_seid;
+	u16 veb_number;
+	u16 vebs_allocated;
+	u16 vebs_unallocated;
+	u16 flags;
+	struct i40e_aqc_get_veb_parameters_completion info;
+};
+
 /* Statistics collected by each port, VSI, VEB, and S-channel */
 struct i40e_eth_stats {
 	u64 rx_bytes;			/* gorc */
@@ -962,8 +983,6 @@ struct i40e_eth_stats {
 	u64 rx_multicast;		/* mprc */
 	u64 rx_broadcast;		/* bprc */
 	u64 rx_discards;		/* rdpc */
-	u64 rx_errors;			/* repc */
-	u64 rx_missed;			/* rmpc */
 	u64 rx_unknown_protocol;	/* rupp */
 	u64 tx_bytes;			/* gotc */
 	u64 tx_unicast;			/* uptc */
@@ -1015,6 +1034,9 @@ struct i40e_hw_port_stats {
 	u64 tx_size_big;		/* ptc9522 */
 	u64 mac_short_packet_dropped;	/* mspdc */
 	u64 checksum_error;		/* xec */
+	/* flow director stats */
+	u64 fd_atr_match;
+	u64 fd_sb_match;
 	/* EEE LPI */
 	u32 tx_lpi_status;
 	u32 rx_lpi_status;
@@ -1151,4 +1173,7 @@ enum i40e_reset_type {
 	I40E_RESET_GLOBR	= 2,
 	I40E_RESET_EMPR		= 3,
 };
+
+/* RSS Hash Table Size */
+#define I40E_PFQF_CTL_0_HASHLUTSIZE_512	0x00010000
 #endif /* _I40E_TYPE_H_ */

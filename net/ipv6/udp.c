@@ -79,7 +79,6 @@ static unsigned int udp6_ehashfn(struct net *net,
 int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2)
 {
 	const struct in6_addr *sk2_rcv_saddr6 = inet6_rcv_saddr(sk2);
-	int sk_ipv6only = ipv6_only_sock(sk);
 	int sk2_ipv6only = inet_v6_ipv6only(sk2);
 	int addr_type = ipv6_addr_type(&sk->sk_v6_rcv_saddr);
 	int addr_type2 = sk2_rcv_saddr6 ? ipv6_addr_type(sk2_rcv_saddr6) : IPV6_ADDR_MAPPED;
@@ -95,7 +94,7 @@ int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2)
 		return 1;
 
 	if (addr_type == IPV6_ADDR_ANY &&
-	    !(sk_ipv6only && addr_type2 == IPV6_ADDR_MAPPED))
+	    !(ipv6_only_sock(sk) && addr_type2 == IPV6_ADDR_MAPPED))
 		return 1;
 
 	if (sk2_rcv_saddr6 &&
@@ -705,17 +704,16 @@ static struct sock *udp_v6_mcast_next(struct net *net, struct sock *sk,
 				      int dif)
 {
 	struct hlist_nulls_node *node;
-	struct sock *s = sk;
 	unsigned short num = ntohs(loc_port);
 
-	sk_nulls_for_each_from(s, node) {
-		struct inet_sock *inet = inet_sk(s);
+	sk_nulls_for_each_from(sk, node) {
+		struct inet_sock *inet = inet_sk(sk);
 
-		if (!net_eq(sock_net(s), net))
+		if (!net_eq(sock_net(sk), net))
 			continue;
 
-		if (udp_sk(s)->udp_port_hash == num &&
-		    s->sk_family == PF_INET6) {
+		if (udp_sk(sk)->udp_port_hash == num &&
+		    sk->sk_family == PF_INET6) {
 			if (inet->inet_dport) {
 				if (inet->inet_dport != rmt_port)
 					continue;
@@ -724,16 +722,16 @@ static struct sock *udp_v6_mcast_next(struct net *net, struct sock *sk,
 			    !ipv6_addr_equal(&sk->sk_v6_daddr, rmt_addr))
 				continue;
 
-			if (s->sk_bound_dev_if && s->sk_bound_dev_if != dif)
+			if (sk->sk_bound_dev_if && sk->sk_bound_dev_if != dif)
 				continue;
 
 			if (!ipv6_addr_any(&sk->sk_v6_rcv_saddr)) {
 				if (!ipv6_addr_equal(&sk->sk_v6_rcv_saddr, loc_addr))
 					continue;
 			}
-			if (!inet6_mc_check(s, loc_addr, rmt_addr))
+			if (!inet6_mc_check(sk, loc_addr, rmt_addr))
 				continue;
-			return s;
+			return sk;
 		}
 	}
 	return NULL;

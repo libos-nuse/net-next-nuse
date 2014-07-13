@@ -1208,8 +1208,8 @@ static int tile_net_setup_interrupts(struct net_device *dev)
 
 	irq = md->ingress_irq;
 	if (irq < 0) {
-		irq = create_irq();
-		if (irq < 0) {
+		irq = irq_alloc_hwirq(-1);
+		if (!irq) {
 			netdev_err(dev,
 				   "create_irq failed: mpipe[%d] %d\n",
 				   instance, irq);
@@ -1223,7 +1223,7 @@ static int tile_net_setup_interrupts(struct net_device *dev)
 		if (rc != 0) {
 			netdev_err(dev, "request_irq failed: mpipe[%d] %d\n",
 				   instance, rc);
-			destroy_irq(irq);
+			irq_free_hwirq(irq);
 			return rc;
 		}
 		md->ingress_irq = irq;
@@ -2191,7 +2191,6 @@ static void tile_net_setup(struct net_device *dev)
 static void tile_net_dev_init(const char *name, const uint8_t *mac)
 {
 	int ret;
-	int i;
 	struct net_device *dev;
 	struct tile_net_priv *priv;
 

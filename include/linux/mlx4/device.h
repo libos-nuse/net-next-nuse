@@ -48,6 +48,17 @@
 #define MSIX_LEGACY_SZ		4
 #define MIN_MSIX_P_PORT		5
 
+#define MLX4_NUM_UP			8
+#define MLX4_NUM_TC			8
+#define MLX4_MAX_100M_UNITS_VAL		255	/*
+						 * work around: can't set values
+						 * greater then this value when
+						 * using 100 Mbps units.
+						 */
+#define MLX4_RATELIMIT_100M_UNITS	3	/* 100 Mbps */
+#define MLX4_RATELIMIT_1G_UNITS		4	/* 1 Gbps */
+#define MLX4_RATELIMIT_DEFAULT		0x00ff
+
 #define MLX4_ROCE_MAX_GIDS	128
 #define MLX4_ROCE_PF_GIDS	16
 
@@ -401,6 +412,7 @@ struct mlx4_caps {
 	int			max_rq_desc_sz;
 	int			max_qp_init_rdma;
 	int			max_qp_dest_rdma;
+	u32			*qp0_qkey;
 	u32			*qp0_proxy;
 	u32			*qp1_proxy;
 	u32			*qp0_tunnel;
@@ -839,7 +851,7 @@ static inline int mlx4_is_slave(struct mlx4_dev *dev)
 }
 
 int mlx4_buf_alloc(struct mlx4_dev *dev, int size, int max_direct,
-		   struct mlx4_buf *buf);
+		   struct mlx4_buf *buf, gfp_t gfp);
 void mlx4_buf_free(struct mlx4_dev *dev, int size, struct mlx4_buf *buf);
 static inline void *mlx4_buf_offset(struct mlx4_buf *buf, int offset)
 {
@@ -876,9 +888,10 @@ int mlx4_mw_enable(struct mlx4_dev *dev, struct mlx4_mw *mw);
 int mlx4_write_mtt(struct mlx4_dev *dev, struct mlx4_mtt *mtt,
 		   int start_index, int npages, u64 *page_list);
 int mlx4_buf_write_mtt(struct mlx4_dev *dev, struct mlx4_mtt *mtt,
-		       struct mlx4_buf *buf);
+		       struct mlx4_buf *buf, gfp_t gfp);
 
-int mlx4_db_alloc(struct mlx4_dev *dev, struct mlx4_db *db, int order);
+int mlx4_db_alloc(struct mlx4_dev *dev, struct mlx4_db *db, int order,
+		  gfp_t gfp);
 void mlx4_db_free(struct mlx4_dev *dev, struct mlx4_db *db);
 
 int mlx4_alloc_hwq_res(struct mlx4_dev *dev, struct mlx4_hwq_resources *wqres,
@@ -894,7 +907,8 @@ void mlx4_cq_free(struct mlx4_dev *dev, struct mlx4_cq *cq);
 int mlx4_qp_reserve_range(struct mlx4_dev *dev, int cnt, int align, int *base);
 void mlx4_qp_release_range(struct mlx4_dev *dev, int base_qpn, int cnt);
 
-int mlx4_qp_alloc(struct mlx4_dev *dev, int qpn, struct mlx4_qp *qp);
+int mlx4_qp_alloc(struct mlx4_dev *dev, int qpn, struct mlx4_qp *qp,
+		  gfp_t gfp);
 void mlx4_qp_free(struct mlx4_dev *dev, struct mlx4_qp *qp);
 
 int mlx4_srq_alloc(struct mlx4_dev *dev, u32 pdn, u32 cqn, u16 xrcdn,
@@ -1236,4 +1250,8 @@ int mlx4_phys_to_slave_port(struct mlx4_dev *dev, int slave, int port);
 int mlx4_get_base_gid_ix(struct mlx4_dev *dev, int slave, int port);
 
 int mlx4_config_vxlan_port(struct mlx4_dev *dev, __be16 udp_port);
+int mlx4_vf_smi_enabled(struct mlx4_dev *dev, int slave, int port);
+int mlx4_vf_get_enable_smi_admin(struct mlx4_dev *dev, int slave, int port);
+int mlx4_vf_set_enable_smi_admin(struct mlx4_dev *dev, int slave, int port,
+				 int enable);
 #endif /* MLX4_DEVICE_H */

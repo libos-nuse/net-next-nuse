@@ -168,8 +168,8 @@ static int e1000_get_settings(struct net_device *netdev,
 		else
 			ecmd->duplex = DUPLEX_HALF;
 	} else {
-		ethtool_cmd_speed_set(ecmd, -1);
-		ecmd->duplex = -1;
+		ethtool_cmd_speed_set(ecmd, SPEED_UNKNOWN);
+		ecmd->duplex = DUPLEX_UNKNOWN;
 	}
 
 	ecmd->autoneg = ((hw->media_type == e1000_media_type_fiber) ||
@@ -1460,7 +1460,8 @@ static int e1000_run_loopback_test(struct e1000_adapter *adapter)
 			 * enough time to complete the receives, if it's
 			 * exceeded, break and error off
 			 */
-		} while (good_cnt < 64 && jiffies < (time + 20));
+		} while (good_cnt < 64 && time_after(time + 20, jiffies));
+
 		if (good_cnt != 64) {
 			ret_val = 13; /* ret_val is the same as mis-compare */
 			break;

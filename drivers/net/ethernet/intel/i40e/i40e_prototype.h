@@ -70,17 +70,28 @@ i40e_status i40e_aq_get_firmware_version(struct i40e_hw *hw,
 				u16 *fw_major_version, u16 *fw_minor_version,
 				u16 *api_major_version, u16 *api_minor_version,
 				struct i40e_asq_cmd_details *cmd_details);
-i40e_status i40e_aq_set_phy_reset(struct i40e_hw *hw,
+i40e_status i40e_aq_set_phy_debug(struct i40e_hw *hw, u8 cmd_flags,
 				struct i40e_asq_cmd_details *cmd_details);
 i40e_status i40e_aq_set_default_vsi(struct i40e_hw *hw, u16 vsi_id,
 				struct i40e_asq_cmd_details *cmd_details);
+enum i40e_status_code i40e_aq_get_phy_capabilities(struct i40e_hw *hw,
+			bool qualified_modules, bool report_init,
+			struct i40e_aq_get_phy_abilities_resp *abilities,
+			struct i40e_asq_cmd_details *cmd_details);
+enum i40e_status_code i40e_aq_set_phy_config(struct i40e_hw *hw,
+				struct i40e_aq_set_phy_config *config,
+				struct i40e_asq_cmd_details *cmd_details);
+enum i40e_status_code i40e_set_fc(struct i40e_hw *hw, u8 *aq_failures,
+				  bool atomic_reset);
 i40e_status i40e_aq_clear_pxe_mode(struct i40e_hw *hw,
 				struct i40e_asq_cmd_details *cmd_details);
 i40e_status i40e_aq_set_link_restart_an(struct i40e_hw *hw,
-				struct i40e_asq_cmd_details *cmd_details);
+					bool enable_link,
+					struct i40e_asq_cmd_details *cmd_details);
 i40e_status i40e_aq_get_link_info(struct i40e_hw *hw,
 				bool enable_lse, struct i40e_link_status *link,
 				struct i40e_asq_cmd_details *cmd_details);
+i40e_status i40e_update_link_info(struct i40e_hw *hw, bool enable_lse);
 i40e_status i40e_aq_set_local_advt_reg(struct i40e_hw *hw,
 				u64 advt_reg,
 				struct i40e_asq_cmd_details *cmd_details);
@@ -216,11 +227,13 @@ i40e_status i40e_aq_query_switch_comp_bw_config(struct i40e_hw *hw,
 /* i40e_common */
 i40e_status i40e_init_shared_code(struct i40e_hw *hw);
 i40e_status i40e_pf_reset(struct i40e_hw *hw);
+void i40e_clear_hw(struct i40e_hw *hw);
 void i40e_clear_pxe_mode(struct i40e_hw *hw);
 bool i40e_get_link_status(struct i40e_hw *hw);
 i40e_status i40e_get_mac_addr(struct i40e_hw *hw,
 						u8 *mac_addr);
 i40e_status i40e_validate_mac_addr(u8 *mac_addr);
+void i40e_pre_tx_queue_cfg(struct i40e_hw *hw, u32 queue, bool enable);
 /* prototype for functions used for NVM access */
 i40e_status i40e_init_nvm(struct i40e_hw *hw);
 i40e_status i40e_acquire_nvm(struct i40e_hw *hw,

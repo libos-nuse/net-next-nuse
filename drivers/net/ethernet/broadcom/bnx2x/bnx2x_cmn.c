@@ -906,6 +906,18 @@ static int bnx2x_rx_int(struct bnx2x_fastpath *fp, int budget)
 		bd_prod = RX_BD(bd_prod);
 		bd_cons = RX_BD(bd_cons);
 
+		/* A rmb() is required to ensure that the CQE is not read
+		 * before it is written by the adapter DMA.  PCI ordering
+		 * rules will make sure the other fields are written before
+		 * the marker at the end of struct eth_fast_path_rx_cqe
+		 * but without rmb() a weakly ordered processor can process
+		 * stale data.  Without the barrier TPA state-machine might
+		 * enter inconsistent state and kernel stack might be
+		 * provided with incorrect packet description - these lead
+		 * to various kernel crashed.
+		 */
+		rmb();
+
 		cqe_fp_flags = cqe_fp->type_error_flags;
 		cqe_fp_type = cqe_fp_flags & ETH_FAST_PATH_RX_CQE_TYPE;
 
@@ -1173,29 +1185,38 @@ u16 bnx2x_get_mf_speed(struct bnx2x *bp)
 static void bnx2x_fill_report_data(struct bnx2x *bp,
 				   struct bnx2x_link_report_data *data)
 {
-	u16 line_speed = bnx2x_get_mf_speed(bp);
-
 	memset(data, 0, sizeof(*data));
 
-	/* Fill the report data: effective line speed */
-	data->line_speed = line_speed;
+	if (IS_PF(bp)) {
+		/* Fill the report data: effective line speed */
+		data->line_speed = bnx2x_get_mf_speed(bp);
 
-	/* Link is down */
-	if (!bp->link_vars.link_up || (bp->flags & MF_FUNC_DIS))
-		__set_bit(BNX2X_LINK_REPORT_LINK_DOWN,
-			  &data->link_report_flags);
+		/* Link is down */
+		if (!bp->link_vars.link_up || (bp->flags & MF_FUNC_DIS))
+			__set_bit(BNX2X_LINK_REPORT_LINK_DOWN,
+				  &data->link_report_flags);
 
-	/* Full DUPLEX */
-	if (bp->link_vars.duplex == DUPLEX_FULL)
-		__set_bit(BNX2X_LINK_REPORT_FD, &data->link_report_flags);
+		if (!BNX2X_NUM_ETH_QUEUES(bp))
+			__set_bit(BNX2X_LINK_REPORT_LINK_DOWN,
+				  &data->link_report_flags);
 
-	/* Rx Flow Control is ON */
-	if (bp->link_vars.flow_ctrl & BNX2X_FLOW_CTRL_RX)
-		__set_bit(BNX2X_LINK_REPORT_RX_FC_ON, &data->link_report_flags);
+		/* Full DUPLEX */
+		if (bp->link_vars.duplex == DUPLEX_FULL)
+			__set_bit(BNX2X_LINK_REPORT_FD,
+				  &data->link_report_flags);
 
-	/* Tx Flow Control is ON */
-	if (bp->link_vars.flow_ctrl & BNX2X_FLOW_CTRL_TX)
-		__set_bit(BNX2X_LINK_REPORT_TX_FC_ON, &data->link_report_flags);
+		/* Rx Flow Control is ON */
+		if (bp->link_vars.flow_ctrl & BNX2X_FLOW_CTRL_RX)
+			__set_bit(BNX2X_LINK_REPORT_RX_FC_ON,
+				  &data->link_report_flags);
+
+		/* Tx Flow Control is ON */
+		if (bp->link_vars.flow_ctrl & BNX2X_FLOW_CTRL_TX)
+			__set_bit(BNX2X_LINK_REPORT_TX_FC_ON,
+				  &data->link_report_flags);
+	} else { /* VF */
+		*data = bp->vf_link_vars;
+	}
 }
 
 /**
@@ -1248,6 +1269,10 @@ void __bnx2x_link_report(struct bnx2x *bp)
 	 * remember the current data for the next time.
 	 */
 	memcpy(&bp->last_reported_link, &cur_data, sizeof(cur_data));
+
+	/* propagate status to VFs */
+	if (IS_PF(bp))
+		bnx2x_iov_link_update(bp);
 
 	if (test_bit(BNX2X_LINK_REPORT_LINK_DOWN,
 		     &cur_data.link_report_flags)) {
@@ -2781,7 +2806,7 @@ int bnx2x_nic_load(struct bnx2x *bp, int load_mode)
 
 	case LOAD_OPEN:
 		netif_tx_start_all_queues(bp->dev);
-		smp_mb__after_clear_bit();
+		smp_mb__after_atomic();
 		break;
 
 	case LOAD_DIAG:
@@ -4939,9 +4964,9 @@ void bnx2x_update_coalesce_sb_index(struct bnx2x *bp, u8 fw_sb_id,
 void bnx2x_schedule_sp_rtnl(struct bnx2x *bp, enum sp_rtnl_flag flag,
 			    u32 verbose)
 {
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	set_bit(flag, &bp->sp_rtnl_state);
-	smp_mb__after_clear_bit();
+	smp_mb__after_atomic();
 	DP((BNX2X_MSG_SP | verbose), "Scheduling sp_rtnl task [Flag: %d]\n",
 	   flag);
 	schedule_delayed_work(&bp->sp_rtnl_task, 0);

@@ -45,8 +45,12 @@ static void hci_cc_inquiry_cancel(struct hci_dev *hdev, struct sk_buff *skb)
 		return;
 
 	clear_bit(HCI_INQUIRY, &hdev->flags);
-	smp_mb__after_clear_bit(); /* wake_up_bit advises about this barrier */
+	smp_mb__after_atomic(); /* wake_up_bit advises about this barrier */
 	wake_up_bit(&hdev->flags, HCI_INQUIRY);
+
+	hci_dev_lock(hdev);
+	hci_discovery_set_state(hdev, DISCOVERY_STOPPED);
+	hci_dev_unlock(hdev);
 
 	hci_conn_check_pending(hdev);
 }
@@ -1453,6 +1457,7 @@ static int hci_outgoing_auth_needed(struct hci_dev *hdev,
 	 * is requested.
 	 */
 	if (!hci_conn_ssp_enabled(conn) && !(conn->auth_type & 0x01) &&
+	    conn->pending_sec_level != BT_SECURITY_FIPS &&
 	    conn->pending_sec_level != BT_SECURITY_HIGH &&
 	    conn->pending_sec_level != BT_SECURITY_MEDIUM)
 		return 0;
@@ -1879,7 +1884,7 @@ static void hci_inquiry_complete_evt(struct hci_dev *hdev, struct sk_buff *skb)
 	if (!test_and_clear_bit(HCI_INQUIRY, &hdev->flags))
 		return;
 
-	smp_mb__after_clear_bit(); /* wake_up_bit advises about this barrier */
+	smp_mb__after_atomic(); /* wake_up_bit advises about this barrier */
 	wake_up_bit(&hdev->flags, HCI_INQUIRY);
 
 	if (!test_bit(HCI_MGMT, &hdev->dev_flags))
@@ -3076,7 +3081,8 @@ static void hci_link_key_request_evt(struct hci_dev *hdev, struct sk_buff *skb)
 		}
 
 		if (key->type == HCI_LK_COMBINATION && key->pin_len < 16 &&
-		    conn->pending_sec_level == BT_SECURITY_HIGH) {
+		    (conn->pending_sec_level == BT_SECURITY_HIGH ||
+		     conn->pending_sec_level == BT_SECURITY_FIPS)) {
 			BT_DBG("%s ignoring key unauthenticated for high security",
 			       hdev->name);
 			goto not_found;
@@ -3535,7 +3541,11 @@ static void hci_io_capa_request_evt(struct hci_dev *hdev, struct sk_buff *skb)
 			cp.authentication = conn->auth_type;
 
 			/* Request MITM protection if our IO caps allow it
-			 * except for the no-bonding case
+			 * except for the no-bonding case.
+			 * conn->auth_type is not updated here since
+			 * that might cause the user confirmation to be
+			 * rejected in case the remote doesn't have the
+			 * IO capabilities for MITM.
 			 */
 			if (conn->io_capability != HCI_IO_NO_INPUT_OUTPUT &&
 			    cp.authentication != HCI_AT_NO_BONDING)
@@ -3626,8 +3636,11 @@ static void hci_user_confirm_request_evt(struct hci_dev *hdev,
 
 		/* If we're not the initiators request authorization to
 		 * proceed from user space (mgmt_user_confirm with
-		 * confirm_hint set to 1). */
-		if (!test_bit(HCI_CONN_AUTH_PEND, &conn->flags)) {
+		 * confirm_hint set to 1). The exception is if neither
+		 * side had MITM in which case we do auto-accept.
+		 */
+		if (!test_bit(HCI_CONN_AUTH_PEND, &conn->flags) &&
+		    (loc_mitm || rem_mitm)) {
 			BT_DBG("Confirming auto-accept as acceptor");
 			confirm_hint = 1;
 			goto confirm;

@@ -248,9 +248,8 @@ static int i40e_config_vsi_tx_queue(struct i40e_vf *vf, u16 vsi_idx,
 	tx_ctx.qlen = info->ring_len;
 	tx_ctx.rdylist = le16_to_cpu(pf->vsi[vsi_idx]->info.qs_handle[0]);
 	tx_ctx.rdylist_act = 0;
-	tx_ctx.head_wb_ena = 1;
-	tx_ctx.head_wb_addr = info->dma_ring_addr +
-			      (info->ring_len * sizeof(struct i40e_tx_desc));
+	tx_ctx.head_wb_ena = info->headwb_enabled;
+	tx_ctx.head_wb_addr = info->dma_headwb_addr;
 
 	/* clear the context in the HMC */
 	ret = i40e_clear_lan_tx_queue_context(hw, pf_queue_id);
@@ -348,10 +347,6 @@ static int i40e_config_vsi_rx_queue(struct i40e_vf *vf, u16 vsi_idx,
 	rx_ctx.dsize = 1;
 
 	/* default values */
-	rx_ctx.tphrdesc_ena = 1;
-	rx_ctx.tphwdesc_ena = 1;
-	rx_ctx.tphdata_ena = 1;
-	rx_ctx.tphhead_ena = 1;
 	rx_ctx.lrxqthresh = 2;
 	rx_ctx.crcstrip = 1;
 	rx_ctx.prefena = 1;
@@ -899,6 +894,7 @@ int i40e_alloc_vfs(struct i40e_pf *pf, u16 num_alloc_vfs)
 		ret = -ENOMEM;
 		goto err_alloc;
 	}
+	pf->vf = vfs;
 
 	/* apply default profile */
 	for (i = 0; i < num_alloc_vfs; i++) {
@@ -908,13 +904,13 @@ int i40e_alloc_vfs(struct i40e_pf *pf, u16 num_alloc_vfs)
 
 		/* assign default capabilities */
 		set_bit(I40E_VIRTCHNL_VF_CAP_L2, &vfs[i].vf_caps);
+		vfs[i].spoofchk = true;
 		/* vf resources get allocated during reset */
 		i40e_reset_vf(&vfs[i], false);
 
 		/* enable vf vplan_qtable mappings */
 		i40e_enable_vf_mappings(&vfs[i]);
 	}
-	pf->vf = vfs;
 	pf->num_alloc_vfs = num_alloc_vfs;
 
 	i40e_enable_pf_switch_lb(pf);
@@ -2062,14 +2058,11 @@ int i40e_ndo_set_vf_mac(struct net_device *netdev, int vf_id, u8 *mac)
 	i40e_del_filter(vsi, vf->default_lan_addr.addr, vf->port_vlan_id,
 			true, false);
 
-	/* add the new mac address */
-	f = i40e_add_filter(vsi, mac, vf->port_vlan_id, true, false);
-	if (!f) {
-		dev_err(&pf->pdev->dev,
-			"Unable to add VF ucast filter\n");
-		ret = -ENOMEM;
-		goto error_param;
-	}
+	/* Delete all the filters for this VSI - we're going to kill it
+	 * anyway.
+	 */
+	list_for_each_entry(f, &vsi->mac_filter_list, list)
+		i40e_del_filter(vsi, f->macaddr, f->vlan, true, false);
 
 	dev_info(&pf->pdev->dev, "Setting MAC %pM on VF %d\n", mac, vf_id);
 	/* program mac filter */
@@ -2078,8 +2071,10 @@ int i40e_ndo_set_vf_mac(struct net_device *netdev, int vf_id, u8 *mac)
 		ret = -EIO;
 		goto error_param;
 	}
-	memcpy(vf->default_lan_addr.addr, mac, ETH_ALEN);
+	ether_addr_copy(vf->default_lan_addr.addr, mac);
 	vf->pf_set_mac = true;
+	/* Force the VF driver stop so it has to reload with new MAC address */
+	i40e_vc_disable_vf(pf, vf);
 	dev_info(&pf->pdev->dev, "Reload the VF driver to make this change effective.\n");
 	ret = 0;
 
@@ -2328,7 +2323,7 @@ int i40e_ndo_get_vf_config(struct net_device *netdev,
 		ivi->linkstate = IFLA_VF_LINK_STATE_ENABLE;
 	else
 		ivi->linkstate = IFLA_VF_LINK_STATE_DISABLE;
-
+	ivi->spoofchk = vf->spoofchk;
 	ret = 0;
 
 error_param:
@@ -2393,5 +2388,52 @@ int i40e_ndo_set_vf_link_state(struct net_device *netdev, int vf_id, int link)
 			       0, (u8 *)&pfe, sizeof(pfe), NULL);
 
 error_out:
+	return ret;
+}
+
+/**
+ * i40e_ndo_set_vf_spoofchk
+ * @netdev: network interface device structure
+ * @vf_id: vf identifier
+ * @enable: flag to enable or disable feature
+ *
+ * Enable or disable VF spoof checking
+ **/
+int i40e_ndo_set_vf_spoofck(struct net_device *netdev, int vf_id, bool enable)
+{
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_vsi *vsi = np->vsi;
+	struct i40e_pf *pf = vsi->back;
+	struct i40e_vsi_context ctxt;
+	struct i40e_hw *hw = &pf->hw;
+	struct i40e_vf *vf;
+	int ret = 0;
+
+	/* validate the request */
+	if (vf_id >= pf->num_alloc_vfs) {
+		dev_err(&pf->pdev->dev, "Invalid VF Identifier %d\n", vf_id);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	vf = &(pf->vf[vf_id]);
+
+	if (enable == vf->spoofchk)
+		goto out;
+
+	vf->spoofchk = enable;
+	memset(&ctxt, 0, sizeof(ctxt));
+	ctxt.seid = pf->vsi[vf->lan_vsi_index]->seid;
+	ctxt.pf_num = pf->hw.pf_id;
+	ctxt.info.valid_sections = cpu_to_le16(I40E_AQ_VSI_PROP_SECURITY_VALID);
+	if (enable)
+		ctxt.info.sec_flags |= I40E_AQ_VSI_SEC_FLAG_ENABLE_MAC_CHK;
+	ret = i40e_aq_update_vsi_params(hw, &ctxt, NULL);
+	if (ret) {
+		dev_err(&pf->pdev->dev, "Error %d updating VSI parameters\n",
+			ret);
+		ret = -EIO;
+	}
+out:
 	return ret;
 }

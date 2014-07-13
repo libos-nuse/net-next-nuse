@@ -1255,7 +1255,7 @@ struct wmi_resource_config {
 	 */
 	__le32 rx_decap_mode;
 
-	/* what is the maximum scan requests than can be queued */
+	/* what is the maximum number of scan requests that can be queued */
 	__le32 scan_max_pending_reqs;
 
 	/* maximum VDEV that could use BMISS offload */
@@ -1440,7 +1440,7 @@ struct wmi_resource_config_10x {
 	 */
 	__le32 rx_decap_mode;
 
-	/* what is the maximum scan requests than can be queued */
+	/* what is the maximum number of scan requests that can be queued */
 	__le32 scan_max_pending_reqs;
 
 	/* maximum VDEV that could use BMISS offload */

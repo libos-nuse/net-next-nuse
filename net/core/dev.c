@@ -1326,7 +1326,7 @@ static int __dev_close_many(struct list_head *head)
 		 * dev->stop() will invoke napi_disable() on all of it's
 		 * napi_struct instances on this device.
 		 */
-		smp_mb__after_clear_bit(); /* Commit netif_running(). */
+		smp_mb__after_atomic(); /* Commit netif_running(). */
 	}
 
 	dev_deactivate_many(head);
@@ -2289,8 +2289,8 @@ EXPORT_SYMBOL(skb_checksum_help);
 
 __be16 skb_network_protocol(struct sk_buff *skb, int *depth)
 {
+	unsigned int vlan_depth = skb->mac_len;
 	__be16 type = skb->protocol;
-	int vlan_depth = skb->mac_len;
 
 	/* Tunnel gso handlers can set protocol to ethernet. */
 	if (type == htons(ETH_P_TEB)) {
@@ -2303,15 +2303,30 @@ __be16 skb_network_protocol(struct sk_buff *skb, int *depth)
 		type = eth->h_proto;
 	}
 
-	while (type == htons(ETH_P_8021Q) || type == htons(ETH_P_8021AD)) {
-		struct vlan_hdr *vh;
+	/* if skb->protocol is 802.1Q/AD then the header should already be
+	 * present at mac_len - VLAN_HLEN (if mac_len > 0), or at
+	 * ETH_HLEN otherwise
+	 */
+	if (type == htons(ETH_P_8021Q) || type == htons(ETH_P_8021AD)) {
+		if (vlan_depth) {
+			if (unlikely(WARN_ON(vlan_depth < VLAN_HLEN)))
+				return 0;
+			vlan_depth -= VLAN_HLEN;
+		} else {
+			vlan_depth = ETH_HLEN;
+		}
+		do {
+			struct vlan_hdr *vh;
 
-		if (unlikely(!pskb_may_pull(skb, vlan_depth + VLAN_HLEN)))
-			return 0;
+			if (unlikely(!pskb_may_pull(skb,
+						    vlan_depth + VLAN_HLEN)))
+				return 0;
 
-		vh = (struct vlan_hdr *)(skb->data + vlan_depth);
-		type = vh->h_vlan_encapsulated_proto;
-		vlan_depth += VLAN_HLEN;
+			vh = (struct vlan_hdr *)(skb->data + vlan_depth);
+			type = vh->h_vlan_encapsulated_proto;
+			vlan_depth += VLAN_HLEN;
+		} while (type == htons(ETH_P_8021Q) ||
+			 type == htons(ETH_P_8021AD));
 	}
 
 	*depth = vlan_depth;
@@ -2498,13 +2513,39 @@ static int dev_gso_segment(struct sk_buff *skb, netdev_features_t features)
 	return 0;
 }
 
+/* If MPLS offload request, verify we are testing hardware MPLS features
+ * instead of standard features for the netdev.
+ */
+#ifdef CONFIG_NET_MPLS_GSO
+static netdev_features_t net_mpls_features(struct sk_buff *skb,
+					   netdev_features_t features,
+					   __be16 type)
+{
+	if (type == htons(ETH_P_MPLS_UC) || type == htons(ETH_P_MPLS_MC))
+		features &= skb->dev->mpls_features;
+
+	return features;
+}
+#else
+static netdev_features_t net_mpls_features(struct sk_buff *skb,
+					   netdev_features_t features,
+					   __be16 type)
+{
+	return features;
+}
+#endif
+
 static netdev_features_t harmonize_features(struct sk_buff *skb,
 	netdev_features_t features)
 {
 	int tmp;
+	__be16 type;
+
+	type = skb_network_protocol(skb, &tmp);
+	features = net_mpls_features(skb, features, type);
 
 	if (skb->ip_summed != CHECKSUM_NONE &&
-	    !can_checksum_protocol(features, skb_network_protocol(skb, &tmp))) {
+	    !can_checksum_protocol(features, type)) {
 		features &= ~NETIF_F_ALL_CSUM;
 	} else if (illegal_highdma(skb->dev, skb)) {
 		features &= ~NETIF_F_SG;
@@ -2697,8 +2738,8 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	/*
 	 * Heuristic to force contended enqueues to serialize on a
 	 * separate lock before trying to get qdisc main lock.
-	 * This permits __QDISC_STATE_RUNNING owner to get the lock more often
-	 * and dequeue packets faster.
+	 * This permits __QDISC___STATE_RUNNING owner to get the lock more
+	 * often and dequeue packets faster.
 	 */
 	contended = qdisc_is_running(q);
 	if (unlikely(contended))
@@ -3347,7 +3388,7 @@ static void net_tx_action(struct softirq_action *h)
 
 			root_lock = qdisc_lock(q);
 			if (spin_trylock(root_lock)) {
-				smp_mb__before_clear_bit();
+				smp_mb__before_atomic();
 				clear_bit(__QDISC_STATE_SCHED,
 					  &q->state);
 				qdisc_run(q);
@@ -3357,7 +3398,7 @@ static void net_tx_action(struct softirq_action *h)
 					      &q->state)) {
 					__netif_reschedule(q);
 				} else {
-					smp_mb__before_clear_bit();
+					smp_mb__before_atomic();
 					clear_bit(__QDISC_STATE_SCHED,
 						  &q->state);
 				}
@@ -4249,7 +4290,7 @@ void __napi_complete(struct napi_struct *n)
 	BUG_ON(n->gro_list);
 
 	list_del(&n->poll_list);
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	clear_bit(NAPI_STATE_SCHED, &n->state);
 }
 EXPORT_SYMBOL(__napi_complete);
@@ -5391,12 +5432,8 @@ int __dev_change_flags(struct net_device *dev, unsigned int flags)
 	 */
 
 	ret = 0;
-	if ((old_flags ^ flags) & IFF_UP) {	/* Bit is different  ? */
+	if ((old_flags ^ flags) & IFF_UP)
 		ret = ((old_flags & IFF_UP) ? __dev_close : __dev_open)(dev);
-
-		if (!ret)
-			dev_set_rx_mode(dev);
-	}
 
 	if ((flags ^ dev->gflags) & IFF_PROMISC) {
 		int inc = (flags & IFF_PROMISC) ? 1 : -1;
@@ -5918,10 +5955,7 @@ static void netdev_init_one_queue(struct net_device *dev,
 
 static void netif_free_tx_queues(struct net_device *dev)
 {
-	if (is_vmalloc_addr(dev->_tx))
-		vfree(dev->_tx);
-	else
-		kfree(dev->_tx);
+	kvfree(dev->_tx);
 }
 
 static int netif_alloc_netdev_queues(struct net_device *dev)
@@ -6395,10 +6429,7 @@ void netdev_freemem(struct net_device *dev)
 {
 	char *addr = (char *)dev - dev->padded;
 
-	if (is_vmalloc_addr(addr))
-		vfree(addr);
-	else
-		kfree(addr);
+	kvfree(addr);
 }
 
 /**
@@ -6599,6 +6630,9 @@ EXPORT_SYMBOL(unregister_netdevice_queue);
 /**
  *	unregister_netdevice_many - unregister many devices
  *	@head: list of devices
+ *
+ *  Note: As most callers use a stack allocated list_head,
+ *  we force a list_del() to make sure stack wont be corrupted later.
  */
 void unregister_netdevice_many(struct list_head *head)
 {
@@ -6608,6 +6642,7 @@ void unregister_netdevice_many(struct list_head *head)
 		rollback_registered_many(head);
 		list_for_each_entry(dev, head, unreg_list)
 			net_set_todo(dev);
+		list_del(head);
 	}
 }
 EXPORT_SYMBOL(unregister_netdevice_many);
@@ -7056,14 +7091,13 @@ static void __net_exit default_device_exit_batch(struct list_head *net_list)
 	rtnl_lock_unregistering(net_list);
 	list_for_each_entry(net, net_list, exit_list) {
 		for_each_netdev_reverse(net, dev) {
-			if (dev->rtnl_link_ops)
+			if (dev->rtnl_link_ops && dev->rtnl_link_ops->dellink)
 				dev->rtnl_link_ops->dellink(dev, &dev_kill_list);
 			else
 				unregister_netdevice_queue(dev, &dev_kill_list);
 		}
 	}
 	unregister_netdevice_many(&dev_kill_list);
-	list_del(&dev_kill_list);
 	rtnl_unlock();
 }
 

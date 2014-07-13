@@ -8,7 +8,6 @@
 #include <net/addrconf.h>
 #include <net/secure_seq.h>
 
-
 int ip6_find_1stfragopt(struct sk_buff *skb, u8 **nexthdr)
 {
 	u16 offset = sizeof(struct ipv6hdr);
@@ -79,6 +78,7 @@ int __ip6_local_out(struct sk_buff *skb)
 	if (len > IPV6_MAXPLEN)
 		len = 0;
 	ipv6_hdr(skb)->payload_len = htons(len);
+	IP6CB(skb)->nhoff = offsetof(struct ipv6hdr, nexthdr);
 
 	return nf_hook(NFPROTO_IPV6, NF_INET_LOCAL_OUT, skb, NULL,
 		       skb_dst(skb)->dev, dst_output);

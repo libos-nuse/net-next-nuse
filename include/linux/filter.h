@@ -6,6 +6,7 @@
 
 #include <linux/atomic.h>
 #include <linux/compat.h>
+#include <linux/skbuff.h>
 #include <linux/workqueue.h>
 #include <uapi/linux/filter.h>
 
@@ -78,161 +79,173 @@ enum {
 
 /* Helper macros for filter block array initializers. */
 
-/* ALU ops on registers, bpf_add|sub|...: A += X */
+/* ALU ops on registers, bpf_add|sub|...: dst_reg += src_reg */
 
-#define BPF_ALU64_REG(OP, A, X)					\
+#define BPF_ALU64_REG(OP, DST, SRC)				\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU64 | BPF_OP(OP) | BPF_X,	\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = 0,					\
 		.imm   = 0 })
 
-#define BPF_ALU32_REG(OP, A, X)					\
+#define BPF_ALU32_REG(OP, DST, SRC)				\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU | BPF_OP(OP) | BPF_X,		\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = 0,					\
 		.imm   = 0 })
 
-/* ALU ops on immediates, bpf_add|sub|...: A += IMM */
+/* ALU ops on immediates, bpf_add|sub|...: dst_reg += imm32 */
 
-#define BPF_ALU64_IMM(OP, A, IMM)				\
+#define BPF_ALU64_IMM(OP, DST, IMM)				\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU64 | BPF_OP(OP) | BPF_K,	\
-		.a_reg = A,					\
-		.x_reg = 0,					\
+		.dst_reg = DST,					\
+		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = IMM })
 
-#define BPF_ALU32_IMM(OP, A, IMM)				\
+#define BPF_ALU32_IMM(OP, DST, IMM)				\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU | BPF_OP(OP) | BPF_K,		\
-		.a_reg = A,					\
-		.x_reg = 0,					\
+		.dst_reg = DST,					\
+		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = IMM })
 
 /* Endianess conversion, cpu_to_{l,b}e(), {l,b}e_to_cpu() */
 
-#define BPF_ENDIAN(TYPE, A, LEN)				\
+#define BPF_ENDIAN(TYPE, DST, LEN)				\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU | BPF_END | BPF_SRC(TYPE),	\
-		.a_reg = A,					\
-		.x_reg = 0,					\
+		.dst_reg = DST,					\
+		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = LEN })
 
-/* Short form of mov, A = X */
+/* Short form of mov, dst_reg = src_reg */
 
-#define BPF_MOV64_REG(A, X)					\
+#define BPF_MOV64_REG(DST, SRC)					\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU64 | BPF_MOV | BPF_X,		\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = 0,					\
 		.imm   = 0 })
 
-#define BPF_MOV32_REG(A, X)					\
+#define BPF_MOV32_REG(DST, SRC)					\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU | BPF_MOV | BPF_X,		\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = 0,					\
 		.imm   = 0 })
 
-/* Short form of mov, A = IMM */
+/* Short form of mov, dst_reg = imm32 */
 
-#define BPF_MOV64_IMM(A, IMM)					\
+#define BPF_MOV64_IMM(DST, IMM)					\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU64 | BPF_MOV | BPF_K,		\
-		.a_reg = A,					\
-		.x_reg = 0,					\
+		.dst_reg = DST,					\
+		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = IMM })
 
-#define BPF_MOV32_IMM(A, IMM)					\
+#define BPF_MOV32_IMM(DST, IMM)					\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU | BPF_MOV | BPF_K,		\
-		.a_reg = A,					\
-		.x_reg = 0,					\
+		.dst_reg = DST,					\
+		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = IMM })
 
-/* Short form of mov based on type, BPF_X: A = X,  BPF_K: A = IMM */
+/* Short form of mov based on type, BPF_X: dst_reg = src_reg, BPF_K: dst_reg = imm32 */
 
-#define BPF_MOV64_RAW(TYPE, A, X, IMM)				\
+#define BPF_MOV64_RAW(TYPE, DST, SRC, IMM)			\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU64 | BPF_MOV | BPF_SRC(TYPE),	\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = 0,					\
 		.imm   = IMM })
 
-#define BPF_MOV32_RAW(TYPE, A, X, IMM)				\
+#define BPF_MOV32_RAW(TYPE, DST, SRC, IMM)			\
 	((struct sock_filter_int) {				\
 		.code  = BPF_ALU | BPF_MOV | BPF_SRC(TYPE),	\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = 0,					\
 		.imm   = IMM })
 
-/* Direct packet access, R0 = *(uint *) (skb->data + OFF) */
+/* Direct packet access, R0 = *(uint *) (skb->data + imm32) */
 
-#define BPF_LD_ABS(SIZE, OFF)					\
+#define BPF_LD_ABS(SIZE, IMM)					\
 	((struct sock_filter_int) {				\
 		.code  = BPF_LD | BPF_SIZE(SIZE) | BPF_ABS,	\
-		.a_reg = 0,					\
-		.x_reg = 0,					\
+		.dst_reg = 0,					\
+		.src_reg = 0,					\
 		.off   = 0,					\
-		.imm   = OFF })
+		.imm   = IMM })
 
-/* Indirect packet access, R0 = *(uint *) (skb->data + X + OFF) */
+/* Indirect packet access, R0 = *(uint *) (skb->data + src_reg + imm32) */
 
-#define BPF_LD_IND(SIZE, X, OFF)				\
+#define BPF_LD_IND(SIZE, SRC, IMM)				\
 	((struct sock_filter_int) {				\
 		.code  = BPF_LD | BPF_SIZE(SIZE) | BPF_IND,	\
-		.a_reg = 0,					\
-		.x_reg = X,					\
+		.dst_reg = 0,					\
+		.src_reg = SRC,					\
 		.off   = 0,					\
-		.imm   = OFF })
+		.imm   = IMM })
 
-/* Memory store, A = *(uint *) (X + OFF), and vice versa */
+/* Memory load, dst_reg = *(uint *) (src_reg + off16) */
 
-#define BPF_LDX_MEM(SIZE, A, X, OFF)				\
+#define BPF_LDX_MEM(SIZE, DST, SRC, OFF)			\
 	((struct sock_filter_int) {				\
 		.code  = BPF_LDX | BPF_SIZE(SIZE) | BPF_MEM,	\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = OFF,					\
 		.imm   = 0 })
 
-#define BPF_STX_MEM(SIZE, A, X, OFF)				\
+/* Memory store, *(uint *) (dst_reg + off16) = src_reg */
+
+#define BPF_STX_MEM(SIZE, DST, SRC, OFF)			\
 	((struct sock_filter_int) {				\
 		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_MEM,	\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = OFF,					\
 		.imm   = 0 })
 
-/* Conditional jumps against registers, if (A 'op' X) goto pc + OFF */
+/* Memory store, *(uint *) (dst_reg + off16) = imm32 */
 
-#define BPF_JMP_REG(OP, A, X, OFF)				\
+#define BPF_ST_MEM(SIZE, DST, OFF, IMM)				\
+	((struct sock_filter_int) {				\
+		.code  = BPF_ST | BPF_SIZE(SIZE) | BPF_MEM,	\
+		.dst_reg = DST,					\
+		.src_reg = 0,					\
+		.off   = OFF,					\
+		.imm   = IMM })
+
+/* Conditional jumps against registers, if (dst_reg 'op' src_reg) goto pc + off16 */
+
+#define BPF_JMP_REG(OP, DST, SRC, OFF)				\
 	((struct sock_filter_int) {				\
 		.code  = BPF_JMP | BPF_OP(OP) | BPF_X,		\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = OFF,					\
 		.imm   = 0 })
 
-/* Conditional jumps against immediates, if (A 'op' IMM) goto pc + OFF */
+/* Conditional jumps against immediates, if (dst_reg 'op' imm32) goto pc + off16 */
 
-#define BPF_JMP_IMM(OP, A, IMM, OFF)				\
+#define BPF_JMP_IMM(OP, DST, IMM, OFF)				\
 	((struct sock_filter_int) {				\
 		.code  = BPF_JMP | BPF_OP(OP) | BPF_K,		\
-		.a_reg = A,					\
-		.x_reg = 0,					\
+		.dst_reg = DST,					\
+		.src_reg = 0,					\
 		.off   = OFF,					\
 		.imm   = IMM })
 
@@ -241,18 +254,18 @@ enum {
 #define BPF_EMIT_CALL(FUNC)					\
 	((struct sock_filter_int) {				\
 		.code  = BPF_JMP | BPF_CALL,			\
-		.a_reg = 0,					\
-		.x_reg = 0,					\
+		.dst_reg = 0,					\
+		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = ((FUNC) - __bpf_call_base) })
 
 /* Raw code statement block */
 
-#define BPF_RAW_INSN(CODE, A, X, OFF, IMM)			\
+#define BPF_RAW_INSN(CODE, DST, SRC, OFF, IMM)			\
 	((struct sock_filter_int) {				\
 		.code  = CODE,					\
-		.a_reg = A,					\
-		.x_reg = X,					\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
 		.off   = OFF,					\
 		.imm   = IMM })
 
@@ -261,8 +274,8 @@ enum {
 #define BPF_EXIT_INSN()						\
 	((struct sock_filter_int) {				\
 		.code  = BPF_JMP | BPF_EXIT,			\
-		.a_reg = 0,					\
-		.x_reg = 0,					\
+		.dst_reg = 0,					\
+		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = 0 })
 
@@ -287,8 +300,8 @@ enum {
 
 struct sock_filter_int {
 	__u8	code;		/* opcode */
-	__u8	a_reg:4;	/* dest register */
-	__u8	x_reg:4;	/* source register */
+	__u8	dst_reg:4;	/* dest register */
+	__u8	src_reg:4;	/* source register */
 	__s16	off;		/* signed offset */
 	__s32	imm;		/* signed immediate constant */
 };
@@ -392,6 +405,18 @@ static inline u16 bpf_anc_helper(const struct sock_filter *ftest)
 	default:
 		return ftest->code;
 	}
+}
+
+void *bpf_internal_load_pointer_neg_helper(const struct sk_buff *skb,
+					   int k, unsigned int size);
+
+static inline void *bpf_load_pointer(const struct sk_buff *skb, int k,
+				     unsigned int size, void *buffer)
+{
+	if (k >= 0)
+		return skb_header_pointer(skb, k, size, buffer);
+
+	return bpf_internal_load_pointer_neg_helper(skb, k, size);
 }
 
 #ifdef CONFIG_BPF_JIT

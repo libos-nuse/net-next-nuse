@@ -23,6 +23,7 @@
 #include <net/dsfield.h>
 
 #include <asm/ebcdic.h>
+#include <asm/chpid.h>
 #include <asm/io.h>
 #include <asm/sysinfo.h>
 #include <asm/compat.h>
@@ -1345,16 +1346,7 @@ static void qeth_set_multiple_write_queues(struct qeth_card *card)
 static void qeth_update_from_chp_desc(struct qeth_card *card)
 {
 	struct ccw_device *ccwdev;
-	struct channelPath_dsc {
-		u8 flags;
-		u8 lsn;
-		u8 desc;
-		u8 chpid;
-		u8 swla;
-		u8 zeroes;
-		u8 chla;
-		u8 chpp;
-	} *chp_dsc;
+	struct channel_path_desc *chp_dsc;
 
 	QETH_DBF_TEXT(SETUP, 2, "chp_desc");
 
@@ -5726,6 +5718,7 @@ int qeth_core_ethtool_get_settings(struct net_device *netdev,
 	struct qeth_card *card = netdev->ml_priv;
 	enum qeth_link_types link_type;
 	struct carrier_info carrier_info;
+	u32 speed;
 
 	if ((card->info.type == QETH_CARD_TYPE_IQD) || (card->info.guestlan))
 		link_type = QETH_LINK_TYPE_10GBIT_ETH;
@@ -5740,28 +5733,29 @@ int qeth_core_ethtool_get_settings(struct net_device *netdev,
 	case QETH_LINK_TYPE_FAST_ETH:
 	case QETH_LINK_TYPE_LANE_ETH100:
 		qeth_set_ecmd_adv_sup(ecmd, SPEED_100, PORT_TP);
-		ecmd->speed = SPEED_100;
+		speed = SPEED_100;
 		ecmd->port = PORT_TP;
 		break;
 
 	case QETH_LINK_TYPE_GBIT_ETH:
 	case QETH_LINK_TYPE_LANE_ETH1000:
 		qeth_set_ecmd_adv_sup(ecmd, SPEED_1000, PORT_FIBRE);
-		ecmd->speed = SPEED_1000;
+		speed = SPEED_1000;
 		ecmd->port = PORT_FIBRE;
 		break;
 
 	case QETH_LINK_TYPE_10GBIT_ETH:
 		qeth_set_ecmd_adv_sup(ecmd, SPEED_10000, PORT_FIBRE);
-		ecmd->speed = SPEED_10000;
+		speed = SPEED_10000;
 		ecmd->port = PORT_FIBRE;
 		break;
 
 	default:
 		qeth_set_ecmd_adv_sup(ecmd, SPEED_10, PORT_TP);
-		ecmd->speed = SPEED_10;
+		speed = SPEED_10;
 		ecmd->port = PORT_TP;
 	}
+	ethtool_cmd_speed_set(ecmd, speed);
 
 	/* Check if we can obtain more accurate information.	 */
 	/* If QUERY_CARD_INFO command is not supported or fails, */
@@ -5806,18 +5800,19 @@ int qeth_core_ethtool_get_settings(struct net_device *netdev,
 
 	switch (carrier_info.port_speed) {
 	case CARD_INFO_PORTS_10M:
-		ecmd->speed = SPEED_10;
+		speed = SPEED_10;
 		break;
 	case CARD_INFO_PORTS_100M:
-		ecmd->speed = SPEED_100;
+		speed = SPEED_100;
 		break;
 	case CARD_INFO_PORTS_1G:
-		ecmd->speed = SPEED_1000;
+		speed = SPEED_1000;
 		break;
 	case CARD_INFO_PORTS_10G:
-		ecmd->speed = SPEED_10000;
+		speed = SPEED_10000;
 		break;
 	}
+	ethtool_cmd_speed_set(ecmd, speed);
 
 	return 0;
 }

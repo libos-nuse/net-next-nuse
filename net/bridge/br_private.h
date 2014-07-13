@@ -35,6 +35,8 @@
 #define BR_GROUPFWD_DEFAULT	0
 /* Don't allow forwarding control protocols like STP and LLDP */
 #define BR_GROUPFWD_RESTRICTED	0x4007u
+/* The Nearest Customer Bridge Group Address, 01-80-C2-00-00-[00,0B,0C,0D,0F] */
+#define BR_GROUPFWD_8021AD	0xB801u
 
 /* Path to usermode spanning tree program */
 #define BR_STP_PROG	"/sbin/bridge-stp"
@@ -54,29 +56,23 @@ struct mac_addr
 	unsigned char	addr[ETH_ALEN];
 };
 
-struct br_ip
-{
-	union {
-		__be32	ip4;
-#if IS_ENABLED(CONFIG_IPV6)
-		struct in6_addr ip6;
-#endif
-	} u;
-	__be16		proto;
-	__u16		vid;
-};
-
 #ifdef CONFIG_BRIDGE_IGMP_SNOOPING
 /* our own querier */
-struct bridge_mcast_query {
+struct bridge_mcast_own_query {
 	struct timer_list	timer;
 	u32			startup_sent;
 };
 
 /* other querier */
-struct bridge_mcast_querier {
+struct bridge_mcast_other_query {
 	struct timer_list		timer;
 	unsigned long			delay_time;
+};
+
+/* selected querier */
+struct bridge_mcast_querier {
+	struct br_ip addr;
+	struct net_bridge_port __rcu	*port;
 };
 #endif
 
@@ -178,9 +174,9 @@ struct net_bridge_port
 #define BR_PROMISC		0x00000080
 
 #ifdef CONFIG_BRIDGE_IGMP_SNOOPING
-	struct bridge_mcast_query	ip4_query;
+	struct bridge_mcast_own_query	ip4_own_query;
 #if IS_ENABLED(CONFIG_IPV6)
-	struct bridge_mcast_query	ip6_query;
+	struct bridge_mcast_own_query	ip6_own_query;
 #endif /* IS_ENABLED(CONFIG_IPV6) */
 	unsigned char			multicast_router;
 	struct timer_list		multicast_router_timer;
@@ -232,6 +228,7 @@ struct net_bridge
 	bool				nf_call_arptables;
 #endif
 	u16				group_fwd_mask;
+	u16				group_fwd_mask_required;
 
 	/* STP */
 	bridge_id			designated_root;
@@ -246,6 +243,7 @@ struct net_bridge
 	unsigned long			bridge_forward_delay;
 
 	u8				group_addr[ETH_ALEN];
+	bool				group_addr_set;
 	u16				root_port;
 
 	enum {
@@ -282,11 +280,13 @@ struct net_bridge
 	struct hlist_head		router_list;
 
 	struct timer_list		multicast_router_timer;
+	struct bridge_mcast_other_query	ip4_other_query;
+	struct bridge_mcast_own_query	ip4_own_query;
 	struct bridge_mcast_querier	ip4_querier;
-	struct bridge_mcast_query	ip4_query;
 #if IS_ENABLED(CONFIG_IPV6)
+	struct bridge_mcast_other_query	ip6_other_query;
+	struct bridge_mcast_own_query	ip6_own_query;
 	struct bridge_mcast_querier	ip6_querier;
-	struct bridge_mcast_query	ip6_query;
 #endif /* IS_ENABLED(CONFIG_IPV6) */
 #endif
 
@@ -298,6 +298,7 @@ struct net_bridge
 	u32				auto_cnt;
 #ifdef CONFIG_BRIDGE_VLAN_FILTERING
 	u8				vlan_enabled;
+	__be16				vlan_proto;
 	struct net_port_vlans __rcu	*vlan_info;
 #endif
 };
@@ -398,7 +399,7 @@ int br_fdb_delete(struct ndmsg *ndm, struct nlattr *tb[],
 int br_fdb_add(struct ndmsg *nlh, struct nlattr *tb[], struct net_device *dev,
 	       const unsigned char *addr, u16 nlh_flags);
 int br_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb,
-		struct net_device *dev, int idx);
+		struct net_device *dev, struct net_device *fdev, int idx);
 int br_fdb_sync_static(struct net_bridge *br, struct net_bridge_port *p);
 void br_fdb_unsync_static(struct net_bridge *br, struct net_bridge_port *p);
 
@@ -493,7 +494,7 @@ static inline bool br_multicast_is_router(struct net_bridge *br)
 
 static inline bool
 __br_multicast_querier_exists(struct net_bridge *br,
-			      struct bridge_mcast_querier *querier)
+			      struct bridge_mcast_other_query *querier)
 {
 	return time_is_before_jiffies(querier->delay_time) &&
 	       (br->multicast_querier || timer_pending(&querier->timer));
@@ -504,10 +505,10 @@ static inline bool br_multicast_querier_exists(struct net_bridge *br,
 {
 	switch (eth->h_proto) {
 	case (htons(ETH_P_IP)):
-		return __br_multicast_querier_exists(br, &br->ip4_querier);
+		return __br_multicast_querier_exists(br, &br->ip4_other_query);
 #if IS_ENABLED(CONFIG_IPV6)
 	case (htons(ETH_P_IPV6)):
-		return __br_multicast_querier_exists(br, &br->ip6_querier);
+		return __br_multicast_querier_exists(br, &br->ip6_other_query);
 #endif
 	default:
 		return false;
@@ -589,6 +590,7 @@ bool br_allowed_ingress(struct net_bridge *br, struct net_port_vlans *v,
 			struct sk_buff *skb, u16 *vid);
 bool br_allowed_egress(struct net_bridge *br, const struct net_port_vlans *v,
 		       const struct sk_buff *skb);
+bool br_should_learn(struct net_bridge_port *p, struct sk_buff *skb, u16 *vid);
 struct sk_buff *br_handle_vlan(struct net_bridge *br,
 			       const struct net_port_vlans *v,
 			       struct sk_buff *skb);
@@ -596,7 +598,10 @@ int br_vlan_add(struct net_bridge *br, u16 vid, u16 flags);
 int br_vlan_delete(struct net_bridge *br, u16 vid);
 void br_vlan_flush(struct net_bridge *br);
 bool br_vlan_find(struct net_bridge *br, u16 vid);
+void br_recalculate_fwd_mask(struct net_bridge *br);
 int br_vlan_filter_toggle(struct net_bridge *br, unsigned long val);
+int br_vlan_set_proto(struct net_bridge *br, unsigned long val);
+void br_vlan_init(struct net_bridge *br);
 int nbp_vlan_add(struct net_bridge_port *port, u16 vid, u16 flags);
 int nbp_vlan_delete(struct net_bridge_port *port, u16 vid);
 void nbp_vlan_flush(struct net_bridge_port *port);
@@ -660,6 +665,12 @@ static inline bool br_allowed_egress(struct net_bridge *br,
 	return true;
 }
 
+static inline bool br_should_learn(struct net_bridge_port *p,
+				   struct sk_buff *skb, u16 *vid)
+{
+	return true;
+}
+
 static inline struct sk_buff *br_handle_vlan(struct net_bridge *br,
 					     const struct net_port_vlans *v,
 					     struct sk_buff *skb)
@@ -684,6 +695,14 @@ static inline void br_vlan_flush(struct net_bridge *br)
 static inline bool br_vlan_find(struct net_bridge *br, u16 vid)
 {
 	return false;
+}
+
+static inline void br_recalculate_fwd_mask(struct net_bridge *br)
+{
+}
+
+static inline void br_vlan_init(struct net_bridge *br)
+{
 }
 
 static inline int nbp_vlan_add(struct net_bridge_port *port, u16 vid, u16 flags)

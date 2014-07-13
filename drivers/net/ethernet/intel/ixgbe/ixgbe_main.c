@@ -402,7 +402,7 @@ static void ixgbe_service_event_complete(struct ixgbe_adapter *adapter)
 	BUG_ON(!test_bit(__IXGBE_SERVICE_SCHED, &adapter->state));
 
 	/* flush memory to make sure state is correct before next watchdog */
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	clear_bit(__IXGBE_SERVICE_SCHED, &adapter->state);
 }
 
@@ -4656,6 +4656,8 @@ static inline bool ixgbe_is_sfp(struct ixgbe_hw *hw)
 	case ixgbe_phy_qsfp_active_unknown:
 	case ixgbe_phy_qsfp_intel:
 	case ixgbe_phy_qsfp_unknown:
+	/* ixgbe_phy_none is set when no SFP module is present */
+	case ixgbe_phy_none:
 		return true;
 	case ixgbe_phy_nl:
 		if (hw->mac.type == ixgbe_mac_82598EB)
@@ -4807,7 +4809,7 @@ static void ixgbe_up_complete(struct ixgbe_adapter *adapter)
 	if (hw->mac.ops.enable_tx_laser)
 		hw->mac.ops.enable_tx_laser(hw);
 
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	clear_bit(__IXGBE_DOWN, &adapter->state);
 	ixgbe_napi_enable_all(adapter);
 
@@ -5717,7 +5719,7 @@ static int ixgbe_resume(struct pci_dev *pdev)
 		e_dev_err("Cannot enable PCI device from suspend\n");
 		return err;
 	}
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	clear_bit(__IXGBE_DISABLED, &adapter->state);
 	pci_set_master(pdev);
 
@@ -8692,7 +8694,7 @@ static pci_ers_result_t ixgbe_io_slot_reset(struct pci_dev *pdev)
 		e_err(probe, "Cannot re-enable PCI device after reset.\n");
 		result = PCI_ERS_RESULT_DISCONNECT;
 	} else {
-		smp_mb__before_clear_bit();
+		smp_mb__before_atomic();
 		clear_bit(__IXGBE_DISABLED, &adapter->state);
 		adapter->hw.hw_addr = adapter->io_addr;
 		pci_set_master(pdev);

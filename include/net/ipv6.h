@@ -19,6 +19,7 @@
 #include <net/if_inet6.h>
 #include <net/ndisc.h>
 #include <net/flow.h>
+#include <net/flow_keys.h>
 #include <net/snmp.h>
 
 #define SIN6_LEN_RFC2133	24
@@ -683,6 +684,50 @@ static inline int ip6_sk_dst_hoplimit(struct ipv6_pinfo *np, struct flowi6 *fl6,
 		hlimit = ip6_dst_hoplimit(dst);
 	return hlimit;
 }
+
+#if IS_ENABLED(CONFIG_IPV6)
+static inline void ip6_set_txhash(struct sock *sk)
+{
+	struct inet_sock *inet = inet_sk(sk);
+	struct ipv6_pinfo *np = inet6_sk(sk);
+	struct flow_keys keys;
+
+	keys.src = (__force __be32)ipv6_addr_hash(&np->saddr);
+	keys.dst = (__force __be32)ipv6_addr_hash(&sk->sk_v6_daddr);
+	keys.port16[0] = inet->inet_sport;
+	keys.port16[1] = inet->inet_dport;
+
+	sk->sk_txhash = flow_hash_from_keys(&keys);
+}
+
+static inline __be32 ip6_make_flowlabel(struct net *net, struct sk_buff *skb,
+					__be32 flowlabel, bool autolabel)
+{
+	if (!flowlabel && (autolabel || net->ipv6.sysctl.auto_flowlabels)) {
+		__be32 hash;
+
+		hash = skb_get_hash(skb);
+
+		/* Since this is being sent on the wire obfuscate hash a bit
+		 * to minimize possbility that any useful information to an
+		 * attacker is leaked. Only lower 20 bits are relevant.
+		 */
+		hash ^= hash >> 12;
+
+		flowlabel = hash & IPV6_FLOWLABEL_MASK;
+	}
+
+	return flowlabel;
+}
+#else
+static inline void ip6_set_txhash(struct sock *sk) { }
+static inline __be32 ip6_make_flowlabel(struct net *net, struct sk_buff *skb,
+					__be32 flowlabel, bool autolabel)
+{
+	return flowlabel;
+}
+#endif
+
 
 /*
  *	Header manipulation

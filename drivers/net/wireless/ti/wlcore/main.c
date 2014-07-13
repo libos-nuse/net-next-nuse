@@ -543,7 +543,7 @@ static int wlcore_irq_locked(struct wl1271 *wl)
 		 * wl1271_ps_elp_wakeup cannot be called concurrently.
 		 */
 		clear_bit(WL1271_FLAG_IRQ_RUNNING, &wl->flags);
-		smp_mb__after_clear_bit();
+		smp_mb__after_atomic();
 
 		ret = wlcore_fw_status(wl, wl->fw_status);
 		if (ret < 0)
@@ -3540,8 +3540,9 @@ out:
 
 static int wl1271_op_hw_scan(struct ieee80211_hw *hw,
 			     struct ieee80211_vif *vif,
-			     struct cfg80211_scan_request *req)
+			     struct ieee80211_scan_request *hw_req)
 {
+	struct cfg80211_scan_request *req = &hw_req->req;
 	struct wl1271 *wl = hw->priv;
 	int ret;
 	u8 *ssid = NULL;
@@ -3636,7 +3637,7 @@ out:
 static int wl1271_op_sched_scan_start(struct ieee80211_hw *hw,
 				      struct ieee80211_vif *vif,
 				      struct cfg80211_sched_scan_request *req,
-				      struct ieee80211_sched_scan_ies *ies)
+				      struct ieee80211_scan_ies *ies)
 {
 	struct wl1271 *wl = hw->priv;
 	struct wl12xx_vif *wlvif = wl12xx_vif_to_data(vif);

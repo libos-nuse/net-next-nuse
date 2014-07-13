@@ -1,7 +1,7 @@
 /*
  * This file is part of the Chelsio T4 Ethernet driver for Linux.
  *
- * Copyright (c) 2003-2010 Chelsio Communications, Inc. All rights reserved.
+ * Copyright (c) 2003-2014 Chelsio Communications, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -232,8 +232,10 @@ struct cxgb4_lld_info {
 	const struct cxgb4_virt_res *vr;     /* assorted HW resources */
 	const unsigned short *mtus;          /* MTU table */
 	const unsigned short *rxq_ids;       /* the ULD's Rx queue ids */
+	const unsigned short *ciq_ids;       /* the ULD's concentrator IQ ids */
 	unsigned short nrxq;                 /* # of Rx queues */
 	unsigned short ntxq;                 /* # of Tx queues */
+	unsigned short nciq;		     /* # of concentrator IQ */
 	unsigned char nchan:4;               /* # of channels */
 	unsigned char nports:4;              /* # of ports */
 	unsigned char wr_cred;               /* WR 16-byte credits */
@@ -251,6 +253,7 @@ struct cxgb4_lld_info {
 	int dbfifo_int_thresh;		     /* doorbell fifo int threshold */
 	unsigned int sge_pktshift;           /* Padding between CPL and */
 					     /*	packet data */
+	unsigned int pf;		     /* Physical Function we're using */
 	bool enable_fw_ofld_conn;            /* Enable connection through fw */
 					     /* WR */
 	bool ulptx_memwrite_dsgl;            /* use of T5 DSGL allowed */
@@ -274,6 +277,11 @@ unsigned int cxgb4_port_viid(const struct net_device *dev);
 unsigned int cxgb4_port_idx(const struct net_device *dev);
 unsigned int cxgb4_best_mtu(const unsigned short *mtus, unsigned short mtu,
 			    unsigned int *idx);
+unsigned int cxgb4_best_aligned_mtu(const unsigned short *mtus,
+				    unsigned short header_size,
+				    unsigned short data_size_max,
+				    unsigned short data_size_align,
+				    unsigned int *mtu_idxp);
 void cxgb4_get_tcp_stats(struct pci_dev *pdev, struct tp_tcp_stats *v4,
 			 struct tp_tcp_stats *v6);
 void cxgb4_iscsi_init(struct net_device *dev, unsigned int tag_mask,

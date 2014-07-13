@@ -299,7 +299,12 @@ int __rtnl_link_register(struct rtnl_link_ops *ops)
 	if (rtnl_link_ops_get(ops->kind))
 		return -EEXIST;
 
-	if (!ops->dellink)
+	/* The check for setup is here because if ops
+	 * does not have that filled up, it is not possible
+	 * to use the ops for creating device. So do not
+	 * fill up dellink as well. That disables rtnl_dellink.
+	 */
+	if (ops->setup && !ops->dellink)
 		ops->dellink = unregister_netdevice_queue;
 
 	list_add_tail(&ops->list, &link_ops);
@@ -1216,6 +1221,8 @@ static const struct nla_policy ifla_vf_policy[IFLA_VF_MAX+1] = {
 				    .len = sizeof(struct ifla_vf_spoofchk) },
 	[IFLA_VF_RATE]		= { .type = NLA_BINARY,
 				    .len = sizeof(struct ifla_vf_rate) },
+	[IFLA_VF_LINK_STATE]	= { .type = NLA_BINARY,
+				    .len = sizeof(struct ifla_vf_link_state) },
 };
 
 static const struct nla_policy ifla_port_policy[IFLA_PORT_MAX+1] = {
@@ -1242,6 +1249,7 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	struct nlattr *tb[IFLA_MAX+1];
 	u32 ext_filter_mask = 0;
 	int err;
+	int hdrlen;
 
 	s_h = cb->args[0];
 	s_idx = cb->args[1];
@@ -1249,8 +1257,17 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	rcu_read_lock();
 	cb->seq = net->dev_base_seq;
 
-	if (nlmsg_parse(cb->nlh, sizeof(struct ifinfomsg), tb, IFLA_MAX,
-			ifla_policy) >= 0) {
+	/* A hack to preserve kernel<->userspace interface.
+	 * The correct header is ifinfomsg. It is consistent with rtnl_getlink.
+	 * However, before Linux v3.9 the code here assumed rtgenmsg and that's
+	 * what iproute2 < v3.9.0 used.
+	 * We can detect the old iproute2. Even including the IFLA_EXT_MASK
+	 * attribute, its netlink message is shorter than struct ifinfomsg.
+	 */
+	hdrlen = nlmsg_len(cb->nlh) < sizeof(struct ifinfomsg) ?
+		 sizeof(struct rtgenmsg) : sizeof(struct ifinfomsg);
+
+	if (nlmsg_parse(cb->nlh, hdrlen, tb, IFLA_MAX, ifla_policy) >= 0) {
 
 		if (tb[IFLA_EXT_MASK])
 			ext_filter_mask = nla_get_u32(tb[IFLA_EXT_MASK]);
@@ -1765,12 +1782,11 @@ static int rtnl_dellink(struct sk_buff *skb, struct nlmsghdr *nlh)
 		return -ENODEV;
 
 	ops = dev->rtnl_link_ops;
-	if (!ops)
+	if (!ops || !ops->dellink)
 		return -EOPNOTSUPP;
 
 	ops->dellink(dev, &list_kill);
 	unregister_netdevice_many(&list_kill);
-	list_del(&list_kill);
 	return 0;
 }
 
@@ -2027,6 +2043,9 @@ replay:
 			return -EOPNOTSUPP;
 		}
 
+		if (!ops->setup)
+			return -EOPNOTSUPP;
+
 		if (!ifname[0])
 			snprintf(ifname, IFNAMSIZ, "%s%%d", ops->kind);
 
@@ -2045,11 +2064,15 @@ replay:
 		if (ops->newlink) {
 			err = ops->newlink(net, dev, tb, data);
 			/* Drivers should call free_netdev() in ->destructor
-			 * and unregister it on failure so that device could be
-			 * finally freed in rtnl_unlock.
+			 * and unregister it on failure after registration
+			 * so that device could be finally freed in rtnl_unlock.
 			 */
-			if (err < 0)
+			if (err < 0) {
+				/* If device is not registered at all, free it now */
+				if (dev->reg_state == NETREG_UNINITIALIZED)
+					free_netdev(dev);
 				goto out;
+			}
 		} else {
 			err = register_netdevice(dev);
 			if (err < 0) {
@@ -2121,9 +2144,13 @@ static u16 rtnl_calcit(struct sk_buff *skb, struct nlmsghdr *nlh)
 	struct nlattr *tb[IFLA_MAX+1];
 	u32 ext_filter_mask = 0;
 	u16 min_ifinfo_dump_size = 0;
+	int hdrlen;
 
-	if (nlmsg_parse(nlh, sizeof(struct ifinfomsg), tb, IFLA_MAX,
-			ifla_policy) >= 0) {
+	/* Same kernel<->userspace interface hack as in rtnl_dump_ifinfo. */
+	hdrlen = nlmsg_len(nlh) < sizeof(struct ifinfomsg) ?
+		 sizeof(struct rtgenmsg) : sizeof(struct ifinfomsg);
+
+	if (nlmsg_parse(nlh, hdrlen, tb, IFLA_MAX, ifla_policy) >= 0) {
 		if (tb[IFLA_EXT_MASK])
 			ext_filter_mask = nla_get_u32(tb[IFLA_EXT_MASK]);
 	}
@@ -2490,6 +2517,7 @@ skip:
 int ndo_dflt_fdb_dump(struct sk_buff *skb,
 		      struct netlink_callback *cb,
 		      struct net_device *dev,
+		      struct net_device *filter_dev,
 		      int idx)
 {
 	int err;
@@ -2507,28 +2535,72 @@ EXPORT_SYMBOL(ndo_dflt_fdb_dump);
 
 static int rtnl_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb)
 {
-	int idx = 0;
-	struct net *net = sock_net(skb->sk);
 	struct net_device *dev;
+	struct nlattr *tb[IFLA_MAX+1];
+	struct net_device *bdev = NULL;
+	struct net_device *br_dev = NULL;
+	const struct net_device_ops *ops = NULL;
+	const struct net_device_ops *cops = NULL;
+	struct ifinfomsg *ifm = nlmsg_data(cb->nlh);
+	struct net *net = sock_net(skb->sk);
+	int brport_idx = 0;
+	int br_idx = 0;
+	int idx = 0;
 
-	rcu_read_lock();
-	for_each_netdev_rcu(net, dev) {
-		if (dev->priv_flags & IFF_BRIDGE_PORT) {
-			struct net_device *br_dev;
-			const struct net_device_ops *ops;
+	if (nlmsg_parse(cb->nlh, sizeof(struct ifinfomsg), tb, IFLA_MAX,
+			ifla_policy) == 0) {
+		if (tb[IFLA_MASTER])
+			br_idx = nla_get_u32(tb[IFLA_MASTER]);
+	}
 
-			br_dev = netdev_master_upper_dev_get(dev);
-			ops = br_dev->netdev_ops;
-			if (ops->ndo_fdb_dump)
-				idx = ops->ndo_fdb_dump(skb, cb, dev, idx);
+	brport_idx = ifm->ifi_index;
+
+	if (br_idx) {
+		br_dev = __dev_get_by_index(net, br_idx);
+		if (!br_dev)
+			return -ENODEV;
+
+		ops = br_dev->netdev_ops;
+		bdev = br_dev;
+	}
+
+	for_each_netdev(net, dev) {
+		if (brport_idx && (dev->ifindex != brport_idx))
+			continue;
+
+		if (!br_idx) { /* user did not specify a specific bridge */
+			if (dev->priv_flags & IFF_BRIDGE_PORT) {
+				br_dev = netdev_master_upper_dev_get(dev);
+				cops = br_dev->netdev_ops;
+			}
+
+			bdev = dev;
+		} else {
+			if (dev != br_dev &&
+			    !(dev->priv_flags & IFF_BRIDGE_PORT))
+				continue;
+
+			if (br_dev != netdev_master_upper_dev_get(dev) &&
+			    !(dev->priv_flags & IFF_EBRIDGE))
+				continue;
+
+			bdev = br_dev;
+			cops = ops;
 		}
 
+		if (dev->priv_flags & IFF_BRIDGE_PORT) {
+			if (cops && cops->ndo_fdb_dump)
+				idx = cops->ndo_fdb_dump(skb, cb, br_dev, dev,
+							 idx);
+		}
+
+		idx = ndo_dflt_fdb_dump(skb, cb, dev, NULL, idx);
 		if (dev->netdev_ops->ndo_fdb_dump)
-			idx = dev->netdev_ops->ndo_fdb_dump(skb, cb, dev, idx);
-		else
-			idx = ndo_dflt_fdb_dump(skb, cb, dev, idx);
+			idx = dev->netdev_ops->ndo_fdb_dump(skb, cb, bdev, dev,
+							    idx);
+
+		cops = NULL;
 	}
-	rcu_read_unlock();
 
 	cb->args[0] = idx;
 	return skb->len;

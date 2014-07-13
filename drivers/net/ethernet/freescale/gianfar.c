@@ -1242,7 +1242,7 @@ static void gfar_hw_init(struct gfar_private *priv)
 		gfar_write_isrg(priv);
 }
 
-static void __init gfar_init_addr_hash_table(struct gfar_private *priv)
+static void gfar_init_addr_hash_table(struct gfar_private *priv)
 {
 	struct gfar __iomem *regs = priv->gfargrp[0].regs;
 
@@ -1384,15 +1384,15 @@ static int gfar_probe(struct platform_device *ofdev)
 
 	gfar_hw_init(priv);
 
+	/* Carrier starts down, phylib will bring it up */
+	netif_carrier_off(dev);
+
 	err = register_netdev(dev);
 
 	if (err) {
 		pr_err("%s: Cannot register net device, aborting\n", dev->name);
 		goto register_fail;
 	}
-
-	/* Carrier starts down, phylib will bring it up */
-	netif_carrier_off(dev);
 
 	device_init_wakeup(&dev->dev,
 			   priv->device_flags &
@@ -1806,9 +1806,9 @@ void stop_gfar(struct net_device *dev)
 
 	netif_tx_stop_all_queues(dev);
 
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	set_bit(GFAR_DOWN, &priv->state);
-	smp_mb__after_clear_bit();
+	smp_mb__after_atomic();
 
 	disable_napi(priv);
 
@@ -2051,9 +2051,9 @@ int startup_gfar(struct net_device *ndev)
 
 	gfar_init_tx_rx_base(priv);
 
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	clear_bit(GFAR_DOWN, &priv->state);
-	smp_mb__after_clear_bit();
+	smp_mb__after_atomic();
 
 	/* Start Rx/Tx DMA and enable the interrupts */
 	gfar_start(priv);

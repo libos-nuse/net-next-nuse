@@ -74,7 +74,7 @@ nfnl_acct_new(struct sock *nfnl, struct sk_buff *skb,
 			/* reset counters if you request a replacement. */
 			atomic64_set(&matching->pkts, 0);
 			atomic64_set(&matching->bytes, 0);
-			smp_mb__before_clear_bit();
+			smp_mb__before_atomic();
 			/* reset overquota flag if quota is enabled. */
 			if ((matching->flags & NFACCT_F_QUOTA))
 				clear_bit(NFACCT_F_OVERQUOTA, &matching->flags);
@@ -83,7 +83,6 @@ nfnl_acct_new(struct sock *nfnl, struct sk_buff *skb,
 		return -EBUSY;
 	}
 
-	nfacct = kzalloc(sizeof(struct nf_acct), GFP_KERNEL);
 	if (tb[NFACCT_FLAGS]) {
 		flags = ntohl(nla_get_be32(tb[NFACCT_FLAGS]));
 		if (flags & ~NFACCT_F_QUOTA)
@@ -147,7 +146,7 @@ nfnl_acct_fill_info(struct sk_buff *skb, u32 portid, u32 seq, u32 type,
 	if (type == NFNL_MSG_ACCT_GET_CTRZERO) {
 		pkts = atomic64_xchg(&acct->pkts, 0);
 		bytes = atomic64_xchg(&acct->bytes, 0);
-		smp_mb__before_clear_bit();
+		smp_mb__before_atomic();
 		if (acct->flags & NFACCT_F_QUOTA)
 			clear_bit(NFACCT_F_OVERQUOTA, &acct->flags);
 	} else {

@@ -161,13 +161,6 @@ static int ixgbe_get_settings(struct net_device *netdev,
 	bool autoneg = false;
 	bool link_up;
 
-	/* SFP type is needed for get_link_capabilities */
-	if (hw->phy.media_type & (ixgbe_media_type_fiber |
-				  ixgbe_media_type_fiber_qsfp)) {
-		if (hw->phy.sfp_type == ixgbe_sfp_type_not_present)
-				hw->phy.ops.identify_sfp(hw);
-	}
-
 	hw->mac.ops.get_link_capabilities(hw, &supported_link, &autoneg);
 
 	/* set the supported link speeds */
@@ -303,8 +296,8 @@ static int ixgbe_get_settings(struct net_device *netdev,
 		}
 		ecmd->duplex = DUPLEX_FULL;
 	} else {
-		ethtool_cmd_speed_set(ecmd, -1);
-		ecmd->duplex = -1;
+		ethtool_cmd_speed_set(ecmd, SPEED_UNKNOWN);
+		ecmd->duplex = DUPLEX_UNKNOWN;
 	}
 
 	return 0;

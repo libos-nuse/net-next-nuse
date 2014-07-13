@@ -544,7 +544,7 @@ static u8 smp_random(struct smp_chan *smp)
 		hci_le_start_enc(hcon, ediv, rand, stk);
 		hcon->enc_key_size = smp->enc_key_size;
 	} else {
-		u8 stk[16];
+		u8 stk[16], auth;
 		__le64 rand = 0;
 		__le16 ediv = 0;
 
@@ -556,8 +556,13 @@ static u8 smp_random(struct smp_chan *smp)
 		memset(stk + smp->enc_key_size, 0,
 		       SMP_MAX_ENC_KEY_SIZE - smp->enc_key_size);
 
+		if (hcon->pending_sec_level == BT_SECURITY_HIGH)
+			auth = 1;
+		else
+			auth = 0;
+
 		hci_add_ltk(hcon->hdev, &hcon->dst, hcon->dst_type,
-			    HCI_SMP_STK_SLAVE, 0, stk, smp->enc_key_size,
+			    HCI_SMP_STK_SLAVE, auth, stk, smp->enc_key_size,
 			    ediv, rand);
 	}
 
@@ -909,10 +914,11 @@ int smp_conn_security(struct hci_conn *hcon, __u8 sec_level)
 
 	authreq = seclevel_to_authreq(sec_level);
 
-	/* hcon->auth_type is set by pair_device in mgmt.c. If the MITM
-	 * flag is set we should also set it for the SMP request.
+	/* Require MITM if IO Capability allows or the security level
+	 * requires it.
 	 */
-	if ((hcon->auth_type & 0x01))
+	if (hcon->io_capability != HCI_IO_NO_INPUT_OUTPUT ||
+	    sec_level > BT_SECURITY_MEDIUM)
 		authreq |= SMP_AUTH_MITM;
 
 	if (hcon->link_mode & HCI_LM_MASTER) {

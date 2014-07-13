@@ -916,6 +916,7 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 	skb_orphan(skb);
 	skb->sk = sk;
 	skb->destructor = tcp_wfree;
+	skb_set_hash_from_sk(skb, sk);
 	atomic_add(skb->truesize, &sk->sk_wmem_alloc);
 
 	/* Build TCP header and checksum it. */
@@ -1074,7 +1075,7 @@ static void tcp_adjust_pcount(struct sock *sk, const struct sk_buff *skb, int de
  * Remember, these are still headerless SKBs at this point.
  */
 int tcp_fragment(struct sock *sk, struct sk_buff *skb, u32 len,
-		 unsigned int mss_now)
+		 unsigned int mss_now, gfp_t gfp)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct sk_buff *buff;
@@ -1089,11 +1090,11 @@ int tcp_fragment(struct sock *sk, struct sk_buff *skb, u32 len,
 	if (nsize < 0)
 		nsize = 0;
 
-	if (skb_unclone(skb, GFP_ATOMIC))
+	if (skb_unclone(skb, gfp))
 		return -ENOMEM;
 
 	/* Get a new skb... force flag on. */
-	buff = sk_stream_alloc_skb(sk, nsize, GFP_ATOMIC);
+	buff = sk_stream_alloc_skb(sk, nsize, gfp);
 	if (buff == NULL)
 		return -ENOMEM; /* We'll just try again later. */
 
@@ -1625,7 +1626,7 @@ static int tso_fragment(struct sock *sk, struct sk_buff *skb, unsigned int len,
 
 	/* All of a TSO frame must be composed of paged data.  */
 	if (skb->len != skb->data_len)
-		return tcp_fragment(sk, skb, len, mss_now);
+		return tcp_fragment(sk, skb, len, mss_now, gfp);
 
 	buff = sk_stream_alloc_skb(sk, 0, gfp);
 	if (unlikely(buff == NULL))
@@ -1961,10 +1962,8 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			/* It is possible TX completion already happened
 			 * before we set TSQ_THROTTLED, so we must
 			 * test again the condition.
-			 * We abuse smp_mb__after_clear_bit() because
-			 * there is no smp_mb__after_set_bit() yet
 			 */
-			smp_mb__after_clear_bit();
+			smp_mb__after_atomic();
 			if (atomic_read(&sk->sk_wmem_alloc) > limit)
 				break;
 		}
@@ -2122,7 +2121,8 @@ void tcp_send_loss_probe(struct sock *sk)
 		goto rearm_timer;
 
 	if ((pcount > 1) && (skb->len > (pcount - 1) * mss)) {
-		if (unlikely(tcp_fragment(sk, skb, (pcount - 1) * mss, mss)))
+		if (unlikely(tcp_fragment(sk, skb, (pcount - 1) * mss, mss,
+					  GFP_ATOMIC)))
 			goto rearm_timer;
 		skb = tcp_write_queue_tail(sk);
 	}
@@ -2130,9 +2130,7 @@ void tcp_send_loss_probe(struct sock *sk)
 	if (WARN_ON(!skb || !tcp_skb_pcount(skb)))
 		goto rearm_timer;
 
-	/* Probe with zero data doesn't trigger fast recovery. */
-	if (skb->len > 0)
-		err = __tcp_retransmit_skb(sk, skb);
+	err = __tcp_retransmit_skb(sk, skb);
 
 	/* Record snd_nxt for loss detection. */
 	if (likely(!err))
@@ -2463,7 +2461,7 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
 		return -EAGAIN;
 
 	if (skb->len > cur_mss) {
-		if (tcp_fragment(sk, skb, cur_mss, cur_mss))
+		if (tcp_fragment(sk, skb, cur_mss, cur_mss, GFP_ATOMIC))
 			return -ENOMEM; /* We'll try again later. */
 	} else {
 		int oldpcount = tcp_skb_pcount(skb);
@@ -3244,7 +3242,7 @@ int tcp_write_wakeup(struct sock *sk)
 		    skb->len > mss) {
 			seg_size = min(seg_size, mss);
 			TCP_SKB_CB(skb)->tcp_flags |= TCPHDR_PSH;
-			if (tcp_fragment(sk, skb, seg_size, mss))
+			if (tcp_fragment(sk, skb, seg_size, mss, GFP_ATOMIC))
 				return -1;
 		} else if (!tcp_skb_pcount(skb))
 			tcp_set_skb_tso_segs(sk, skb, mss);
@@ -3302,3 +3300,18 @@ void tcp_send_probe0(struct sock *sk)
 					  TCP_RTO_MAX);
 	}
 }
+
+int tcp_rtx_synack(struct sock *sk, struct request_sock *req)
+{
+	const struct tcp_request_sock_ops *af_ops = tcp_rsk(req)->af_specific;
+	struct flowi fl;
+	int res;
+
+	res = af_ops->send_synack(sk, NULL, &fl, req, 0, NULL);
+	if (!res) {
+		TCP_INC_STATS_BH(sock_net(sk), TCP_MIB_RETRANSSEGS);
+		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPSYNRETRANS);
+	}
+	return res;
+}
+EXPORT_SYMBOL(tcp_rtx_synack);

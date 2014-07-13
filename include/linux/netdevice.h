@@ -490,7 +490,7 @@ static inline void napi_disable(struct napi_struct *n)
 static inline void napi_enable(struct napi_struct *n)
 {
 	BUG_ON(!test_bit(NAPI_STATE_SCHED, &n->state));
-	smp_mb__before_clear_bit();
+	smp_mb__before_atomic();
 	clear_bit(NAPI_STATE_SCHED, &n->state);
 }
 
@@ -943,7 +943,8 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
  *		      const unsigned char *addr)
  *	Deletes the FDB entry from dev coresponding to addr.
  * int (*ndo_fdb_dump)(struct sk_buff *skb, struct netlink_callback *cb,
- *		       struct net_device *dev, int idx)
+ *		       struct net_device *dev, struct net_device *filter_dev,
+ *		       int idx)
  *	Used to add FDB entries to dump requests. Implementers should add
  *	entries to skb and update idx with the number of entries.
  *
@@ -1114,6 +1115,7 @@ struct net_device_ops {
 	int			(*ndo_fdb_dump)(struct sk_buff *skb,
 						struct netlink_callback *cb,
 						struct net_device *dev,
+						struct net_device *filter_dev,
 						int idx);
 
 	int			(*ndo_bridge_setlink)(struct net_device *dev,
@@ -2486,7 +2488,7 @@ static inline int netif_set_xps_queue(struct net_device *dev,
  * as a distribution range limit for the returned value.
  */
 static inline u16 skb_tx_hash(const struct net_device *dev,
-			      const struct sk_buff *skb)
+			      struct sk_buff *skb)
 {
 	return __skb_tx_hash(dev, skb, dev->real_num_tx_queues);
 }
@@ -3305,6 +3307,13 @@ static inline bool net_gso_ok(netdev_features_t features, int gso_type)
 	BUILD_BUG_ON(SKB_GSO_TCP_ECN != (NETIF_F_TSO_ECN >> NETIF_F_GSO_SHIFT));
 	BUILD_BUG_ON(SKB_GSO_TCPV6   != (NETIF_F_TSO6 >> NETIF_F_GSO_SHIFT));
 	BUILD_BUG_ON(SKB_GSO_FCOE    != (NETIF_F_FSO >> NETIF_F_GSO_SHIFT));
+	BUILD_BUG_ON(SKB_GSO_GRE     != (NETIF_F_GSO_GRE >> NETIF_F_GSO_SHIFT));
+	BUILD_BUG_ON(SKB_GSO_GRE_CSUM != (NETIF_F_GSO_GRE_CSUM >> NETIF_F_GSO_SHIFT));
+	BUILD_BUG_ON(SKB_GSO_IPIP    != (NETIF_F_GSO_IPIP >> NETIF_F_GSO_SHIFT));
+	BUILD_BUG_ON(SKB_GSO_SIT     != (NETIF_F_GSO_SIT >> NETIF_F_GSO_SHIFT));
+	BUILD_BUG_ON(SKB_GSO_UDP_TUNNEL != (NETIF_F_GSO_UDP_TUNNEL >> NETIF_F_GSO_SHIFT));
+	BUILD_BUG_ON(SKB_GSO_UDP_TUNNEL_CSUM != (NETIF_F_GSO_UDP_TUNNEL_CSUM >> NETIF_F_GSO_SHIFT));
+	BUILD_BUG_ON(SKB_GSO_MPLS    != (NETIF_F_GSO_MPLS >> NETIF_F_GSO_SHIFT));
 
 	return (features & feature) == feature;
 }

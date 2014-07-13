@@ -141,6 +141,7 @@ static int igb_get_settings(struct net_device *netdev, struct ethtool_cmd *ecmd)
 	struct e1000_dev_spec_82575 *dev_spec = &hw->dev_spec._82575;
 	struct e1000_sfp_flags *eth_flags = &dev_spec->eth_flags;
 	u32 status;
+	u32 speed;
 
 	status = rd32(E1000_STATUS);
 	if (hw->phy.media_type == e1000_media_type_copper) {
@@ -215,13 +216,13 @@ static int igb_get_settings(struct net_device *netdev, struct ethtool_cmd *ecmd)
 	if (status & E1000_STATUS_LU) {
 		if ((status & E1000_STATUS_2P5_SKU) &&
 		    !(status & E1000_STATUS_2P5_SKU_OVER)) {
-			ecmd->speed = SPEED_2500;
+			speed = SPEED_2500;
 		} else if (status & E1000_STATUS_SPEED_1000) {
-			ecmd->speed = SPEED_1000;
+			speed = SPEED_1000;
 		} else if (status & E1000_STATUS_SPEED_100) {
-			ecmd->speed = SPEED_100;
+			speed = SPEED_100;
 		} else {
-			ecmd->speed = SPEED_10;
+			speed = SPEED_10;
 		}
 		if ((status & E1000_STATUS_FD) ||
 		    hw->phy.media_type != e1000_media_type_copper)
@@ -229,9 +230,10 @@ static int igb_get_settings(struct net_device *netdev, struct ethtool_cmd *ecmd)
 		else
 			ecmd->duplex = DUPLEX_HALF;
 	} else {
-		ecmd->speed = -1;
-		ecmd->duplex = -1;
+		speed = SPEED_UNKNOWN;
+		ecmd->duplex = DUPLEX_UNKNOWN;
 	}
+	ethtool_cmd_speed_set(ecmd, speed);
 	if ((hw->phy.media_type == e1000_media_type_fiber) ||
 	    hw->mac.autoneg)
 		ecmd->autoneg = AUTONEG_ENABLE;
@@ -1665,8 +1667,8 @@ static int igb_setup_loopback_test(struct igb_adapter *adapter)
 		(hw->device_id == E1000_DEV_ID_DH89XXCC_SERDES) ||
 		(hw->device_id == E1000_DEV_ID_DH89XXCC_BACKPLANE) ||
 		(hw->device_id == E1000_DEV_ID_DH89XXCC_SFP) ||
-		(hw->device_id == E1000_DEV_ID_I354_SGMII)) {
-
+		(hw->device_id == E1000_DEV_ID_I354_SGMII) ||
+		(hw->device_id == E1000_DEV_ID_I354_BACKPLANE_2_5GBPS)) {
 			/* Enable DH89xxCC MPHY for near end loopback */
 			reg = rd32(E1000_MPHY_ADDR_CTL);
 			reg = (reg & E1000_MPHY_ADDR_CTL_OFFSET_MASK) |
@@ -2736,7 +2738,7 @@ static int igb_get_module_info(struct net_device *netdev,
 {
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
-	u32 status = E1000_SUCCESS;
+	u32 status = 0;
 	u16 sff8472_rev, addr_mode;
 	bool page_swap = false;
 
@@ -2746,12 +2748,12 @@ static int igb_get_module_info(struct net_device *netdev,
 
 	/* Check whether we support SFF-8472 or not */
 	status = igb_read_phy_reg_i2c(hw, IGB_SFF_8472_COMP, &sff8472_rev);
-	if (status != E1000_SUCCESS)
+	if (status)
 		return -EIO;
 
 	/* addressing mode is not supported */
 	status = igb_read_phy_reg_i2c(hw, IGB_SFF_8472_SWAP, &addr_mode);
-	if (status != E1000_SUCCESS)
+	if (status)
 		return -EIO;
 
 	/* addressing mode is not supported */
@@ -2778,7 +2780,7 @@ static int igb_get_module_eeprom(struct net_device *netdev,
 {
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
-	u32 status = E1000_SUCCESS;
+	u32 status = 0;
 	u16 *dataword;
 	u16 first_word, last_word;
 	int i = 0;
@@ -2797,7 +2799,7 @@ static int igb_get_module_eeprom(struct net_device *netdev,
 	/* Read EEPROM block, SFF-8079/SFF-8472, word at a time */
 	for (i = 0; i < last_word - first_word + 1; i++) {
 		status = igb_read_phy_reg_i2c(hw, first_word + i, &dataword[i]);
-		if (status != E1000_SUCCESS) {
+		if (status) {
 			/* Error occurred while reading module */
 			kfree(dataword);
 			return -EIO;

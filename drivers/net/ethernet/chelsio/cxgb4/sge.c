@@ -1,7 +1,7 @@
 /*
  * This file is part of the Chelsio T4 Ethernet driver for Linux.
  *
- * Copyright (c) 2003-2010 Chelsio Communications, Inc. All rights reserved.
+ * Copyright (c) 2003-2014 Chelsio Communications, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -2031,7 +2031,7 @@ static void sge_rx_timer_cb(unsigned long data)
 			struct sge_fl *fl = s->egr_map[id];
 
 			clear_bit(id, s->starving_fl);
-			smp_mb__after_clear_bit();
+			smp_mb__after_atomic();
 
 			if (fl_starving(fl)) {
 				rxq = container_of(fl, struct sge_eth_rxq, fl);
@@ -2215,7 +2215,6 @@ int t4_sge_alloc_rxq(struct adapter *adap, struct sge_rspq *iq, bool fwevtq,
 	iq->cntxt_id = ntohs(c.iqid);
 	iq->abs_id = ntohs(c.physiqid);
 	iq->size--;                           /* subtract status entry */
-	iq->adap = adap;
 	iq->netdev = dev;
 	iq->handler = hnd;
 
@@ -2512,6 +2511,10 @@ void t4_free_sge_resources(struct adapter *adap)
 			free_rspq_fl(adap, &oq->rspq, &oq->fl);
 	}
 	for (i = 0, oq = adap->sge.rdmarxq; i < adap->sge.rdmaqs; i++, oq++) {
+		if (oq->rspq.desc)
+			free_rspq_fl(adap, &oq->rspq, &oq->fl);
+	}
+	for (i = 0, oq = adap->sge.rdmaciq; i < adap->sge.rdmaciqs; i++, oq++) {
 		if (oq->rspq.desc)
 			free_rspq_fl(adap, &oq->rspq, &oq->fl);
 	}

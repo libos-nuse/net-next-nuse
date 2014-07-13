@@ -922,7 +922,7 @@ static const int frag_sizes[] = {
 void mlx4_en_calc_rx_buf(struct net_device *dev)
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
-	int eff_mtu = dev->mtu + ETH_HLEN + VLAN_HLEN + ETH_LLC_SNAP_SIZE;
+	int eff_mtu = dev->mtu + ETH_HLEN + VLAN_HLEN;
 	int buf_size = 0;
 	int i = 0;
 
@@ -976,7 +976,7 @@ static int mlx4_en_config_rss_qp(struct mlx4_en_priv *priv, int qpn,
 	if (!context)
 		return -ENOMEM;
 
-	err = mlx4_qp_alloc(mdev->dev, qpn, qp);
+	err = mlx4_qp_alloc(mdev->dev, qpn, qp, GFP_KERNEL);
 	if (err) {
 		en_err(priv, "Failed to allocate qp #%x\n", qpn);
 		goto out;
@@ -1016,7 +1016,7 @@ int mlx4_en_create_drop_qp(struct mlx4_en_priv *priv)
 		en_err(priv, "Failed reserving drop qpn\n");
 		return err;
 	}
-	err = mlx4_qp_alloc(priv->mdev->dev, qpn, &priv->drop_qp);
+	err = mlx4_qp_alloc(priv->mdev->dev, qpn, &priv->drop_qp, GFP_KERNEL);
 	if (err) {
 		en_err(priv, "Failed allocating drop qp\n");
 		mlx4_qp_release_range(priv->mdev->dev, qpn, 1);
@@ -1075,7 +1075,7 @@ int mlx4_en_config_rss_steer(struct mlx4_en_priv *priv)
 	}
 
 	/* Configure RSS indirection qp */
-	err = mlx4_qp_alloc(mdev->dev, priv->base_qpn, &rss_map->indir_qp);
+	err = mlx4_qp_alloc(mdev->dev, priv->base_qpn, &rss_map->indir_qp, GFP_KERNEL);
 	if (err) {
 		en_err(priv, "Failed to allocate RSS indirection QP\n");
 		goto rss_err;

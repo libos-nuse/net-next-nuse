@@ -329,6 +329,9 @@
 /* Timestamp in Rx buffer */
 #define E1000_RXPBS_CFG_TS_EN           0x80000000
 
+#define I210_RXPBSIZE_DEFAULT		0x000000A2 /* RXPBSIZE default */
+#define I210_TXPBSIZE_DEFAULT		0x04000014 /* TXPBSIZE default */
+
 /* SerDes Control */
 #define E1000_SCTL_DISABLE_SERDES_LOOPBACK 0x0400
 
@@ -456,7 +459,6 @@
 #define E1000_RAH_POOL_1 0x00040000
 
 /* Error Codes */
-#define E1000_SUCCESS      0
 #define E1000_ERR_NVM      1
 #define E1000_ERR_PHY      2
 #define E1000_ERR_CONFIG   3

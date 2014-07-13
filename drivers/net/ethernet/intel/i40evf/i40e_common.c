@@ -43,12 +43,10 @@ i40e_status i40e_set_mac_type(struct i40e_hw *hw)
 	if (hw->vendor_id == PCI_VENDOR_ID_INTEL) {
 		switch (hw->device_id) {
 		case I40E_DEV_ID_SFP_XL710:
-		case I40E_DEV_ID_SFP_X710:
 		case I40E_DEV_ID_QEMU:
 		case I40E_DEV_ID_KX_A:
 		case I40E_DEV_ID_KX_B:
 		case I40E_DEV_ID_KX_C:
-		case I40E_DEV_ID_KX_D:
 		case I40E_DEV_ID_QSFP_A:
 		case I40E_DEV_ID_QSFP_B:
 		case I40E_DEV_ID_QSFP_C:
@@ -553,6 +551,7 @@ i40e_status i40e_aq_send_msg_to_pf(struct i40e_hw *hw,
 				struct i40e_asq_cmd_details *cmd_details)
 {
 	struct i40e_aq_desc desc;
+	struct i40e_asq_cmd_details details;
 	i40e_status status;
 
 	i40evf_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_send_msg_to_pf);
@@ -567,7 +566,6 @@ i40e_status i40e_aq_send_msg_to_pf(struct i40e_hw *hw,
 		desc.datalen = cpu_to_le16(msglen);
 	}
 	if (!cmd_details) {
-		struct i40e_asq_cmd_details details;
 		memset(&details, 0, sizeof(details));
 		details.async = true;
 		cmd_details = &details;

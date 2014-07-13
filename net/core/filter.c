@@ -59,12 +59,12 @@
 #define BPF_R10	regs[BPF_REG_10]
 
 /* Named registers */
-#define A	regs[insn->a_reg]
-#define X	regs[insn->x_reg]
+#define DST	regs[insn->dst_reg]
+#define SRC	regs[insn->src_reg]
 #define FP	regs[BPF_REG_FP]
 #define ARG1	regs[BPF_REG_ARG1]
 #define CTX	regs[BPF_REG_CTX]
-#define K	insn->imm
+#define IMM	insn->imm
 
 /* No hurry in this branch
  *
@@ -82,15 +82,6 @@ void *bpf_internal_load_pointer_neg_helper(const struct sk_buff *skb, int k, uns
 		return ptr;
 
 	return NULL;
-}
-
-static inline void *load_pointer(const struct sk_buff *skb, int k,
-				 unsigned int size, void *buffer)
-{
-	if (k >= 0)
-		return skb_header_pointer(skb, k, size, buffer);
-
-	return bpf_internal_load_pointer_neg_helper(skb, k, size);
 }
 
 /**
@@ -264,7 +255,7 @@ static unsigned int __sk_run_filter(void *ctx, const struct sock_filter_int *ins
 	FP = (u64) (unsigned long) &stack[ARRAY_SIZE(stack)];
 	ARG1 = (u64) (unsigned long) ctx;
 
-	/* Register for user BPF programs need to be reset first. */
+	/* Registers used in classic BPF programs need to be reset first. */
 	regs[BPF_REG_A] = 0;
 	regs[BPF_REG_X] = 0;
 
@@ -274,16 +265,16 @@ select_insn:
 	/* ALU */
 #define ALU(OPCODE, OP)			\
 	ALU64_##OPCODE##_X:		\
-		A = A OP X;		\
+		DST = DST OP SRC;	\
 		CONT;			\
 	ALU_##OPCODE##_X:		\
-		A = (u32) A OP (u32) X;	\
+		DST = (u32) DST OP (u32) SRC;	\
 		CONT;			\
 	ALU64_##OPCODE##_K:		\
-		A = A OP K;		\
+		DST = DST OP IMM;		\
 		CONT;			\
 	ALU_##OPCODE##_K:		\
-		A = (u32) A OP (u32) K;	\
+		DST = (u32) DST OP (u32) IMM;	\
 		CONT;
 
 	ALU(ADD,  +)
@@ -296,92 +287,92 @@ select_insn:
 	ALU(MUL,  *)
 #undef ALU
 	ALU_NEG:
-		A = (u32) -A;
+		DST = (u32) -DST;
 		CONT;
 	ALU64_NEG:
-		A = -A;
+		DST = -DST;
 		CONT;
 	ALU_MOV_X:
-		A = (u32) X;
+		DST = (u32) SRC;
 		CONT;
 	ALU_MOV_K:
-		A = (u32) K;
+		DST = (u32) IMM;
 		CONT;
 	ALU64_MOV_X:
-		A = X;
+		DST = SRC;
 		CONT;
 	ALU64_MOV_K:
-		A = K;
+		DST = IMM;
 		CONT;
 	ALU64_ARSH_X:
-		(*(s64 *) &A) >>= X;
+		(*(s64 *) &DST) >>= SRC;
 		CONT;
 	ALU64_ARSH_K:
-		(*(s64 *) &A) >>= K;
+		(*(s64 *) &DST) >>= IMM;
 		CONT;
 	ALU64_MOD_X:
-		if (unlikely(X == 0))
+		if (unlikely(SRC == 0))
 			return 0;
-		tmp = A;
-		A = do_div(tmp, X);
+		tmp = DST;
+		DST = do_div(tmp, SRC);
 		CONT;
 	ALU_MOD_X:
-		if (unlikely(X == 0))
+		if (unlikely(SRC == 0))
 			return 0;
-		tmp = (u32) A;
-		A = do_div(tmp, (u32) X);
+		tmp = (u32) DST;
+		DST = do_div(tmp, (u32) SRC);
 		CONT;
 	ALU64_MOD_K:
-		tmp = A;
-		A = do_div(tmp, K);
+		tmp = DST;
+		DST = do_div(tmp, IMM);
 		CONT;
 	ALU_MOD_K:
-		tmp = (u32) A;
-		A = do_div(tmp, (u32) K);
+		tmp = (u32) DST;
+		DST = do_div(tmp, (u32) IMM);
 		CONT;
 	ALU64_DIV_X:
-		if (unlikely(X == 0))
+		if (unlikely(SRC == 0))
 			return 0;
-		do_div(A, X);
+		do_div(DST, SRC);
 		CONT;
 	ALU_DIV_X:
-		if (unlikely(X == 0))
+		if (unlikely(SRC == 0))
 			return 0;
-		tmp = (u32) A;
-		do_div(tmp, (u32) X);
-		A = (u32) tmp;
+		tmp = (u32) DST;
+		do_div(tmp, (u32) SRC);
+		DST = (u32) tmp;
 		CONT;
 	ALU64_DIV_K:
-		do_div(A, K);
+		do_div(DST, IMM);
 		CONT;
 	ALU_DIV_K:
-		tmp = (u32) A;
-		do_div(tmp, (u32) K);
-		A = (u32) tmp;
+		tmp = (u32) DST;
+		do_div(tmp, (u32) IMM);
+		DST = (u32) tmp;
 		CONT;
 	ALU_END_TO_BE:
-		switch (K) {
+		switch (IMM) {
 		case 16:
-			A = (__force u16) cpu_to_be16(A);
+			DST = (__force u16) cpu_to_be16(DST);
 			break;
 		case 32:
-			A = (__force u32) cpu_to_be32(A);
+			DST = (__force u32) cpu_to_be32(DST);
 			break;
 		case 64:
-			A = (__force u64) cpu_to_be64(A);
+			DST = (__force u64) cpu_to_be64(DST);
 			break;
 		}
 		CONT;
 	ALU_END_TO_LE:
-		switch (K) {
+		switch (IMM) {
 		case 16:
-			A = (__force u16) cpu_to_le16(A);
+			DST = (__force u16) cpu_to_le16(DST);
 			break;
 		case 32:
-			A = (__force u32) cpu_to_le32(A);
+			DST = (__force u32) cpu_to_le32(DST);
 			break;
 		case 64:
-			A = (__force u64) cpu_to_le64(A);
+			DST = (__force u64) cpu_to_le64(DST);
 			break;
 		}
 		CONT;
@@ -401,85 +392,85 @@ select_insn:
 		insn += insn->off;
 		CONT;
 	JMP_JEQ_X:
-		if (A == X) {
+		if (DST == SRC) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JEQ_K:
-		if (A == K) {
+		if (DST == IMM) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JNE_X:
-		if (A != X) {
+		if (DST != SRC) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JNE_K:
-		if (A != K) {
+		if (DST != IMM) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JGT_X:
-		if (A > X) {
+		if (DST > SRC) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JGT_K:
-		if (A > K) {
+		if (DST > IMM) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JGE_X:
-		if (A >= X) {
+		if (DST >= SRC) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JGE_K:
-		if (A >= K) {
+		if (DST >= IMM) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JSGT_X:
-		if (((s64) A) > ((s64) X)) {
+		if (((s64) DST) > ((s64) SRC)) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JSGT_K:
-		if (((s64) A) > ((s64) K)) {
+		if (((s64) DST) > ((s64) IMM)) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JSGE_X:
-		if (((s64) A) >= ((s64) X)) {
+		if (((s64) DST) >= ((s64) SRC)) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JSGE_K:
-		if (((s64) A) >= ((s64) K)) {
+		if (((s64) DST) >= ((s64) IMM)) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JSET_X:
-		if (A & X) {
+		if (DST & SRC) {
 			insn += insn->off;
 			CONT_JMP;
 		}
 		CONT;
 	JMP_JSET_K:
-		if (A & K) {
+		if (DST & IMM) {
 			insn += insn->off;
 			CONT_JMP;
 		}
@@ -488,15 +479,15 @@ select_insn:
 		return BPF_R0;
 
 	/* STX and ST and LDX*/
-#define LDST(SIZEOP, SIZE)					\
-	STX_MEM_##SIZEOP:					\
-		*(SIZE *)(unsigned long) (A + insn->off) = X;	\
-		CONT;						\
-	ST_MEM_##SIZEOP:					\
-		*(SIZE *)(unsigned long) (A + insn->off) = K;	\
-		CONT;						\
-	LDX_MEM_##SIZEOP:					\
-		A = *(SIZE *)(unsigned long) (X + insn->off);	\
+#define LDST(SIZEOP, SIZE)						\
+	STX_MEM_##SIZEOP:						\
+		*(SIZE *)(unsigned long) (DST + insn->off) = SRC;	\
+		CONT;							\
+	ST_MEM_##SIZEOP:						\
+		*(SIZE *)(unsigned long) (DST + insn->off) = IMM;	\
+		CONT;							\
+	LDX_MEM_##SIZEOP:						\
+		DST = *(SIZE *)(unsigned long) (SRC + insn->off);	\
 		CONT;
 
 	LDST(B,   u8)
@@ -504,16 +495,16 @@ select_insn:
 	LDST(W,  u32)
 	LDST(DW, u64)
 #undef LDST
-	STX_XADD_W: /* lock xadd *(u32 *)(A + insn->off) += X */
-		atomic_add((u32) X, (atomic_t *)(unsigned long)
-			   (A + insn->off));
+	STX_XADD_W: /* lock xadd *(u32 *)(dst_reg + off16) += src_reg */
+		atomic_add((u32) SRC, (atomic_t *)(unsigned long)
+			   (DST + insn->off));
 		CONT;
-	STX_XADD_DW: /* lock xadd *(u64 *)(A + insn->off) += X */
-		atomic64_add((u64) X, (atomic64_t *)(unsigned long)
-			     (A + insn->off));
+	STX_XADD_DW: /* lock xadd *(u64 *)(dst_reg + off16) += src_reg */
+		atomic64_add((u64) SRC, (atomic64_t *)(unsigned long)
+			     (DST + insn->off));
 		CONT;
-	LD_ABS_W: /* BPF_R0 = ntohl(*(u32 *) (skb->data + K)) */
-		off = K;
+	LD_ABS_W: /* BPF_R0 = ntohl(*(u32 *) (skb->data + imm32)) */
+		off = IMM;
 load_word:
 		/* BPF_LD + BPD_ABS and BPF_LD + BPF_IND insns are
 		 * only appearing in the programs where ctx ==
@@ -527,51 +518,51 @@ load_word:
 		 * BPF_R6-BPF_R9, and store return value into BPF_R0.
 		 *
 		 * Implicit input:
-		 *   ctx
+		 *   ctx == skb == BPF_R6 == CTX
 		 *
 		 * Explicit input:
-		 *   X == any register
-		 *   K == 32-bit immediate
+		 *   SRC == any register
+		 *   IMM == 32-bit immediate
 		 *
 		 * Output:
 		 *   BPF_R0 - 8/16/32-bit skb data converted to cpu endianness
 		 */
 
-		ptr = load_pointer((struct sk_buff *) ctx, off, 4, &tmp);
+		ptr = bpf_load_pointer((struct sk_buff *) (unsigned long) CTX, off, 4, &tmp);
 		if (likely(ptr != NULL)) {
 			BPF_R0 = get_unaligned_be32(ptr);
 			CONT;
 		}
 
 		return 0;
-	LD_ABS_H: /* BPF_R0 = ntohs(*(u16 *) (skb->data + K)) */
-		off = K;
+	LD_ABS_H: /* BPF_R0 = ntohs(*(u16 *) (skb->data + imm32)) */
+		off = IMM;
 load_half:
-		ptr = load_pointer((struct sk_buff *) ctx, off, 2, &tmp);
+		ptr = bpf_load_pointer((struct sk_buff *) (unsigned long) CTX, off, 2, &tmp);
 		if (likely(ptr != NULL)) {
 			BPF_R0 = get_unaligned_be16(ptr);
 			CONT;
 		}
 
 		return 0;
-	LD_ABS_B: /* BPF_R0 = *(u8 *) (ctx + K) */
-		off = K;
+	LD_ABS_B: /* BPF_R0 = *(u8 *) (skb->data + imm32) */
+		off = IMM;
 load_byte:
-		ptr = load_pointer((struct sk_buff *) ctx, off, 1, &tmp);
+		ptr = bpf_load_pointer((struct sk_buff *) (unsigned long) CTX, off, 1, &tmp);
 		if (likely(ptr != NULL)) {
 			BPF_R0 = *(u8 *)ptr;
 			CONT;
 		}
 
 		return 0;
-	LD_IND_W: /* BPF_R0 = ntohl(*(u32 *) (skb->data + X + K)) */
-		off = K + X;
+	LD_IND_W: /* BPF_R0 = ntohl(*(u32 *) (skb->data + src_reg + imm32)) */
+		off = IMM + SRC;
 		goto load_word;
-	LD_IND_H: /* BPF_R0 = ntohs(*(u16 *) (skb->data + X + K)) */
-		off = K + X;
+	LD_IND_H: /* BPF_R0 = ntohs(*(u16 *) (skb->data + src_reg + imm32)) */
+		off = IMM + SRC;
 		goto load_half;
-	LD_IND_B: /* BPF_R0 = *(u8 *) (skb->data + X + K) */
-		off = K + X;
+	LD_IND_B: /* BPF_R0 = *(u8 *) (skb->data + src_reg + imm32) */
+		off = IMM + SRC;
 		goto load_byte;
 
 	default_label:
@@ -584,7 +575,11 @@ load_byte:
  * to make sure its still a 3bit field starting at a byte boundary;
  * taken from arch/x86/net/bpf_jit_comp.c.
  */
+#ifdef __BIG_ENDIAN_BITFIELD
+#define PKT_TYPE_MAX	(7 << 5)
+#else
 #define PKT_TYPE_MAX	7
+#endif
 static unsigned int pkt_type_offset(void)
 {
 	struct sk_buff skb_probe = { .pkt_type = ~0, };
@@ -671,7 +666,7 @@ static bool convert_bpf_extensions(struct sock_filter *fp,
 	case SKF_AD_OFF + SKF_AD_PROTOCOL:
 		BUILD_BUG_ON(FIELD_SIZEOF(struct sk_buff, protocol) != 2);
 
-		/* A = *(u16 *) (ctx + offsetof(protocol)) */
+		/* A = *(u16 *) (CTX + offsetof(protocol)) */
 		*insn++ = BPF_LDX_MEM(BPF_H, BPF_REG_A, BPF_REG_CTX,
 				      offsetof(struct sk_buff, protocol));
 		/* A = ntohs(A) [emitting a nop or swap16] */
@@ -685,6 +680,10 @@ static bool convert_bpf_extensions(struct sock_filter *fp,
 			return false;
 		insn++;
 		*insn = BPF_ALU32_IMM(BPF_AND, BPF_REG_A, PKT_TYPE_MAX);
+#ifdef __BIG_ENDIAN_BITFIELD
+		insn++;
+                *insn = BPF_ALU32_IMM(BPF_RSH, BPF_REG_A, 5);
+#endif
 		break;
 
 	case SKF_AD_OFF + SKF_AD_IFINDEX:
@@ -733,7 +732,7 @@ static bool convert_bpf_extensions(struct sock_filter *fp,
 		BUILD_BUG_ON(FIELD_SIZEOF(struct sk_buff, vlan_tci) != 2);
 		BUILD_BUG_ON(VLAN_TAG_PRESENT != 0x1000);
 
-		/* A = *(u16 *) (ctx + offsetof(vlan_tci)) */
+		/* A = *(u16 *) (CTX + offsetof(vlan_tci)) */
 		*insn++ = BPF_LDX_MEM(BPF_H, BPF_REG_A, BPF_REG_CTX,
 				      offsetof(struct sk_buff, vlan_tci));
 		if (fp->k == SKF_AD_OFF + SKF_AD_VLAN_TAG) {
@@ -752,13 +751,13 @@ static bool convert_bpf_extensions(struct sock_filter *fp,
 	case SKF_AD_OFF + SKF_AD_NLATTR_NEST:
 	case SKF_AD_OFF + SKF_AD_CPU:
 	case SKF_AD_OFF + SKF_AD_RANDOM:
-		/* arg1 = ctx */
+		/* arg1 = CTX */
 		*insn++ = BPF_MOV64_REG(BPF_REG_ARG1, BPF_REG_CTX);
 		/* arg2 = A */
 		*insn++ = BPF_MOV64_REG(BPF_REG_ARG2, BPF_REG_A);
 		/* arg3 = X */
 		*insn++ = BPF_MOV64_REG(BPF_REG_ARG3, BPF_REG_X);
-		/* Emit call(ctx, arg2=A, arg3=X) */
+		/* Emit call(arg1=CTX, arg2=A, arg3=X) */
 		switch (fp->k) {
 		case SKF_AD_OFF + SKF_AD_PAY_OFFSET:
 			*insn = BPF_EMIT_CALL(__skb_get_pay_offset);
@@ -832,11 +831,11 @@ int sk_convert_filter(struct sock_filter *prog, int len,
 	BUILD_BUG_ON(BPF_MEMWORDS * sizeof(u32) > MAX_BPF_STACK);
 	BUILD_BUG_ON(BPF_REG_FP + 1 != MAX_BPF_REG);
 
-	if (len <= 0 || len >= BPF_MAXINSNS)
+	if (len <= 0 || len > BPF_MAXINSNS)
 		return -EINVAL;
 
 	if (new_prog) {
-		addrs = kzalloc(len * sizeof(*addrs), GFP_KERNEL);
+		addrs = kcalloc(len, sizeof(*addrs), GFP_KERNEL);
 		if (!addrs)
 			return -ENOMEM;
 	}
@@ -933,12 +932,12 @@ do_pass:
 				 */
 				*insn++ = BPF_MOV32_IMM(BPF_REG_TMP, fp->k);
 
-				insn->a_reg = BPF_REG_A;
-				insn->x_reg = BPF_REG_TMP;
+				insn->dst_reg = BPF_REG_A;
+				insn->src_reg = BPF_REG_TMP;
 				bpf_src = BPF_X;
 			} else {
-				insn->a_reg = BPF_REG_A;
-				insn->x_reg = BPF_REG_X;
+				insn->dst_reg = BPF_REG_A;
+				insn->src_reg = BPF_REG_X;
 				insn->imm = fp->k;
 				bpf_src = BPF_SRC(fp->code);
 			}
@@ -1093,7 +1092,7 @@ static int check_load_and_stores(struct sock_filter *filter, int flen)
 
 	BUILD_BUG_ON(BPF_MEMWORDS > 16);
 
-	masks = kmalloc(flen * sizeof(*masks), GFP_KERNEL);
+	masks = kmalloc_array(flen, sizeof(*masks), GFP_KERNEL);
 	if (!masks)
 		return -ENOMEM;
 
@@ -1374,7 +1373,7 @@ static struct sk_filter *__sk_migrate_realloc(struct sk_filter *fp,
 	fp_new = sock_kmalloc(sk, len, GFP_KERNEL);
 	if (fp_new) {
 		*fp_new = *fp;
-		/* As we're kepping orig_prog in fp_new along,
+		/* As we're keeping orig_prog in fp_new along,
 		 * we need to make sure we're not evicting it
 		 * from the old fp.
 		 */
@@ -1492,8 +1491,13 @@ static struct sk_filter *__sk_prepare_filter(struct sk_filter *fp,
 	fp->jited = 0;
 
 	err = sk_chk_filter(fp->insns, fp->len);
-	if (err)
+	if (err) {
+		if (sk != NULL)
+			sk_filter_uncharge(sk, fp);
+		else
+			kfree(fp);
 		return ERR_PTR(err);
+	}
 
 	/* Probe if we can JIT compile the filter and if so, do
 	 * the compilation of the filter.
@@ -1511,8 +1515,8 @@ static struct sk_filter *__sk_prepare_filter(struct sk_filter *fp,
 
 /**
  *	sk_unattached_filter_create - create an unattached filter
- *	@fprog: the filter program
  *	@pfp: the unattached filter that is created
+ *	@fprog: the filter program
  *
  * Create a filter independent of any socket. We first run some
  * sanity checks on it to make sure it does not explode on us later.
