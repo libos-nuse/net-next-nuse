@@ -62,7 +62,8 @@ static void sim_dev_setup(struct net_device *dev)
 struct SimDevice *sim_dev_create (void *priv, enum SimDevFlags flags)
 {
   struct SimDevice *dev = (struct SimDevice *)alloc_netdev(sizeof(struct SimDevice), 
-							   "sim%d", &sim_dev_setup);
+							   "sim%d", NET_NAME_UNKNOWN,
+                                                           &sim_dev_setup);
   if (flags & SIM_DEV_NOARP)
     {
       dev->dev.flags |= IFF_NOARP;
