@@ -480,8 +480,10 @@ static struct sk_buff *efx_rx_mk_skb(struct efx_channel *channel,
 	skb = netdev_alloc_skb(efx->net_dev,
 			       efx->rx_ip_align + efx->rx_prefix_size +
 			       hdr_len);
-	if (unlikely(skb == NULL))
+	if (unlikely(skb == NULL)) {
+		atomic_inc(&efx->n_rx_noskb_drops);
 		return NULL;
+	}
 
 	EFX_BUG_ON_PARANOID(rx_buf->len < hdr_len);
 
@@ -527,6 +529,8 @@ void efx_rx_packet(struct efx_rx_queue *rx_queue, unsigned int index,
 	struct efx_nic *efx = rx_queue->efx;
 	struct efx_channel *channel = efx_rx_queue_channel(rx_queue);
 	struct efx_rx_buffer *rx_buf;
+
+	rx_queue->rx_packets++;
 
 	rx_buf = efx_rx_buffer(rx_queue, index);
 	rx_buf->flags |= flags;

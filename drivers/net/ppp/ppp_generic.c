@@ -539,7 +539,7 @@ static int get_filter(void __user *arg, struct sock_filter **p)
 {
 	struct sock_fprog uprog;
 	struct sock_filter *code = NULL;
-	int len, err;
+	int len;
 
 	if (copy_from_user(&uprog, arg, sizeof(uprog)))
 		return -EFAULT;
@@ -553,12 +553,6 @@ static int get_filter(void __user *arg, struct sock_filter **p)
 	code = memdup_user(uprog.filter, len);
 	if (IS_ERR(code))
 		return PTR_ERR(code);
-
-	err = sk_chk_filter(code, uprog.len);
-	if (err) {
-		kfree(code);
-		return err;
-	}
 
 	*p = code;
 	return uprog.len;
@@ -661,6 +655,10 @@ static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			break;
 		ppp_lock(ppp);
 		cflags = ppp->flags & ~val;
+#ifdef CONFIG_PPP_MULTILINK
+		if (!(ppp->flags & SC_MULTILINK) && (val & SC_MULTILINK))
+			ppp->nextseq = 0;
+#endif
 		ppp->flags = val & SC_FLAG_BITS;
 		ppp_unlock(ppp);
 		if (cflags & SC_CCP_OPEN)
@@ -2665,7 +2663,8 @@ ppp_create_interface(struct net *net, int unit, int *retp)
 	int ret = -ENOMEM;
 	int i;
 
-	dev = alloc_netdev(sizeof(struct ppp), "", ppp_setup);
+	dev = alloc_netdev(sizeof(struct ppp), "", NET_NAME_UNKNOWN,
+			   ppp_setup);
 	if (!dev)
 		goto out1;
 

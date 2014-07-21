@@ -249,6 +249,8 @@ struct efx_tx_queue {
 	unsigned int tso_packets;
 	unsigned int pushes;
 	unsigned int pio_packets;
+	/* Statistics to supplement MAC stats */
+	unsigned long tx_packets;
 
 	/* Members shared between paths and sometimes updated */
 	unsigned int empty_read_count ____cacheline_aligned_in_smp;
@@ -358,6 +360,8 @@ struct efx_rx_queue {
 	unsigned int recycle_count;
 	struct timer_list slow_fill;
 	unsigned int slow_fill_count;
+	/* Statistics to supplement MAC stats */
+	unsigned long rx_packets;
 };
 
 enum efx_sync_events_state {
@@ -777,6 +781,7 @@ struct vfdi_status;
  *	interrupt has occurred.
  * @stats_lock: Statistics update lock. Must be held when calling
  *	efx_nic_type::{update,start,stop}_stats.
+ * @n_rx_noskb_drops: Count of RX packets dropped due to failure to allocate an skb
  *
  * This is stored in the private area of the &struct net_device.
  */
@@ -930,6 +935,7 @@ struct efx_nic {
 	spinlock_t biu_lock;
 	int last_irq_cpu;
 	spinlock_t stats_lock;
+	atomic_t n_rx_noskb_drops;
 };
 
 static inline int efx_dev_registered(struct efx_nic *efx)

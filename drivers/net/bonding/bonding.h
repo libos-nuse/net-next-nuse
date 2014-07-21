@@ -194,8 +194,8 @@ struct slave {
  */
 struct bonding {
 	struct   net_device *dev; /* first - useful for panic debug */
-	struct   slave *curr_active_slave;
-	struct   slave *current_arp_slave;
+	struct   slave __rcu *curr_active_slave;
+	struct   slave __rcu *current_arp_slave;
 	struct   slave *primary_slave;
 	bool     force_primary;
 	s32      slave_cnt; /* never change this value outside the attach/detach wrappers */
@@ -232,6 +232,10 @@ struct bonding {
 #define bond_slave_get_rtnl(dev) \
 	((struct slave *) rtnl_dereference(dev->rx_handler_data))
 
+#define bond_deref_active_protected(bond)				   \
+	rcu_dereference_protected(bond->curr_active_slave,		   \
+				  lockdep_is_held(&bond->curr_slave_lock))
+
 struct bond_vlan_tag {
 	__be16		vlan_proto;
 	unsigned short	vlan_id;
@@ -263,6 +267,12 @@ static inline bool bond_is_lb(const struct bonding *bond)
 {
 	return BOND_MODE(bond) == BOND_MODE_TLB ||
 	       BOND_MODE(bond) == BOND_MODE_ALB;
+}
+
+static inline bool bond_is_nondyn_tlb(const struct bonding *bond)
+{
+	return (BOND_MODE(bond) == BOND_MODE_TLB)  &&
+	       (bond->params.tlb_dynamic_lb == 0);
 }
 
 static inline bool bond_mode_uses_arp(int mode)
@@ -514,7 +524,6 @@ unsigned int bond_get_num_tx_queues(void);
 int bond_netlink_init(void);
 void bond_netlink_fini(void);
 struct net_device *bond_option_active_slave_get_rcu(struct bonding *bond);
-struct net_device *bond_option_active_slave_get(struct bonding *bond);
 const char *bond_slave_link_status(s8 link);
 bool bond_verify_device_path(struct net_device *start_dev,
 			     struct net_device *end_dev,
