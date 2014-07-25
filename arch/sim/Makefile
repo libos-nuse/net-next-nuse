@@ -61,7 +61,7 @@ all: library modules
 
 AUTOCONF=$(ARCH_DIR)/autoconf.h
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ kernel/rcu/ kernel/locking/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/
+dirs=kernel/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
@@ -70,6 +70,7 @@ kernel/_to_keep=notifier.o params.o time.o sysctl.o \
 rwsem.o semaphore.o kfifo.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
+kernel/bpf_to_keep=bpf/core.o
 mm/_to_keep=util.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o
