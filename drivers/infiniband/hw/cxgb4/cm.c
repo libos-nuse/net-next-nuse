@@ -433,8 +433,17 @@ static void arp_failure_discard(void *handle, struct sk_buff *skb)
  */
 static void act_open_req_arp_failure(void *handle, struct sk_buff *skb)
 {
+	struct c4iw_ep *ep = handle;
+
 	printk(KERN_ERR MOD "ARP failure duing connect\n");
 	kfree_skb(skb);
+	connect_reply_upcall(ep, -EHOSTUNREACH);
+	state_set(&ep->com, DEAD);
+	remove_handle(ep->com.dev, &ep->com.dev->atid_idr, ep->atid);
+	cxgb4_free_atid(ep->com.dev->rdev.lldi.tids, ep->atid);
+	dst_release(ep->dst);
+	cxgb4_l2t_release(ep->l2t);
+	c4iw_put_ep(&ep->com);
 }
 
 /*
@@ -660,7 +669,7 @@ static int send_connect(struct c4iw_ep *ep)
 		opt2 |= T5_OPT_2_VALID;
 		opt2 |= V_CONG_CNTRL(CONG_ALG_TAHOE);
 	}
-	t4_set_arp_err_handler(skb, NULL, act_open_req_arp_failure);
+	t4_set_arp_err_handler(skb, ep, act_open_req_arp_failure);
 
 	if (is_t4(ep->com.dev->rdev.lldi.adapter_type)) {
 		if (ep->com.remote_addr.ss_family == AF_INET) {
@@ -1813,6 +1822,20 @@ static int is_neg_adv(unsigned int status)
 	       status == CPL_ERR_KEEPALV_NEG_ADVICE;
 }
 
+static char *neg_adv_str(unsigned int status)
+{
+	switch (status) {
+	case CPL_ERR_RTX_NEG_ADVICE:
+		return "Retransmit timeout";
+	case CPL_ERR_PERSIST_NEG_ADVICE:
+		return "Persist timeout";
+	case CPL_ERR_KEEPALV_NEG_ADVICE:
+		return "Keepalive timeout";
+	default:
+		return "Unknown";
+	}
+}
+
 static void set_tcp_window(struct c4iw_ep *ep, struct port_info *pi)
 {
 	ep->snd_win = snd_win;
@@ -2011,8 +2034,9 @@ static int act_open_rpl(struct c4iw_dev *dev, struct sk_buff *skb)
 	     status, status2errno(status));
 
 	if (is_neg_adv(status)) {
-		printk(KERN_WARNING MOD "Connection problems for atid %u\n",
-			atid);
+		dev_warn(&dev->rdev.lldi.pdev->dev,
+			 "Connection problems for atid %u status %u (%s)\n",
+			 atid, status, neg_adv_str(status));
 		return 0;
 	}
 
@@ -2204,7 +2228,6 @@ static void reject_cr(struct c4iw_dev *dev, u32 hwtid, struct sk_buff *skb)
 	PDBG("%s c4iw_dev %p tid %u\n", __func__, dev, hwtid);
 	BUG_ON(skb_cloned(skb));
 	skb_trim(skb, sizeof(struct cpl_tid_release));
-	skb_get(skb);
 	release_tid(&dev->rdev, hwtid, skb);
 	return;
 }
@@ -2488,8 +2511,9 @@ static int peer_abort(struct c4iw_dev *dev, struct sk_buff *skb)
 
 	ep = lookup_tid(t, tid);
 	if (is_neg_adv(req->status)) {
-		PDBG("%s neg_adv_abort ep %p tid %u\n", __func__, ep,
-		     ep->hwtid);
+		dev_warn(&dev->rdev.lldi.pdev->dev,
+			 "Negative advice on abort - tid %u status %d (%s)\n",
+			 ep->hwtid, req->status, neg_adv_str(req->status));
 		return 0;
 	}
 	PDBG("%s ep %p tid %u state %u\n", __func__, ep, ep->hwtid,
@@ -3894,8 +3918,9 @@ static int peer_abort_intr(struct c4iw_dev *dev, struct sk_buff *skb)
 		return 0;
 	}
 	if (is_neg_adv(req->status)) {
-		PDBG("%s neg_adv_abort ep %p tid %u\n", __func__, ep,
-		     ep->hwtid);
+		dev_warn(&dev->rdev.lldi.pdev->dev,
+			 "Negative advice on abort - tid %u status %d (%s)\n",
+			 ep->hwtid, req->status, neg_adv_str(req->status));
 		kfree_skb(skb);
 		return 0;
 	}
@@ -3952,7 +3977,7 @@ int __init c4iw_cm_init(void)
 	return 0;
 }
 
-void __exit c4iw_cm_term(void)
+void c4iw_cm_term(void)
 {
 	WARN_ON(!list_empty(&timeout_list));
 	flush_workqueue(workq);

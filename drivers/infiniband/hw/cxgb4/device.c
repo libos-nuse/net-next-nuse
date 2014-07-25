@@ -844,6 +844,7 @@ static int c4iw_rdev_open(struct c4iw_rdev *rdev)
 		pr_err(MOD "error allocating status page\n");
 		goto err4;
 	}
+
 	if (c4iw_wr_log) {
 		rdev->wr_log = kzalloc((1 << c4iw_wr_log_size_order) *
 				       sizeof(*rdev->wr_log), GFP_KERNEL);
@@ -854,6 +855,9 @@ static int c4iw_rdev_open(struct c4iw_rdev *rdev)
 			pr_err(MOD "error allocating wr_log. Logging disabled\n");
 		}
 	}
+
+	rdev->status_page->db_off = 0;
+
 	return 0;
 err4:
 	c4iw_rqtpool_destroy(rdev);
@@ -888,7 +892,6 @@ static void c4iw_dealloc(struct uld_ctx *ctx)
 	if (ctx->dev->rdev.oc_mw_kva)
 		iounmap(ctx->dev->rdev.oc_mw_kva);
 	ib_dealloc_device(&ctx->dev->ibdev);
-	iwpm_exit(RDMA_NL_C4IW);
 	ctx->dev = NULL;
 }
 
@@ -934,17 +937,17 @@ static struct c4iw_dev *c4iw_alloc(const struct cxgb4_lld_info *infop)
 
 	devp->rdev.hw_queue.t4_eq_status_entries =
 		devp->rdev.lldi.sge_ingpadboundary > 64 ? 2 : 1;
-	devp->rdev.hw_queue.t4_max_eq_size =
-		65520 - devp->rdev.hw_queue.t4_eq_status_entries;
-	devp->rdev.hw_queue.t4_max_iq_size = 65520 - 1;
-	devp->rdev.hw_queue.t4_max_rq_size =
-		8192 - devp->rdev.hw_queue.t4_eq_status_entries;
+	devp->rdev.hw_queue.t4_max_eq_size = 65520;
+	devp->rdev.hw_queue.t4_max_iq_size = 65520;
+	devp->rdev.hw_queue.t4_max_rq_size = 8192 -
+		devp->rdev.hw_queue.t4_eq_status_entries - 1;
 	devp->rdev.hw_queue.t4_max_sq_size =
-		devp->rdev.hw_queue.t4_max_eq_size - 1;
+		devp->rdev.hw_queue.t4_max_eq_size -
+		devp->rdev.hw_queue.t4_eq_status_entries - 1;
 	devp->rdev.hw_queue.t4_max_qp_depth =
-		devp->rdev.hw_queue.t4_max_rq_size - 1;
+		devp->rdev.hw_queue.t4_max_rq_size;
 	devp->rdev.hw_queue.t4_max_cq_depth =
-		devp->rdev.hw_queue.t4_max_iq_size - 1;
+		devp->rdev.hw_queue.t4_max_iq_size - 2;
 	devp->rdev.hw_queue.t4_stat_len =
 		devp->rdev.lldi.sge_egrstatuspagesize;
 
@@ -1007,12 +1010,6 @@ static struct c4iw_dev *c4iw_alloc(const struct cxgb4_lld_info *infop)
 		setup_debugfs(devp);
 	}
 
-	ret = iwpm_init(RDMA_NL_C4IW);
-	if (ret) {
-		pr_err("port mapper initialization failed with %d\n", ret);
-		ib_dealloc_device(&devp->ibdev);
-		return ERR_PTR(ret);
-	}
 
 	return devp;
 }
@@ -1513,6 +1510,15 @@ static int __init c4iw_init_module(void)
 		pr_err("%s[%u]: Failed to add netlink callback\n"
 		       , __func__, __LINE__);
 
+	err = iwpm_init(RDMA_NL_C4IW);
+	if (err) {
+		pr_err("port mapper initialization failed with %d\n", err);
+		ibnl_remove_client(RDMA_NL_C4IW);
+		c4iw_cm_term();
+		debugfs_remove_recursive(c4iw_debugfs_root);
+		return err;
+	}
+
 	cxgb4_register_uld(CXGB4_ULD_RDMA, &c4iw_uld_info);
 
 	return 0;
@@ -1530,6 +1536,7 @@ static void __exit c4iw_exit_module(void)
 	}
 	mutex_unlock(&dev_mutex);
 	cxgb4_unregister_uld(CXGB4_ULD_RDMA);
+	iwpm_exit(RDMA_NL_C4IW);
 	ibnl_remove_client(RDMA_NL_C4IW);
 	c4iw_cm_term();
 	debugfs_remove_recursive(c4iw_debugfs_root);

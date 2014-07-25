@@ -1113,6 +1113,9 @@ int dev_change_name(struct net_device *dev, const char *newname)
 		return err;
 	}
 
+	if (oldname[0] && !strchr(oldname, '%'))
+		netdev_info(dev, "renamed from %s\n", oldname);
+
 	old_assign_type = dev->name_assign_type;
 	dev->name_assign_type = NET_NAME_RENAMED;
 
@@ -4103,6 +4106,8 @@ static void napi_reuse_skb(struct napi_struct *napi, struct sk_buff *skb)
 	skb->vlan_tci = 0;
 	skb->dev = napi->dev;
 	skb->skb_iif = 0;
+	skb->encapsulation = 0;
+	skb_shinfo(skb)->gso_type = 0;
 	skb->truesize = SKB_TRUESIZE(skb_end_offset(skb));
 
 	napi->skb = skb;
@@ -6950,12 +6955,14 @@ static int __netdev_printk(const char *level, const struct net_device *dev,
 	if (dev && dev->dev.parent) {
 		r = dev_printk_emit(level[1] - '0',
 				    dev->dev.parent,
-				    "%s %s %s: %pV",
+				    "%s %s %s%s: %pV",
 				    dev_driver_string(dev->dev.parent),
 				    dev_name(dev->dev.parent),
-				    netdev_name(dev), vaf);
+				    netdev_name(dev), netdev_reg_state(dev),
+				    vaf);
 	} else if (dev) {
-		r = printk("%s%s: %pV", level, netdev_name(dev), vaf);
+		r = printk("%s%s%s: %pV", level, netdev_name(dev),
+			   netdev_reg_state(dev), vaf);
 	} else {
 		r = printk("%s(NULL net_device): %pV", level, vaf);
 	}
