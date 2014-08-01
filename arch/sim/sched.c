@@ -15,6 +15,7 @@ called by wait_event macro:
 
 struct SimTask
 {
+  struct list_head head;
   struct task_struct kernel_task;
   void *private;
 };
@@ -112,7 +113,7 @@ void add_wait_queue(wait_queue_head_t *q, wait_queue_t *wait)
 void add_wait_queue_exclusive(wait_queue_head_t *q, wait_queue_t *wait)
 {
   wait->flags |= WQ_FLAG_EXCLUSIVE;
-  list_add(&wait->task_list, &q->task_list);
+  list_add_tail (&wait->task_list, &q->task_list);
 }
 void remove_wait_queue(wait_queue_head_t *q, wait_queue_t *wait)
 {
@@ -222,7 +223,7 @@ int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags,
                           void *key)
 {
   struct task_struct *task = (struct task_struct *)curr->private;
-  struct SimTask *sim_task = (struct SimTask *)task;
+  struct SimTask *sim_task = container_of(task, struct SimTask, kernel_task);
   return sim_task_wakeup (sim_task);
 }
 

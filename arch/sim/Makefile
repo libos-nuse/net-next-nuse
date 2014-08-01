@@ -9,13 +9,14 @@ endif
 
 
 SIM_SRC=\
-fs.c random.c sim.c softirq.c time.c \
+fs.c random.c softirq.c time.c \
 glue.c sim-device.c sysctl.c timer.c \
 hrtimer.c sched.c sim-socket.c sysfs.c workqueue.c \
 print.c security.c slab.c tasklet.c \
 proc.c seq.c socket.c tasklet-hrtimer.c \
 cred.c pid.c modules.c filemap.c splice.c vmscan.c \
-dcache.c super.c inode.c
+dcache.c super.c inode.c sim-nuse.c sim-nuse-fiber.c sim-nuse-vif.c \
+sim-nuse-vif-rawsock.c sim-nuse-vif-netmap.c sim-nuse-glue.c
 
 COV?=no
 cov_yes=-fprofile-arcs -ftest-coverage
@@ -50,7 +51,7 @@ ifeq ($(PROCESSOR_SIZE),64)
 CFLAGS+= -DCONFIG_64BIT
 endif
 
-LDFLAGS += -shared -nodefaultlibs -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
+LDFLAGS += -nodefaultlibs -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV)) -lpthread -ldl -lrt
 
 modules:=
 all-obj-for-clean:=
@@ -78,7 +79,7 @@ drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
 drivers/net/_to_keep=loopback.o
 lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
 find_last_bit.o find_next_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
-ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
+ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o  \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o
 fs/_to_keep=read_write.o libfs.o namei.o
@@ -141,10 +142,16 @@ quiet_cmd_builtin = BUILTIN   $@
 %.o:%.c
 	$(call if_changed,cc)
 
-library: $(KERNEL_LIB)
+library: $(KERNEL_LIB) nuse
 modules: $(modules) 
 
-install: modules library
+quiet_cmd_nusetest = BUILDTEST   $@
+      cmd_nusetest = $(MAKE) -s -C $(ARCH_DIR)/test/nuse
+
+nuse: $(ARCH_DIR)/test/nuse
+	$(call if_changed,nusetest)
+
+install: modules library nuse
 
 install-dir:
 
@@ -157,15 +164,19 @@ quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
 		  for f in $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean); do rm -f $$f; done 2>/dev/null ;\
 		  rm -rf $(ARCH_DIR)/linker.lds $(AUTOCONF) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null ;\
-		  $(MAKE) -C $(ARCH_DIR)/test clean
+		  $(MAKE) -C $(ARCH_DIR)/test clean ;\
+		  $(MAKE) -C $(ARCH_DIR)/test/nuse clean
 
 ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
 archclean:
 	$(call if_changed,clean)
 
 quiet_cmd_linklib = LIB   $@
-      cmd_linklib = $(CC) $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@; \
-		    ln -s -f $(KERNEL_LIB) liblinux.so
+      cmd_linklib = $(CC) -shared $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@; \
+		    ln -s -f $(KERNEL_LIB) liblinux.so ;\
+                    sudo ln -f -s `pwd`/liblinux.so /usr/lib64/liblinux.so ;\
+                    sudo chown root liblinux.so ;\
+                    sudo chmod 4755 liblinux.so
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linklib)
