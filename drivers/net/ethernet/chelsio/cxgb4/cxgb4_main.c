@@ -673,9 +673,12 @@ static int link_start(struct net_device *dev)
 	if (ret == 0)
 		ret = t4_link_start(pi->adapter, mb, pi->tx_chan,
 				    &pi->link_cfg);
-	if (ret == 0)
+	if (ret == 0) {
+		local_bh_disable();
 		ret = t4_enable_vi_params(pi->adapter, mb, pi->viid, true,
 					  true, CXGB4_DCB_ENABLED);
+		local_bh_enable();
+	}
 
 	return ret;
 }
@@ -6524,11 +6527,9 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	/* We control everything through one PF */
 	func = SOURCEPF_GET(readl(adapter->regs + PL_WHOAMI));
-	if ((pdev->device == 0xa000 && func != 0) ||
-	    func != ent->driver_data) {
+	if (func != ent->driver_data) {
 		pci_save_state(pdev);        /* to restore SR-IOV later */
-		err = 0;
-		goto out_unmap_bar0;
+		goto sriov;
 	}
 
 	adapter->pdev = pdev;
@@ -6694,6 +6695,7 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (is_offload(adapter))
 		attach_ulds(adapter);
 
+sriov:
 #ifdef CONFIG_PCI_IOV
 	if (func < ARRAY_SIZE(num_vf) && num_vf[func] > 0)
 		if (pci_enable_sriov(pdev, num_vf[func]) == 0)
