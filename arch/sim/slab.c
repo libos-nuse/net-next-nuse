@@ -42,6 +42,23 @@ void *__kmalloc_track_caller(size_t size, gfp_t flags, unsigned long caller)
   return kmalloc (size, flags);
 }
 
+void *krealloc(const void *p, size_t new_size, gfp_t flags)
+{
+  void *ret;
+
+  if (!new_size)
+    {
+      kfree(p);
+      return ZERO_SIZE_PTR;
+    }
+
+  ret = __kmalloc (new_size, flags);
+  if (ret && p != ret)
+    kfree(p);
+
+  return ret;
+}
+
 struct kmem_cache *
 kmem_cache_create(const char *name, size_t size, size_t align,
 		  unsigned long flags, void (*ctor)(void *))

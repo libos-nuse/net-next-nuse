@@ -9,6 +9,7 @@ struct thread_info
   __u32 flags;
   int preempt_count;
   struct task_struct *task;
+  struct restart_block    restart_block;
 };
 
 struct thread_info *current_thread_info(void);
