@@ -24,12 +24,13 @@ struct SimFiber
   void *context;
   const char *name;
   int canceled;
+  timer_t timerid;
 };
 
 #include <sched.h>
 void *sim_fiber_new_from_caller (uint32_t stackSize, const char *name)
 {
-#if 0
+#if 1
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
   CPU_SET(0, &cpuset);
@@ -41,6 +42,7 @@ void *sim_fiber_new_from_caller (uint32_t stackSize, const char *name)
   fiber->pthread = pthread_self (); 
   fiber->name = name;
   fiber->canceled = 0;
+  fiber->timerid = NULL;
   return fiber;
 }
 
@@ -102,6 +104,10 @@ void sim_fiber_stop (void * handler)
 {
   struct SimFiber *fiber = handler;
   fiber->canceled = 0;
+  if (fiber->timerid)
+    {
+      timer_delete (fiber->timerid);
+    }
   return;
 }
 
@@ -155,14 +161,33 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 #include <signal.h>
 #include <time.h>
 #include <string.h>
+#include <sys/resource.h>
+struct SimNuseTimerTrampolineContext
+{
+  void (*callback) (void *arg);
+  void *context;
+  timer_t timerid;
+};
+
+void
+sim_nuse_timer_trampoline (sigval_t context)
+{
+  struct SimNuseTimerTrampolineContext *ctx = context.sival_ptr;
+  ctx->callback (ctx->context);
+  timer_delete (ctx->timerid);
+  sim_free (ctx);
+  return;
+}
+
 void
 sim_add_timer (unsigned long ns, 
-               void (*func) (sigval_t),
-               void *arg)
+               void (*func) (void *arg),
+               void *arg,
+               void *handler)
 {
   struct sigevent se;
-  timer_t timerid;
   struct itimerspec new_value;
+  struct SimFiber *fiber = handler;
 
   new_value.it_value.tv_sec = ns / (1000*1000*1000);
   new_value.it_value.tv_nsec = ns % (1000*1000*1000);
@@ -171,17 +196,26 @@ sim_add_timer (unsigned long ns,
 
   //  printf ("to %d sec %d nsec\n", new_value.it_value.tv_sec, new_value.it_value.tv_nsec);
 
+  struct SimNuseTimerTrampolineContext *ctx = sim_malloc (sizeof (struct SimNuseTimerTrampolineContext));
+  if (!ctx)
+    {
+      return;
+    }
+  ctx->callback = func;
+  ctx->context = arg;
+
   memset (&se, 0, sizeof(se));
-  se.sigev_value.sival_ptr = arg;
+  se.sigev_value.sival_ptr = ctx;
   se.sigev_notify = SIGEV_THREAD;
-  se.sigev_notify_function = func;
+  se.sigev_notify_function = sim_nuse_timer_trampoline;
   se.sigev_notify_attributes = NULL;
-  int ret = timer_create (CLOCK_REALTIME, &se, &timerid);
+  int ret = timer_create (CLOCK_REALTIME, &se, &ctx->timerid);
   if (ret)
     perror ("timer_create");
-  ret = timer_settime (timerid, 0, &new_value, NULL);
+  ret = timer_settime (ctx->timerid, 0, &new_value, NULL);
   if (ret)
     perror ("timer_settime");
 
+  fiber->timerid = ctx->timerid;
   return;
 }

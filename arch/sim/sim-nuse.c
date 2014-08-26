@@ -196,7 +196,7 @@ void *sim_event_schedule_ns (__u64 ns, void (*fn) (void *context), void *context
 
   list_add_tail_rcu (&task->head, &g_task_lists);
 
-  sim_add_timer (ns, sim_nuse_task_start_trampoline, ctx);
+  sim_add_timer (ns, sim_nuse_task_start_trampoline, ctx, fiber);
 
   return task;
 }
