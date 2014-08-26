@@ -336,7 +336,6 @@ void nuse_hijack_init (void)
 
 }
 
-
 void __attribute__((constructor))
 sim_nuse_init (struct SimExported *exported, const struct SimImported *imported, struct SimKernel *kernel)
 {

@@ -312,7 +312,7 @@ poll (struct pollfd *fds, nfds_t nfds, int timeout)
 {
   sim_update_jiffies ();
 
-  int count = -1;
+  int count = 0;
   int timed_out = 0;
   int i;
 

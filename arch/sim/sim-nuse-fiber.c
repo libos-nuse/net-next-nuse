@@ -26,8 +26,15 @@ struct SimFiber
   int canceled;
 };
 
+#include <sched.h>
 void *sim_fiber_new_from_caller (uint32_t stackSize, const char *name)
 {
+#if 0
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(0, &cpuset);
+  sched_setaffinity (getpid (), sizeof(cpu_set_t), &cpuset);
+#endif
   struct SimFiber *fiber = sim_malloc (sizeof (struct SimFiber));
   fiber->func = NULL;
   fiber->context = NULL;
@@ -77,7 +84,9 @@ void
 sim_fiber_wait (void *handler)
 {
   struct SimFiber *fiber = handler;
+  pthread_mutex_lock (&fiber->mutex);
   pthread_cond_wait (&fiber->condvar, &fiber->mutex);
+  pthread_mutex_unlock (&fiber->mutex);
 }
 
 int
@@ -148,7 +157,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 #include <string.h>
 void
 sim_add_timer (unsigned long ns, 
-               void *(*func) (void *arg),
+               void (*func) (sigval_t),
                void *arg)
 {
   struct sigevent se;

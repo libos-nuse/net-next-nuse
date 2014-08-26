@@ -46,3 +46,4 @@ $(OBJS): Makefile $(SRCS)
 clean:
 	rm -f $(TARGET)
 	rm -f *.o
+	rm -f *-ld
