@@ -31,7 +31,7 @@ PIC?=yes
 pic_yes=-fpic -DPIC
 pic_no=-mcmodel=large
 PIC_CFLAGS=$(pic_$(PIC))
-KERNEL_LIB=libsim-linux$(KERNELVERSION).so
+KERNEL_LIB=libnuse-linux$(KERNELVERSION).so
 SIM_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(SIM_SRC))))
 CFLAGS+= \
  $(opt_$(OPT)) -g3 -D__KERNEL__ -Wall -Wstrict-prototypes -Wno-trigraphs \
@@ -173,10 +173,7 @@ archclean:
 
 quiet_cmd_linklib = LIB   $@
       cmd_linklib = $(CC) -shared $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@; \
-		    ln -s -f $(KERNEL_LIB) liblinux.so ;\
-                    sudo ln -f -s `pwd`/liblinux.so /usr/lib64/liblinux.so ;\
-                    sudo chown root liblinux.so ;\
-                    sudo chmod 4755 liblinux.so
+		    ln -s -f $(KERNEL_LIB) libnuse-linux.so ;
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linklib)

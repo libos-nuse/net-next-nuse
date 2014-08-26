@@ -1,0 +1,6 @@
+#!/bin/sh
+sudo ln -f -s `pwd`/libnuse-linux.so /usr/lib64/libnuse-linux.so ;\
+sudo chown root libnuse-linux.so ;\
+sudo chmod 4755 libnuse-linux.so
+
+LD_PRELOAD=libnuse-linux.so $*
