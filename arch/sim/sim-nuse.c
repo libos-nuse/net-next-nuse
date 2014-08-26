@@ -271,7 +271,9 @@ sim_netdev_create (void)
   int err;
 
   /* FIXME: shoudl be configurable */
-  struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_RAWSOCK);
+  //  struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_NETMAP, "xge0");
+  //struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_RAWSOCK, "xge0");
+  struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_RAWSOCK, "ens33");
   if (!vif)
     {
       sim_printf ("vif create error\n");
@@ -288,7 +290,8 @@ sim_netdev_create (void)
   struct ifreq ifr;
   struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
   sin->sin_family = AF_INET;
-  sin->sin_addr.s_addr = inet_addr ("192.168.209.139");
+  sin->sin_addr.s_addr = inet_addr ("192.168.209.39");
+  //  sin->sin_addr.s_addr = inet_addr ("130.69.250.39");
   strncpy (ifr.ifr_name, "sim0", IFNAMSIZ-1);
   err = devinet_ioctl (&init_net, SIOCSIFADDR, &ifr);
   if (err)
@@ -376,6 +379,8 @@ sim_nuse_init (struct SimExported *exported, const struct SimImported *imported,
   exported->sys_file_write = sim_sys_file_write_forwarder;
   exported->sys_file_read = sim_sys_file_read_forwarder;
 #endif
+
+  nuse_set_affinity ();
 
   nuse_hijack_init ();
   rcu_init ();

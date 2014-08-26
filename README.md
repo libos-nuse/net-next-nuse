@@ -12,6 +12,12 @@ NUSE (Network Stack in Userspace) [![Build Status](https://travis-ci.org/thehaji
  make library ARCH=sim OPT=no
 ```
 
+for a build with netmap,
+
+```
+make library ARCH=sim OPT=no NETMAP=yes
+```
+
 you should see libnuse-linux.so.
 
 Then, a wrapper script called **nuse** takes your application running with NUSE.

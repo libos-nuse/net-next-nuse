@@ -2,6 +2,7 @@
 #include <linux/netdevice.h>
 #define _GNU_SOURCE /* Get RTLD_NEXT */
 #include <dlfcn.h>
+#include <sys/ioctl.h>
 #include "sim-init.h"
 #include "sim-assert.h"
 #include "sim-nuse.h"
@@ -20,6 +21,7 @@ extern int __close(int fd);
 extern int bind (int fd, struct sockaddr *name, int namelen);
 
 extern unsigned int if_nametoindex(const char *ifname);
+static int (*host_socket)(int, int, int) = NULL;
 
 void
 nuse_vif_raw_read (struct nuse_vif *vif, struct SimDevice *dev)
@@ -79,10 +81,9 @@ nuse_vif_raw_write (struct nuse_vif *vif, struct SimDevice *dev,
 }
 
 void *
-nuse_vif_raw_create (void)
+nuse_vif_raw_create (const char *ifname)
 {
   int err;
-  static int (*host_socket)(int, int, int) = NULL;
   if (!host_socket)
     {
       host_socket = dlsym (RTLD_NEXT, "socket");
@@ -110,7 +111,7 @@ nuse_vif_raw_create (void)
   memset (&ll, 0, sizeof(ll));
 
   ll.sll_family = AF_PACKET;
-  ll.sll_ifindex = if_nametoindex ("ens33"); /* XXX: FIXME */
+  ll.sll_ifindex = if_nametoindex (ifname);
   ll.sll_protocol = htons (ETH_P_ALL);
   err = host_bind (sock, (struct sockaddr *)&ll, sizeof (ll));
   if (err)
@@ -128,6 +129,42 @@ nuse_vif_raw_delete (struct nuse_vif *vif)
   int sock = vif->sock;
   __close (sock);
   return;
+}
+
+int
+nuse_set_if_promisc (char * ifname)
+{
+  int fd;
+  struct ifreq ifr;
+
+  if (!host_socket)
+    {
+      host_socket = dlsym (RTLD_NEXT, "socket");
+      if (!host_socket)
+        {
+          printf ("dlsym fail (%s) \n", dlerror ());
+        }
+    }
+
+  fd = host_socket (AF_INET, SOCK_DGRAM, 0);
+  memset (&ifr, 0, sizeof (ifr));
+  strncpy (ifr.ifr_name, ifname, IFNAMSIZ - 1);
+
+  if (ioctl (fd, SIOCGIFFLAGS, &ifr) != 0)
+    {
+      printf ("failed to get interface status");
+      return -1;
+    }
+
+  ifr.ifr_flags |= IFF_UP|IFF_PROMISC;
+
+  if (ioctl (fd, SIOCSIFFLAGS, &ifr) != 0) 
+    {
+      printf ("failed to set interface to promisc");
+      return -1;
+    }
+
+  return 0;
 }
 
 static struct nuse_vif_impl nuse_vif_rawsock = {

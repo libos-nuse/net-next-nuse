@@ -8,6 +8,10 @@ ifeq "$(GCCVERSIONGTEQ48)" "1"
 endif
 
 
+NETMAP?=no
+netmap_yes=sim-nuse-vif-netmap.c
+netmap_no=
+
 SIM_SRC=\
 fs.c random.c softirq.c time.c \
 glue.c sim-device.c sysctl.c timer.c \
@@ -16,7 +20,8 @@ print.c security.c slab.c tasklet.c \
 proc.c seq.c socket.c tasklet-hrtimer.c \
 cred.c pid.c modules.c filemap.c splice.c vmscan.c \
 dcache.c super.c inode.c sim-nuse.c sim-nuse-fiber.c sim-nuse-vif.c \
-sim-nuse-vif-rawsock.c sim-nuse-vif-netmap.c sim-nuse-glue.c
+sim-nuse-vif-rawsock.c sim-nuse-glue.c $(netmap_$(NETMAP))
+
 
 COV?=no
 cov_yes=-fprofile-arcs -ftest-coverage
@@ -173,7 +178,7 @@ archclean:
 
 quiet_cmd_linklib = LIB   $@
       cmd_linklib = $(CC) -shared $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@; \
-		    ln -s -f $(KERNEL_LIB) libnuse-linux.so ;
+		    ln -s -f $(KERNEL_LIB) libnuse-linux.so
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linklib)

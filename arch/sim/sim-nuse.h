@@ -10,13 +10,14 @@ struct nuse_vif
 {
   int sock;
   enum viftype type;
+  void *private;
 };
 
 struct nuse_vif_impl {
   void (*read) (struct nuse_vif *, struct SimDevice *);
   void (*write) (struct nuse_vif *, struct SimDevice *, 
                  unsigned char *, int);
-  void *(*create) (void);
+  void *(*create) (const char *);
   void (*delete) (struct nuse_vif *);
 };
 
@@ -29,7 +30,7 @@ struct SimTask
 };
 
 /* sim-nuse-vif.c */
-extern void * nuse_vif_create (enum viftype);
+extern void *nuse_vif_create (enum viftype type, const char *ifname);
 extern void nuse_vif_read (struct nuse_vif *vif, struct SimDevice *dev);
 extern void nuse_vif_write (struct nuse_vif *vif, struct SimDevice *dev, 
                             unsigned char *data, int len);

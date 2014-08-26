@@ -28,14 +28,18 @@ struct SimFiber
 };
 
 #include <sched.h>
-void *sim_fiber_new_from_caller (uint32_t stackSize, const char *name)
+/* FIXME: more precise affinity shoudl be required. */
+void
+nuse_set_affinity ()
 {
-#if 1
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
   CPU_SET(0, &cpuset);
   sched_setaffinity (getpid (), sizeof(cpu_set_t), &cpuset);
-#endif
+}
+
+void *sim_fiber_new_from_caller (uint32_t stackSize, const char *name)
+{
   struct SimFiber *fiber = sim_malloc (sizeof (struct SimFiber));
   fiber->func = NULL;
   fiber->context = NULL;
