@@ -112,6 +112,7 @@ void sim_fiber_stop (void * handler)
     {
       timer_delete (fiber->timerid);
     }
+  fiber->timerid = NULL;
   return;
 }
 
@@ -178,7 +179,11 @@ sim_nuse_timer_trampoline (sigval_t context)
 {
   struct SimNuseTimerTrampolineContext *ctx = context.sival_ptr;
   ctx->callback (ctx->context);
-  timer_delete (ctx->timerid);
+  if (ctx->timerid)
+    {
+      timer_delete (ctx->timerid);
+    }
+  ctx->timerid = NULL;
   sim_free (ctx);
   return;
 }
