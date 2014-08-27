@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "sim-init.h"
 #include "sim-assert.h"
+#include "sim-nuse-vif.h"
 #include "sim-nuse.h"
 #include "sim.h"
 
@@ -405,6 +406,8 @@ sim_nuse_init (struct SimExported *exported, const struct SimImported *imported,
     (*call)();
     call++;
   } while (call < __initcall_end);
+
+  nuse_vif_netmap_init ();
 
   // finally, put the system in RUNNING state.
   system_state = SYSTEM_RUNNING;
