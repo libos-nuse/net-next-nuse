@@ -177,7 +177,7 @@ archclean:
 	$(call if_changed,clean)
 
 quiet_cmd_linklib = LIB   $@
-      cmd_linklib = $(CC) -shared $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@; \
+      cmd_linklib = $(CC) -shared -Wl,--whole-archive $(OBJS) $(LDFLAGS) -o $@; \
 		    ln -s -f $(KERNEL_LIB) libnuse-linux.so
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
