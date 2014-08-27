@@ -295,6 +295,43 @@ int recv (int fd, void *buf, size_t count, int flags)
   return recvfrom (fd, buf, count, flags, 0, 0);
 }
 
+extern int sim_sock_setsockopt (struct socket *socket, int level, int optname,
+                                const void *optval, int optlen);
+int setsockopt(int sockfd, int level, int optname,
+               const void *optval, int optlen)
+{
+  sim_update_jiffies ();
+  struct socket *kernel_socket = g_fd_table[sockfd];
+  int retval = sim_sock_setsockopt (kernel_socket, level, optname, optval, optlen);
+  if (retval < 0)
+    {
+      errno = -retval;
+      sim_softirq_wakeup ();
+      return -1;
+    }
+  sim_softirq_wakeup ();
+  return retval;
+}
+
+extern int sim_sock_getsockopt (struct socket *socket, int level, int optname,
+                                void *optval, int *optlen);
+int getsockopt(int sockfd, int level, int optname,
+               void *optval, int *optlen)
+{
+  sim_update_jiffies ();
+  struct socket *kernel_socket = g_fd_table[sockfd];
+  int retval = sim_sock_getsockopt (kernel_socket, level, optname, optval, optlen);
+  if (retval < 0)
+    {
+      errno = -retval;
+      sim_softirq_wakeup ();
+      return -1;
+    }
+  sim_softirq_wakeup ();
+  return retval;
+}
+
+
 void sim_poll_event (int flag, void *context)
 {
   sim_assert (1);

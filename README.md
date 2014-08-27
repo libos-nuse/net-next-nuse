@@ -23,7 +23,15 @@ you should see libnuse-linux.so.
 Then, a wrapper script called **nuse** takes your application running with NUSE.
 
 ```
+ sudo ./nuse ping 192.168.209.1
+```
+
+or
+
+```
  sudo ./nuse iperf -c 192.168.209.1 -u
 ```
+
+should just work fine !
 
 since the LD_PRELOAD with sudo technique requires additional copy and permission changes to the library, the script will automatically conduct such an operation.
