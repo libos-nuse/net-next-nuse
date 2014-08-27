@@ -292,7 +292,8 @@ int wait_for_completion_interruptible(struct completion *x)
 }
 int wake_up_process(struct task_struct *tsk)
 {
-  return sim_task_wakeup((struct SimTask *)tsk);
+  struct SimTask *sim_task = container_of(tsk, struct SimTask, kernel_task);
+  return sim_task_wakeup(sim_task);
 }
 int _cond_resched(void)
 {
