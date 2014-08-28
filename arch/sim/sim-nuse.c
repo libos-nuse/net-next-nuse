@@ -277,6 +277,13 @@ sim_netdev_create (const char *ifname, int ifindex)
   char *ifv4addr;
   struct ifreq ifr;
 
+  sprintf (ifnamebuf, "nuse-%s", ifname);
+  if (!(ifv4addr = getenv (ifnamebuf)))
+    {
+      /* skipped */
+      return;
+    }
+
   struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_RAWSOCK, ifname);
   if (!vif)
     {
@@ -292,19 +299,15 @@ sim_netdev_create (const char *ifname, int ifindex)
   hwaddr_base[5]++;
   ether_setup ((struct net_device *)dev);
 
-  sprintf (ifnamebuf, "nuse-%s", ifname);
-  if ((ifv4addr = getenv (ifnamebuf)))
+  struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
+  printf ("assign nuse interface %s IPv4 address %s\n", ifnamebuf, ifv4addr);
+  sin->sin_family = AF_INET;
+  sin->sin_addr.s_addr = inet_addr (ifv4addr);
+  sprintf (ifr.ifr_name, "sim%d", ifindex - 2);
+  err = devinet_ioctl (&init_net, SIOCSIFADDR, &ifr);
+  if (err)
     {
-      struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
-      printf ("assign nuse interface %s IPv4 address %s\n", ifnamebuf, ifv4addr);
-      sin->sin_family = AF_INET;
-      sin->sin_addr.s_addr = inet_addr (ifv4addr);
-      sprintf (ifr.ifr_name, "sim%d", ifindex - 2);
-      err = devinet_ioctl (&init_net, SIOCSIFADDR, &ifr);
-      if (err)
-        {
-          sim_printf ("err devinet_ioctl %d\n", err);
-        }
+      sim_printf ("err devinet_ioctl %d\n", err);
     }
 
   /* IFF_UP */
