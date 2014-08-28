@@ -1,8 +1,6 @@
 #ifndef SIM_TYPES_H
 #define SIM_TYPES_H
 
-#include <linux/sched.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -39,13 +37,6 @@ struct SimSysIterator
   void (*report_end_dir) (const struct SimSysIterator *iter);
   void (*report_file) (const struct SimSysIterator *iter, const char *filename, 
 		       int flags, struct SimSysFile *file);
-};
-
-struct SimTask
-{
-  struct list_head head;
-  struct task_struct kernel_task;
-  void *private;
 };
 
 #ifdef __cplusplus
