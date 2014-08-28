@@ -20,7 +20,8 @@ print.c security.c slab.c tasklet.c \
 proc.c seq.c socket.c tasklet-hrtimer.c \
 cred.c pid.c modules.c filemap.c splice.c vmscan.c \
 dcache.c super.c inode.c sim-nuse.c sim-nuse-fiber.c sim-nuse-vif.c \
-sim-nuse-vif-rawsock.c sim-nuse-glue.c $(netmap_$(NETMAP))
+sim-nuse-vif-rawsock.c sim-nuse-glue.c sim-nuse-hostcalls.c \
+$(netmap_$(NETMAP))
 
 
 COV?=no

@@ -2,10 +2,8 @@ NUSE (Network Stack in Userspace) [![Build Status](https://travis-ci.org/thehaji
 ===============================
 
 
-## NOTE
- because this is really alpha version, IP address and interface name are 'hard-coded': you need to modify by yourself at this moment.
-
-## HOWTO
+# HOWTO
+## Build
 
 ```
  make defconfig ARCH=sim
@@ -20,16 +18,21 @@ make library ARCH=sim OPT=no NETMAP=yes
 
 you should see libnuse-linux.so.
 
+## Run
+
 Then, a wrapper script called **nuse** takes your application running with NUSE.
 
 ```
- sudo ./nuse ping 192.168.209.1
+ sudo nuse-eth0=192.168.209.39 ./nuse ping 192.168.209.1
 ```
 
-or
+where **nuse-(interface name)** indicates an IPv4 address for an interface under NUSE, instead of host OS's one.
+
+
+And, iperf
 
 ```
- sudo ./nuse iperf -c 192.168.209.1 -u
+ sudo nuse-eth0=192.168.209.39 ./nuse iperf -c 192.168.209.1 -u
 ```
 
 should just work fine !

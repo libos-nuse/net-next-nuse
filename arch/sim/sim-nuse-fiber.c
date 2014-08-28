@@ -1,8 +1,6 @@
 #include <stdio.h>
 #define __USE_GNU 1
 #include <pthread.h>
-#define _GNU_SOURCE /* Get RTLD_NEXT */
-#include <dlfcn.h>
 #include "sim-assert.h"
 
 typedef unsigned int uint32_t;

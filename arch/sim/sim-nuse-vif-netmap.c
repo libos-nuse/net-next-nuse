@@ -1,5 +1,3 @@
-#define _GNU_SOURCE /* Get RTLD_NEXT */
-#include <dlfcn.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -43,7 +41,6 @@ extern void sim_dev_rx (struct SimDevice *device, struct SimDevicePacket packet)
 extern void *sim_dev_get_private (struct SimDevice *);
 extern void sim_softirq_wakeup (void);
 extern void *sim_malloc (unsigned long size);
-static int (*host_poll)(struct pollfd *, int, int) = NULL;
 
 #define BURST_MAX 1024
 
@@ -56,16 +53,6 @@ nuse_vif_netmap_read (struct nuse_vif *vif, struct SimDevice *dev)
   struct netmap_if *nifp = netmap->nmd->nifp;
 
   uint32_t i, cur, rx, n, size;
-
-  if (!host_poll)
-    {
-      host_poll = dlsym (RTLD_NEXT, "poll");
-      if (!host_poll)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-          sim_assert (0);
-        }
-    }
 
   while (1)
     {
@@ -128,16 +115,6 @@ nuse_vif_netmap_write (struct nuse_vif *vif, struct SimDevice *dev,
 
   uint8_t *dst;
   uint32_t i, cur, nm_frag_size, offset, last;
-
-  if (!host_poll)
-    {
-      host_poll = dlsym (RTLD_NEXT, "poll");
-      if (!host_poll)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-	  sim_assert (0);
-        }
-    }
 
   while (1)
     {

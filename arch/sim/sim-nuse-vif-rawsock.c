@@ -14,14 +14,13 @@ extern void *sim_dev_get_private (struct SimDevice *);
 extern void sim_softirq_wakeup (void);
 extern void *sim_malloc (unsigned long size);
 /* socket for RAW socket */
-extern int socket (int v0, int v1, int v2);
 extern ssize_t __write(int fd, const void *buf, size_t count);
 extern ssize_t __read(int fd, void *buf, size_t count);
 extern int __close(int fd);
-extern int bind (int fd, struct sockaddr *name, int namelen);
+extern int (*host_socket) (int fd, int type, int proto);
+extern int (*host_bind)(int, const struct sockaddr *, int);
 
 extern unsigned int if_nametoindex(const char *ifname);
-static int (*host_socket)(int, int, int) = NULL;
 
 void
 nuse_vif_raw_read (struct nuse_vif *vif, struct SimDevice *dev)
@@ -84,25 +83,6 @@ void *
 nuse_vif_raw_create (const char *ifname)
 {
   int err;
-  if (!host_socket)
-    {
-      host_socket = dlsym (RTLD_NEXT, "socket");
-      if (!host_socket)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-        }
-    }
-
-  static int (*host_bind)(int, const struct sockaddr *, int) = NULL;
-  if (!host_bind)
-    {
-      host_bind = dlsym (RTLD_NEXT, "bind");
-      if (!host_bind)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-        }
-    }
-
   int sock = host_socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL));
   if (sock < 0)
     perror ("socket");
@@ -136,15 +116,6 @@ nuse_set_if_promisc (char * ifname)
 {
   int fd;
   struct ifreq ifr;
-
-  if (!host_socket)
-    {
-      host_socket = dlsym (RTLD_NEXT, "socket");
-      if (!host_socket)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-        }
-    }
 
   fd = host_socket (AF_INET, SOCK_DGRAM, 0);
   memset (&ifr, 0, sizeof (ifr));

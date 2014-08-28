@@ -3,10 +3,9 @@
 #include <linux/kernel.h> // SYSTEM_BOOTING
 #include <linux/sched.h> // struct task_struct
 #include <net/net_namespace.h> 
-#define _GNU_SOURCE /* Get RTLD_NEXT */
-#include <dlfcn.h>
 #include <bits/pthreadtypes.h>
 #include <stdio.h>
+#include <sys/ioctl.h>
 #include "sim-init.h"
 #include "sim-assert.h"
 #include "sim-nuse.h"
@@ -34,7 +33,10 @@ extern long int random(void);
 extern pid_t getpid(void);
 extern int nanosleep(const struct timespec *req, struct timespec *rem);
 extern int clock_gettime(clockid_t clk_id, struct timespec *tp);
+extern char *getenv(const char *name);
 
+extern int (*host_socket) (int fd, int type, int proto);
+extern int (*host_close) (int fd);
 /* ipaddress config */
 extern int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg);
 extern void ether_setup(struct net_device *dev);
@@ -265,15 +267,17 @@ void sim_signal_raised (struct SimTask *task, int sig)
   return;
 }
 
+unsigned char hwaddr_base[6] = {0,0,0,0,0,0x01};
+
 void
-sim_netdev_create (void)
+sim_netdev_create (const char *ifname, int ifindex)
 {
   int err;
+  char ifnamebuf[IFNAMSIZ];
+  char *ifv4addr;
+  struct ifreq ifr;
 
-  /* FIXME: shoudl be configurable */
-  //  struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_NETMAP, "xge0");
-  //struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_RAWSOCK, "xge0");
-  struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_RAWSOCK, "ens33");
+  struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_RAWSOCK, ifname);
   if (!vif)
     {
       sim_printf ("vif create error\n");
@@ -281,28 +285,32 @@ sim_netdev_create (void)
       return;
     }
 
-  /* FIXME: temporal impl (sim0). */
+  /* create new net_device (sim%d FIXME: nuse%d). */
   struct SimDevice *dev = sim_dev_create (vif, 0);
-  unsigned char mac[6] = {0,0,0,0,0,0x01};
-  sim_dev_set_address (dev, mac);
+  /* assign new hw address */
+  sim_dev_set_address (dev, hwaddr_base);
+  hwaddr_base[5]++;
   ether_setup ((struct net_device *)dev);
 
-  struct ifreq ifr;
-  struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
-  sin->sin_family = AF_INET;
-  sin->sin_addr.s_addr = inet_addr ("192.168.209.39");
-  //  sin->sin_addr.s_addr = inet_addr ("130.69.250.39");
-  strncpy (ifr.ifr_name, "sim0", IFNAMSIZ-1);
-  err = devinet_ioctl (&init_net, SIOCSIFADDR, &ifr);
-  if (err)
+  sprintf (ifnamebuf, "nuse-%s", ifname);
+  if ((ifv4addr = getenv (ifnamebuf)))
     {
-      sim_printf ("err devinet_ioctl %d\n", err);
+      struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
+      printf ("assign nuse interface %s IPv4 address %s\n", ifnamebuf, ifv4addr);
+      sin->sin_family = AF_INET;
+      sin->sin_addr.s_addr = inet_addr (ifv4addr);
+      sprintf (ifr.ifr_name, "sim%d", ifindex - 2);
+      err = devinet_ioctl (&init_net, SIOCSIFADDR, &ifr);
+      if (err)
+        {
+          sim_printf ("err devinet_ioctl %d\n", err);
+        }
     }
 
   /* IFF_UP */
   memset (&ifr, 0, sizeof (struct ifreq));
   ifr.ifr_flags = IFF_UP;
-  strncpy (ifr.ifr_name, "sim0", IFNAMSIZ-1);
+  sprintf (ifr.ifr_name, "sim%d", ifindex - 2);
   err = devinet_ioctl (&init_net, SIOCSIFFLAGS, &ifr);
   if (err)
     {
@@ -319,25 +327,48 @@ sim_netdev_create (void)
   return;
 }
 
-
-int (*host_pthread_create)(pthread_t *, const pthread_attr_t *,
-    void *(*) (void *), void *) = NULL;
-
-static
-void nuse_hijack_init (void)
+void
+nuse_create_netdevs (void)
 {
-  /* hijacking functions */
-  if (!host_pthread_create)
+  char buf[1024];
+  struct ifconf ifc;
+  struct ifreq *ifr;
+  int sock;
+  int nifs;
+  int i;
+
+  sock = host_socket (AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0)
     {
-      host_pthread_create = dlsym (RTLD_NEXT, "pthread_create");
-      if (!host_pthread_create)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-          sim_assert (0);
-        }
+      perror("socket");
+      return;
     }
 
+  ifc.ifc_len = sizeof (buf);
+  ifc.ifc_buf = buf;
+  if(ioctl (sock, SIOCGIFCONF, &ifc) < 0)
+    {
+      perror ("ioctl(SIOCGIFCONF)");
+      return;
+    }
+
+  ifr = ifc.ifc_req;
+  nifs = ifc.ifc_len / sizeof(struct ifreq);
+  for (i = 0; i < nifs; i++)
+    {
+      struct ifreq *item = &ifr[i];
+
+      if (strncmp (item->ifr_name, "lo", 2) == 0)
+        {
+          continue;
+        }
+      
+      sim_netdev_create (item->ifr_name, item->ifr_ifindex);
+    }
+  host_close (sock);
+  return;
 }
+
 
 void __attribute__((constructor))
 sim_nuse_init (struct SimExported *exported, const struct SimImported *imported, struct SimKernel *kernel)
@@ -413,5 +444,5 @@ sim_nuse_init (struct SimExported *exported, const struct SimImported *imported,
   memset (g_fd_table, 0, sizeof (g_fd_table));
 
   /* create netdev sim%s corresponding to underlying netdevs */
-  sim_netdev_create ();
+  nuse_create_netdevs ();
 }
