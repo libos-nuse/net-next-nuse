@@ -1,10 +1,4 @@
-/* FIXME */
-struct SimTask
-{
-  struct list_head head;
-  struct task_struct kernel_task;
-  void *private;
-};
+#include "sim-nuse-vif.h"
 
 /* sim-nuse-vif.c */
 extern void *nuse_vif_create (enum viftype type, const char *ifname);

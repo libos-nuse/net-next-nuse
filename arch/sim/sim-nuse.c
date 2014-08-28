@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include "sim-init.h"
 #include "sim-assert.h"
-#include "sim-nuse-vif.h"
 #include "sim-nuse.h"
 #include "sim.h"
 

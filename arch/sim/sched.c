@@ -13,13 +13,6 @@ called by wait_event macro:
  - finish_wait
 */
 
-struct SimTask
-{
-  struct list_head head;
-  struct task_struct kernel_task;
-  void *private;
-};
-
 struct SimTask *sim_task_create (void *private, unsigned long pid)
 {
   struct SimTask *task = sim_malloc (sizeof (struct SimTask));
