@@ -26,6 +26,10 @@
 
 
 #define MIN(X,Y) ((X) < (Y) ? (X) : (Y))
+typedef int (*initcall_t)(void);
+#define __define_initcall(fn, id)      \
+  static initcall_t __initcall_##fn##id                \
+       __attribute__((__section__(".initcall" #id ".init"))) = fn;
 
 
 struct nuse_vif_netmap
@@ -250,4 +254,4 @@ int nuse_vif_netmap_init (void)
   nuse_vif[NUSE_VIF_NETMAP] = &nuse_vif_netmap;
   return 0;
 }
-//core_initcall(nuse_vif_netmap_init, 1);
+__define_initcall(nuse_vif_netmap_init, 1);

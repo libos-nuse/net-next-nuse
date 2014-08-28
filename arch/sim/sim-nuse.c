@@ -406,8 +406,6 @@ sim_nuse_init (struct SimExported *exported, const struct SimImported *imported,
     call++;
   } while (call < __initcall_end);
 
-  nuse_vif_netmap_init ();
-
   // finally, put the system in RUNNING state.
   system_state = SYSTEM_RUNNING;
 
