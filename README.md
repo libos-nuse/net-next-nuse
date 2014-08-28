@@ -26,8 +26,13 @@ Then, a wrapper script called **nuse** takes your application running with NUSE.
  sudo nuse-eth0=192.168.209.39 ./nuse ping 192.168.209.1
 ```
 
-where **nuse-(interface name)** indicates an IPv4 address for an interface under NUSE, instead of host OS's one.
+where an environmental variable **nuse-(interface name)** indicates an IPv4 address for an interface under NUSE, instead of host OS's one.
 
+and if you want to use netmap for network i/o, specify **NUSEVIF=NETMAP** as an env variable. The default interface will be raw socket based network i/o.
+
+```
+ sudo NUSEVIF=NETMAP nuse-eth0=192.168.209.39 ./nuse ping 192.168.209.1
+```
 
 And, iperf
 

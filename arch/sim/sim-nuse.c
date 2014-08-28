@@ -274,8 +274,9 @@ sim_netdev_create (const char *ifname, int ifindex)
 {
   int err;
   char ifnamebuf[IFNAMSIZ];
-  char *ifv4addr;
+  char *ifv4addr, *nusevif;
   struct ifreq ifr;
+  enum viftype type = NUSE_VIF_RAWSOCK; /* default: raw socket */
 
   sprintf (ifnamebuf, "nuse-%s", ifname);
   if (!(ifv4addr = getenv (ifnamebuf)))
@@ -284,7 +285,15 @@ sim_netdev_create (const char *ifname, int ifindex)
       return;
     }
 
-  struct nuse_vif *vif = nuse_vif_create (NUSE_VIF_RAWSOCK, ifname);
+  if ((nusevif = getenv ("NUSEVIF")))
+    {
+      if (strncmp (nusevif, "RAW", 3) == 0)
+	type = NUSE_VIF_RAWSOCK;
+      else if (strncmp (nusevif, "NETMAP", 6) == 0)
+	type = NUSE_VIF_NETMAP;
+    }
+
+  struct nuse_vif *vif = nuse_vif_create (type, ifname);
   if (!vif)
     {
       sim_printf ("vif create error\n");

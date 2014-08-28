@@ -41,6 +41,7 @@ extern void sim_dev_rx (struct SimDevice *device, struct SimDevicePacket packet)
 extern void *sim_dev_get_private (struct SimDevice *);
 extern void sim_softirq_wakeup (void);
 extern void *sim_malloc (unsigned long size);
+extern int (*host_poll)(struct pollfd *, int, int);
 
 #define BURST_MAX 1024
 
