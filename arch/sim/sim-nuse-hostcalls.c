@@ -14,59 +14,34 @@ int (*host_poll)(struct pollfd *, int, int) = NULL;
 int (*host_socket) (int fd, int type, int proto) = NULL;
 int (*host_close) (int fd) = NULL;
 int (*host_bind)(int, const struct sockaddr *, int) = NULL;
+ssize_t (*host_write) (int fd, const void *buf, size_t count) = NULL;
+ssize_t (*host_writev) (int fd, const struct iovec *iovec, size_t count) = NULL;
+int (*host_open) (const char *pathname, int flags) = NULL;
+
+static void *
+nuse_hijack_resolve_sym (const char *sym)
+{
+  void *resolv;
+  resolv = dlsym (RTLD_NEXT, sym);
+  if (!resolv)
+    {
+      printf ("dlsym fail %s (%s) \n", sym, dlerror ());
+      sim_assert (0);
+    }
+  return resolv;
+}
 
 void nuse_hijack_init (void)
 {
   /* hijacking functions */
-  if (!host_socket)
-    {
-      host_socket = dlsym (RTLD_NEXT, "socket");
-      if (!host_socket)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-          sim_assert (0);
-        }
-    }
+  host_socket = nuse_hijack_resolve_sym ("socket");
+  host_write = nuse_hijack_resolve_sym ("write");
+  host_close = nuse_hijack_resolve_sym ("close");
+  host_bind = nuse_hijack_resolve_sym ("bind");
+  host_pthread_create = nuse_hijack_resolve_sym ("pthread_create");
+  host_poll = nuse_hijack_resolve_sym ("poll");
+  host_open = nuse_hijack_resolve_sym ("open");
 
-  if (!host_close)
-    {
-      host_close = dlsym (RTLD_NEXT, "close");
-      if (!host_close)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-          sim_assert (0);
-        }
-    }
-
-  if (!host_bind)
-    {
-      host_bind = dlsym (RTLD_NEXT, "bind");
-      if (!host_bind)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-          sim_assert (0);
-        }
-    }
-
-  if (!host_pthread_create)
-    {
-      host_pthread_create = dlsym (RTLD_NEXT, "pthread_create");
-      if (!host_pthread_create)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-          sim_assert (0);
-        }
-    }
-  if (!host_poll)
-    {
-      host_poll = dlsym (RTLD_NEXT, "poll");
-      if (!host_poll)
-        {
-          printf ("dlsym fail (%s) \n", dlerror ());
-          sim_assert (0);
-        }
-    }
-
-
+  return;
 }
 

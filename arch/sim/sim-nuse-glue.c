@@ -33,10 +33,69 @@ typedef long int __fd_mask;
 #define __FD_ELT(d)     ((d) / __NFDBITS)
 #define __FD_MASK(d)    ((__fd_mask) 1 << ((d) % __NFDBITS))
 
+// #include <sys/epoll.h> FIXME
+/* Valid opcodes ( "op" parameter ) to issue to epoll_ctl().  */
+#define EPOLL_CTL_ADD 1 /* Add a file descriptor to the interface.  */
+#define EPOLL_CTL_DEL 2 /* Remove a file descriptor from the interface.  */
+#define EPOLL_CTL_MOD 3 /* Change file descriptor epoll_event structure.  */
+
+typedef union epoll_data
+{
+  void *ptr;
+  int fd;
+  uint32_t u32;
+  uint64_t u64;
+} epoll_data_t;
+
+struct epoll_event
+{
+  uint32_t events;      /* Epoll events */
+  epoll_data_t data;    /* User data variable */
+} __EPOLL_PACKED;
+
+enum EPOLL_EVENTS
+  {
+    EPOLLIN = 0x001,
+#define EPOLLIN EPOLLIN
+    EPOLLPRI = 0x002,
+#define EPOLLPRI EPOLLPRI
+    EPOLLOUT = 0x004,
+#define EPOLLOUT EPOLLOUT
+    EPOLLRDNORM = 0x040,
+#define EPOLLRDNORM EPOLLRDNORM
+    EPOLLRDBAND = 0x080,
+#define EPOLLRDBAND EPOLLRDBAND
+    EPOLLWRNORM = 0x100,
+#define EPOLLWRNORM EPOLLWRNORM
+    EPOLLWRBAND = 0x200,
+#define EPOLLWRBAND EPOLLWRBAND
+    EPOLLMSG = 0x400,
+#define EPOLLMSG EPOLLMSG
+    EPOLLERR = 0x008,
+#define EPOLLERR EPOLLERR
+    EPOLLHUP = 0x010,
+#define EPOLLHUP EPOLLHUP
+    EPOLLRDHUP = 0x2000,
+#define EPOLLRDHUP EPOLLRDHUP
+    EPOLLWAKEUP = 1u << 29,
+#define EPOLLWAKEUP EPOLLWAKEUP
+    EPOLLONESHOT = 1u << 30,
+#define EPOLLONESHOT EPOLLONESHOT
+    EPOLLET = 1u << 31
+#define EPOLLET EPOLLET
+  };
+
+
 extern int clock_gettime(clockid_t clk_id, struct timespec *tp);
+extern void *malloc(size_t size);
+extern void free(void *ptr);
 
 extern void sim_update_jiffies (void);
 extern void sim_softirq_wakeup (void);
+extern ssize_t (*host_write) (int fd, const void *buf, size_t count);
+extern ssize_t (*host_writev) (int fd, const struct iovec *iovec, size_t count);
+extern int (*host_open) (const char *pathname, int flags);
+extern int (*host_close) (int fd);
 
 __u64 curfd = 3;
 struct socket *g_fd_table[1024];
@@ -106,8 +165,15 @@ int socket (int v0, int v1, int v2)
 extern int sim_sock_close (struct socket *);
 int close (int fd)
 {
+  if (!g_fd_table[fd])
+    {
+      g_fd_table[fd] = 0;
+      return host_close (fd);
+    }
+
   sim_update_jiffies ();
   int ret = sim_sock_close (g_fd_table[fd]);
+  g_fd_table[fd] = 0;
   sim_softirq_wakeup ();
   return ret;
 }
@@ -194,9 +260,8 @@ int sim_sock_shutdown (struct SimSocket *socket, int how)
 #endif
 /* FORWARDER3(sim_sock_accept,nvoid, int, struct SimSocket *,struct SimSocket **, int); */
 extern int sim_sock_accept (struct socket *socket, struct socket **new_socket, int flags);
-int accept (int fd, struct sockaddr *addr, int *addrlen)
+int accept4 (int fd, struct sockaddr *addr, int *addrlen, int flags)
 {
-  int flags = 0;                /* FIXME: XXX */
   sim_update_jiffies ();
   struct socket *kernel_socket = g_fd_table[fd];
   struct socket *new_socket = sim_malloc (sizeof (struct socket));
@@ -223,9 +288,18 @@ int accept (int fd, struct sockaddr *addr, int *addrlen)
   sim_softirq_wakeup ();
   return curfd - 1;
 }
+int accept (int fd, struct sockaddr *addr, int *addrlen, int flags)
+{
+  return accept4 (fd, addr, addrlen, 0);
+}
 
 ssize_t write (int fd, const void *buf, size_t count)
 {
+  if (!g_fd_table[fd])
+    {
+      return host_write (fd, buf, count);
+    }
+
   struct msghdr msg;
   struct iovec iov;
   msg.msg_control = 0;
@@ -234,6 +308,23 @@ ssize_t write (int fd, const void *buf, size_t count)
   msg.msg_iov = &iov;
   iov.iov_len = count;
   iov.iov_base = (void*)buf;
+  msg.msg_name = 0;
+  msg.msg_namelen = 0;
+  return sendmsg (fd, &msg, 0);
+}
+
+ssize_t writev (int fd, const struct iovec *iov, size_t count)
+{
+  if (!g_fd_table[fd])
+    {
+      return host_writev (fd, iov, count);
+    }
+
+  struct msghdr msg;
+  msg.msg_control = 0;
+  msg.msg_controllen = 0;
+  msg.msg_iovlen = 1;
+  msg.msg_iov = (struct iovec *)iov;
   msg.msg_name = 0;
   msg.msg_namelen = 0;
   return sendmsg (fd, &msg, 0);
@@ -331,6 +422,12 @@ int getsockopt(int sockfd, int level, int optname,
   return retval;
 }
 
+int open (const char *pathname, int flags)
+{
+  curfd++;
+  return host_open (pathname, flags);
+}
+
 
 void sim_poll_event (int flag, void *context)
 {
@@ -377,12 +474,12 @@ restart:
   /* call (sim) kernel side */
   for (i = 0; i < nfds; ++i)
     {
-      if (!g_fd_table[i])
+      if (!g_fd_table[fds[i].fd])
         {
           continue;
         }
 
-      sim_sock_poll (g_fd_table[i], &poll_table);
+      sim_sock_poll (g_fd_table[fds[i].fd], &poll_table);
       int mask = poll_table.ret;
       mask &= (fds[i].events | POLLERR | POLLHUP);
       fds[i].revents = mask;
@@ -399,7 +496,8 @@ restart:
 
   if (timeout < 0)
     {
-      /* XXX */
+      /* XXX: should wait */
+      sleep (1);
       goto restart;
     }
   else
@@ -425,6 +523,8 @@ select (int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 {
   struct pollfd pollFd[nfds];
   int fd;
+
+  memset (pollFd, 0, sizeof (struct pollfd) * nfds);
 
   if (nfds == -1)
     {
@@ -529,3 +629,169 @@ select (int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
     }
   return ret;
 }
+
+/* epoll relates */
+struct epoll_fd
+{
+  struct epoll_fd *next;
+  struct epoll_event *ev;
+  int fd;
+};
+
+struct epoll_fd *g_epoll_fd_table[1024] = {0};
+
+int
+epoll_create (int size)
+{
+  struct epoll_fd *epfd = malloc (sizeof (struct epoll_fd));
+  memset (epfd, 0, sizeof (struct epoll_fd));
+  g_epoll_fd_table[curfd] = epfd;
+  return curfd++;
+}
+
+int
+epoll_ctl (int epollfd, int op, int fd, struct epoll_event *event)
+{
+  struct epoll_fd *prev, *epfd = g_epoll_fd_table[epollfd];
+  if (!epfd)
+    return EBADF;
+
+  struct epoll_event *ev;
+
+  switch (op)
+    {
+    case EPOLL_CTL_ADD:
+      ev = (struct epoll_event *)malloc (sizeof (struct epoll_event));
+      memcpy (ev, event, sizeof (struct epoll_event));
+
+      if (!epfd->ev)
+        {
+          epfd->ev = ev;
+          epfd->fd = fd;
+        }
+      else
+        {
+          prev = epfd;
+          while (epfd->next)
+            {
+              prev = epfd;
+              epfd = epfd->next;
+            }
+
+          epfd = malloc (sizeof (struct epoll_fd));
+          epfd->ev = ev;
+          epfd->fd = fd;
+          prev->next = epfd;
+        }
+      break;
+    case EPOLL_CTL_MOD:
+      while (epfd && epfd->fd != fd)
+        {
+          epfd = epfd->next;
+        }
+      ev = epfd->ev;
+      memcpy (ev, event, sizeof (struct epoll_event));
+      epfd->fd = fd;
+      break;
+    case EPOLL_CTL_DEL:
+      while (epfd && epfd->fd != fd)
+        {
+          prev = epfd;
+          epfd = epfd->next;
+        }
+      prev->next = epfd->next;
+      ev = epfd->ev;
+      free (ev);
+      free (epfd);
+      break;
+    default:
+      break;
+    }
+
+  return 0;
+}
+
+int
+epoll_wait (int epollfd, struct epoll_event *events,
+           int maxevents, int timeout)
+{
+  struct epoll_fd *cur, *epfd = g_epoll_fd_table[epollfd];
+  if (!epfd)
+    return EBADF;
+
+  struct epoll_event *ev;
+
+  struct pollfd pollFd[maxevents];
+  memset (pollFd, 0, sizeof (struct pollfd) * maxevents);
+  int j = 0;
+
+  for (cur = epfd; cur && cur->ev ; cur = cur->next)
+    {
+      struct epoll_event *ev = cur->ev;
+      int pevent = 0;
+      if (ev->events & EPOLLIN)
+        {
+          pevent |= POLLIN;
+        }
+      if (ev->events & EPOLLOUT)
+        {
+          pevent |= POLLOUT;
+        }
+
+      pollFd[j].events = pevent;
+      pollFd[j].fd = cur->fd;
+      pollFd[j++].revents = 0;
+    }
+
+  int pollRet = poll (pollFd, maxevents, timeout);
+  if (pollRet > 0)
+    {
+      pollRet = 0;
+      /* FIXME: c10k... far fast */
+      for (j = 0; j < maxevents; j++)
+        {
+          int fd = pollFd[j].fd;
+          struct epoll_event *rev;
+          for (cur = epfd; cur && epfd->ev ; cur = cur->next)
+            {
+              rev = cur->ev;
+              if (cur->fd == fd)
+                break;
+            }
+
+          if ((POLLIN & pollFd[j].revents) || (POLLHUP & pollFd[j].revents)
+              || (POLLERR & pollFd[j].revents))
+            {
+              memcpy (events, rev, sizeof (struct epoll_event));
+              events->events = pollFd[j].revents;
+              printf ("epoll woke up for read with %d\n", fd);
+              pollRet++;
+              events++;
+            }
+          if (POLLOUT & pollFd[j].revents)
+            {
+              memcpy (events, rev, sizeof (struct epoll_event));
+              events->events = pollFd[j].revents;
+              // *events = *epollFd->evs[fd];
+              // events->data.fd = fd;
+              printf ("epoll woke up for write with %d\n", fd);
+              pollRet++;
+              events++;
+            }
+          if (POLLPRI & pollFd[j].revents)
+            {
+              memcpy (events, rev, sizeof (struct epoll_event));
+              events->events = pollFd[j].revents;
+              printf ("epoll woke up for other with %d\n", fd);
+              // *events = *epollFd->evs[fd];
+              // events->data.fd = fd;
+              pollRet++;
+              events++;
+            }
+
+        }
+    }
+
+  return pollRet;
+}
+       

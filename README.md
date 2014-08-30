@@ -43,3 +43,7 @@ And, iperf
 should just work fine !
 
 since the LD_PRELOAD with sudo technique requires additional copy and permission changes to the library, the script will automatically conduct such an operation.
+
+## Tested platform
+Fedora 19 64bits
+Ubuntu 13.04 64bits
