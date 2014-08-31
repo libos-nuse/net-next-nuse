@@ -662,6 +662,7 @@ epoll_ctl (int epollfd, int op, int fd, struct epoll_event *event)
     {
     case EPOLL_CTL_ADD:
       ev = (struct epoll_event *)malloc (sizeof (struct epoll_event));
+      memset (ev, 0, sizeof (struct epoll_event));
       memcpy (ev, event, sizeof (struct epoll_event));
 
       if (!epfd->ev)
@@ -678,10 +679,10 @@ epoll_ctl (int epollfd, int op, int fd, struct epoll_event *event)
               epfd = epfd->next;
             }
 
-          epfd = malloc (sizeof (struct epoll_fd));
-          epfd->ev = ev;
-          epfd->fd = fd;
-          prev->next = epfd;
+          epfd->next = malloc (sizeof (struct epoll_fd));
+          memset (epfd->next, 0, sizeof (struct epoll_fd));
+          epfd->next->ev = ev;
+          epfd->next->fd = fd;
         }
       break;
     case EPOLL_CTL_MOD:
