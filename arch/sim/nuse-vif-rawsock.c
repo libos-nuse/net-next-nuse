@@ -5,7 +5,8 @@
 #include <sys/ioctl.h>
 #include "sim-init.h"
 #include "sim-assert.h"
-#include "sim-nuse.h"
+//#include "nuse-hostcalls.h"
+#include "nuse.h"
 #include "sim.h"
 
 extern struct SimDevicePacket sim_dev_create_packet (struct SimDevice *dev, int size);
@@ -14,9 +15,9 @@ extern void *sim_dev_get_private (struct SimDevice *);
 extern void sim_softirq_wakeup (void);
 extern void *sim_malloc (unsigned long size);
 /* socket for RAW socket */
-extern ssize_t __write(int fd, const void *buf, size_t count);
-extern ssize_t __read(int fd, void *buf, size_t count);
-extern int __close(int fd);
+extern ssize_t (*host_write)(int fd, const void *buf, size_t count);
+extern ssize_t (*host_read)(int fd, void *buf, size_t count);
+extern int (*host_close)(int fd);
 extern int (*host_socket) (int fd, int type, int proto);
 extern int (*host_bind)(int, const struct sockaddr *, int);
 
@@ -29,16 +30,16 @@ nuse_vif_raw_read (struct nuse_vif *vif, struct SimDevice *dev)
   char buf[8192];
   while (1)
     {
-      ssize_t size = __read (sock, buf, sizeof (buf));
+      ssize_t size = host_read (sock, buf, sizeof (buf));
       if (size < 0)
         {
           perror ("read");
-          __close (sock);
+          host_close (sock);
           return;
         }
       else if (size == 0)
         {
-          __close (sock);
+          host_close (sock);
           return;
         }
 
@@ -72,7 +73,7 @@ nuse_vif_raw_write (struct nuse_vif *vif, struct SimDevice *dev,
                 unsigned char *data, int len)
 {
   int sock = vif->sock;
-  int ret = __write (sock, data, len);
+  int ret = host_write (sock, data, len);
   if (ret == -1)
     perror ("write");
 
@@ -107,7 +108,7 @@ void
 nuse_vif_raw_delete (struct nuse_vif *vif)
 {
   int sock = vif->sock;
-  __close (sock);
+  host_close (sock);
   return;
 }
 

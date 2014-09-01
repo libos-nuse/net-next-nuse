@@ -9,8 +9,13 @@ endif
 
 
 NETMAP?=no
-netmap_yes=sim-nuse-vif-netmap.c
+netmap_yes=nuse-vif-netmap.c
 netmap_no=
+
+NUSE_SRC=\
+nuse.c nuse-fiber.c nuse-vif.c \
+nuse-vif-rawsock.c nuse-glue.c nuse-hostcalls.c \
+$(netmap_$(NETMAP))
 
 SIM_SRC=\
 fs.c random.c softirq.c time.c \
@@ -19,10 +24,7 @@ hrtimer.c sched.c sim-socket.c sysfs.c workqueue.c \
 print.c security.c slab.c tasklet.c \
 proc.c seq.c socket.c tasklet-hrtimer.c \
 cred.c pid.c modules.c filemap.c splice.c vmscan.c \
-dcache.c super.c inode.c sim-nuse.c sim-nuse-fiber.c sim-nuse-vif.c \
-sim-nuse-vif-rawsock.c sim-nuse-glue.c sim-nuse-hostcalls.c \
-$(netmap_$(NETMAP))
-
+dcache.c super.c inode.c $(NUSE_SRC)
 
 COV?=no
 cov_yes=-fprofile-arcs -ftest-coverage

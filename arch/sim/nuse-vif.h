@@ -1,3 +1,6 @@
+#ifndef NUSE_VIF_H
+#define NUSE_VIF_H
+
 struct SimDevice;
 
 enum viftype
@@ -22,3 +25,5 @@ struct nuse_vif_impl {
   void *(*create) (const char *);
   void (*delete) (struct nuse_vif *);
 };
+
+#endif /* NUSE_VIF_H */

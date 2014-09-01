@@ -16,11 +16,9 @@
 #define NETMAP_WITH_LIBS
 #include <net/netmap_user.h>
 
-//#include "sim-init.h"
 #include "sim-types.h"
 #include "sim-assert.h"
-#include "sim-nuse-vif.h"
-//#include "sim.h"
+#include "nuse-vif.h"
 
 
 #define MIN(X,Y) ((X) < (Y) ? (X) : (Y))

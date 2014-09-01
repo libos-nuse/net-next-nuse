@@ -1,9 +1,11 @@
 #include <net/net_namespace.h> 
 #include <errno.h>
 #include <poll.h>
+#include <unistd.h>
+
 #include "sim-init.h"
 #include "sim-assert.h"
-#include "sim-nuse.h"
+#include "nuse.h"
 #include "sim.h"
 
 //#include <sys/select.h>

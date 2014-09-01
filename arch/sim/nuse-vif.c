@@ -1,8 +1,4 @@
-#include <linux/sched.h> // struct task_struct
-#include "sim-init.h"
-#include "sim-assert.h"
-#include "sim-nuse.h"
-#include "sim.h"
+#include "nuse-vif.h"
 
 struct nuse_vif_impl *nuse_vif[NUSE_VIF_MAX];
 

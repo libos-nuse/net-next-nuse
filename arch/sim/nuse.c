@@ -8,7 +8,8 @@
 #include <sys/ioctl.h>
 #include "sim-init.h"
 #include "sim-assert.h"
-#include "sim-nuse.h"
+#include "nuse.h"
+#include "nuse-hostcalls.h"
 #include "sim.h"
 
 int kptr_restrict __read_mostly;
@@ -35,8 +36,6 @@ extern int nanosleep(const struct timespec *req, struct timespec *rem);
 extern int clock_gettime(clockid_t clk_id, struct timespec *tp);
 extern char *getenv(const char *name);
 
-extern int (*host_socket) (int fd, int type, int proto);
-extern int (*host_close) (int fd);
 /* ipaddress config */
 extern int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg);
 extern void ether_setup(struct net_device *dev);
@@ -87,7 +86,7 @@ struct SimTask *sim_task_current (void)
   list_for_each_entry_rcu(task, &g_task_lists, head) 
     {
       void *fiber = task->private;
-      if (fiber && sim_fiber_isself (fiber))
+      if (fiber && nuse_fiber_isself (fiber))
         {
           rcu_read_unlock();
           return task;
@@ -98,7 +97,7 @@ struct SimTask *sim_task_current (void)
   return g_sim_main_ctx;
 }
 
-struct SimNuseTaskTrampolineContext
+struct NuseTaskTrampolineContext
 {
   void (*callback) (void *);
   void *context;
@@ -106,18 +105,18 @@ struct SimNuseTaskTrampolineContext
 };
 
 void
-sim_nuse_task_add (void *fiber)
+nuse_task_add (void *fiber)
 {
   struct SimTask *task = sim_task_create (fiber, getpid ());
   list_add_tail_rcu (&task->head, &g_task_lists);
   return;
 }
 
-static void *sim_nuse_task_start_trampoline (void *context)
+static void *nuse_task_start_trampoline (void *context)
 {
   // we use this trampoline solely for the purpose of executing sim_update_jiffies
   // prior to calling the callback.
-  struct SimNuseTaskTrampolineContext *ctx = context;
+  struct NuseTaskTrampolineContext *ctx = context;
   int found = 0;
   struct SimTask *task;
 
@@ -134,7 +133,7 @@ static void *sim_nuse_task_start_trampoline (void *context)
       return NULL;
     }
 
-  if (sim_fiber_is_stopped (ctx->task->private))
+  if (nuse_fiber_is_stopped (ctx->task->private))
     {
       sim_free (ctx);
       sim_update_jiffies ();
@@ -150,7 +149,7 @@ static void *sim_nuse_task_start_trampoline (void *context)
 
   callback (callback_context);
 
-  //  sim_fiber_free (task->private);
+  //  nuse_fiber_free (task->private);
   list_del_rcu (&task->head);
 
   return ctx;
@@ -158,7 +157,7 @@ static void *sim_nuse_task_start_trampoline (void *context)
 
 struct SimTask *sim_task_start (void (*callback) (void *), void *context)
 {
-  struct SimNuseTaskTrampolineContext *ctx = sim_malloc (sizeof (struct SimNuseTaskTrampolineContext));
+  struct NuseTaskTrampolineContext *ctx = sim_malloc (sizeof (struct NuseTaskTrampolineContext));
   if (!ctx)
     {
       return NULL;
@@ -166,23 +165,23 @@ struct SimTask *sim_task_start (void (*callback) (void *), void *context)
   ctx->callback = callback;
   ctx->context = context;
 
-  void *fiber = sim_fiber_new (&sim_nuse_task_start_trampoline, ctx, 1 << 16, "task");
+  void *fiber = nuse_fiber_new (&nuse_task_start_trampoline, ctx, 1 << 16, "task");
   struct SimTask *task = NULL;
   task = sim_task_create (fiber, getpid ());
   ctx->task = task;
 
-  if (!sim_fiber_is_stopped (task->private))
+  if (!nuse_fiber_is_stopped (task->private))
     {
       list_add_tail_rcu (&task->head, &g_task_lists);
     }
 
-  sim_fiber_start (fiber);
+  nuse_fiber_start (fiber);
   return task;
 }
 
 void *sim_event_schedule_ns (__u64 ns, void (*fn) (void *context), void *context)
 {
-  struct SimNuseTaskTrampolineContext *ctx = sim_malloc (sizeof (struct SimNuseTaskTrampolineContext));
+  struct NuseTaskTrampolineContext *ctx = sim_malloc (sizeof (struct NuseTaskTrampolineContext));
   if (!ctx)
     {
       return NULL;
@@ -191,14 +190,14 @@ void *sim_event_schedule_ns (__u64 ns, void (*fn) (void *context), void *context
   ctx->context = context;
 
   /* without fiber_start (pthread) */
-  void *fiber = sim_fiber_new_from_caller (1 << 16, "task_sched");
+  void *fiber = nuse_fiber_new_from_caller (1 << 16, "task_sched");
   struct SimTask *task = NULL;
   task = sim_task_create (fiber, getpid ());
   ctx->task = task;
 
   list_add_tail_rcu (&task->head, &g_task_lists);
 
-  sim_add_timer (ns, sim_nuse_task_start_trampoline, ctx, fiber);
+  nuse_add_timer (ns, nuse_task_start_trampoline, ctx, fiber);
 
   return task;
 }
@@ -206,8 +205,8 @@ void *sim_event_schedule_ns (__u64 ns, void (*fn) (void *context), void *context
 void sim_event_cancel (void *event)
 {
   struct SimTask *task = event;
-  sim_fiber_stop (task->private);
-  //  sim_fiber_free (task->private);
+  nuse_fiber_stop (task->private);
+  //  nuse_fiber_free (task->private);
   list_del_rcu (&task->head);
   return;
 }
@@ -218,13 +217,13 @@ void sim_task_wait (void)
   rcu_sched_qs (0);
   struct SimTask *task = sim_task_current ();
   sim_assert (task != NULL);
-  sim_fiber_wait (task->private);
+  nuse_fiber_wait (task->private);
   sim_update_jiffies ();
 }
 
 int sim_task_wakeup (struct SimTask *task)
 {
-  return sim_fiber_wakeup (task->private);
+  return nuse_fiber_wakeup (task->private);
 }
 
 
@@ -238,7 +237,7 @@ extern void rcu_idle_exit (void);
 
 
 void *
-sim_netdev_rx_trampoline (void *context)
+nuse_netdev_rx_trampoline (void *context)
 {
   struct SimDevice *dev = context;
   struct nuse_vif *vif = sim_dev_get_private (dev);
@@ -270,7 +269,7 @@ void sim_signal_raised (struct SimTask *task, int sig)
 unsigned char hwaddr_base[6] = {0,0,0,0,0,0x01};
 
 void
-sim_netdev_create (const char *ifname, int ifindex)
+nuse_netdev_create (const char *ifname, int ifindex)
 {
   int err;
   char ifnamebuf[IFNAMSIZ];
@@ -330,17 +329,17 @@ sim_netdev_create (const char *ifname, int ifindex)
     }
 
   /* wait for packets */
-  void *fiber = sim_fiber_new (&sim_netdev_rx_trampoline, dev, 1 << 16, "NET_RX");
+  void *fiber = nuse_fiber_new (&nuse_netdev_rx_trampoline, dev, 1 << 16, "NET_RX");
   struct SimTask *task = NULL;
   task = sim_task_create (fiber, getpid ());
   list_add_tail_rcu (&task->head, &g_task_lists);
-  sim_fiber_start (fiber);
+  nuse_fiber_start (fiber);
 
   return;
 }
 
 void
-nuse_create_netdevs (void)
+nuse_netdevs_create (void)
 {
   char buf[1024];
   struct ifconf ifc;
@@ -358,7 +357,7 @@ nuse_create_netdevs (void)
 
   ifc.ifc_len = sizeof (buf);
   ifc.ifc_buf = buf;
-  if(ioctl (sock, SIOCGIFCONF, &ifc) < 0)
+  if(host_ioctl (sock, SIOCGIFCONF, &ifc) < 0)
     {
       perror ("ioctl(SIOCGIFCONF)");
       return;
@@ -375,7 +374,7 @@ nuse_create_netdevs (void)
           continue;
         }
       
-      sim_netdev_create (item->ifr_name, item->ifr_ifindex);
+      nuse_netdev_create (item->ifr_name, item->ifr_ifindex);
     }
   host_close (sock);
   return;
@@ -383,52 +382,14 @@ nuse_create_netdevs (void)
 
 
 void __attribute__((constructor))
-sim_nuse_init (struct SimExported *exported, const struct SimImported *imported, struct SimKernel *kernel)
+nuse_init (void)
 {
-  // make sure we can call the callbacks
-#if 0
-  g_imported = *imported;
-  g_kernel = kernel;
-  exported->task_create = sim_task_create;
-  exported->task_destroy = sim_task_destroy;
-  exported->task_get_private = sim_task_get_private;
-  exported->sock_socket = sim_sock_socket_forwarder;
-  exported->sock_close = sim_sock_close_forwarder;
-  exported->sock_recvmsg = sim_sock_recvmsg_forwarder;
-  exported->sock_sendmsg = sim_sock_sendmsg_forwarder;
-  exported->sock_getsockname = sim_sock_getsockname_forwarder;
-  exported->sock_getpeername = sim_sock_getpeername_forwarder;
-  exported->sock_bind = sim_sock_bind_forwarder;
-  exported->sock_connect = sim_sock_connect_forwarder;
-  exported->sock_listen = sim_sock_listen_forwarder;
-  exported->sock_shutdown = sim_sock_shutdown_forwarder;
-  exported->sock_accept = sim_sock_accept_forwarder;
-  exported->sock_ioctl = sim_sock_ioctl_forwarder;
-  exported->sock_setsockopt = sim_sock_setsockopt_forwarder;
-  exported->sock_getsockopt = sim_sock_getsockopt_forwarder;
-
-  exported->sock_poll = sim_sock_poll_forwarder;
-  exported->sock_pollfreewait = sim_sock_pollfreewait_forwarder;
-
-  exported->dev_create = sim_dev_create_forwarder;
-  exported->dev_destroy = sim_dev_destroy_forwarder;
-  exported->dev_get_private = sim_dev_get_private;
-  exported->dev_set_address = sim_dev_set_address_forwarder;
-  exported->dev_set_mtu = sim_dev_set_mtu_forwarder;
-  exported->dev_create_packet = sim_dev_create_packet_forwarder;
-  exported->dev_rx = sim_dev_rx_forwarder;
-
-  exported->sys_iterate_files = sim_sys_iterate_files_forwarder;
-  exported->sys_file_write = sim_sys_file_write_forwarder;
-  exported->sys_file_read = sim_sys_file_read_forwarder;
-#endif
-
   nuse_set_affinity ();
 
   nuse_hijack_init ();
   rcu_init ();
 
-  void *fiber = sim_fiber_new_from_caller (1 << 16, "init");
+  void *fiber = nuse_fiber_new_from_caller (1 << 16, "init");
   g_sim_main_ctx = sim_task_create (fiber, getpid ());
   list_add_tail_rcu (&g_sim_main_ctx->head, &g_task_lists);
 
@@ -456,5 +417,5 @@ sim_nuse_init (struct SimExported *exported, const struct SimImported *imported,
   memset (g_fd_table, 0, sizeof (g_fd_table));
 
   /* create netdev sim%s corresponding to underlying netdevs */
-  nuse_create_netdevs ();
+  nuse_netdevs_create ();
 }

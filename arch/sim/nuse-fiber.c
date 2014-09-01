@@ -1,7 +1,16 @@
 #include <stdio.h>
 #define __USE_GNU 1
 #include <pthread.h>
+#include <signal.h>
+#include <time.h>
+#include <string.h>
+#include <sys/resource.h>
+//#include "nuse-hostcalls.h"
 #include "sim-assert.h"
+
+/* FIXME */
+extern int (*host_pthread_create)(pthread_t *, const pthread_attr_t *,
+                                  void *(*) (void *), void *);
 
 typedef unsigned int uint32_t;
 enum {
@@ -10,10 +19,8 @@ enum {
 };
 void *sim_malloc (unsigned long size);
 void sim_free (void *);
-extern int (*host_pthread_create)(pthread_t *, const pthread_attr_t *,
-                                  void *(*) (void *), void *);
 
-struct SimFiber
+struct NuseFiber
 {
   pthread_t pthread;
   pthread_mutex_t mutex;
@@ -36,9 +43,9 @@ nuse_set_affinity ()
   sched_setaffinity (getpid (), sizeof(cpu_set_t), &cpuset);
 }
 
-void *sim_fiber_new_from_caller (uint32_t stackSize, const char *name)
+void *nuse_fiber_new_from_caller (uint32_t stackSize, const char *name)
 {
-  struct SimFiber *fiber = sim_malloc (sizeof (struct SimFiber));
+  struct NuseFiber *fiber = sim_malloc (sizeof (struct NuseFiber));
   fiber->func = NULL;
   fiber->context = NULL;
   fiber->pthread = pthread_self (); 
@@ -48,20 +55,20 @@ void *sim_fiber_new_from_caller (uint32_t stackSize, const char *name)
   return fiber;
 }
 
-void *sim_fiber_new (void* (*callback)(void *),
+void *nuse_fiber_new (void* (*callback)(void *),
                      void *context,
                      uint32_t stackSize,
                      const char *name)
 {
-  struct SimFiber *fiber = sim_fiber_new_from_caller (stackSize, name);
+  struct NuseFiber *fiber = nuse_fiber_new_from_caller (stackSize, name);
   fiber->func = callback;
   fiber->context = context;
   return fiber;
 }
 
-void sim_fiber_start (void * handler)
+void nuse_fiber_start (void * handler)
 {
-  struct SimFiber *fiber = handler;
+  struct NuseFiber *fiber = handler;
   int error;
 
   error = pthread_mutex_init (&fiber->mutex, NULL);
@@ -78,33 +85,33 @@ void sim_fiber_start (void * handler)
 }
 
 int
-sim_fiber_isself (void *handler)
+nuse_fiber_isself (void *handler)
 {
-  struct SimFiber *fiber = handler;
+  struct NuseFiber *fiber = handler;
   return fiber->pthread == pthread_self ();
 }
 
 void
-sim_fiber_wait (void *handler)
+nuse_fiber_wait (void *handler)
 {
-  struct SimFiber *fiber = handler;
+  struct NuseFiber *fiber = handler;
   pthread_mutex_lock (&fiber->mutex);
   pthread_cond_wait (&fiber->condvar, &fiber->mutex);
   pthread_mutex_unlock (&fiber->mutex);
 }
 
 int
-sim_fiber_wakeup (void *handler)
+nuse_fiber_wakeup (void *handler)
 {
-  struct SimFiber *fiber = handler;
+  struct NuseFiber *fiber = handler;
   int ret = pthread_cond_signal (&fiber->condvar);
 
   return (ret == 0 ? 1 : 0);
 }
 
-void sim_fiber_stop (void * handler)
+void nuse_fiber_stop (void * handler)
 {
-  struct SimFiber *fiber = handler;
+  struct NuseFiber *fiber = handler;
   fiber->canceled = 0;
   if (fiber->timerid)
     {
@@ -114,15 +121,15 @@ void sim_fiber_stop (void * handler)
   return;
 }
 
-int sim_fiber_is_stopped (void * handler)
+int nuse_fiber_is_stopped (void * handler)
 {
-  struct SimFiber *fiber = handler;
+  struct NuseFiber *fiber = handler;
   return fiber->canceled;
 }
 
-void sim_fiber_free (void * handler)
+void nuse_fiber_free (void * handler)
 {
-  struct SimFiber *fiber = handler;
+  struct NuseFiber *fiber = handler;
   pthread_mutex_destroy (&fiber->mutex);
   pthread_cond_destroy (&fiber->condvar);
   //  pthread_join (fiber->pthread, 0);
@@ -142,7 +149,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     }
 
   int error;
-  struct SimFiber *fiber = sim_malloc (sizeof (struct SimFiber));
+  struct NuseFiber *fiber = sim_malloc (sizeof (struct NuseFiber));
   fiber->func = NULL;
   fiber->context = NULL;
   fiber->pthread = *thread; 
@@ -156,16 +163,12 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
   error = pthread_cond_init (&fiber->condvar, NULL);
   sim_assert (error == 0);
 
-  sim_nuse_task_add (fiber);
+  nuse_task_add (fiber);
   return ret;
 }
 
 
-#include <signal.h>
-#include <time.h>
-#include <string.h>
-#include <sys/resource.h>
-struct SimNuseTimerTrampolineContext
+struct NuseTimerTrampolineContext
 {
   void (*callback) (void *arg);
   void *context;
@@ -173,9 +176,9 @@ struct SimNuseTimerTrampolineContext
 };
 
 void
-sim_nuse_timer_trampoline (sigval_t context)
+nuse_timer_trampoline (sigval_t context)
 {
-  struct SimNuseTimerTrampolineContext *ctx = context.sival_ptr;
+  struct NuseTimerTrampolineContext *ctx = context.sival_ptr;
   ctx->callback (ctx->context);
   if (ctx->timerid)
     {
@@ -187,14 +190,14 @@ sim_nuse_timer_trampoline (sigval_t context)
 }
 
 void
-sim_add_timer (unsigned long ns, 
+nuse_add_timer (unsigned long ns, 
                void (*func) (void *arg),
                void *arg,
                void *handler)
 {
   struct sigevent se;
   struct itimerspec new_value;
-  struct SimFiber *fiber = handler;
+  struct NuseFiber *fiber = handler;
 
   new_value.it_value.tv_sec = ns / (1000*1000*1000);
   new_value.it_value.tv_nsec = ns % (1000*1000*1000);
@@ -203,7 +206,7 @@ sim_add_timer (unsigned long ns,
 
   //  printf ("to %d sec %d nsec\n", new_value.it_value.tv_sec, new_value.it_value.tv_nsec);
 
-  struct SimNuseTimerTrampolineContext *ctx = sim_malloc (sizeof (struct SimNuseTimerTrampolineContext));
+  struct NuseTimerTrampolineContext *ctx = sim_malloc (sizeof (struct NuseTimerTrampolineContext));
   if (!ctx)
     {
       return;
@@ -214,7 +217,7 @@ sim_add_timer (unsigned long ns,
   memset (&se, 0, sizeof(se));
   se.sigev_value.sival_ptr = ctx;
   se.sigev_notify = SIGEV_THREAD;
-  se.sigev_notify_function = sim_nuse_timer_trampoline;
+  se.sigev_notify_function = nuse_timer_trampoline;
   se.sigev_notify_attributes = NULL;
   int ret = timer_create (CLOCK_REALTIME, &se, &ctx->timerid);
   if (ret)
