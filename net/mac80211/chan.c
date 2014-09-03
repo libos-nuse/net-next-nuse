@@ -66,7 +66,7 @@ static bool ieee80211_can_create_new_chanctx(struct ieee80211_local *local)
 static struct ieee80211_chanctx *
 ieee80211_vif_get_chanctx(struct ieee80211_sub_if_data *sdata)
 {
-	struct ieee80211_local *local = sdata->local;
+	struct ieee80211_local *local __maybe_unused = sdata->local;
 	struct ieee80211_chanctx_conf *conf;
 
 	conf = rcu_dereference_protected(sdata->vif.chanctx_conf,
@@ -1444,7 +1444,7 @@ ieee80211_vif_use_reserved_switch(struct ieee80211_local *local)
 
 			list_del(&sdata->reserved_chanctx_list);
 			list_move(&sdata->assigned_chanctx_list,
-				  &new_ctx->assigned_vifs);
+				  &ctx->assigned_vifs);
 			sdata->reserved_chanctx = NULL;
 
 			ieee80211_vif_chanctx_reservation_complete(sdata);

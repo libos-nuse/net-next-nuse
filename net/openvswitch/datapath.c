@@ -47,8 +47,6 @@
 #include <linux/openvswitch.h>
 #include <linux/rculist.h>
 #include <linux/dmi.h>
-#include <linux/genetlink.h>
-#include <net/genetlink.h>
 #include <net/genetlink.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
@@ -781,7 +779,7 @@ static struct sk_buff *ovs_flow_cmd_build_info(const struct sw_flow *flow,
 
 	skb = ovs_flow_cmd_alloc_info(ovsl_dereference(flow->sf_acts), info,
 				      always);
-	if (!skb || IS_ERR(skb))
+	if (IS_ERR_OR_NULL(skb))
 		return skb;
 
 	retval = ovs_flow_cmd_fill_info(flow, dp_ifindex, skb,

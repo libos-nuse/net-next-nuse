@@ -59,15 +59,12 @@ ktime_t ktime_get(void)
   u64 ns = sim_current_ns ();
   return ns_to_ktime (ns);
 }
-void ktime_get_ts(struct timespec *ts)
+ktime_t ktime_get_with_offset(enum tk_offsets offs)
 {
-    u64 ns = sim_current_ns ();
-    *ts = ns_to_timespec (ns);
+  /* FIXME */
+  return ktime_get ();
 }
-ktime_t ktime_get_real(void)
-{
-  return ktime_get();
-}
+
 void update_xtime_cache(u64 nsec)
 {}
 unsigned long get_seconds(void)

@@ -165,6 +165,7 @@ struct xenvif_queue { /* Per-queue data for xenvif */
 	u16 dealloc_ring[MAX_PENDING_REQS];
 	struct task_struct *dealloc_task;
 	wait_queue_head_t dealloc_wq;
+	atomic_t inflight_packets;
 
 	/* Use kthread for guest RX */
 	struct task_struct *task;
@@ -176,9 +177,9 @@ struct xenvif_queue { /* Per-queue data for xenvif */
 	struct xen_netif_rx_back_ring rx;
 	struct sk_buff_head rx_queue;
 	RING_IDX rx_last_skb_slots;
-	bool rx_queue_purge;
+	unsigned long status;
 
-	struct timer_list wake_queue;
+	struct timer_list rx_stalled;
 
 	struct gnttab_copy grant_copy_op[MAX_GRANT_COPY_OPS];
 
@@ -196,6 +197,20 @@ struct xenvif_queue { /* Per-queue data for xenvif */
 
 	/* Statistics */
 	struct xenvif_stats stats;
+};
+
+enum state_bit_shift {
+	/* This bit marks that the vif is connected */
+	VIF_STATUS_CONNECTED,
+	/* This bit signals the RX thread that queuing was stopped (in
+	 * start_xmit), and either the timer fired or an RX interrupt came
+	 */
+	QUEUE_STATUS_RX_PURGE_EVENT,
+	/* This bit tells the interrupt handler that this queue was the reason
+	 * for the carrier off, so it should kick the thread. Only queues which
+	 * brought it down can turn on the carrier.
+	 */
+	QUEUE_STATUS_RX_STALLED
 };
 
 struct xenvif {
@@ -220,6 +235,7 @@ struct xenvif {
 	 * frontend is rogue.
 	 */
 	bool disabled;
+	unsigned long status;
 
 	/* Queues */
 	struct xenvif_queue *queues;
@@ -313,5 +329,9 @@ extern unsigned int xenvif_max_queues;
 #ifdef CONFIG_DEBUG_FS
 extern struct dentry *xen_netback_dbg_root;
 #endif
+
+void xenvif_skb_zerocopy_prepare(struct xenvif_queue *queue,
+				 struct sk_buff *skb);
+void xenvif_skb_zerocopy_complete(struct xenvif_queue *queue);
 
 #endif /* __XEN_NETBACK__COMMON_H__ */

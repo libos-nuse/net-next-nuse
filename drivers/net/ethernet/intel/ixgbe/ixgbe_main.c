@@ -84,7 +84,7 @@ static const struct ixgbe_info *ixgbe_info_tbl[] = {
  * { Vendor ID, Device ID, SubVendor ID, SubDevice ID,
  *   Class, Class Mask, private data (not used) }
  */
-static DEFINE_PCI_DEVICE_TABLE(ixgbe_pci_tbl) = {
+static const struct pci_device_id ixgbe_pci_tbl[] = {
 	{PCI_VDEVICE(INTEL, IXGBE_DEV_ID_82598), board_82598 },
 	{PCI_VDEVICE(INTEL, IXGBE_DEV_ID_82598AF_DUAL_PORT), board_82598 },
 	{PCI_VDEVICE(INTEL, IXGBE_DEV_ID_82598AF_SINGLE_PORT), board_82598 },
@@ -570,7 +570,7 @@ static void ixgbe_dump(struct ixgbe_adapter *adapter)
 
 	/* Print TX Ring Summary */
 	if (!netdev || !netif_running(netdev))
-		goto exit;
+		return;
 
 	dev_info(&adapter->pdev->dev, "TX Rings Summary\n");
 	pr_info(" %s     %s              %s        %s\n",
@@ -685,7 +685,7 @@ rx_ring_summary:
 
 	/* Print RX Rings */
 	if (!netif_msg_rx_status(adapter))
-		goto exit;
+		return;
 
 	dev_info(&adapter->pdev->dev, "RX Rings Dump\n");
 
@@ -787,9 +787,6 @@ rx_ring_summary:
 
 		}
 	}
-
-exit:
-	return;
 }
 
 static void ixgbe_release_hw_control(struct ixgbe_adapter *adapter)
@@ -1011,7 +1008,6 @@ static inline bool ixgbe_check_tx_hang(struct ixgbe_ring *tx_ring)
 	u32 tx_done = ixgbe_get_tx_completed(tx_ring);
 	u32 tx_done_old = tx_ring->tx_stats.tx_done_old;
 	u32 tx_pending = ixgbe_get_tx_pending(tx_ring);
-	bool ret = false;
 
 	clear_check_for_tx_hang(tx_ring);
 
@@ -1027,18 +1023,16 @@ static inline bool ixgbe_check_tx_hang(struct ixgbe_ring *tx_ring)
 	 * run the check_tx_hang logic with a transmit completion
 	 * pending but without time to complete it yet.
 	 */
-	if ((tx_done_old == tx_done) && tx_pending) {
+	if (tx_done_old == tx_done && tx_pending)
 		/* make sure it is true for two checks in a row */
-		ret = test_and_set_bit(__IXGBE_HANG_CHECK_ARMED,
-				       &tx_ring->state);
-	} else {
-		/* update completed stats and continue */
-		tx_ring->tx_stats.tx_done_old = tx_done;
-		/* reset the countdown */
-		clear_bit(__IXGBE_HANG_CHECK_ARMED, &tx_ring->state);
-	}
+		return test_and_set_bit(__IXGBE_HANG_CHECK_ARMED,
+					&tx_ring->state);
+	/* update completed stats and continue */
+	tx_ring->tx_stats.tx_done_old = tx_done;
+	/* reset the countdown */
+	clear_bit(__IXGBE_HANG_CHECK_ARMED, &tx_ring->state);
 
-	return ret;
+	return false;
 }
 
 /**
@@ -4701,18 +4695,18 @@ static int ixgbe_non_sfp_link_config(struct ixgbe_hw *hw)
 		ret = hw->mac.ops.check_link(hw, &speed, &link_up, false);
 
 	if (ret)
-		goto link_cfg_out;
+		return ret;
 
 	speed = hw->phy.autoneg_advertised;
 	if ((!speed) && (hw->mac.ops.get_link_capabilities))
 		ret = hw->mac.ops.get_link_capabilities(hw, &speed,
 							&autoneg);
 	if (ret)
-		goto link_cfg_out;
+		return ret;
 
 	if (hw->mac.ops.setup_link)
 		ret = hw->mac.ops.setup_link(hw, speed, link_up);
-link_cfg_out:
+
 	return ret;
 }
 
@@ -6843,6 +6837,36 @@ static void ixgbe_tx_olinfo_status(union ixgbe_adv_tx_desc *tx_desc,
 	tx_desc->read.olinfo_status = cpu_to_le32(olinfo_status);
 }
 
+static int __ixgbe_maybe_stop_tx(struct ixgbe_ring *tx_ring, u16 size)
+{
+	netif_stop_subqueue(tx_ring->netdev, tx_ring->queue_index);
+
+	/* Herbert's original patch had:
+	 *  smp_mb__after_netif_stop_queue();
+	 * but since that doesn't exist yet, just open code it.
+	 */
+	smp_mb();
+
+	/* We need to check again in a case another CPU has just
+	 * made room available.
+	 */
+	if (likely(ixgbe_desc_unused(tx_ring) < size))
+		return -EBUSY;
+
+	/* A reprieve! - use start_queue because it doesn't call schedule */
+	netif_start_subqueue(tx_ring->netdev, tx_ring->queue_index);
+	++tx_ring->tx_stats.restart_queue;
+	return 0;
+}
+
+static inline int ixgbe_maybe_stop_tx(struct ixgbe_ring *tx_ring, u16 size)
+{
+	if (likely(ixgbe_desc_unused(tx_ring) >= size))
+		return 0;
+
+	return __ixgbe_maybe_stop_tx(tx_ring, size);
+}
+
 #define IXGBE_TXD_CMD (IXGBE_TXD_CMD_EOP | \
 		       IXGBE_TXD_CMD_RS)
 
@@ -6964,8 +6988,12 @@ static void ixgbe_tx_map(struct ixgbe_ring *tx_ring,
 
 	tx_ring->next_to_use = i;
 
-	/* notify HW of packet */
-	ixgbe_write_tail(tx_ring, i);
+	ixgbe_maybe_stop_tx(tx_ring, DESC_NEEDED);
+
+	if (netif_xmit_stopped(txring_txq(tx_ring)) || !skb->xmit_more) {
+		/* notify HW of packet */
+		ixgbe_write_tail(tx_ring, i);
+	}
 
 	return;
 dma_error:
@@ -7071,32 +7099,6 @@ static void ixgbe_atr(struct ixgbe_ring *ring,
 	/* This assumes the Rx queue and Tx queue are bound to the same CPU */
 	ixgbe_fdir_add_signature_filter_82599(&q_vector->adapter->hw,
 					      input, common, ring->queue_index);
-}
-
-static int __ixgbe_maybe_stop_tx(struct ixgbe_ring *tx_ring, u16 size)
-{
-	netif_stop_subqueue(tx_ring->netdev, tx_ring->queue_index);
-	/* Herbert's original patch had:
-	 *  smp_mb__after_netif_stop_queue();
-	 * but since that doesn't exist yet, just open code it. */
-	smp_mb();
-
-	/* We need to check again in a case another CPU has just
-	 * made room available. */
-	if (likely(ixgbe_desc_unused(tx_ring) < size))
-		return -EBUSY;
-
-	/* A reprieve! - use start_queue because it doesn't call schedule */
-	netif_start_subqueue(tx_ring->netdev, tx_ring->queue_index);
-	++tx_ring->tx_stats.restart_queue;
-	return 0;
-}
-
-static inline int ixgbe_maybe_stop_tx(struct ixgbe_ring *tx_ring, u16 size)
-{
-	if (likely(ixgbe_desc_unused(tx_ring) >= size))
-		return 0;
-	return __ixgbe_maybe_stop_tx(tx_ring, size);
 }
 
 static u16 ixgbe_select_queue(struct net_device *dev, struct sk_buff *skb,
@@ -7266,8 +7268,6 @@ netdev_tx_t ixgbe_xmit_frame_ring(struct sk_buff *skb,
 xmit_fcoe:
 #endif /* IXGBE_FCOE */
 	ixgbe_tx_map(tx_ring, first, hdr_len);
-
-	ixgbe_maybe_stop_tx(tx_ring, DESC_NEEDED);
 
 	return NETDEV_TX_OK;
 

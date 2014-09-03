@@ -307,7 +307,7 @@ static void build_pairing_cmd(struct l2cap_conn *conn,
 	struct hci_dev *hdev = hcon->hdev;
 	u8 local_dist = 0, remote_dist = 0;
 
-	if (test_bit(HCI_PAIRABLE, &conn->hcon->hdev->dev_flags)) {
+	if (test_bit(HCI_BONDABLE, &conn->hcon->hdev->dev_flags)) {
 		local_dist = SMP_DIST_ENC_KEY | SMP_DIST_SIGN;
 		remote_dist = SMP_DIST_ENC_KEY | SMP_DIST_SIGN;
 		authreq |= SMP_AUTH_BONDING;
@@ -391,10 +391,12 @@ static const u8 gen_method[5][5] = {
 
 static u8 get_auth_method(struct smp_chan *smp, u8 local_io, u8 remote_io)
 {
-	/* If either side has unknown io_caps, use JUST WORKS */
+	/* If either side has unknown io_caps, use JUST_CFM (which gets
+	 * converted later to JUST_WORKS if we're initiators.
+	 */
 	if (local_io > SMP_IO_KEYBOARD_DISPLAY ||
 	    remote_io > SMP_IO_KEYBOARD_DISPLAY)
-		return JUST_WORKS;
+		return JUST_CFM;
 
 	return gen_method[remote_io][local_io];
 }
@@ -414,19 +416,23 @@ static int tk_request(struct l2cap_conn *conn, u8 remote_oob, u8 auth,
 
 	BT_DBG("tk_request: auth:%d lcl:%d rem:%d", auth, local_io, remote_io);
 
-	/* If neither side wants MITM, use JUST WORKS */
-	/* Otherwise, look up method from the table */
+	/* If neither side wants MITM, either "just" confirm an incoming
+	 * request or use just-works for outgoing ones. The JUST_CFM
+	 * will be converted to JUST_WORKS if necessary later in this
+	 * function. If either side has MITM look up the method from the
+	 * table.
+	 */
 	if (!(auth & SMP_AUTH_MITM))
-		method = JUST_WORKS;
+		method = JUST_CFM;
 	else
 		method = get_auth_method(smp, local_io, remote_io);
 
-	/* If not bonding, don't ask user to confirm a Zero TK */
-	if (!(auth & SMP_AUTH_BONDING) && method == JUST_CFM)
-		method = JUST_WORKS;
-
 	/* Don't confirm locally initiated pairing attempts */
 	if (method == JUST_CFM && test_bit(SMP_FLAG_INITIATOR, &smp->flags))
+		method = JUST_WORKS;
+
+	/* Don't bother user space with no IO capabilities */
+	if (method == JUST_CFM && hcon->io_capability == HCI_IO_NO_INPUT_OUTPUT)
 		method = JUST_WORKS;
 
 	/* If Just Works, Continue with Zero TK */
@@ -443,7 +449,7 @@ static int tk_request(struct l2cap_conn *conn, u8 remote_oob, u8 auth,
 	 * Confirms and the slave Enters the passkey.
 	 */
 	if (method == OVERLAP) {
-		if (test_bit(HCI_CONN_MASTER, &hcon->flags))
+		if (hcon->role == HCI_ROLE_MASTER)
 			method = CFM_PASSKEY;
 		else
 			method = REQ_PASSKEY;
@@ -573,13 +579,16 @@ static struct smp_chan *smp_chan_create(struct l2cap_conn *conn)
 	struct smp_chan *smp;
 
 	smp = kzalloc(sizeof(*smp), GFP_ATOMIC);
-	if (!smp)
+	if (!smp) {
+		clear_bit(HCI_CONN_LE_SMP_PEND, &conn->hcon->flags);
 		return NULL;
+	}
 
 	smp->tfm_aes = crypto_alloc_blkcipher("ecb(aes)", 0, CRYPTO_ALG_ASYNC);
 	if (IS_ERR(smp->tfm_aes)) {
 		BT_ERR("Unable to create ECB crypto context");
 		kfree(smp);
+		clear_bit(HCI_CONN_LE_SMP_PEND, &conn->hcon->flags);
 		return NULL;
 	}
 
@@ -674,6 +683,7 @@ int smp_user_confirm_reply(struct hci_conn *hcon, u16 mgmt_op, __le32 passkey)
 static u8 smp_cmd_pairing_req(struct l2cap_conn *conn, struct sk_buff *skb)
 {
 	struct smp_cmd_pairing rsp, *req = (void *) skb->data;
+	struct hci_dev *hdev = conn->hcon->hdev;
 	struct smp_chan *smp;
 	u8 key_size, auth, sec_level;
 	int ret;
@@ -683,7 +693,7 @@ static u8 smp_cmd_pairing_req(struct l2cap_conn *conn, struct sk_buff *skb)
 	if (skb->len < sizeof(*req))
 		return SMP_INVALID_PARAMS;
 
-	if (test_bit(HCI_CONN_MASTER, &conn->hcon->flags))
+	if (conn->hcon->role != HCI_ROLE_SLAVE)
 		return SMP_CMD_NOTSUPP;
 
 	if (!test_and_set_bit(HCI_CONN_LE_SMP_PEND, &conn->hcon->flags))
@@ -693,6 +703,10 @@ static u8 smp_cmd_pairing_req(struct l2cap_conn *conn, struct sk_buff *skb)
 
 	if (!smp)
 		return SMP_UNSPECIFIED;
+
+	if (!test_bit(HCI_BONDABLE, &hdev->dev_flags) &&
+	    (req->auth_req & SMP_AUTH_BONDING))
+		return SMP_PAIRING_NOTSUPP;
 
 	smp->preq[0] = SMP_CMD_PAIRING_REQ;
 	memcpy(&smp->preq[1], req, sizeof(*req));
@@ -733,8 +747,6 @@ static u8 smp_cmd_pairing_req(struct l2cap_conn *conn, struct sk_buff *skb)
 	if (ret)
 		return SMP_UNSPECIFIED;
 
-	clear_bit(SMP_FLAG_INITIATOR, &smp->flags);
-
 	return 0;
 }
 
@@ -750,7 +762,7 @@ static u8 smp_cmd_pairing_rsp(struct l2cap_conn *conn, struct sk_buff *skb)
 	if (skb->len < sizeof(*rsp))
 		return SMP_INVALID_PARAMS;
 
-	if (!test_bit(HCI_CONN_MASTER, &conn->hcon->flags))
+	if (conn->hcon->role != HCI_ROLE_MASTER)
 		return SMP_CMD_NOTSUPP;
 
 	skb_pull(skb, sizeof(*rsp));
@@ -844,7 +856,7 @@ static bool smp_ltk_encrypt(struct l2cap_conn *conn, u8 sec_level)
 	struct hci_conn *hcon = conn->hcon;
 
 	key = hci_find_ltk_by_addr(hcon->hdev, &hcon->dst, hcon->dst_type,
-				   hcon->out);
+				   hcon->role);
 	if (!key)
 		return false;
 
@@ -871,9 +883,12 @@ bool smp_sufficient_security(struct hci_conn *hcon, u8 sec_level)
 	/* If we're encrypted with an STK always claim insufficient
 	 * security. This way we allow the connection to be re-encrypted
 	 * with an LTK, even if the LTK provides the same level of
-	 * security.
+	 * security. Only exception is if we don't have an LTK (e.g.
+	 * because of key distribution bits).
 	 */
-	if (test_bit(HCI_CONN_STK_ENCRYPT, &hcon->flags))
+	if (test_bit(HCI_CONN_STK_ENCRYPT, &hcon->flags) &&
+	    hci_find_ltk_by_addr(hcon->hdev, &hcon->dst, hcon->dst_type,
+				 hcon->role))
 		return false;
 
 	if (hcon->sec_level >= sec_level)
@@ -895,7 +910,7 @@ static u8 smp_cmd_security_req(struct l2cap_conn *conn, struct sk_buff *skb)
 	if (skb->len < sizeof(*rp))
 		return SMP_INVALID_PARAMS;
 
-	if (!test_bit(HCI_CONN_MASTER, &conn->hcon->flags))
+	if (hcon->role != HCI_ROLE_MASTER)
 		return SMP_CMD_NOTSUPP;
 
 	sec_level = authreq_to_seclevel(rp->auth_req);
@@ -915,6 +930,10 @@ static u8 smp_cmd_security_req(struct l2cap_conn *conn, struct sk_buff *skb)
 	if (!smp)
 		return SMP_UNSPECIFIED;
 
+	if (!test_bit(HCI_BONDABLE, &hcon->hdev->dev_flags) &&
+	    (rp->auth_req & SMP_AUTH_BONDING))
+		return SMP_PAIRING_NOTSUPP;
+
 	skb_pull(skb, sizeof(*rp));
 
 	memset(&cp, 0, sizeof(cp));
@@ -924,8 +943,6 @@ static u8 smp_cmd_security_req(struct l2cap_conn *conn, struct sk_buff *skb)
 	memcpy(&smp->preq[1], &cp, sizeof(cp));
 
 	smp_send_cmd(conn, SMP_CMD_PAIRING_REQ, sizeof(cp), &cp);
-
-	clear_bit(SMP_FLAG_INITIATOR, &smp->flags);
 
 	return 0;
 }
@@ -951,7 +968,7 @@ int smp_conn_security(struct hci_conn *hcon, __u8 sec_level)
 	if (sec_level > hcon->pending_sec_level)
 		hcon->pending_sec_level = sec_level;
 
-	if (test_bit(HCI_CONN_MASTER, &hcon->flags))
+	if (hcon->role == HCI_ROLE_MASTER)
 		if (smp_ltk_encrypt(conn, hcon->pending_sec_level))
 			return 0;
 
@@ -971,7 +988,7 @@ int smp_conn_security(struct hci_conn *hcon, __u8 sec_level)
 	    hcon->pending_sec_level > BT_SECURITY_MEDIUM)
 		authreq |= SMP_AUTH_MITM;
 
-	if (test_bit(HCI_CONN_MASTER, &hcon->flags)) {
+	if (hcon->role == HCI_ROLE_MASTER) {
 		struct smp_cmd_pairing cp;
 
 		build_pairing_cmd(conn, &cp, NULL, authreq);
@@ -1175,7 +1192,7 @@ int smp_sig_channel(struct l2cap_conn *conn, struct sk_buff *skb)
 	}
 
 	if (!test_bit(HCI_LE_ENABLED, &hcon->hdev->dev_flags)) {
-		err = -ENOTSUPP;
+		err = -EOPNOTSUPP;
 		reason = SMP_PAIRING_NOTSUPP;
 		goto done;
 	}
@@ -1193,7 +1210,7 @@ int smp_sig_channel(struct l2cap_conn *conn, struct sk_buff *skb)
 	    !conn->smp_chan) {
 		BT_ERR("Unexpected SMP command 0x%02x. Disconnecting.", code);
 		kfree_skb(skb);
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 
 	switch (code) {
@@ -1277,6 +1294,22 @@ static void smp_notify_keys(struct l2cap_conn *conn)
 		bacpy(&hcon->dst, &smp->remote_irk->bdaddr);
 		hcon->dst_type = smp->remote_irk->addr_type;
 		l2cap_conn_update_id_addr(hcon);
+
+		/* When receiving an indentity resolving key for
+		 * a remote device that does not use a resolvable
+		 * private address, just remove the key so that
+		 * it is possible to use the controller white
+		 * list for scanning.
+		 *
+		 * Userspace will have been told to not store
+		 * this key at this point. So it is safe to
+		 * just remove it.
+		 */
+		if (!bacmp(&smp->remote_irk->rpa, BDADDR_ANY)) {
+			list_del(&smp->remote_irk->list);
+			kfree(smp->remote_irk);
+			smp->remote_irk = NULL;
+		}
 	}
 
 	/* The LTKs and CSRKs should be persistent only if both sides

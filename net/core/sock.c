@@ -437,7 +437,6 @@ static void sock_disable_timestamp(struct sock *sk, unsigned long flags)
 int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 {
 	int err;
-	int skb_len;
 	unsigned long flags;
 	struct sk_buff_head *list = &sk->sk_receive_queue;
 
@@ -458,13 +457,6 @@ int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 
 	skb->dev = NULL;
 	skb_set_owner_r(skb, sk);
-
-	/* Cache the SKB length before we tack it onto the receive
-	 * queue.  Once it is added it no longer belongs to us and
-	 * may be freed by other threads of control pulling packets
-	 * from the queue.
-	 */
-	skb_len = skb->len;
 
 	/* we escape from rcu protected region, make sure we dont leak
 	 * a norefcounted dst
@@ -848,24 +840,25 @@ set_rcvbuf:
 			ret = -EINVAL;
 			break;
 		}
-		sock_valbool_flag(sk, SOCK_TIMESTAMPING_TX_HARDWARE,
-				  val & SOF_TIMESTAMPING_TX_HARDWARE);
-		sock_valbool_flag(sk, SOCK_TIMESTAMPING_TX_SOFTWARE,
-				  val & SOF_TIMESTAMPING_TX_SOFTWARE);
-		sock_valbool_flag(sk, SOCK_TIMESTAMPING_RX_HARDWARE,
-				  val & SOF_TIMESTAMPING_RX_HARDWARE);
+		if (val & SOF_TIMESTAMPING_OPT_ID &&
+		    !(sk->sk_tsflags & SOF_TIMESTAMPING_OPT_ID)) {
+			if (sk->sk_protocol == IPPROTO_TCP) {
+				if (sk->sk_state != TCP_ESTABLISHED) {
+					ret = -EINVAL;
+					break;
+				}
+				sk->sk_tskey = tcp_sk(sk)->snd_una;
+			} else {
+				sk->sk_tskey = 0;
+			}
+		}
+		sk->sk_tsflags = val;
 		if (val & SOF_TIMESTAMPING_RX_SOFTWARE)
 			sock_enable_timestamp(sk,
 					      SOCK_TIMESTAMPING_RX_SOFTWARE);
 		else
 			sock_disable_timestamp(sk,
 					       (1UL << SOCK_TIMESTAMPING_RX_SOFTWARE));
-		sock_valbool_flag(sk, SOCK_TIMESTAMPING_SOFTWARE,
-				  val & SOF_TIMESTAMPING_SOFTWARE);
-		sock_valbool_flag(sk, SOCK_TIMESTAMPING_SYS_HARDWARE,
-				  val & SOF_TIMESTAMPING_SYS_HARDWARE);
-		sock_valbool_flag(sk, SOCK_TIMESTAMPING_RAW_HARDWARE,
-				  val & SOF_TIMESTAMPING_RAW_HARDWARE);
 		break;
 
 	case SO_RCVLOWAT:
@@ -1091,21 +1084,7 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		break;
 
 	case SO_TIMESTAMPING:
-		v.val = 0;
-		if (sock_flag(sk, SOCK_TIMESTAMPING_TX_HARDWARE))
-			v.val |= SOF_TIMESTAMPING_TX_HARDWARE;
-		if (sock_flag(sk, SOCK_TIMESTAMPING_TX_SOFTWARE))
-			v.val |= SOF_TIMESTAMPING_TX_SOFTWARE;
-		if (sock_flag(sk, SOCK_TIMESTAMPING_RX_HARDWARE))
-			v.val |= SOF_TIMESTAMPING_RX_HARDWARE;
-		if (sock_flag(sk, SOCK_TIMESTAMPING_RX_SOFTWARE))
-			v.val |= SOF_TIMESTAMPING_RX_SOFTWARE;
-		if (sock_flag(sk, SOCK_TIMESTAMPING_SOFTWARE))
-			v.val |= SOF_TIMESTAMPING_SOFTWARE;
-		if (sock_flag(sk, SOCK_TIMESTAMPING_SYS_HARDWARE))
-			v.val |= SOF_TIMESTAMPING_SYS_HARDWARE;
-		if (sock_flag(sk, SOCK_TIMESTAMPING_RAW_HARDWARE))
-			v.val |= SOF_TIMESTAMPING_RAW_HARDWARE;
+		v.val = sk->sk_tsflags;
 		break;
 
 	case SO_RCVTIMEO:
@@ -1478,6 +1457,7 @@ static void sk_update_clone(const struct sock *sk, struct sock *newsk)
 struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 {
 	struct sock *newsk;
+	bool is_charged = true;
 
 	newsk = sk_prot_alloc(sk->sk_prot, priority, sk->sk_family);
 	if (newsk != NULL) {
@@ -1522,9 +1502,13 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 
 		filter = rcu_dereference_protected(newsk->sk_filter, 1);
 		if (filter != NULL)
-			sk_filter_charge(newsk, filter);
+			/* though it's an empty new sock, the charging may fail
+			 * if sysctl_optmem_max was changed between creation of
+			 * original socket and cloning
+			 */
+			is_charged = sk_filter_charge(newsk, filter);
 
-		if (unlikely(xfrm_sk_clone_policy(newsk))) {
+		if (unlikely(!is_charged || xfrm_sk_clone_policy(newsk))) {
 			/* It is still raw copy of parent, so invalidate
 			 * destructor and make plain sk_free() */
 			newsk->sk_destruct = NULL;
@@ -2504,11 +2488,11 @@ int sock_recv_errqueue(struct sock *sk, struct msghdr *msg, int len,
 		       int level, int type)
 {
 	struct sock_exterr_skb *serr;
-	struct sk_buff *skb, *skb2;
+	struct sk_buff *skb;
 	int copied, err;
 
 	err = -EAGAIN;
-	skb = skb_dequeue(&sk->sk_error_queue);
+	skb = sock_dequeue_err_skb(sk);
 	if (skb == NULL)
 		goto out;
 
@@ -2528,16 +2512,6 @@ int sock_recv_errqueue(struct sock *sk, struct msghdr *msg, int len,
 
 	msg->msg_flags |= MSG_ERRQUEUE;
 	err = copied;
-
-	/* Reset and regenerate socket error */
-	spin_lock_bh(&sk->sk_error_queue.lock);
-	sk->sk_err = 0;
-	if ((skb2 = skb_peek(&sk->sk_error_queue)) != NULL) {
-		sk->sk_err = SKB_EXT_ERR(skb2)->ee.ee_errno;
-		spin_unlock_bh(&sk->sk_error_queue.lock);
-		sk->sk_error_report(sk);
-	} else
-		spin_unlock_bh(&sk->sk_error_queue.lock);
 
 out_free_skb:
 	kfree_skb(skb);

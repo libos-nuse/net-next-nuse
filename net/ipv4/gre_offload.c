@@ -74,7 +74,7 @@ static struct sk_buff *gre_gso_segment(struct sk_buff *skb,
 	/* segment inner packet. */
 	enc_features = skb->dev->hw_enc_features & netif_skb_features(skb);
 	segs = skb_mac_gso_segment(skb, enc_features);
-	if (!segs || IS_ERR(segs)) {
+	if (IS_ERR_OR_NULL(segs)) {
 		skb_gso_error_unwind(skb, protocol, ghl, mac_offset, mac_len);
 		goto out;
 	}
@@ -117,28 +117,6 @@ static struct sk_buff *gre_gso_segment(struct sk_buff *skb,
 	} while ((skb = skb->next));
 out:
 	return segs;
-}
-
-/* Compute the whole skb csum in s/w and store it, then verify GRO csum
- * starting from gro_offset.
- */
-static __sum16 gro_skb_checksum(struct sk_buff *skb)
-{
-	__sum16 sum;
-
-	skb->csum = skb_checksum(skb, 0, skb->len, 0);
-	NAPI_GRO_CB(skb)->csum = csum_sub(skb->csum,
-		csum_partial(skb->data, skb_gro_offset(skb), 0));
-	sum = csum_fold(NAPI_GRO_CB(skb)->csum);
-	if (unlikely(skb->ip_summed == CHECKSUM_COMPLETE)) {
-		if (unlikely(!sum) && !skb->csum_complete_sw)
-			netdev_rx_csum_fault(skb->dev);
-	} else {
-		skb->ip_summed = CHECKSUM_COMPLETE;
-		skb->csum_complete_sw = 1;
-	}
-
-	return sum;
 }
 
 static struct sk_buff **gre_gro_receive(struct sk_buff **head,
@@ -192,22 +170,16 @@ static struct sk_buff **gre_gro_receive(struct sk_buff **head,
 		if (unlikely(!greh))
 			goto out_unlock;
 	}
-	if (greh->flags & GRE_CSUM) { /* Need to verify GRE csum first */
-		__sum16 csum = 0;
 
-		if (skb->ip_summed == CHECKSUM_COMPLETE)
-			csum = csum_fold(NAPI_GRO_CB(skb)->csum);
-		/* Don't trust csum error calculated/reported by h/w */
-		if (skb->ip_summed == CHECKSUM_NONE || csum != 0)
-			csum = gro_skb_checksum(skb);
-
-		/* GRE CSUM is the 1's complement of the 1's complement sum
-		 * of the GRE hdr plus payload so it should add up to 0xffff
-		 * (and 0 after csum_fold()) just like the IPv4 hdr csum.
-		 */
-		if (csum)
+	/* Don't bother verifying checksum if we're going to flush anyway. */
+	if ((greh->flags & GRE_CSUM) && !NAPI_GRO_CB(skb)->flush) {
+		if (skb_gro_checksum_simple_validate(skb))
 			goto out_unlock;
+
+		skb_gro_checksum_try_convert(skb, IPPROTO_GRE, 0,
+					     null_compute_pseudo);
 	}
+
 	flush = 0;
 
 	for (p = *head; p; p = p->next) {

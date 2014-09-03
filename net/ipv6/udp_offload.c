@@ -10,6 +10,7 @@
  *      UDPv6 GSO support
  */
 #include <linux/skbuff.h>
+#include <linux/netdevice.h>
 #include <net/protocol.h>
 #include <net/ipv6.h>
 #include <net/udp.h>
@@ -127,10 +128,52 @@ static struct sk_buff *udp6_ufo_fragment(struct sk_buff *skb,
 out:
 	return segs;
 }
+
+static struct sk_buff **udp6_gro_receive(struct sk_buff **head,
+					 struct sk_buff *skb)
+{
+	struct udphdr *uh = udp_gro_udphdr(skb);
+
+	if (unlikely(!uh))
+		goto flush;
+
+	/* Don't bother verifying checksum if we're going to flush anyway. */
+	if (!NAPI_GRO_CB(skb)->flush)
+		goto skip;
+
+	if (skb_gro_checksum_validate_zero_check(skb, IPPROTO_UDP, uh->check,
+						 ip6_gro_compute_pseudo))
+		goto flush;
+	else if (uh->check)
+		skb_gro_checksum_try_convert(skb, IPPROTO_UDP, uh->check,
+					     ip6_gro_compute_pseudo);
+
+skip:
+	return udp_gro_receive(head, skb, uh);
+
+flush:
+	NAPI_GRO_CB(skb)->flush = 1;
+	return NULL;
+}
+
+int udp6_gro_complete(struct sk_buff *skb, int nhoff)
+{
+	const struct ipv6hdr *ipv6h = ipv6_hdr(skb);
+	struct udphdr *uh = (struct udphdr *)(skb->data + nhoff);
+
+	if (uh->check)
+		uh->check = ~udp_v6_check(skb->len - nhoff, &ipv6h->saddr,
+					  &ipv6h->daddr, 0);
+
+	return udp_gro_complete(skb, nhoff);
+}
+
 static const struct net_offload udpv6_offload = {
 	.callbacks = {
 		.gso_send_check =	udp6_ufo_send_check,
 		.gso_segment	=	udp6_ufo_fragment,
+		.gro_receive	=	udp6_gro_receive,
+		.gro_complete	=	udp6_gro_complete,
 	},
 };
 

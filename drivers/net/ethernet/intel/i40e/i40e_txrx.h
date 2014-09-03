@@ -121,6 +121,7 @@ enum i40e_dyn_idx_t {
 /* Tx Descriptors needed, worst case */
 #define TXD_USE_COUNT(S) DIV_ROUND_UP((S), I40E_MAX_DATA_PER_TXD)
 #define DESC_NEEDED (MAX_SKB_FRAGS + 4)
+#define I40E_MIN_DESC_PENDING	4
 
 #define I40E_TX_FLAGS_CSUM		(u32)(1)
 #define I40E_TX_FLAGS_HW_VLAN		(u32)(1 << 1)
@@ -290,4 +291,13 @@ int i40e_setup_rx_descriptors(struct i40e_ring *rx_ring);
 void i40e_free_tx_resources(struct i40e_ring *tx_ring);
 void i40e_free_rx_resources(struct i40e_ring *rx_ring);
 int i40e_napi_poll(struct napi_struct *napi, int budget);
+#ifdef I40E_FCOE
+void i40e_tx_map(struct i40e_ring *tx_ring, struct sk_buff *skb,
+		 struct i40e_tx_buffer *first, u32 tx_flags,
+		 const u8 hdr_len, u32 td_cmd, u32 td_offset);
+int i40e_maybe_stop_tx(struct i40e_ring *tx_ring, int size);
+int i40e_xmit_descriptor_count(struct sk_buff *skb, struct i40e_ring *tx_ring);
+int i40e_tx_prepare_vlan_flags(struct sk_buff *skb,
+			       struct i40e_ring *tx_ring, u32 *flags);
+#endif
 #endif /* _I40E_TXRX_H_ */

@@ -1681,17 +1681,17 @@ err:
 	return status;
 }
 
-void be_cmd_get_regs(struct be_adapter *adapter, u32 buf_len, void *buf)
+int be_cmd_get_regs(struct be_adapter *adapter, u32 buf_len, void *buf)
 {
 	struct be_dma_mem get_fat_cmd;
 	struct be_mcc_wrb *wrb;
 	struct be_cmd_req_get_fat *req;
 	u32 offset = 0, total_size, buf_size,
 				log_offset = sizeof(u32), payload_len;
-	int status;
+	int status = 0;
 
 	if (buf_len == 0)
-		return;
+		return -EIO;
 
 	total_size = buf_len;
 
@@ -1700,10 +1700,9 @@ void be_cmd_get_regs(struct be_adapter *adapter, u32 buf_len, void *buf)
 					      get_fat_cmd.size,
 					      &get_fat_cmd.dma);
 	if (!get_fat_cmd.va) {
-		status = -ENOMEM;
 		dev_err(&adapter->pdev->dev,
 		"Memory allocation failure while retrieving FAT data\n");
-		return;
+		return -ENOMEM;
 	}
 
 	spin_lock_bh(&adapter->mcc_lock);
@@ -1746,6 +1745,7 @@ err:
 	pci_free_consistent(adapter->pdev, get_fat_cmd.size,
 			    get_fat_cmd.va, get_fat_cmd.dma);
 	spin_unlock_bh(&adapter->mcc_lock);
+	return status;
 }
 
 /* Uses synchronous mcc */
@@ -1771,6 +1771,7 @@ int be_cmd_get_fw_ver(struct be_adapter *adapter)
 	status = be_mcc_notify_wait(adapter);
 	if (!status) {
 		struct be_cmd_resp_get_fw_version *resp = embedded_payload(wrb);
+
 		strcpy(adapter->fw_ver, resp->firmware_version_string);
 		strcpy(adapter->fw_on_flash, resp->fw_on_flash_version_string);
 	}
@@ -2018,6 +2019,9 @@ int be_cmd_query_fw_cfg(struct be_adapter *adapter)
 		adapter->function_mode = le32_to_cpu(resp->function_mode);
 		adapter->function_caps = le32_to_cpu(resp->function_caps);
 		adapter->asic_rev = le32_to_cpu(resp->asic_revision) & 0xFF;
+		dev_info(&adapter->pdev->dev,
+			 "FW config: function_mode=0x%x, function_caps=0x%x\n",
+			 adapter->function_mode, adapter->function_caps);
 	}
 
 	mutex_unlock(&adapter->mbox_lock);
@@ -2236,6 +2240,34 @@ int lancer_cmd_write_object(struct be_adapter *adapter, struct be_dma_mem *cmd,
 	return status;
 
 err_unlock:
+	spin_unlock_bh(&adapter->mcc_lock);
+	return status;
+}
+
+int lancer_cmd_delete_object(struct be_adapter *adapter, const char *obj_name)
+{
+	struct lancer_cmd_req_delete_object *req;
+	struct be_mcc_wrb *wrb;
+	int status;
+
+	spin_lock_bh(&adapter->mcc_lock);
+
+	wrb = wrb_from_mccq(adapter);
+	if (!wrb) {
+		status = -EBUSY;
+		goto err;
+	}
+
+	req = embedded_payload(wrb);
+
+	be_wrb_cmd_hdr_prepare(&req->hdr, CMD_SUBSYSTEM_COMMON,
+			       OPCODE_COMMON_DELETE_OBJECT,
+			       sizeof(*req), wrb, NULL);
+
+	strcpy(req->object_name, obj_name);
+
+	status = be_mcc_notify_wait(adapter);
+err:
 	spin_unlock_bh(&adapter->mcc_lock);
 	return status;
 }
@@ -3805,13 +3837,19 @@ bool dump_present(struct be_adapter *adapter)
 
 int lancer_initiate_dump(struct be_adapter *adapter)
 {
+	struct device *dev = &adapter->pdev->dev;
 	int status;
+
+	if (dump_present(adapter)) {
+		dev_info(dev, "Previous dump not cleared, not forcing dump\n");
+		return -EEXIST;
+	}
 
 	/* give firmware reset and diagnostic dump */
 	status = lancer_physdev_ctrl(adapter, PHYSDEV_CONTROL_FW_RESET_MASK |
 				     PHYSDEV_CONTROL_DD_MASK);
 	if (status < 0) {
-		dev_err(&adapter->pdev->dev, "Firmware reset failed\n");
+		dev_err(dev, "FW reset failed\n");
 		return status;
 	}
 
@@ -3820,11 +3858,19 @@ int lancer_initiate_dump(struct be_adapter *adapter)
 		return status;
 
 	if (!dump_present(adapter)) {
-		dev_err(&adapter->pdev->dev, "Dump image not present\n");
-		return -1;
+		dev_err(dev, "FW dump not generated\n");
+		return -EIO;
 	}
 
 	return 0;
+}
+
+int lancer_delete_dump(struct be_adapter *adapter)
+{
+	int status;
+
+	status = lancer_cmd_delete_object(adapter, LANCER_FW_DUMP_FILE);
+	return be_cmd_status(status);
 }
 
 /* Uses sync mcc */

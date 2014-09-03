@@ -2876,24 +2876,24 @@ static void cxgb4vf_pci_shutdown(struct pci_dev *pdev)
 	if (!adapter)
 		return;
 
-	/*
-	 * Disable all Virtual Interfaces.  This will shut down the
+	/* Disable all Virtual Interfaces.  This will shut down the
 	 * delivery of all ingress packets into the chip for these
 	 * Virtual Interfaces.
 	 */
-	for_each_port(adapter, pidx) {
-		struct net_device *netdev;
-		struct port_info *pi;
+	for_each_port(adapter, pidx)
+		if (test_bit(pidx, &adapter->registered_device_map))
+			unregister_netdev(adapter->port[pidx]);
 
-		if (!test_bit(pidx, &adapter->registered_device_map))
-			continue;
-
-		netdev = adapter->port[pidx];
-		if (!netdev)
-			continue;
-
-		pi = netdev_priv(netdev);
-		t4vf_enable_vi(adapter, pi->viid, false, false);
+	/* Free up all Queues which will prevent further DMA and
+	 * Interrupts allowing various internal pathways to drain.
+	 */
+	t4vf_sge_stop(adapter);
+	if (adapter->flags & USING_MSIX) {
+		pci_disable_msix(adapter->pdev);
+		adapter->flags &= ~USING_MSIX;
+	} else if (adapter->flags & USING_MSI) {
+		pci_disable_msi(adapter->pdev);
+		adapter->flags &= ~USING_MSI;
 	}
 
 	/*
@@ -2901,6 +2901,7 @@ static void cxgb4vf_pci_shutdown(struct pci_dev *pdev)
 	 * Interrupts allowing various internal pathways to drain.
 	 */
 	t4vf_free_sge_resources(adapter);
+	pci_set_drvdata(pdev, NULL);
 }
 
 /*
@@ -2909,7 +2910,7 @@ static void cxgb4vf_pci_shutdown(struct pci_dev *pdev)
 #define CH_DEVICE(devid, idx) \
 	{ PCI_VENDOR_ID_CHELSIO, devid, PCI_ANY_ID, PCI_ANY_ID, 0, 0, idx }
 
-static DEFINE_PCI_DEVICE_TABLE(cxgb4vf_pci_tbl) = {
+static const struct pci_device_id cxgb4vf_pci_tbl[] = {
 	CH_DEVICE(0xb000, 0),	/* PE10K FPGA */
 	CH_DEVICE(0x4800, 0),	/* T440-dbg */
 	CH_DEVICE(0x4801, 0),	/* T420-cr */

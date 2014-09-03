@@ -78,6 +78,11 @@ static const struct be_ethtool_stat et_stats[] = {
 	 * fifo must never overflow.
 	 */
 	{DRVSTAT_INFO(rxpp_fifo_overflow_drop)},
+	/* Received packets dropped when the RX block runs out of space in
+	 * one of its input FIFOs. This could happen due a long burst of
+	 * minimum-sized (64b) frames in the receive path.
+	 * This counter may also be erroneously incremented rarely.
+	 */
 	{DRVSTAT_INFO(rx_input_fifo_overflow_drop)},
 	{DRVSTAT_INFO(rx_ip_checksum_errs)},
 	{DRVSTAT_INFO(rx_tcp_checksum_errs)},
@@ -114,6 +119,8 @@ static const struct be_ethtool_stat et_stats[] = {
 	 * is more than 9018 bytes
 	 */
 	{DRVSTAT_INFO(rx_drops_mtu)},
+	/* Number of dma mapping errors */
+	{DRVSTAT_INFO(dma_map_errors)},
 	/* Number of packets dropped due to random early drop function */
 	{DRVSTAT_INFO(eth_red_drops)},
 	{DRVSTAT_INFO(be_on_die_temperature)},
@@ -152,6 +159,34 @@ static const struct be_ethtool_stat et_rx_stats[] = {
  */
 static const struct be_ethtool_stat et_tx_stats[] = {
 	{DRVSTAT_TX_INFO(tx_compl)}, /* If moving this member see above note */
+	/* This counter is incremented when the HW encounters an error while
+	 * parsing the packet header of an outgoing TX request. This counter is
+	 * applicable only for BE2, BE3 and Skyhawk based adapters.
+	 */
+	{DRVSTAT_TX_INFO(tx_hdr_parse_err)},
+	/* This counter is incremented when an error occurs in the DMA
+	 * operation associated with the TX request from the host to the device.
+	 */
+	{DRVSTAT_TX_INFO(tx_dma_err)},
+	/* This counter is incremented when MAC or VLAN spoof checking is
+	 * enabled on the interface and the TX request fails the spoof check
+	 * in HW.
+	 */
+	{DRVSTAT_TX_INFO(tx_spoof_check_err)},
+	/* This counter is incremented when the HW encounters an error while
+	 * performing TSO offload. This counter is applicable only for Lancer
+	 * adapters.
+	 */
+	{DRVSTAT_TX_INFO(tx_tso_err)},
+	/* This counter is incremented when the HW detects Q-in-Q style VLAN
+	 * tagging in a packet and such tagging is not expected on the outgoing
+	 * interface. This counter is applicable only for Lancer adapters.
+	 */
+	{DRVSTAT_TX_INFO(tx_qinq_err)},
+	/* This counter is incremented when the HW detects parity errors in the
+	 * packet data. This counter is applicable only for Lancer adapters.
+	 */
+	{DRVSTAT_TX_INFO(tx_internal_parity_err)},
 	{DRVSTAT_TX_INFO(tx_bytes)},
 	{DRVSTAT_TX_INFO(tx_pkts)},
 	/* Number of skbs queued for trasmission by the driver */
@@ -681,22 +716,21 @@ static int be_set_dump(struct net_device *netdev, struct ethtool_dump *dump)
 	struct device *dev = &adapter->pdev->dev;
 	int status;
 
-	if (!lancer_chip(adapter)) {
-		dev_err(dev, "FW dump not supported\n");
+	if (!lancer_chip(adapter) ||
+	    !check_privilege(adapter, MAX_PRIVILEGES))
 		return -EOPNOTSUPP;
-	}
-
-	if (dump_present(adapter)) {
-		dev_err(dev, "Previous dump not cleared, not forcing dump\n");
-		return 0;
-	}
 
 	switch (dump->flag) {
 	case LANCER_INITIATE_FW_DUMP:
 		status = lancer_initiate_dump(adapter);
 		if (!status)
-			dev_info(dev, "F/w dump initiated successfully\n");
+			dev_info(dev, "FW dump initiated successfully\n");
 		break;
+	case LANCER_DELETE_FW_DUMP:
+		status = lancer_delete_dump(adapter);
+		if (!status)
+			dev_info(dev, "FW dump deleted successfully\n");
+	break;
 	default:
 		dev_err(dev, "Invalid dump level: 0x%x\n", dump->flag);
 		return -EINVAL;

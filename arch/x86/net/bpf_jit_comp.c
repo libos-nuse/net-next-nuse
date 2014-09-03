@@ -211,7 +211,7 @@ struct jit_context {
 	bool seen_ld_abs;
 };
 
-static int do_jit(struct sk_filter *bpf_prog, int *addrs, u8 *image,
+static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		  int oldproglen, struct jit_context *ctx)
 {
 	struct bpf_insn *insn = bpf_prog->insnsi;
@@ -235,7 +235,7 @@ static int do_jit(struct sk_filter *bpf_prog, int *addrs, u8 *image,
 	/* mov qword ptr [rbp-X],rbx */
 	EMIT3_off32(0x48, 0x89, 0x9D, -stacksize);
 
-	/* sk_convert_filter() maps classic BPF register X to R7 and uses R8
+	/* bpf_convert_filter() maps classic BPF register X to R7 and uses R8
 	 * as temporary, so all tcpdump filters need to spill/fill R7(r13) and
 	 * R8(r14). R9(r15) spill could be made conditional, but there is only
 	 * one 'bpf_error' return path out of helper functions inside bpf_jit.S
@@ -513,6 +513,48 @@ static int do_jit(struct sk_filter *bpf_prog, int *addrs, u8 *image,
 			case BPF_ARSH: b3 = 0xF8; break;
 			}
 			EMIT3(0xC1, add_1reg(b3, dst_reg), imm32);
+			break;
+
+		case BPF_ALU | BPF_LSH | BPF_X:
+		case BPF_ALU | BPF_RSH | BPF_X:
+		case BPF_ALU | BPF_ARSH | BPF_X:
+		case BPF_ALU64 | BPF_LSH | BPF_X:
+		case BPF_ALU64 | BPF_RSH | BPF_X:
+		case BPF_ALU64 | BPF_ARSH | BPF_X:
+
+			/* check for bad case when dst_reg == rcx */
+			if (dst_reg == BPF_REG_4) {
+				/* mov r11, dst_reg */
+				EMIT_mov(AUX_REG, dst_reg);
+				dst_reg = AUX_REG;
+			}
+
+			if (src_reg != BPF_REG_4) { /* common case */
+				EMIT1(0x51); /* push rcx */
+
+				/* mov rcx, src_reg */
+				EMIT_mov(BPF_REG_4, src_reg);
+			}
+
+			/* shl %rax, %cl | shr %rax, %cl | sar %rax, %cl */
+			if (BPF_CLASS(insn->code) == BPF_ALU64)
+				EMIT1(add_1mod(0x48, dst_reg));
+			else if (is_ereg(dst_reg))
+				EMIT1(add_1mod(0x40, dst_reg));
+
+			switch (BPF_OP(insn->code)) {
+			case BPF_LSH: b3 = 0xE0; break;
+			case BPF_RSH: b3 = 0xE8; break;
+			case BPF_ARSH: b3 = 0xF8; break;
+			}
+			EMIT2(0xD3, add_1reg(b3, dst_reg));
+
+			if (src_reg != BPF_REG_4)
+				EMIT1(0x59); /* pop rcx */
+
+			if (insn->dst_reg == BPF_REG_4)
+				/* mov dst_reg, r11 */
+				EMIT_mov(insn->dst_reg, AUX_REG);
 			break;
 
 		case BPF_ALU | BPF_END | BPF_FROM_BE:
@@ -841,7 +883,7 @@ common_load:		ctx->seen_ld_abs = true;
 			/* By design x64 JIT should support all BPF instructions
 			 * This error will be seen if new instruction was added
 			 * to interpreter, but not to JIT
-			 * or if there is junk in sk_filter
+			 * or if there is junk in bpf_prog
 			 */
 			pr_err("bpf_jit: unknown opcode %02x\n", insn->code);
 			return -EINVAL;
@@ -862,11 +904,11 @@ common_load:		ctx->seen_ld_abs = true;
 	return proglen;
 }
 
-void bpf_jit_compile(struct sk_filter *prog)
+void bpf_jit_compile(struct bpf_prog *prog)
 {
 }
 
-void bpf_int_jit_compile(struct sk_filter *prog)
+void bpf_int_jit_compile(struct bpf_prog *prog)
 {
 	struct bpf_binary_header *header = NULL;
 	int proglen, oldproglen = 0;
@@ -932,7 +974,7 @@ out:
 
 static void bpf_jit_free_deferred(struct work_struct *work)
 {
-	struct sk_filter *fp = container_of(work, struct sk_filter, work);
+	struct bpf_prog *fp = container_of(work, struct bpf_prog, work);
 	unsigned long addr = (unsigned long)fp->bpf_func & PAGE_MASK;
 	struct bpf_binary_header *header = (void *)addr;
 
@@ -941,7 +983,7 @@ static void bpf_jit_free_deferred(struct work_struct *work)
 	kfree(fp);
 }
 
-void bpf_jit_free(struct sk_filter *fp)
+void bpf_jit_free(struct bpf_prog *fp)
 {
 	if (fp->jited) {
 		INIT_WORK(&fp->work, bpf_jit_free_deferred);

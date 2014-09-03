@@ -1384,8 +1384,6 @@ rel_resource:
 	return -EINVAL;
 }
 
-#define CPL_ISCSI_DATA		0xB2
-#define CPL_RX_ISCSI_DDP	0x49
 cxgb4i_cplhandler_func cxgb4i_cplhandlers[NUM_CPL_CMDS] = {
 	[CPL_ACT_ESTABLISH] = do_act_establish,
 	[CPL_ACT_OPEN_RPL] = do_act_open_rpl,
@@ -1646,25 +1644,22 @@ static int cxgbi_inet6addr_handler(struct notifier_block *this,
 	struct cxgbi_device *cdev;
 	int ret = NOTIFY_DONE;
 
-	rcu_read_lock();
-
 	if (event_dev->priv_flags & IFF_802_1Q_VLAN)
 		event_dev = vlan_dev_real_dev(event_dev);
 
 	cdev = cxgbi_device_find_by_netdev(event_dev, NULL);
-	if (!cdev) {
-		rcu_read_unlock();
+
+	if (!cdev)
 		return ret;
-	}
+
 	switch (event) {
 	case NETDEV_UP:
 		ret = cxgb4_clip_get(event_dev,
 				     (const struct in6_addr *)
 				     ((ifa)->addr.s6_addr));
-		if (ret < 0) {
-			rcu_read_unlock();
+		if (ret < 0)
 			return ret;
-		}
+
 		ret = NOTIFY_OK;
 		break;
 
@@ -1679,7 +1674,6 @@ static int cxgbi_inet6addr_handler(struct notifier_block *this,
 		break;
 	}
 
-	rcu_read_unlock();
 	return ret;
 }
 

@@ -70,13 +70,14 @@ all: library modules
 
 AUTOCONF=$(ARCH_DIR)/autoconf.h
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/
+dirs=kernel/ kernel/time/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
 comma= ,
-kernel/_to_keep=notifier.o params.o time.o sysctl.o \
+kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o
+kernel/time/_to_keep=time.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
@@ -89,7 +90,8 @@ lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
 find_last_bit.o find_next_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o  \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
-div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o
+div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
+rhashtable.o hash.o
 fs/_to_keep=read_write.o libfs.o namei.o
 fs/proc/_to_keep=proc_sysctl.o
 
@@ -113,7 +115,7 @@ $(AUTOCONF): $(ARCH_DIR)/generate-autoconf.py $(srctree)/.config $(ARCH_DIR)/tim
 	$(ARCH_DIR)/generate-autoconf.py $(srctree)/.config > $@
 $(ARCH_DIR)/timeconst.h: $(srctree)/.config
 	echo "hz=$(CONFIG_HZ)" > $(srctree)/arch/sim/hz.bc
-	bc $(srctree)/arch/sim/hz.bc kernel/timeconst.bc > $@
+	bc $(srctree)/arch/sim/hz.bc kernel/time/timeconst.bc > $@
 $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	ld -shared --verbose | ./$^ > $@
 

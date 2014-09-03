@@ -145,6 +145,7 @@ static struct i40e_stats i40e_gstrings_stats[] = {
 	I40E_PF_STAT("rx_jabber", stats.rx_jabber),
 	I40E_PF_STAT("VF_admin_queue_requests", vf_aq_requests),
 	I40E_PF_STAT("rx_hwtstamp_cleared", rx_hwtstamp_cleared),
+	I40E_PF_STAT("fdir_flush_cnt", fd_flush_cnt),
 	I40E_PF_STAT("fdir_atr_match", stats.fd_atr_match),
 	I40E_PF_STAT("fdir_sb_match", stats.fd_sb_match),
 
@@ -155,6 +156,19 @@ static struct i40e_stats i40e_gstrings_stats[] = {
 	I40E_PF_STAT("rx_lpi_count", stats.rx_lpi_count),
 };
 
+#ifdef I40E_FCOE
+static const struct i40e_stats i40e_gstrings_fcoe_stats[] = {
+	I40E_VSI_STAT("fcoe_bad_fccrc", fcoe_stats.fcoe_bad_fccrc),
+	I40E_VSI_STAT("rx_fcoe_dropped", fcoe_stats.rx_fcoe_dropped),
+	I40E_VSI_STAT("rx_fcoe_packets", fcoe_stats.rx_fcoe_packets),
+	I40E_VSI_STAT("rx_fcoe_dwords", fcoe_stats.rx_fcoe_dwords),
+	I40E_VSI_STAT("fcoe_ddp_count", fcoe_stats.fcoe_ddp_count),
+	I40E_VSI_STAT("fcoe_last_error", fcoe_stats.fcoe_last_error),
+	I40E_VSI_STAT("tx_fcoe_packets", fcoe_stats.tx_fcoe_packets),
+	I40E_VSI_STAT("tx_fcoe_dwords", fcoe_stats.tx_fcoe_dwords),
+};
+
+#endif /* I40E_FCOE */
 #define I40E_QUEUE_STATS_LEN(n) \
 	(((struct i40e_netdev_priv *)netdev_priv((n)))->vsi->num_queue_pairs \
 	    * 2 /* Tx and Rx together */                                     \
@@ -162,9 +176,17 @@ static struct i40e_stats i40e_gstrings_stats[] = {
 #define I40E_GLOBAL_STATS_LEN	ARRAY_SIZE(i40e_gstrings_stats)
 #define I40E_NETDEV_STATS_LEN   ARRAY_SIZE(i40e_gstrings_net_stats)
 #define I40E_MISC_STATS_LEN	ARRAY_SIZE(i40e_gstrings_misc_stats)
+#ifdef I40E_FCOE
+#define I40E_FCOE_STATS_LEN	ARRAY_SIZE(i40e_gstrings_fcoe_stats)
+#define I40E_VSI_STATS_LEN(n)	(I40E_NETDEV_STATS_LEN + \
+				 I40E_FCOE_STATS_LEN + \
+				 I40E_MISC_STATS_LEN + \
+				 I40E_QUEUE_STATS_LEN((n)))
+#else
 #define I40E_VSI_STATS_LEN(n)   (I40E_NETDEV_STATS_LEN + \
 				 I40E_MISC_STATS_LEN + \
 				 I40E_QUEUE_STATS_LEN((n)))
+#endif /* I40E_FCOE */
 #define I40E_PFC_STATS_LEN ( \
 		(FIELD_SIZEOF(struct i40e_pf, stats.priority_xoff_rx) + \
 		 FIELD_SIZEOF(struct i40e_pf, stats.priority_xon_rx) + \
@@ -1112,6 +1134,13 @@ static void i40e_get_ethtool_stats(struct net_device *netdev,
 		data[i++] = (i40e_gstrings_misc_stats[j].sizeof_stat ==
 			    sizeof(u64)) ? *(u64 *)p : *(u32 *)p;
 	}
+#ifdef I40E_FCOE
+	for (j = 0; j < I40E_FCOE_STATS_LEN; j++) {
+		p = (char *)vsi + i40e_gstrings_fcoe_stats[j].stat_offset;
+		data[i++] = (i40e_gstrings_fcoe_stats[j].sizeof_stat ==
+			sizeof(u64)) ? *(u64 *)p : *(u32 *)p;
+	}
+#endif
 	rcu_read_lock();
 	for (j = 0; j < vsi->num_queue_pairs; j++) {
 		tx_ring = ACCESS_ONCE(vsi->tx_rings[j]);
@@ -1193,6 +1222,13 @@ static void i40e_get_strings(struct net_device *netdev, u32 stringset,
 				 i40e_gstrings_misc_stats[i].stat_string);
 			p += ETH_GSTRING_LEN;
 		}
+#ifdef I40E_FCOE
+		for (i = 0; i < I40E_FCOE_STATS_LEN; i++) {
+			snprintf(p, ETH_GSTRING_LEN, "%s",
+				 i40e_gstrings_fcoe_stats[i].stat_string);
+			p += ETH_GSTRING_LEN;
+		}
+#endif
 		for (i = 0; i < vsi->num_queue_pairs; i++) {
 			snprintf(p, ETH_GSTRING_LEN, "tx-%u.tx_packets", i);
 			p += ETH_GSTRING_LEN;
@@ -1913,7 +1949,7 @@ static int i40e_update_ethtool_fdir_entry(struct i40e_vsi *vsi,
 
 	/* add filter to the list */
 	if (parent)
-		hlist_add_after(&parent->fdir_node, &input->fdir_node);
+		hlist_add_behind(&input->fdir_node, &parent->fdir_node);
 	else
 		hlist_add_head(&input->fdir_node,
 			       &pf->fdir_filter_list);
@@ -1941,6 +1977,13 @@ static int i40e_del_fdir_entry(struct i40e_vsi *vsi,
 		(struct ethtool_rx_flow_spec *)&cmd->fs;
 	struct i40e_pf *pf = vsi->back;
 	int ret = 0;
+
+	if (test_bit(__I40E_RESET_RECOVERY_PENDING, &pf->state) ||
+	    test_bit(__I40E_RESET_INTR_RECEIVED, &pf->state))
+		return -EBUSY;
+
+	if (test_bit(__I40E_FD_FLUSH_REQUESTED, &pf->state))
+		return -EBUSY;
 
 	ret = i40e_update_ethtool_fdir_entry(vsi, NULL, fsp->location, cmd);
 
@@ -1974,6 +2017,13 @@ static int i40e_add_fdir_ethtool(struct i40e_vsi *vsi,
 
 	if (pf->auto_disable_flags & I40E_FLAG_FD_SB_ENABLED)
 		return -ENOSPC;
+
+	if (test_bit(__I40E_RESET_RECOVERY_PENDING, &pf->state) ||
+	    test_bit(__I40E_RESET_INTR_RECEIVED, &pf->state))
+		return -EBUSY;
+
+	if (test_bit(__I40E_FD_FLUSH_REQUESTED, &pf->state))
+		return -EBUSY;
 
 	fsp = (struct ethtool_rx_flow_spec *)&cmd->fs;
 

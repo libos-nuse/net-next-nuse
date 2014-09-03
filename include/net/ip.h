@@ -216,6 +216,12 @@ static inline int inet_is_local_reserved_port(struct net *net, int port)
 		return 0;
 	return test_bit(port, net->ipv4.sysctl_local_reserved_ports);
 }
+
+static inline bool sysctl_dev_name_is_allowed(const char *name)
+{
+	return strcmp(name, "default") != 0  && strcmp(name, "all") != 0;
+}
+
 #else
 static inline int inet_is_local_reserved_port(struct net *net, int port)
 {
@@ -310,16 +316,7 @@ static inline unsigned int ip_skb_dst_mtu(const struct sk_buff *skb)
 	}
 }
 
-#define IP_IDENTS_SZ 2048u
-extern atomic_t *ip_idents;
-
-static inline u32 ip_idents_reserve(u32 hash, int segs)
-{
-	atomic_t *id_ptr = ip_idents + hash % IP_IDENTS_SZ;
-
-	return atomic_add_return(segs, id_ptr) - segs;
-}
-
+u32 ip_idents_reserve(u32 hash, int segs);
 void __ip_select_ident(struct iphdr *iph, int segs);
 
 static inline void ip_select_ident_segs(struct sk_buff *skb, struct sock *sk, int segs)
@@ -365,6 +362,14 @@ static inline void inet_set_txhash(struct sock *sk)
 	keys.port16[1] = inet->inet_dport;
 
 	sk->sk_txhash = flow_hash_from_keys(&keys);
+}
+
+static inline __wsum inet_gro_compute_pseudo(struct sk_buff *skb, int proto)
+{
+	const struct iphdr *iph = skb_gro_network_header(skb);
+
+	return csum_tcpudp_nofold(iph->saddr, iph->daddr,
+				  skb_gro_len(skb), proto, 0);
 }
 
 /*
@@ -495,7 +500,6 @@ static inline struct sk_buff *ip_check_defrag(struct sk_buff *skb, u32 user)
 }
 #endif
 int ip_frag_mem(struct net *net);
-int ip_frag_nqueues(struct net *net);
 
 /*
  *	Functions provided by ip_forward.c
