@@ -231,14 +231,13 @@ void generic_pipe_buf_get(struct pipe_inode_info *pipe, struct pipe_buffer *buf)
   sim_assert (false);
   return;
 }
-
-int proc_nr_inodes(ctl_table *table, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
+int proc_nr_inodes(struct ctl_table *table, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	  sim_assert (false);
 	  return 0;
 }
 
-int proc_nr_dentry(ctl_table *table, int write, void __user *buffer,
+int proc_nr_dentry(struct ctl_table *table, int write, void __user *buffer,
 		   size_t *lenp, loff_t *ppos)
 {
 	sim_assert (false);
