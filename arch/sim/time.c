@@ -65,6 +65,29 @@ ktime_t ktime_get_with_offset(enum tk_offsets offs)
   return ktime_get ();
 }
 
+/* copied from kernel/time/hrtimeer.c */
+#if BITS_PER_LONG < 64
+/*
+ * Divide a ktime value by a nanosecond value
+ */
+u64 ktime_divns(const ktime_t kt, s64 div)
+{
+  u64 dclc;
+  int sft = 0;
+
+  dclc = ktime_to_ns(kt);
+  /* Make sure the divisor is less than 2^32: */
+  while (div >> 32) {
+    sft++;
+    div >>= 1;
+  }
+  dclc >>= sft;
+  do_div(dclc, (unsigned long) div);
+
+  return dclc;
+}
+#endif /* BITS_PER_LONG >= 64 */
+
 void update_xtime_cache(u64 nsec)
 {}
 unsigned long get_seconds(void)
