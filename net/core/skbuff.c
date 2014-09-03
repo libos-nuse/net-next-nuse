@@ -62,6 +62,7 @@
 #include <linux/scatterlist.h>
 #include <linux/errqueue.h>
 #include <linux/prefetch.h>
+#include <linux/if_vlan.h>
 
 #include <net/protocol.h>
 #include <net/dst.h>
@@ -3490,6 +3491,26 @@ int sock_queue_err_skb(struct sock *sk, struct sk_buff *skb)
 }
 EXPORT_SYMBOL(sock_queue_err_skb);
 
+struct sk_buff *sock_dequeue_err_skb(struct sock *sk)
+{
+	struct sk_buff_head *q = &sk->sk_error_queue;
+	struct sk_buff *skb, *skb_next;
+	int err = 0;
+
+	spin_lock_bh(&q->lock);
+	skb = __skb_dequeue(q);
+	if (skb && (skb_next = skb_peek(q)))
+		err = SKB_EXT_ERR(skb_next)->ee.ee_errno;
+	spin_unlock_bh(&q->lock);
+
+	sk->sk_err = err;
+	if (err)
+		sk->sk_error_report(sk);
+
+	return skb;
+}
+EXPORT_SYMBOL(sock_dequeue_err_skb);
+
 void __skb_tstamp_tx(struct sk_buff *orig_skb,
 		     struct skb_shared_hwtstamps *hwtstamps,
 		     struct sock *sk, int tstype)
@@ -3973,3 +3994,55 @@ unsigned int skb_gso_transport_seglen(const struct sk_buff *skb)
 	return shinfo->gso_size;
 }
 EXPORT_SYMBOL_GPL(skb_gso_transport_seglen);
+
+static struct sk_buff *skb_reorder_vlan_header(struct sk_buff *skb)
+{
+	if (skb_cow(skb, skb_headroom(skb)) < 0) {
+		kfree_skb(skb);
+		return NULL;
+	}
+
+	memmove(skb->data - ETH_HLEN, skb->data - VLAN_ETH_HLEN, 2 * ETH_ALEN);
+	skb->mac_header += VLAN_HLEN;
+	return skb;
+}
+
+struct sk_buff *skb_vlan_untag(struct sk_buff *skb)
+{
+	struct vlan_hdr *vhdr;
+	u16 vlan_tci;
+
+	if (unlikely(vlan_tx_tag_present(skb))) {
+		/* vlan_tci is already set-up so leave this for another time */
+		return skb;
+	}
+
+	skb = skb_share_check(skb, GFP_ATOMIC);
+	if (unlikely(!skb))
+		goto err_free;
+
+	if (unlikely(!pskb_may_pull(skb, VLAN_HLEN)))
+		goto err_free;
+
+	vhdr = (struct vlan_hdr *)skb->data;
+	vlan_tci = ntohs(vhdr->h_vlan_TCI);
+	__vlan_hwaccel_put_tag(skb, skb->protocol, vlan_tci);
+
+	skb_pull_rcsum(skb, VLAN_HLEN);
+	vlan_set_encap_proto(skb, vhdr);
+
+	skb = skb_reorder_vlan_header(skb);
+	if (unlikely(!skb))
+		goto err_free;
+
+	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
+	skb_reset_mac_len(skb);
+
+	return skb;
+
+err_free:
+	kfree_skb(skb);
+	return NULL;
+}
+EXPORT_SYMBOL(skb_vlan_untag);

@@ -987,7 +987,6 @@ struct proto {
 						struct sk_buff *skb);
 
 	void		(*release_cb)(struct sock *sk);
-	void		(*mtu_reduced)(struct sock *sk);
 
 	/* Keeping track of sk's, looking them up, and port selection methods. */
 	void			(*hash)(struct sock *sk);
@@ -2042,6 +2041,7 @@ void sk_stop_timer(struct sock *sk, struct timer_list *timer);
 int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb);
 
 int sock_queue_err_skb(struct sock *sk, struct sk_buff *skb);
+struct sk_buff *sock_dequeue_err_skb(struct sock *sk);
 
 /*
  *	Recover an error report and clear atomically

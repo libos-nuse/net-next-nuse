@@ -124,6 +124,8 @@ struct buffer_state {
  */
 struct arc_emac_priv {
 	/* Devices */
+	const char *drv_name;
+	const char *drv_version;
 	struct device *dev;
 	struct phy_device *phy_dev;
 	struct mii_bus *bus;
@@ -204,7 +206,9 @@ static inline void arc_reg_clr(struct arc_emac_priv *priv, int reg, int mask)
 	arc_reg_set(priv, reg, value & ~mask);
 }
 
-int arc_mdio_probe(struct platform_device *pdev, struct arc_emac_priv *priv);
+int arc_mdio_probe(struct arc_emac_priv *priv);
 int arc_mdio_remove(struct arc_emac_priv *priv);
+int arc_emac_probe(struct net_device *ndev, int interface);
+int arc_emac_remove(struct net_device *ndev);
 
 #endif /* ARC_EMAC_H */

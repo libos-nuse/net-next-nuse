@@ -437,7 +437,6 @@ static void sock_disable_timestamp(struct sock *sk, unsigned long flags)
 int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 {
 	int err;
-	int skb_len;
 	unsigned long flags;
 	struct sk_buff_head *list = &sk->sk_receive_queue;
 
@@ -458,13 +457,6 @@ int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 
 	skb->dev = NULL;
 	skb_set_owner_r(skb, sk);
-
-	/* Cache the SKB length before we tack it onto the receive
-	 * queue.  Once it is added it no longer belongs to us and
-	 * may be freed by other threads of control pulling packets
-	 * from the queue.
-	 */
-	skb_len = skb->len;
 
 	/* we escape from rcu protected region, make sure we dont leak
 	 * a norefcounted dst
@@ -2496,11 +2488,11 @@ int sock_recv_errqueue(struct sock *sk, struct msghdr *msg, int len,
 		       int level, int type)
 {
 	struct sock_exterr_skb *serr;
-	struct sk_buff *skb, *skb2;
+	struct sk_buff *skb;
 	int copied, err;
 
 	err = -EAGAIN;
-	skb = skb_dequeue(&sk->sk_error_queue);
+	skb = sock_dequeue_err_skb(sk);
 	if (skb == NULL)
 		goto out;
 
@@ -2520,16 +2512,6 @@ int sock_recv_errqueue(struct sock *sk, struct msghdr *msg, int len,
 
 	msg->msg_flags |= MSG_ERRQUEUE;
 	err = copied;
-
-	/* Reset and regenerate socket error */
-	spin_lock_bh(&sk->sk_error_queue.lock);
-	sk->sk_err = 0;
-	if ((skb2 = skb_peek(&sk->sk_error_queue)) != NULL) {
-		sk->sk_err = SKB_EXT_ERR(skb2)->ee.ee_errno;
-		spin_unlock_bh(&sk->sk_error_queue.lock);
-		sk->sk_error_report(sk);
-	} else
-		spin_unlock_bh(&sk->sk_error_queue.lock);
 
 out_free_skb:
 	kfree_skb(skb);

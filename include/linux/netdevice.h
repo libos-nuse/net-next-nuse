@@ -1747,6 +1747,12 @@ struct netdev_queue *netdev_get_tx_queue(const struct net_device *dev,
 	return &dev->_tx[index];
 }
 
+static inline struct netdev_queue *skb_get_tx_queue(const struct net_device *dev,
+						    const struct sk_buff *skb)
+{
+	return netdev_get_tx_queue(dev, skb_get_queue_mapping(skb));
+}
+
 static inline void netdev_for_each_tx_queue(struct net_device *dev,
 					    void (*f)(struct net_device *,
 						      struct netdev_queue *,
@@ -1781,24 +1787,13 @@ void dev_net_set(struct net_device *dev, struct net *net)
 #endif
 }
 
-static inline bool netdev_uses_dsa_tags(struct net_device *dev)
+static inline bool netdev_uses_dsa(struct net_device *dev)
 {
-#ifdef CONFIG_NET_DSA_TAG_DSA
+#ifdef CONFIG_NET_DSA
 	if (dev->dsa_ptr != NULL)
-		return dsa_uses_dsa_tags(dev->dsa_ptr);
+		return dsa_uses_tagged_protocol(dev->dsa_ptr);
 #endif
-
-	return 0;
-}
-
-static inline bool netdev_uses_trailer_tags(struct net_device *dev)
-{
-#ifdef CONFIG_NET_DSA_TAG_TRAILER
-	if (dev->dsa_ptr != NULL)
-		return dsa_uses_trailer_tags(dev->dsa_ptr);
-#endif
-
-	return 0;
+	return false;
 }
 
 /**
@@ -1883,7 +1878,13 @@ struct napi_gro_cb {
 	u16	proto;
 
 	/* Used in udp_gro_receive */
-	u16	udp_mark;
+	u8	udp_mark:1;
+
+	/* GRO checksum is valid */
+	u8	csum_valid:1;
+
+	/* Number of checksums via CHECKSUM_UNNECESSARY */
+	u8	csum_cnt:3;
 
 	/* used to support CHECKSUM_COMPLETE for tunneling protocols */
 	__wsum	csum;
@@ -1926,6 +1927,13 @@ struct udp_offload {
 	__be16			 port;
 	struct offload_callbacks callbacks;
 };
+
+struct dsa_device_ops {
+	netdev_tx_t (*xmit)(struct sk_buff *skb, struct net_device *dev);
+	int (*rcv)(struct sk_buff *skb, struct net_device *dev,
+		   struct packet_type *pt, struct net_device *orig_dev);
+};
+
 
 /* often modified stats are per cpu, other are shared (netdev->stats) */
 struct pcpu_sw_netstats {
@@ -1982,6 +1990,7 @@ struct pcpu_sw_netstats {
 #define NETDEV_CHANGEUPPER	0x0015
 #define NETDEV_RESEND_IGMP	0x0016
 #define NETDEV_PRECHANGEMTU	0x0017 /* notify before mtu change happened */
+#define NETDEV_CHANGEINFODATA	0x0018
 
 int register_netdevice_notifier(struct notifier_block *nb);
 int unregister_netdevice_notifier(struct notifier_block *nb);
@@ -2153,10 +2162,96 @@ static inline void *skb_gro_network_header(struct sk_buff *skb)
 static inline void skb_gro_postpull_rcsum(struct sk_buff *skb,
 					const void *start, unsigned int len)
 {
-	if (skb->ip_summed == CHECKSUM_COMPLETE)
+	if (NAPI_GRO_CB(skb)->csum_valid)
 		NAPI_GRO_CB(skb)->csum = csum_sub(NAPI_GRO_CB(skb)->csum,
 						  csum_partial(start, len, 0));
 }
+
+/* GRO checksum functions. These are logical equivalents of the normal
+ * checksum functions (in skbuff.h) except that they operate on the GRO
+ * offsets and fields in sk_buff.
+ */
+
+__sum16 __skb_gro_checksum_complete(struct sk_buff *skb);
+
+static inline bool __skb_gro_checksum_validate_needed(struct sk_buff *skb,
+						      bool zero_okay,
+						      __sum16 check)
+{
+	return (skb->ip_summed != CHECKSUM_PARTIAL &&
+		NAPI_GRO_CB(skb)->csum_cnt == 0 &&
+		(!zero_okay || check));
+}
+
+static inline __sum16 __skb_gro_checksum_validate_complete(struct sk_buff *skb,
+							   __wsum psum)
+{
+	if (NAPI_GRO_CB(skb)->csum_valid &&
+	    !csum_fold(csum_add(psum, NAPI_GRO_CB(skb)->csum)))
+		return 0;
+
+	NAPI_GRO_CB(skb)->csum = psum;
+
+	return __skb_gro_checksum_complete(skb);
+}
+
+static inline void skb_gro_incr_csum_unnecessary(struct sk_buff *skb)
+{
+	if (NAPI_GRO_CB(skb)->csum_cnt > 0) {
+		/* Consume a checksum from CHECKSUM_UNNECESSARY */
+		NAPI_GRO_CB(skb)->csum_cnt--;
+	} else {
+		/* Update skb for CHECKSUM_UNNECESSARY and csum_level when we
+		 * verified a new top level checksum or an encapsulated one
+		 * during GRO. This saves work if we fallback to normal path.
+		 */
+		__skb_incr_checksum_unnecessary(skb);
+	}
+}
+
+#define __skb_gro_checksum_validate(skb, proto, zero_okay, check,	\
+				    compute_pseudo)			\
+({									\
+	__sum16 __ret = 0;						\
+	if (__skb_gro_checksum_validate_needed(skb, zero_okay, check))	\
+		__ret = __skb_gro_checksum_validate_complete(skb,	\
+				compute_pseudo(skb, proto));		\
+	if (__ret)							\
+		__skb_mark_checksum_bad(skb);				\
+	else								\
+		skb_gro_incr_csum_unnecessary(skb);			\
+	__ret;								\
+})
+
+#define skb_gro_checksum_validate(skb, proto, compute_pseudo)		\
+	__skb_gro_checksum_validate(skb, proto, false, 0, compute_pseudo)
+
+#define skb_gro_checksum_validate_zero_check(skb, proto, check,		\
+					     compute_pseudo)		\
+	__skb_gro_checksum_validate(skb, proto, true, check, compute_pseudo)
+
+#define skb_gro_checksum_simple_validate(skb)				\
+	__skb_gro_checksum_validate(skb, 0, false, 0, null_compute_pseudo)
+
+static inline bool __skb_gro_checksum_convert_check(struct sk_buff *skb)
+{
+	return (NAPI_GRO_CB(skb)->csum_cnt == 0 &&
+		!NAPI_GRO_CB(skb)->csum_valid);
+}
+
+static inline void __skb_gro_checksum_convert(struct sk_buff *skb,
+					      __sum16 check, __wsum pseudo)
+{
+	NAPI_GRO_CB(skb)->csum = ~pseudo;
+	NAPI_GRO_CB(skb)->csum_valid = 1;
+}
+
+#define skb_gro_checksum_try_convert(skb, proto, check, compute_pseudo)	\
+do {									\
+	if (__skb_gro_checksum_convert_check(skb))			\
+		__skb_gro_checksum_convert(skb, check,			\
+					   compute_pseudo(skb, proto));	\
+} while (0)
 
 static inline int dev_hard_header(struct sk_buff *skb, struct net_device *dev,
 				  unsigned short type,
@@ -2754,8 +2849,9 @@ int dev_set_mac_address(struct net_device *, struct sockaddr *);
 int dev_change_carrier(struct net_device *, bool new_carrier);
 int dev_get_phys_port_id(struct net_device *dev,
 			 struct netdev_phys_port_id *ppid);
-int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
-			struct netdev_queue *txq);
+struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device *dev);
+struct sk_buff *dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
+				    struct netdev_queue *txq, int *ret);
 int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
 int dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
 bool is_skb_forwardable(struct net_device *dev, struct sk_buff *skb);
@@ -3356,6 +3452,27 @@ int __init dev_proc_init(void);
 #else
 #define dev_proc_init() 0
 #endif
+
+static inline netdev_tx_t __netdev_start_xmit(const struct net_device_ops *ops,
+					      struct sk_buff *skb, struct net_device *dev,
+					      bool more)
+{
+	skb->xmit_more = more ? 1 : 0;
+	return ops->ndo_start_xmit(skb, dev);
+}
+
+static inline netdev_tx_t netdev_start_xmit(struct sk_buff *skb, struct net_device *dev,
+					    struct netdev_queue *txq, bool more)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+	int rc;
+
+	rc = __netdev_start_xmit(ops, skb, dev, more);
+	if (rc == NETDEV_TX_OK)
+		txq_trans_update(txq);
+
+	return rc;
+}
 
 int netdev_class_create_file_ns(struct class_attribute *class_attr,
 				const void *ns);

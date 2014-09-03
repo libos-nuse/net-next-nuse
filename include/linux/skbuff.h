@@ -47,11 +47,29 @@
  *
  *   The hardware you're dealing with doesn't calculate the full checksum
  *   (as in CHECKSUM_COMPLETE), but it does parse headers and verify checksums
- *   for specific protocols e.g. TCP/UDP/SCTP, then, for such packets it will
- *   set CHECKSUM_UNNECESSARY if their checksums are okay. skb->csum is still
- *   undefined in this case though. It is a bad option, but, unfortunately,
- *   nowadays most vendors do this. Apparently with the secret goal to sell
- *   you new devices, when you will add new protocol to your host, f.e. IPv6 8)
+ *   for specific protocols. For such packets it will set CHECKSUM_UNNECESSARY
+ *   if their checksums are okay. skb->csum is still undefined in this case
+ *   though. It is a bad option, but, unfortunately, nowadays most vendors do
+ *   this. Apparently with the secret goal to sell you new devices, when you
+ *   will add new protocol to your host, f.e. IPv6 8)
+ *
+ *   CHECKSUM_UNNECESSARY is applicable to following protocols:
+ *     TCP: IPv6 and IPv4.
+ *     UDP: IPv4 and IPv6. A device may apply CHECKSUM_UNNECESSARY to a
+ *       zero UDP checksum for either IPv4 or IPv6, the networking stack
+ *       may perform further validation in this case.
+ *     GRE: only if the checksum is present in the header.
+ *     SCTP: indicates the CRC in SCTP header has been validated.
+ *
+ *   skb->csum_level indicates the number of consecutive checksums found in
+ *   the packet minus one that have been verified as CHECKSUM_UNNECESSARY.
+ *   For instance if a device receives an IPv6->UDP->GRE->IPv4->TCP packet
+ *   and a device is able to verify the checksums for UDP (possibly zero),
+ *   GRE (checksum flag is set), and TCP-- skb->csum_level would be set to
+ *   two. If the device were only able to verify the UDP checksum and not
+ *   GRE, either because it doesn't support GRE checksum of because GRE
+ *   checksum is bad, skb->csum_level would be set to zero (TCP checksum is
+ *   not considered in this case).
  *
  * CHECKSUM_COMPLETE:
  *
@@ -111,6 +129,9 @@
 #define CHECKSUM_UNNECESSARY	1
 #define CHECKSUM_COMPLETE	2
 #define CHECKSUM_PARTIAL	3
+
+/* Maximum value in skb->csum_level */
+#define SKB_MAX_CSUM_LEVEL	3
 
 #define SKB_DATA_ALIGN(X)	ALIGN(X, SMP_CACHE_BYTES)
 #define SKB_WITH_OVERHEAD(X)	\
@@ -452,6 +473,7 @@ static inline u32 skb_mstamp_us_delta(const struct skb_mstamp *t1,
  *	@tc_verd: traffic control verdict
  *	@hash: the packet hash
  *	@queue_mapping: Queue mapping for multiqueue devices
+ *	@xmit_more: More SKBs are pending for this queue
  *	@ndisc_nodetype: router type (from link layer)
  *	@ooo_okay: allow the mapping of a socket to a queue to be changed
  *	@l4_hash: indicate hash is a canonical 4-tuple hash over transport
@@ -558,6 +580,7 @@ struct sk_buff {
 
 	__u16			queue_mapping;
 	kmemcheck_bitfield_begin(flags2);
+	__u8			xmit_more:1;
 #ifdef CONFIG_IPV6_NDISC_NODETYPE
 	__u8			ndisc_nodetype:2;
 #endif
@@ -569,16 +592,12 @@ struct sk_buff {
 	__u8			wifi_acked:1;
 	__u8			no_fcs:1;
 	__u8			head_frag:1;
-	/* Encapsulation protocol and NIC drivers should use
-	 * this flag to indicate to each other if the skb contains
-	 * encapsulated packet or not and maybe use the inner packet
-	 * headers if needed
-	 */
+	/* Indicates the inner headers are valid in the skbuff. */
 	__u8			encapsulation:1;
 	__u8			encap_hdr_csum:1;
 	__u8			csum_valid:1;
 	__u8			csum_complete_sw:1;
-	/* 2/4 bit hole (depending on ndisc_nodetype presence) */
+	/* 1/3 bit hole (depending on ndisc_nodetype presence) */
 	kmemcheck_bitfield_end(flags2);
 
 #if defined CONFIG_NET_DMA || defined CONFIG_NET_RX_BUSY_POLL
@@ -595,6 +614,12 @@ struct sk_buff {
 		__u32		dropcount;
 		__u32		reserved_tailroom;
 	};
+
+	kmemcheck_bitfield_begin(flags3);
+	__u8			csum_level:2;
+	__u8			csum_bad:1;
+	/* 13 bit hole */
+	kmemcheck_bitfield_end(flags3);
 
 	__be16			inner_protocol;
 	__u16			inner_transport_header;
@@ -1860,18 +1885,6 @@ static inline int pskb_network_may_pull(struct sk_buff *skb, unsigned int len)
 	return pskb_may_pull(skb, skb_network_offset(skb) + len);
 }
 
-static inline void skb_pop_rcv_encapsulation(struct sk_buff *skb)
-{
-	/* Only continue with checksum unnecessary if device indicated
-	 * it is valid across encapsulation (skb->encapsulation was set).
-	 */
-	if (skb->ip_summed == CHECKSUM_UNNECESSARY && !skb->encapsulation)
-		skb->ip_summed = CHECKSUM_NONE;
-
-	skb->encapsulation = 0;
-	skb->csum_valid = 0;
-}
-
 /*
  * CPUs often take a performance hit when accessing unaligned memory
  * locations. The actual performance hit varies, it can be small if the
@@ -2555,6 +2568,7 @@ int skb_shift(struct sk_buff *tgt, struct sk_buff *skb, int shiftlen);
 void skb_scrub_packet(struct sk_buff *skb, bool xnet);
 unsigned int skb_gso_transport_seglen(const struct sk_buff *skb);
 struct sk_buff *skb_segment(struct sk_buff *skb, netdev_features_t features);
+struct sk_buff *skb_vlan_untag(struct sk_buff *skb);
 
 struct skb_checksum_ops {
 	__wsum (*update)(const void *mem, int len, __wsum wsum);
@@ -2566,18 +2580,24 @@ __wsum __skb_checksum(const struct sk_buff *skb, int offset, int len,
 __wsum skb_checksum(const struct sk_buff *skb, int offset, int len,
 		    __wsum csum);
 
-static inline void *skb_header_pointer(const struct sk_buff *skb, int offset,
-				       int len, void *buffer)
+static inline void *__skb_header_pointer(const struct sk_buff *skb, int offset,
+					 int len, void *data, int hlen, void *buffer)
 {
-	int hlen = skb_headlen(skb);
-
 	if (hlen - offset >= len)
-		return skb->data + offset;
+		return data + offset;
 
-	if (skb_copy_bits(skb, offset, buffer, len) < 0)
+	if (!skb ||
+	    skb_copy_bits(skb, offset, buffer, len) < 0)
 		return NULL;
 
 	return buffer;
+}
+
+static inline void *skb_header_pointer(const struct sk_buff *skb, int offset,
+				       int len, void *buffer)
+{
+	return __skb_header_pointer(skb, offset, len, skb->data,
+				    skb_headlen(skb), buffer);
 }
 
 /**
@@ -2785,6 +2805,42 @@ static inline __sum16 skb_checksum_complete(struct sk_buff *skb)
 	       0 : __skb_checksum_complete(skb);
 }
 
+static inline void __skb_decr_checksum_unnecessary(struct sk_buff *skb)
+{
+	if (skb->ip_summed == CHECKSUM_UNNECESSARY) {
+		if (skb->csum_level == 0)
+			skb->ip_summed = CHECKSUM_NONE;
+		else
+			skb->csum_level--;
+	}
+}
+
+static inline void __skb_incr_checksum_unnecessary(struct sk_buff *skb)
+{
+	if (skb->ip_summed == CHECKSUM_UNNECESSARY) {
+		if (skb->csum_level < SKB_MAX_CSUM_LEVEL)
+			skb->csum_level++;
+	} else if (skb->ip_summed == CHECKSUM_NONE) {
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		skb->csum_level = 0;
+	}
+}
+
+static inline void __skb_mark_checksum_bad(struct sk_buff *skb)
+{
+	/* Mark current checksum as bad (typically called from GRO
+	 * path). In the case that ip_summed is CHECKSUM_NONE
+	 * this must be the first checksum encountered in the packet.
+	 * When ip_summed is CHECKSUM_UNNECESSARY, this is the first
+	 * checksum after the last one validated. For UDP, a zero
+	 * checksum can not be marked as bad.
+	 */
+
+	if (skb->ip_summed == CHECKSUM_NONE ||
+	    skb->ip_summed == CHECKSUM_UNNECESSARY)
+		skb->csum_bad = 1;
+}
+
 /* Check if we need to perform checksum complete validation.
  *
  * Returns true if checksum complete is needed, false otherwise
@@ -2796,6 +2852,7 @@ static inline bool __skb_checksum_validate_needed(struct sk_buff *skb,
 {
 	if (skb_csum_unnecessary(skb) || (zero_okay && !check)) {
 		skb->csum_valid = 1;
+		__skb_decr_checksum_unnecessary(skb);
 		return false;
 	}
 
@@ -2825,6 +2882,9 @@ static inline __sum16 __skb_checksum_validate_complete(struct sk_buff *skb,
 			skb->csum_valid = 1;
 			return 0;
 		}
+	} else if (skb->csum_bad) {
+		/* ip_summed == CHECKSUM_NONE in this case */
+		return 1;
 	}
 
 	skb->csum = psum;
@@ -2881,6 +2941,26 @@ static inline __wsum null_compute_pseudo(struct sk_buff *skb, int proto)
 
 #define skb_checksum_simple_validate(skb)				\
 	__skb_checksum_validate(skb, 0, true, false, 0, null_compute_pseudo)
+
+static inline bool __skb_checksum_convert_check(struct sk_buff *skb)
+{
+	return (skb->ip_summed == CHECKSUM_NONE &&
+		skb->csum_valid && !skb->csum_bad);
+}
+
+static inline void __skb_checksum_convert(struct sk_buff *skb,
+					  __sum16 check, __wsum pseudo)
+{
+	skb->csum = ~pseudo;
+	skb->ip_summed = CHECKSUM_COMPLETE;
+}
+
+#define skb_checksum_try_convert(skb, proto, check, compute_pseudo)	\
+do {									\
+	if (__skb_checksum_convert_check(skb))				\
+		__skb_checksum_convert(skb, check,			\
+				       compute_pseudo(skb, proto));	\
+} while (0)
 
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 void nf_conntrack_destroy(struct nf_conntrack *nfct);
