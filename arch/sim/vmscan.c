@@ -6,7 +6,7 @@
  */
 int register_shrinker(struct shrinker *shrinker)
 {
-
+	return 0;
 }
 
 /*
