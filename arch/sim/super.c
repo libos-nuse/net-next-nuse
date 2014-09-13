@@ -16,7 +16,20 @@
 
 void put_super(struct super_block *sb);
 int grab_super(struct super_block *s);
-void destroy_super(struct super_block *s);
+
+static void destroy_super(struct super_block *s)
+{
+  int i;
+  list_lru_destroy(&s->s_dentry_lru);
+  list_lru_destroy(&s->s_inode_lru);
+  for (i = 0; i < SB_FREEZE_LEVELS; i++)
+    percpu_counter_destroy(&s->s_writers.counter[i]);
+  security_sb_free(s);
+  WARN_ON(!list_empty(&s->s_mounts));
+  kfree(s->s_subtype);
+  kfree(s->s_options);
+  kfree_rcu(s, rcu);
+}
 
 int set_anon_super(struct super_block *s, void *data)
 {
@@ -42,14 +55,16 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		if (security_sb_alloc(s)) {
 			kfree(s);
 			s = NULL;
-			goto out;
+			goto fail;
 		}
 		s->s_bdi = &default_backing_dev_info;
 		INIT_HLIST_NODE(&s->s_instances);
 		INIT_HLIST_BL_HEAD(&s->s_anon);
 		INIT_LIST_HEAD(&s->s_inodes);
-		INIT_LIST_HEAD(&s->s_dentry_lru);
-		INIT_LIST_HEAD(&s->s_inode_lru);
+                if (list_lru_init(&s->s_dentry_lru))
+                  goto fail;
+                if (list_lru_init(&s->s_inode_lru))
+                  goto fail;
 		INIT_LIST_HEAD(&s->s_mounts);
 		init_rwsem(&s->s_umount);
 		/*
@@ -81,9 +96,11 @@ static struct super_block *alloc_super(struct file_system_type *type)
 
 		s->s_shrink.seeks = DEFAULT_SEEKS;
 		s->s_shrink.batch = 1024;
+		return s;
 	}
-out:
-	return s;
+fail:
+	destroy_super(s);
+	return NULL;
 }
 
 /**

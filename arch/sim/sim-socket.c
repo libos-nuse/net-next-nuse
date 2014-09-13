@@ -308,7 +308,7 @@ static int sim_pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
       return 0;
     }
 
-  sim_poll_event((int)key, entry->opaque);
+  sim_poll_event ((unsigned long)key, entry->opaque);
   return 1;
 }
 
@@ -325,7 +325,7 @@ static void sim_pollwait(struct file *filp, wait_queue_head_t *wait_address, pol
   entry->opaque = fromDCE->opaque; // Copy DCE poll table reference
   entry->eventMask = fromDCE->ret; // Copy poll mask of wanted events.
 
-  pwq->table = entry;
+  pwq->table = (void *)entry;
 
   init_waitqueue_func_entry(&entry->wait, sim_pollwake);
   entry->wait.private = entry;
@@ -364,7 +364,7 @@ void sim_sock_poll (struct SimSocket *socket, struct poll_table_ref *ret)
 
       pwait = &(ptable->pt);
       // Pass the DCE pool table to sim_pollwait function
-      ptable->table = ret;
+      ptable->table = (void *)ret;
     }
 
   ret->ret = sock->ops->poll(&zero, sock, pwait);
