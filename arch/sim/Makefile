@@ -102,21 +102,29 @@ $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config
 
 -include $(srctree)/.config
 
+quiet_cmd_autoconf = GEN     $@
+      cmd_autoconf = $(ARCH_DIR)/generate-autoconf.py $(srctree)/.config > $@
 $(AUTOCONF): $(ARCH_DIR)/generate-autoconf.py $(srctree)/.config $(ARCH_DIR)/timeconst.h
-	$(ARCH_DIR)/generate-autoconf.py $(srctree)/.config > $@
+	$(call if_changed,autoconf)
+quiet_cmd_timeconst = GEN     $@
+      cmd_timeconst = echo "hz=$(CONFIG_HZ)" > $(srctree)/arch/sim/hz.bc ; \
+                      bc $(srctree)/arch/sim/hz.bc kernel/time/timeconst.bc > $@
 $(ARCH_DIR)/timeconst.h: $(srctree)/.config
-	echo "hz=$(CONFIG_HZ)" > $(srctree)/arch/sim/hz.bc
-	bc $(srctree)/arch/sim/hz.bc kernel/time/timeconst.bc > $@
+	$(call if_changed,timeconst)
+quiet_cmd_linker = GEN     $@
+      cmd_linker = ld -shared --verbose | ./$^ > $@
 $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
-	ld -shared --verbose | ./$^ > $@
+	$(call if_changed,linker)
 
 # from lib/Makefile
 CRC32TABLE = $(ARCH_DIR)/crc32table.h
 hostprogs-y	:= $(srctree)/lib/gen_crc32table
 clean-files	:= crc32table.h
 
+quiet_cmd_crc32src = GEN     $@
+      cmd_crc32src = cc $^ -o $@
 $(srctree)/lib/gen_crc32table: $(srctree)/lib/gen_crc32table.c
-	cc $^ -o $@
+	$(call if_changed,crc32src)
 
 quiet_cmd_crc32 = GEN     $@
       cmd_crc32 = $< > $@
