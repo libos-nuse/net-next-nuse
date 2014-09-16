@@ -77,14 +77,6 @@ lowpan_dev_info *lowpan_dev_info(const struct net_device *dev)
 	return netdev_priv(dev);
 }
 
-static inline void lowpan_address_flip(u8 *src, u8 *dest)
-{
-	int i;
-
-	for (i = 0; i < IEEE802154_ADDR_LEN; i++)
-		(dest)[IEEE802154_ADDR_LEN - i - 1] = (src)[i];
-}
-
 static int lowpan_header_create(struct sk_buff *skb, struct net_device *dev,
 				unsigned short type, const void *_daddr,
 				const void *_saddr, unsigned int len)
@@ -246,7 +238,7 @@ lowpan_alloc_frag(struct sk_buff *skb, int size,
 			return ERR_PTR(-rc);
 		}
 	} else {
-		frag = ERR_PTR(ENOMEM);
+		frag = ERR_PTR(-ENOMEM);
 	}
 
 	return frag;
@@ -437,7 +429,7 @@ static void lowpan_setup(struct net_device *dev)
 	/* Frame Control + Sequence Number + Address fields + Security Header */
 	dev->hard_header_len	= 2 + 1 + 20 + 14;
 	dev->needed_tailroom	= 2; /* FCS */
-	dev->mtu		= 1281;
+	dev->mtu		= IPV6_MIN_MTU;
 	dev->tx_queue_len	= 0;
 	dev->flags		= IFF_BROADCAST | IFF_MULTICAST;
 	dev->watchdog_timeo	= 0;

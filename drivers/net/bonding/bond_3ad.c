@@ -234,24 +234,6 @@ static inline int __check_agg_selection_timer(struct port *port)
 }
 
 /**
- * __get_state_machine_lock - lock the port's state machines
- * @port: the port we're looking at
- */
-static inline void __get_state_machine_lock(struct port *port)
-{
-	spin_lock_bh(&(SLAVE_AD_INFO(port->slave)->state_machine_lock));
-}
-
-/**
- * __release_state_machine_lock - unlock the port's state machines
- * @port: the port we're looking at
- */
-static inline void __release_state_machine_lock(struct port *port)
-{
-	spin_unlock_bh(&(SLAVE_AD_INFO(port->slave)->state_machine_lock));
-}
-
-/**
  * __get_link_speed - get a port's speed
  * @port: the port we're looking at
  *
@@ -315,15 +297,14 @@ static u16 __get_link_speed(struct port *port)
 static u8 __get_duplex(struct port *port)
 {
 	struct slave *slave = port->slave;
-
 	u8 retval;
 
 	/* handling a special case: when the configuration starts with
 	 * link down, it sets the duplex to 0.
 	 */
-	if (slave->link != BOND_LINK_UP)
+	if (slave->link != BOND_LINK_UP) {
 		retval = 0x0;
-	else {
+	} else {
 		switch (slave->duplex) {
 		case DUPLEX_FULL:
 			retval = 0x1;
@@ -339,16 +320,6 @@ static u8 __get_duplex(struct port *port)
 		}
 	}
 	return retval;
-}
-
-/**
- * __initialize_port_locks - initialize a port's STATE machine spinlock
- * @port: the slave of the port we're looking at
- */
-static inline void __initialize_port_locks(struct slave *slave)
-{
-	/* make sure it isn't called twice */
-	spin_lock_init(&(SLAVE_AD_INFO(slave)->state_machine_lock));
 }
 
 /* Conversions */
@@ -1843,7 +1814,6 @@ void bond_3ad_bind_slave(struct slave *slave)
 
 		ad_initialize_port(port, bond->params.lacp_fast);
 
-		__initialize_port_locks(slave);
 		port->slave = slave;
 		port->actor_port_number = SLAVE_AD_INFO(slave)->id;
 		/* key is determined according to the link speed, duplex and user key(which
@@ -1899,6 +1869,8 @@ void bond_3ad_unbind_slave(struct slave *slave)
 	struct slave *slave_iter;
 	struct list_head *iter;
 
+	/* Sync against bond_3ad_state_machine_handler() */
+	spin_lock_bh(&bond->mode_lock);
 	aggregator = &(SLAVE_AD_INFO(slave)->aggregator);
 	port = &(SLAVE_AD_INFO(slave)->port);
 
@@ -1906,7 +1878,7 @@ void bond_3ad_unbind_slave(struct slave *slave)
 	if (!port->slave) {
 		netdev_warn(bond->dev, "Trying to unbind an uninitialized port on %s\n",
 			    slave->dev->name);
-		return;
+		goto out;
 	}
 
 	netdev_dbg(bond->dev, "Unbinding Link Aggregation Group %d\n",
@@ -2032,6 +2004,9 @@ void bond_3ad_unbind_slave(struct slave *slave)
 		}
 	}
 	port->slave = NULL;
+
+out:
+	spin_unlock_bh(&bond->mode_lock);
 }
 
 /**
@@ -2057,7 +2032,11 @@ void bond_3ad_state_machine_handler(struct work_struct *work)
 	struct port *port;
 	bool should_notify_rtnl = BOND_SLAVE_NOTIFY_LATER;
 
-	read_lock(&bond->lock);
+	/* Lock to protect data accessed by all (e.g., port->sm_vars) and
+	 * against running with bond_3ad_unbind_slave. ad_rx_machine may run
+	 * concurrently due to incoming LACPDU as well.
+	 */
+	spin_lock_bh(&bond->mode_lock);
 	rcu_read_lock();
 
 	/* check if there are any slaves */
@@ -2093,12 +2072,6 @@ void bond_3ad_state_machine_handler(struct work_struct *work)
 			goto re_arm;
 		}
 
-		/* Lock around state machines to protect data accessed
-		 * by all (e.g., port->sm_vars).  ad_rx_machine may run
-		 * concurrently due to incoming LACPDU.
-		 */
-		__get_state_machine_lock(port);
-
 		ad_rx_machine(NULL, port);
 		ad_periodic_machine(port);
 		ad_port_selection_logic(port);
@@ -2108,8 +2081,6 @@ void bond_3ad_state_machine_handler(struct work_struct *work)
 		/* turn off the BEGIN bit, since we already handled it */
 		if (port->sm_vars & AD_PORT_BEGIN)
 			port->sm_vars &= ~AD_PORT_BEGIN;
-
-		__release_state_machine_lock(port);
 	}
 
 re_arm:
@@ -2120,7 +2091,7 @@ re_arm:
 		}
 	}
 	rcu_read_unlock();
-	read_unlock(&bond->lock);
+	spin_unlock_bh(&bond->mode_lock);
 
 	if (should_notify_rtnl && rtnl_trylock()) {
 		bond_slave_state_notify(bond);
@@ -2161,9 +2132,9 @@ static int bond_3ad_rx_indication(struct lacpdu *lacpdu, struct slave *slave,
 			netdev_dbg(slave->bond->dev, "Received LACPDU on port %d\n",
 				   port->actor_port_number);
 			/* Protect against concurrent state machines */
-			__get_state_machine_lock(port);
+			spin_lock(&slave->bond->mode_lock);
 			ad_rx_machine(lacpdu, port);
-			__release_state_machine_lock(port);
+			spin_unlock(&slave->bond->mode_lock);
 			break;
 
 		case AD_TYPE_MARKER:
@@ -2213,7 +2184,7 @@ void bond_3ad_adapter_speed_changed(struct slave *slave)
 		return;
 	}
 
-	__get_state_machine_lock(port);
+	spin_lock_bh(&slave->bond->mode_lock);
 
 	port->actor_admin_port_key &= ~AD_SPEED_KEY_BITS;
 	port->actor_oper_port_key = port->actor_admin_port_key |=
@@ -2224,7 +2195,7 @@ void bond_3ad_adapter_speed_changed(struct slave *slave)
 	 */
 	port->sm_vars |= AD_PORT_BEGIN;
 
-	__release_state_machine_lock(port);
+	spin_unlock_bh(&slave->bond->mode_lock);
 }
 
 /**
@@ -2246,7 +2217,7 @@ void bond_3ad_adapter_duplex_changed(struct slave *slave)
 		return;
 	}
 
-	__get_state_machine_lock(port);
+	spin_lock_bh(&slave->bond->mode_lock);
 
 	port->actor_admin_port_key &= ~AD_DUPLEX_KEY_BITS;
 	port->actor_oper_port_key = port->actor_admin_port_key |=
@@ -2257,7 +2228,7 @@ void bond_3ad_adapter_duplex_changed(struct slave *slave)
 	 */
 	port->sm_vars |= AD_PORT_BEGIN;
 
-	__release_state_machine_lock(port);
+	spin_unlock_bh(&slave->bond->mode_lock);
 }
 
 /**
@@ -2280,7 +2251,7 @@ void bond_3ad_handle_link_change(struct slave *slave, char link)
 		return;
 	}
 
-	__get_state_machine_lock(port);
+	spin_lock_bh(&slave->bond->mode_lock);
 	/* on link down we are zeroing duplex and speed since
 	 * some of the adaptors(ce1000.lan) report full duplex/speed
 	 * instead of N/A(duplex) / 0(speed).
@@ -2311,7 +2282,7 @@ void bond_3ad_handle_link_change(struct slave *slave, char link)
 	 */
 	port->sm_vars |= AD_PORT_BEGIN;
 
-	__release_state_machine_lock(port);
+	spin_unlock_bh(&slave->bond->mode_lock);
 }
 
 /**
@@ -2395,7 +2366,6 @@ int __bond_3ad_get_active_agg_info(struct bonding *bond,
 	return 0;
 }
 
-/* Wrapper used to hold bond->lock so no slave manipulation can occur */
 int bond_3ad_get_active_agg_info(struct bonding *bond, struct ad_info *ad_info)
 {
 	int ret;
@@ -2477,20 +2447,16 @@ err_free:
 int bond_3ad_lacpdu_recv(const struct sk_buff *skb, struct bonding *bond,
 			 struct slave *slave)
 {
-	int ret = RX_HANDLER_ANOTHER;
 	struct lacpdu *lacpdu, _lacpdu;
 
 	if (skb->protocol != PKT_TYPE_LACPDU)
-		return ret;
+		return RX_HANDLER_ANOTHER;
 
 	lacpdu = skb_header_pointer(skb, 0, sizeof(_lacpdu), &_lacpdu);
 	if (!lacpdu)
-		return ret;
+		return RX_HANDLER_ANOTHER;
 
-	read_lock(&bond->lock);
-	ret = bond_3ad_rx_indication(lacpdu, slave, skb->len);
-	read_unlock(&bond->lock);
-	return ret;
+	return bond_3ad_rx_indication(lacpdu, slave, skb->len);
 }
 
 /**
@@ -2500,7 +2466,7 @@ int bond_3ad_lacpdu_recv(const struct sk_buff *skb, struct bonding *bond,
  * When modify lacp_rate parameter via sysfs,
  * update actor_oper_port_state of each port.
  *
- * Hold slave->state_machine_lock,
+ * Hold bond->mode_lock,
  * so we can modify port->actor_oper_port_state,
  * no matter bond is up or down.
  */
@@ -2512,13 +2478,13 @@ void bond_3ad_update_lacp_rate(struct bonding *bond)
 	int lacp_fast;
 
 	lacp_fast = bond->params.lacp_fast;
+	spin_lock_bh(&bond->mode_lock);
 	bond_for_each_slave(bond, slave, iter) {
 		port = &(SLAVE_AD_INFO(slave)->port);
-		__get_state_machine_lock(port);
 		if (lacp_fast)
 			port->actor_oper_port_state |= AD_STATE_LACP_TIMEOUT;
 		else
 			port->actor_oper_port_state &= ~AD_STATE_LACP_TIMEOUT;
-		__release_state_machine_lock(port);
 	}
+	spin_unlock_bh(&bond->mode_lock);
 }

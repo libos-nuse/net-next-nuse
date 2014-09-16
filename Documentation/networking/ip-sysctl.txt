@@ -844,6 +844,11 @@ igmp_max_memberships - INTEGER
 
 	conf/all/*	  is special, changes the settings for all interfaces
 
+igmp_qrv - INTEGER
+	 Controls the IGMP query robustness variable (see RFC2236 8.1).
+	 Default: 2 (as specified by RFC2236 8.1)
+	 Minimum: 1 (as specified by RFC6636 4.5)
+
 log_martians - BOOLEAN
 	Log packets with impossible addresses to kernel log.
 	log_martians for the interface will be enabled if at least one of
@@ -947,14 +952,9 @@ accept_source_route - BOOLEAN
 		FALSE (host)
 
 accept_local - BOOLEAN
-	Accept packets with local source addresses. In combination
-	with suitable routing, this can be used to direct packets
-	between two local interfaces over the wire and have them
-	accepted properly.
-
-	rp_filter must be set to a non-zero value in order for
-	accept_local to have an effect.
-
+	Accept packets with local source addresses. In combination with
+	suitable routing, this can be used to direct packets between two
+	local interfaces over the wire and have them accepted properly.
 	default FALSE
 
 route_localnet - BOOLEAN
@@ -1151,6 +1151,11 @@ anycast_src_echo_reply - BOOLEAN
 	TRUE:  enabled
 	FALSE: disabled
 	Default: FALSE
+
+mld_qrv - INTEGER
+	Controls the MLD query robustness variable (see RFC3810 9.1).
+	Default: 2 (as specified by RFC3810 9.1)
+	Minimum: 1 (as specified by RFC6636 4.5)
 
 IPv6 Fragmentation:
 

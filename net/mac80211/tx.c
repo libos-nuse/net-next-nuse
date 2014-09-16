@@ -1478,7 +1478,10 @@ static int ieee80211_skb_resize(struct ieee80211_sub_if_data *sdata,
 		tail_need = max_t(int, tail_need, 0);
 	}
 
-	if (skb_cloned(skb))
+	if (skb_cloned(skb) &&
+	    (!(local->hw.flags & IEEE80211_HW_SUPPORTS_CLONED_SKBS) ||
+	     !skb_clone_writable(skb, ETH_HLEN) ||
+	     sdata->crypto_tx_tailroom_needed_cnt))
 		I802_DEBUG_INC(local->tx_expand_skb_head_cloned);
 	else if (head_need || tail_need)
 		I802_DEBUG_INC(local->tx_expand_skb_head);
@@ -1844,7 +1847,7 @@ netdev_tx_t ieee80211_subif_start_xmit(struct sk_buff *skb,
 			memcpy(hdr.addr4, skb->data + ETH_ALEN, ETH_ALEN);
 			hdrlen = 30;
 			authorized = test_sta_flag(sta, WLAN_STA_AUTHORIZED);
-			wme_sta = test_sta_flag(sta, WLAN_STA_WME);
+			wme_sta = sta->sta.wme;
 		}
 		ap_sdata = container_of(sdata->bss, struct ieee80211_sub_if_data,
 					u.ap);
@@ -1957,7 +1960,7 @@ netdev_tx_t ieee80211_subif_start_xmit(struct sk_buff *skb,
 			if (sta) {
 				authorized = test_sta_flag(sta,
 							WLAN_STA_AUTHORIZED);
-				wme_sta = test_sta_flag(sta, WLAN_STA_WME);
+				wme_sta = sta->sta.wme;
 				tdls_peer = test_sta_flag(sta,
 							  WLAN_STA_TDLS_PEER);
 				tdls_auth = test_sta_flag(sta,
@@ -2035,7 +2038,7 @@ netdev_tx_t ieee80211_subif_start_xmit(struct sk_buff *skb,
 		sta = sta_info_get(sdata, hdr.addr1);
 		if (sta) {
 			authorized = test_sta_flag(sta, WLAN_STA_AUTHORIZED);
-			wme_sta = test_sta_flag(sta, WLAN_STA_WME);
+			wme_sta = sta->sta.wme;
 		}
 	}
 
@@ -2069,30 +2072,23 @@ netdev_tx_t ieee80211_subif_start_xmit(struct sk_buff *skb,
 
 	if (unlikely(!multicast && skb->sk &&
 		     skb_shinfo(skb)->tx_flags & SKBTX_WIFI_STATUS)) {
-		struct sk_buff *orig_skb = skb;
+		struct sk_buff *ack_skb = skb_clone_sk(skb);
 
-		skb = skb_clone(skb, GFP_ATOMIC);
-		if (skb) {
+		if (ack_skb) {
 			unsigned long flags;
 			int id;
 
 			spin_lock_irqsave(&local->ack_status_lock, flags);
-			id = idr_alloc(&local->ack_status_frames, orig_skb,
+			id = idr_alloc(&local->ack_status_frames, ack_skb,
 				       1, 0x10000, GFP_ATOMIC);
 			spin_unlock_irqrestore(&local->ack_status_lock, flags);
 
 			if (id >= 0) {
 				info_id = id;
 				info_flags |= IEEE80211_TX_CTL_REQ_TX_STATUS;
-			} else if (skb_shared(skb)) {
-				kfree_skb(orig_skb);
 			} else {
-				kfree_skb(skb);
-				skb = orig_skb;
+				kfree_skb(ack_skb);
 			}
-		} else {
-			/* couldn't clone -- lose tx status ... */
-			skb = orig_skb;
 		}
 	}
 

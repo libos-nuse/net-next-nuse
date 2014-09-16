@@ -807,6 +807,11 @@ static int ixgbe_alloc_q_vector(struct ixgbe_adapter *adapter,
 		       ixgbe_poll, 64);
 	napi_hash_add(&q_vector->napi);
 
+#ifdef CONFIG_NET_RX_BUSY_POLL
+	/* initialize busy poll */
+	atomic_set(&q_vector->state, IXGBE_QV_STATE_DISABLE);
+
+#endif
 	/* tie q_vector and adapter together */
 	adapter->q_vector[v_idx] = q_vector;
 	q_vector->adapter = adapter;
@@ -1086,6 +1091,11 @@ static void ixgbe_set_interrupt_capability(struct ixgbe_adapter *adapter)
 			return;
 	}
 
+	/* At this point, we do not have MSI-X capabilities. We need to
+	 * reconfigure or disable various features which require MSI-X
+	 * capability.
+	 */
+
 	/* disable DCB if number of TCs exceeds 1 */
 	if (netdev_get_num_tc(adapter->netdev) > 1) {
 		e_err(probe, "num TCs exceeds number of queues - disabling DCB\n");
@@ -1107,6 +1117,9 @@ static void ixgbe_set_interrupt_capability(struct ixgbe_adapter *adapter)
 	/* disable RSS */
 	adapter->ring_feature[RING_F_RSS].limit = 1;
 
+	/* recalculate number of queues now that many features have been
+	 * changed or disabled.
+	 */
 	ixgbe_set_num_queues(adapter);
 	adapter->num_q_vectors = 1;
 

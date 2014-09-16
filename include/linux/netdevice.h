@@ -543,7 +543,7 @@ struct netdev_queue {
  * read mostly part
  */
 	struct net_device	*dev;
-	struct Qdisc		*qdisc;
+	struct Qdisc __rcu	*qdisc;
 	struct Qdisc		*qdisc_sleeping;
 #ifdef CONFIG_SYSFS
 	struct kobject		kobj;
@@ -1789,7 +1789,7 @@ void dev_net_set(struct net_device *dev, struct net *net)
 
 static inline bool netdev_uses_dsa(struct net_device *dev)
 {
-#ifdef CONFIG_NET_DSA
+#if IS_ENABLED(CONFIG_NET_DSA)
 	if (dev->dsa_ptr != NULL)
 		return dsa_uses_tagged_protocol(dev->dsa_ptr);
 #endif
@@ -1927,13 +1927,6 @@ struct udp_offload {
 	__be16			 port;
 	struct offload_callbacks callbacks;
 };
-
-struct dsa_device_ops {
-	netdev_tx_t (*xmit)(struct sk_buff *skb, struct net_device *dev);
-	int (*rcv)(struct sk_buff *skb, struct net_device *dev,
-		   struct packet_type *pt, struct net_device *orig_dev);
-};
-
 
 /* often modified stats are per cpu, other are shared (netdev->stats) */
 struct pcpu_sw_netstats {
@@ -2083,8 +2076,8 @@ void __dev_remove_pack(struct packet_type *pt);
 void dev_add_offload(struct packet_offload *po);
 void dev_remove_offload(struct packet_offload *po);
 
-struct net_device *dev_get_by_flags_rcu(struct net *net, unsigned short flags,
-					unsigned short mask);
+struct net_device *__dev_get_by_flags(struct net *net, unsigned short flags,
+				      unsigned short mask);
 struct net_device *dev_get_by_name(struct net *net, const char *name);
 struct net_device *dev_get_by_name_rcu(struct net *net, const char *name);
 struct net_device *__dev_get_by_name(struct net *net, const char *name);
@@ -2356,12 +2349,7 @@ static inline void input_queue_tail_incr_save(struct softnet_data *sd,
 DECLARE_PER_CPU_ALIGNED(struct softnet_data, softnet_data);
 
 void __netif_schedule(struct Qdisc *q);
-
-static inline void netif_schedule_queue(struct netdev_queue *txq)
-{
-	if (!(txq->state & QUEUE_STATE_ANY_XOFF))
-		__netif_schedule(txq->qdisc);
-}
+void netif_schedule_queue(struct netdev_queue *txq);
 
 static inline void netif_tx_schedule_all(struct net_device *dev)
 {
@@ -2397,11 +2385,7 @@ static inline void netif_tx_start_all_queues(struct net_device *dev)
 	}
 }
 
-static inline void netif_tx_wake_queue(struct netdev_queue *dev_queue)
-{
-	if (test_and_clear_bit(__QUEUE_STATE_DRV_XOFF, &dev_queue->state))
-		__netif_schedule(dev_queue->qdisc);
-}
+void netif_tx_wake_queue(struct netdev_queue *dev_queue);
 
 /**
  *	netif_wake_queue - restart transmit
@@ -2673,19 +2657,7 @@ static inline bool netif_subqueue_stopped(const struct net_device *dev,
 	return __netif_subqueue_stopped(dev, skb_get_queue_mapping(skb));
 }
 
-/**
- *	netif_wake_subqueue - allow sending packets on subqueue
- *	@dev: network device
- *	@queue_index: sub queue index
- *
- * Resume individual transmit queue of a device with multiple transmit queues.
- */
-static inline void netif_wake_subqueue(struct net_device *dev, u16 queue_index)
-{
-	struct netdev_queue *txq = netdev_get_tx_queue(dev, queue_index);
-	if (test_and_clear_bit(__QUEUE_STATE_DRV_XOFF, &txq->state))
-		__netif_schedule(txq->qdisc);
-}
+void netif_wake_subqueue(struct net_device *dev, u16 queue_index);
 
 #ifdef CONFIG_XPS
 int netif_set_xps_queue(struct net_device *dev, const struct cpumask *mask,
@@ -3272,7 +3244,7 @@ static inline int __dev_uc_sync(struct net_device *dev,
 }
 
 /**
- *  __dev_uc_unsync - Remove synchonized addresses from device
+ *  __dev_uc_unsync - Remove synchronized addresses from device
  *  @dev:  device to sync
  *  @unsync: function to call if address should be removed
  *
@@ -3316,7 +3288,7 @@ static inline int __dev_mc_sync(struct net_device *dev,
 }
 
 /**
- *  __dev_mc_unsync - Remove synchonized addresses from device
+ *  __dev_mc_unsync - Remove synchronized addresses from device
  *  @dev:  device to sync
  *  @unsync: function to call if address should be removed
  *

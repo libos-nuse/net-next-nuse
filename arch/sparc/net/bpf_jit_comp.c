@@ -801,7 +801,7 @@ cond_branch:			f_offset = addrs[i + filter[i].jf];
 	if (image) {
 		bpf_flush_icache(image, image + proglen);
 		fp->bpf_func = (void *)image;
-		fp->jited = 1;
+		fp->jited = true;
 	}
 out:
 	kfree(addrs);
@@ -812,5 +812,6 @@ void bpf_jit_free(struct bpf_prog *fp)
 {
 	if (fp->jited)
 		module_free(NULL, fp->bpf_func);
-	kfree(fp);
+
+	bpf_prog_unlock_free(fp);
 }

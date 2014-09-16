@@ -283,6 +283,7 @@ static const struct pci_device_id cxgb4_pci_tbl[] = {
 	CH_DEVICE(0x5083, 4),
 	CH_DEVICE(0x5084, 4),
 	CH_DEVICE(0x5085, 4),
+	CH_DEVICE(0x5086, 4),
 	CH_DEVICE(0x5401, 4),
 	CH_DEVICE(0x5402, 4),
 	CH_DEVICE(0x5403, 4),
@@ -310,6 +311,7 @@ static const struct pci_device_id cxgb4_pci_tbl[] = {
 	CH_DEVICE(0x5483, 4),
 	CH_DEVICE(0x5484, 4),
 	CH_DEVICE(0x5485, 4),
+	CH_DEVICE(0x5486, 4),
 	{ 0, }
 };
 
@@ -1253,7 +1255,9 @@ freeout:	t4_free_sge_resources(adap);
 			goto freeout;
 	}
 
-	t4_write_reg(adap, MPS_TRC_RSS_CONTROL,
+	t4_write_reg(adap, is_t4(adap->params.chip) ?
+				MPS_TRC_RSS_CONTROL :
+				MPS_T5_TRC_RSS_CONTROL,
 		     RSSCONTROL(netdev2pinfo(adap->port[0])->tx_chan) |
 		     QUEUENUMBER(s->ethrxq[0].rspq.abs_id));
 	return 0;
@@ -1761,7 +1765,8 @@ static void get_regs(struct net_device *dev, struct ethtool_regs *regs,
 		0xd004, 0xd03c,
 		0xdfc0, 0xdfe0,
 		0xe000, 0xea7c,
-		0xf000, 0x11190,
+		0xf000, 0x11110,
+		0x11118, 0x11190,
 		0x19040, 0x1906c,
 		0x19078, 0x19080,
 		0x1908c, 0x19124,
@@ -1968,7 +1973,8 @@ static void get_regs(struct net_device *dev, struct ethtool_regs *regs,
 		0xd004, 0xd03c,
 		0xdfc0, 0xdfe0,
 		0xe000, 0x11088,
-		0x1109c, 0x1117c,
+		0x1109c, 0x11110,
+		0x11118, 0x1117c,
 		0x11190, 0x11204,
 		0x19040, 0x1906c,
 		0x19078, 0x19080,
@@ -4386,7 +4392,6 @@ static int cxgb4_inet6addr_handler(struct notifier_block *this,
 		 * bond. We need to find such different adapters and add clip
 		 * in all of them only once.
 		 */
-		read_lock(&bond->lock);
 		bond_for_each_slave(bond, slave, iter) {
 			if (!first_pdev) {
 				ret = clip_add(slave->dev, ifa, event);
@@ -4400,7 +4405,6 @@ static int cxgb4_inet6addr_handler(struct notifier_block *this,
 				   to_pci_dev(slave->dev->dev.parent))
 					ret = clip_add(slave->dev, ifa, event);
 		}
-		read_unlock(&bond->lock);
 	} else
 		ret = clip_add(ifa->idev->dev, ifa, event);
 
@@ -5955,7 +5959,8 @@ static int adap_init0(struct adapter *adap)
 		params[3] = FW_PARAM_PFVF(CQ_END);
 		params[4] = FW_PARAM_PFVF(OCQ_START);
 		params[5] = FW_PARAM_PFVF(OCQ_END);
-		ret = t4_query_params(adap, 0, 0, 0, 6, params, val);
+		ret = t4_query_params(adap, adap->mbox, adap->fn, 0, 6, params,
+				      val);
 		if (ret < 0)
 			goto bye;
 		adap->vres.qp.start = val[0];
@@ -5967,7 +5972,8 @@ static int adap_init0(struct adapter *adap)
 
 		params[0] = FW_PARAM_DEV(MAXORDIRD_QP);
 		params[1] = FW_PARAM_DEV(MAXIRD_ADAPTER);
-		ret = t4_query_params(adap, 0, 0, 0, 2, params, val);
+		ret = t4_query_params(adap, adap->mbox, adap->fn, 0, 2, params,
+				      val);
 		if (ret < 0) {
 			adap->params.max_ordird_qp = 8;
 			adap->params.max_ird_adapter = 32 * adap->tids.ntids;

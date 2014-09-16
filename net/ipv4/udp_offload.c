@@ -294,7 +294,7 @@ static struct sk_buff **udp4_gro_receive(struct sk_buff **head,
 		goto flush;
 
 	/* Don't bother verifying checksum if we're going to flush anyway. */
-	if (!NAPI_GRO_CB(skb)->flush)
+	if (NAPI_GRO_CB(skb)->flush)
 		goto skip;
 
 	if (skb_gro_checksum_validate_zero_check(skb, IPPROTO_UDP, uh->check,
@@ -336,7 +336,7 @@ int udp_gro_complete(struct sk_buff *skb, int nhoff)
 	return err;
 }
 
-int udp4_gro_complete(struct sk_buff *skb, int nhoff)
+static int udp4_gro_complete(struct sk_buff *skb, int nhoff)
 {
 	const struct iphdr *iph = ip_hdr(skb);
 	struct udphdr *uh = (struct udphdr *)(skb->data + nhoff);
