@@ -17,6 +17,16 @@ kernel_dev_xmit(struct sk_buff *skb,
 		struct net_device *dev)
 {
   netif_stop_queue(dev);
+  if (skb->ip_summed == CHECKSUM_PARTIAL)
+    {
+      int err = skb_checksum_help (skb);
+      if (unlikely(err))
+        {
+          printk ("checksum error (%d)\n", err);
+          return 0;
+        }
+    }
+  
   sim_dev_xmit ((struct SimDevice *)dev, skb->data, skb->len);
   dev_kfree_skb(skb);
   netif_wake_queue(dev);
@@ -168,7 +178,7 @@ void sim_dev_rx (struct SimDevice *device, struct SimDevicePacket packet)
   struct sk_buff *skb = packet.token;
   struct net_device *dev = &device->dev;
   skb->protocol = eth_type_trans(skb, dev);
-  skb->ip_summed = CHECKSUM_UNNECESSARY; // Stops the TCP checksum
+  skb->ip_summed = CHECKSUM_PARTIAL; // Do the TCP checksum (FIXME: should be configurable)
 
   netif_rx (skb);
 }
