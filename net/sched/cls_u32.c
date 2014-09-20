@@ -64,8 +64,11 @@ struct tc_u_knode {
 	u32 __percpu		*pcpu_success;
 #endif
 	struct tcf_proto	*tp;
-	struct tc_u32_sel	sel;
 	struct rcu_head		rcu;
+	/* The 'sel' field MUST be the last field in structure to allow for
+	 * tc_u32_keys allocated at end of structure.
+	 */
+	struct tc_u32_sel	sel;
 };
 
 struct tc_u_hnode {
@@ -375,7 +378,7 @@ static int u32_delete_key(struct tcf_proto *tp, struct tc_u_knode *key)
 {
 	struct tc_u_knode __rcu **kp;
 	struct tc_u_knode *pkp;
-	struct tc_u_hnode *ht = key->ht_up;
+	struct tc_u_hnode *ht = rtnl_dereference(key->ht_up);
 
 	if (ht) {
 		kp = &ht->ht[TC_U32_HASH(key->handle)];
@@ -607,7 +610,8 @@ static int u32_change(struct net *net, struct sk_buff *in_skb,
 		if (TC_U32_KEY(n->handle) == 0)
 			return -EINVAL;
 
-		return u32_set_parms(net, tp, base, n->ht_up, n, tb,
+		return u32_set_parms(net, tp, base,
+				     rtnl_dereference(n->ht_up), n, tb,
 				     tca[TCA_RATE], ovr);
 	}
 
@@ -681,7 +685,7 @@ static int u32_change(struct net *net, struct sk_buff *in_skb,
 #endif
 
 	memcpy(&n->sel, s, sizeof(*s) + s->nkeys*sizeof(struct tc_u32_key));
-	n->ht_up = ht;
+	RCU_INIT_POINTER(n->ht_up, ht);
 	n->handle = handle;
 	n->fshift = s->hmask ? ffs(ntohl(s->hmask)) - 1 : 0;
 	tcf_exts_init(&n->exts, TCA_U32_ACT, TCA_U32_POLICE);
@@ -788,8 +792,8 @@ static int u32_dump(struct net *net, struct tcf_proto *tp, unsigned long fh,
 	} else {
 #ifdef CONFIG_CLS_U32_PERF
 		struct tc_u32_pcnt *gpf;
-#endif
 		int cpu;
+#endif
 
 		if (nla_put(skb, TCA_U32_SEL,
 			    sizeof(n->sel) + n->sel.nkeys*sizeof(struct tc_u32_key),
@@ -816,9 +820,10 @@ static int u32_dump(struct net *net, struct tcf_proto *tp, unsigned long fh,
 			struct tc_u32_mark mark = {.val = n->val,
 						   .mask = n->mask,
 						   .success = 0};
+			int cpum;
 
-			for_each_possible_cpu(cpu) {
-				__u32 cnt = *per_cpu_ptr(n->pcpu_success, cpu);
+			for_each_possible_cpu(cpum) {
+				__u32 cnt = *per_cpu_ptr(n->pcpu_success, cpum);
 
 				mark.success += cnt;
 			}
