@@ -78,6 +78,8 @@ nuse_config_parse_interface (char * line, FILE * fp, struct nuse_config * cf)
 				vifcf->type = NUSE_VIF_NETMAP;
 			} else if (strncmp (args[1], "TAP", 3) == 0) {
 				vifcf->type = NUSE_VIF_TAP;
+			} else if (strncmp (args[1], "DPDK", 4) == 0) {
+				vifcf->type = NUSE_VIF_DPDK;
 			} else {
 				printf ("invalid vif type %s\n", args[1]);
 				return 0;

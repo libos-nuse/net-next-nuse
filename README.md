@@ -18,6 +18,28 @@ make library ARCH=sim OPT=no NETMAP=yes
 
 you should see libnuse-linux.so.
 
+## Build with Intel DPDK
+
+You need to build dpdk sdk first.
+
+```
+make dpdk-sdk ARCH=sim DPDK=yes
+```
+
+then build with the SDK for DPDK channel of NUSE.
+
+```
+ make defconfig ARCH=sim
+ make library ARCH=sim OPT=no DPDK=yes
+```
+
+Additional DPDK configuration is needed, hugepage setup, make an interface DPDK mode.
+
+```
+ ./dpdk/tools/setup.sh
+ sudo ./dpdk/tools/dpdk_nic_bind.py -b igb_uio 0000:02:01.0
+```
+
 ## Run
 
 At 1st, please write a configuration file for nuse **nuse.conf**.
@@ -45,7 +67,7 @@ route
 
 When viftype is TAP, the interface name attached to nuse process is
 not restricted to be same as physical interfaces of host
-stack. However, viftype RAW and NETMAP requires that an interface name
+stack. However, viftype RAW, NETMAP, and DPDK require an interface name
 must be same as a physical interface of host stack.
 
 The default interface will be raw socket based network i/o.

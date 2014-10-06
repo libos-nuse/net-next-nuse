@@ -12,6 +12,36 @@ NETMAP?=no
 netmap_yes=nuse-vif-netmap.c
 netmap_no=
 
+DPDK?=no
+dpdk_yes=nuse-vif-dpdk.c
+dpdk_no=
+dpdkl_yes=-L $(ARCH_DIR)/dpdk/build -L$(RTE_SDK)/$(RTE_TARGET)/lib  -Wl,--whole-archive -lnuse-dpdk $(DPDK_LDLIBS) 
+dpdkl_no=
+
+RTE_SDK=$(shell expr `pwd`)/dpdk
+RTE_TARGET=build
+
+DPDK_LDLIBS += -lrte_pmd_virtio_uio -lrte_pmd_vmxnet3_uio -lrte_pmd_ixgbe \
+          -lrte_pmd_e1000 -lrte_timer -lrte_hash \
+          -lrte_mbuf -lethdev \
+          -lrte_eal -lrte_mempool -lrte_ring -lrte_pmd_ring -lrte_malloc
+
+quiet_cmd_vif_dpdk = VIF-DPDK ($(DPDK)) $@
+      cmd_vif_dpdk = \
+		    if test $(dpdk_$(DPDK)); then make -s -C $(ARCH_DIR)/dpdk ; fi
+
+dpdk-sdk:
+	if test $(dpdk_$(DPDK)); then \
+	git submodule init; \
+	git submodule update; \
+	cd $(srctree)/dpdk ; make CONFIG_RTE_LIBRTE_ETHDEV_DEBUG=y T=$(shell expr `uname -m`)-native-linuxapp-gcc config && \
+           make SRCARCH=x86 CONFIG_RTE_BUILD_COMBINE_LIBS=y EXTRA_CFLAGS="-fPIC -g" ;\
+	fi
+
+vif-dpdk: $(ARCH_DIR)/nuse-vif-dpdk.c
+	$(call if_changed,vif_dpdk)
+
+
 NUSE_SRC=\
 nuse.c nuse-fiber.c nuse-vif.c  nuse-poll.c \
 nuse-vif-rawsock.c nuse-glue.c nuse-hostcalls.c nuse-config.c \
@@ -182,16 +212,17 @@ archclean:
 	$(call if_changed,clean)
 
 quiet_cmd_linklib = LIB   $@
-      cmd_linklib = $(CC) -shared -Wl,--whole-archive $(OBJS) $(LDFLAGS) -o $@; \
+      # order of $(dpdkl_$(DPDK)) matters...
+      cmd_linklib = $(CC) -shared -Wl,--whole-archive $(dpdkl_$(DPDK)) $(OBJS) $(LDFLAGS) -o $@; \
 		    ln -s -f $(KERNEL_LIB) libnuse-linux.so
 
-$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
+$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds vif-dpdk
 	$(call if_changed,linklib)
 
 test:
 	$(MAKE) -C $(ARCH_DIR)/test
 
-.PHONY : clean
+.PHONY : clean $(dpdk_$(DPDK))
 
 KBUILD_KCONFIG := arch/$(ARCH)/Kconfig
 CLEAN_FILES := $(ARCH_DIR)/test/buildtop/source/quagga/lib/*.lo
