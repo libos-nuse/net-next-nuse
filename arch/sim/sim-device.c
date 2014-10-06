@@ -46,7 +46,6 @@ static const struct ethtool_ops sim_ethtool_ops = {
 static const struct net_device_ops sim_dev_ops = {
   .ndo_start_xmit = kernel_dev_xmit,
   .ndo_set_mac_address = eth_mac_addr,
-
 };
 
 static void sim_dev_setup(struct net_device *dev)

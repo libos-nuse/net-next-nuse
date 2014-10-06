@@ -8,6 +8,7 @@ enum viftype
     NUSE_VIF_RAWSOCK = 0,
     NUSE_VIF_NETMAP,            /* not yet */
     NUSE_VIF_DPDK,               /* not yet */
+    NUSE_VIF_TAP,		/* not yet */
     NUSE_VIF_MAX
   };
 
