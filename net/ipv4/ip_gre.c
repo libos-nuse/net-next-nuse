@@ -241,6 +241,8 @@ static void __gre_xmit(struct sk_buff *skb, struct net_device *dev,
 	/* Push GRE header. */
 	gre_build_header(skb, &tpi, tunnel->tun_hlen);
 
+	skb_set_inner_protocol(skb, tpi.proto);
+
 	ip_tunnel_xmit(skb, dev, tnl_params, tnl_params->protocol);
 }
 
@@ -508,7 +510,7 @@ static int ipgre_tunnel_init(struct net_device *dev)
 	memcpy(dev->broadcast, &iph->daddr, 4);
 
 	dev->flags		= IFF_NOARP;
-	dev->priv_flags		&= ~IFF_XMIT_DST_RELEASE;
+	netif_keep_dst(dev);
 	dev->addr_len		= 4;
 
 	if (iph->daddr) {

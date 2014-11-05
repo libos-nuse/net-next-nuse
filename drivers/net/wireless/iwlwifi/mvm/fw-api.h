@@ -116,6 +116,9 @@ enum {
 	TXPATH_FLUSH = 0x1e,
 	MGMT_MCAST_KEY = 0x1f,
 
+	/* scheduler config */
+	SCD_QUEUE_CFG = 0x1d,
+
 	/* global key */
 	WEP_KEY = 0x20,
 
@@ -154,6 +157,7 @@ enum {
 	/* Power - legacy power table command */
 	POWER_TABLE_CMD = 0x77,
 	PSM_UAPSD_AP_MISBEHAVING_NOTIFICATION = 0x78,
+	LTR_CONFIG = 0xee,
 
 	/* Thermal Throttling*/
 	REPLY_THERMAL_MNG_BACKOFF = 0x7e,
@@ -204,6 +208,10 @@ enum {
 
 	REPLY_SF_CFG_CMD = 0xd1,
 	REPLY_BEACON_FILTERING_CMD = 0xd2,
+
+	/* DTS measurements */
+	CMD_DTS_MEASUREMENT_TRIGGER = 0xdc,
+	DTS_MEASUREMENT_NOTIFICATION = 0xdd,
 
 	REPLY_DEBUG_CMD = 0xf0,
 	DEBUG_LOG_MSG = 0xf7,
@@ -550,7 +558,7 @@ enum iwl_time_event_type {
 	TE_WIDI_TX_SYNC,
 
 	/* Channel Switch NoA */
-	TE_P2P_GO_CSA_NOA,
+	TE_CHANNEL_SWITCH_PERIOD,
 
 	TE_MAX
 }; /* MAC_EVENT_TYPE_API_E_VER_1 */
@@ -1601,19 +1609,106 @@ enum iwl_sf_scenario {
 
 #define SF_LONG_DELAY_AGING_TIMER 1000000	/* 1 Sec */
 
+#define SF_CFG_DUMMY_NOTIF_OFF	BIT(16)
+
 /**
  * Smart Fifo configuration command.
- * @state: smart fifo state, types listed in iwl_sf_sate.
+ * @state: smart fifo state, types listed in enum %iwl_sf_sate.
  * @watermark: Minimum allowed availabe free space in RXF for transient state.
  * @long_delay_timeouts: aging and idle timer values for each scenario
  * in long delay state.
  * @full_on_timeouts: timer values for each scenario in full on state.
  */
 struct iwl_sf_cfg_cmd {
-	enum iwl_sf_state state;
+	__le32 state;
 	__le32 watermark[SF_TRANSIENT_STATES_NUMBER];
 	__le32 long_delay_timeouts[SF_NUM_SCENARIO][SF_NUM_TIMEOUT_TYPES];
 	__le32 full_on_timeouts[SF_NUM_SCENARIO][SF_NUM_TIMEOUT_TYPES];
 } __packed; /* SF_CFG_API_S_VER_2 */
+
+/* DTS measurements */
+
+enum iwl_dts_measurement_flags {
+	DTS_TRIGGER_CMD_FLAGS_TEMP	= BIT(0),
+	DTS_TRIGGER_CMD_FLAGS_VOLT	= BIT(1),
+};
+
+/**
+ * iwl_dts_measurement_cmd - request DTS temperature and/or voltage measurements
+ *
+ * @flags: indicates which measurements we want as specified in &enum
+ *	   iwl_dts_measurement_flags
+ */
+struct iwl_dts_measurement_cmd {
+	__le32 flags;
+} __packed; /* TEMPERATURE_MEASUREMENT_TRIGGER_CMD_S */
+
+/**
+ * iwl_dts_measurement_notif - notification received with the measurements
+ *
+ * @temp: the measured temperature
+ * @voltage: the measured voltage
+ */
+struct iwl_dts_measurement_notif {
+	__le32 temp;
+	__le32 voltage;
+} __packed; /* TEMPERATURE_MEASUREMENT_TRIGGER_NTFY_S */
+
+/**
+ * enum iwl_scd_control - scheduler config command control flags
+ * @IWL_SCD_CONTROL_RM_TID: remove TID from this queue
+ * @IWL_SCD_CONTROL_SET_SSN: use the SSN and program it into HW
+ */
+enum iwl_scd_control {
+	IWL_SCD_CONTROL_RM_TID	= BIT(4),
+	IWL_SCD_CONTROL_SET_SSN	= BIT(5),
+};
+
+/**
+ * enum iwl_scd_flags - scheduler config command flags
+ * @IWL_SCD_FLAGS_SHARE_TID: multiple TIDs map to this queue
+ * @IWL_SCD_FLAGS_SHARE_RA: multiple RAs map to this queue
+ * @IWL_SCD_FLAGS_DQA_ENABLED: DQA is enabled
+ */
+enum iwl_scd_flags {
+	IWL_SCD_FLAGS_SHARE_TID		= BIT(0),
+	IWL_SCD_FLAGS_SHARE_RA		= BIT(1),
+	IWL_SCD_FLAGS_DQA_ENABLED	= BIT(2),
+};
+
+#define IWL_SCDQ_INVALID_STA	0xff
+
+/**
+ * struct iwl_scd_txq_cfg_cmd - New txq hw scheduler config command
+ * @token:	dialog token addba - unused legacy
+ * @sta_id:	station id 4-bit
+ * @tid:	TID 0..7
+ * @scd_queue:	TFD queue num 0 .. 31
+ * @enable:	1 queue enable, 0 queue disable
+ * @aggregate:	1 aggregated queue, 0 otherwise
+ * @tx_fifo:	tx fifo num 0..7
+ * @window:	up to 64
+ * @ssn:	starting seq num 12-bit
+ * @control:	command control flags
+ * @flags:	flags - see &enum iwl_scd_flags
+ *
+ * Note that every time the command is sent, all parameters must
+ * be filled with the exception of
+ *  - the SSN, which is only used with @IWL_SCD_CONTROL_SET_SSN
+ *  - the window, which is only relevant when starting aggregation
+ */
+struct iwl_scd_txq_cfg_cmd {
+	u8 token;
+	u8 sta_id;
+	u8 tid;
+	u8 scd_queue;
+	u8 enable;
+	u8 aggregate;
+	u8 tx_fifo;
+	u8 window;
+	__le16 ssn;
+	u8 control;
+	u8 flags;
+} __packed;
 
 #endif /* __fw_api_h__ */

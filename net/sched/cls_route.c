@@ -269,10 +269,8 @@ static void
 route4_delete_filter(struct rcu_head *head)
 {
 	struct route4_filter *f = container_of(head, struct route4_filter, rcu);
-	struct tcf_proto *tp = f->tp;
 
-	tcf_unbind_filter(tp, &f->res);
-	tcf_exts_destroy(tp, &f->exts);
+	tcf_exts_destroy(&f->exts);
 	kfree(f);
 }
 
@@ -297,6 +295,7 @@ static void route4_destroy(struct tcf_proto *tp)
 
 					next = rtnl_dereference(f->next);
 					RCU_INIT_POINTER(b->ht[h2], next);
+					tcf_unbind_filter(tp, &f->res);
 					call_rcu(&f->rcu, route4_delete_filter);
 				}
 			}
@@ -338,6 +337,7 @@ static int route4_delete(struct tcf_proto *tp, unsigned long arg)
 			route4_reset_fastmap(head);
 
 			/* Delete it */
+			tcf_unbind_filter(tp, &f->res);
 			call_rcu(&f->rcu, route4_delete_filter);
 
 			/* Strip RTNL protected tree */
@@ -456,7 +456,7 @@ static int route4_set_parms(struct net *net, struct tcf_proto *tp,
 
 	return 0;
 errout:
-	tcf_exts_destroy(tp, &e);
+	tcf_exts_destroy(&e);
 	return err;
 }
 
@@ -524,6 +524,7 @@ static int route4_change(struct net *net, struct sk_buff *in_skb,
 		if (f->handle < f1->handle)
 			break;
 
+	netif_keep_dst(qdisc_dev(tp->q));
 	rcu_assign_pointer(f->next, f1);
 	rcu_assign_pointer(*fp, f);
 
@@ -545,8 +546,10 @@ static int route4_change(struct net *net, struct sk_buff *in_skb,
 
 	route4_reset_fastmap(head);
 	*arg = (unsigned long)f;
-	if (fold)
+	if (fold) {
+		tcf_unbind_filter(tp, &fold->res);
 		call_rcu(&fold->rcu, route4_delete_filter);
+	}
 	return 0;
 
 errout:

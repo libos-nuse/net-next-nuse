@@ -57,6 +57,10 @@
 #include <net/rtnetlink.h>
 #include <net/udp.h>
 
+#if IS_ENABLED(CONFIG_NET_FOU)
+#include <net/fou.h>
+#endif
+
 #if IS_ENABLED(CONFIG_IPV6)
 #include <net/ipv6.h>
 #include <net/ip6_fib.h>
@@ -80,10 +84,10 @@ static void __tunnel_dst_set(struct ip_tunnel_dst *idst,
 	idst->saddr = saddr;
 }
 
-static void tunnel_dst_set(struct ip_tunnel *t,
+static noinline void tunnel_dst_set(struct ip_tunnel *t,
 			   struct dst_entry *dst, __be32 saddr)
 {
-	__tunnel_dst_set(this_cpu_ptr(t->dst_cache), dst, saddr);
+	__tunnel_dst_set(raw_cpu_ptr(t->dst_cache), dst, saddr);
 }
 
 static void tunnel_dst_reset(struct ip_tunnel *t)
@@ -107,7 +111,7 @@ static struct rtable *tunnel_rtable_get(struct ip_tunnel *t,
 	struct dst_entry *dst;
 
 	rcu_read_lock();
-	idst = this_cpu_ptr(t->dst_cache);
+	idst = raw_cpu_ptr(t->dst_cache);
 	dst = rcu_dereference(idst->dst);
 	if (dst && !atomic_inc_not_zero(&dst->__refcnt))
 		dst = NULL;
@@ -493,8 +497,12 @@ static int ip_encap_hlen(struct ip_tunnel_encap *e)
 	switch (e->type) {
 	case TUNNEL_ENCAP_NONE:
 		return 0;
+#if IS_ENABLED(CONFIG_NET_FOU)
 	case TUNNEL_ENCAP_FOU:
-		return sizeof(struct udphdr);
+		return fou_encap_hlen(e);
+	case TUNNEL_ENCAP_GUE:
+		return gue_encap_hlen(e);
+#endif
 	default:
 		return -EINVAL;
 	}
@@ -523,50 +531,18 @@ int ip_tunnel_encap_setup(struct ip_tunnel *t,
 }
 EXPORT_SYMBOL_GPL(ip_tunnel_encap_setup);
 
-static int fou_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
-			    size_t hdr_len, u8 *protocol, struct flowi4 *fl4)
-{
-	struct udphdr *uh;
-	__be16 sport;
-	bool csum = !!(e->flags & TUNNEL_ENCAP_FLAG_CSUM);
-	int type = csum ? SKB_GSO_UDP_TUNNEL_CSUM : SKB_GSO_UDP_TUNNEL;
-
-	skb = iptunnel_handle_offloads(skb, csum, type);
-
-	if (IS_ERR(skb))
-		return PTR_ERR(skb);
-
-	/* Get length and hash before making space in skb */
-
-	sport = e->sport ? : udp_flow_src_port(dev_net(skb->dev),
-					       skb, 0, 0, false);
-
-	skb_push(skb, hdr_len);
-
-	skb_reset_transport_header(skb);
-	uh = udp_hdr(skb);
-
-	uh->dest = e->dport;
-	uh->source = sport;
-	uh->len = htons(skb->len);
-	uh->check = 0;
-	udp_set_csum(!(e->flags & TUNNEL_ENCAP_FLAG_CSUM), skb,
-		     fl4->saddr, fl4->daddr, skb->len);
-
-	*protocol = IPPROTO_UDP;
-
-	return 0;
-}
-
 int ip_tunnel_encap(struct sk_buff *skb, struct ip_tunnel *t,
 		    u8 *protocol, struct flowi4 *fl4)
 {
 	switch (t->encap.type) {
 	case TUNNEL_ENCAP_NONE:
 		return 0;
+#if IS_ENABLED(CONFIG_NET_FOU)
 	case TUNNEL_ENCAP_FOU:
-		return fou_build_header(skb, &t->encap, t->encap_hlen,
-					protocol, fl4);
+		return fou_build_header(skb, &t->encap, protocol, fl4);
+	case TUNNEL_ENCAP_GUE:
+		return gue_build_header(skb, &t->encap, protocol, fl4);
+#endif
 	default:
 		return -EINVAL;
 	}
@@ -759,7 +735,7 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 		df |= (inner_iph->frag_off&htons(IP_DF));
 
 	max_headroom = LL_RESERVED_SPACE(rt->dst.dev) + sizeof(struct iphdr)
-			+ rt->dst.header_len;
+			+ rt->dst.header_len + ip_encap_hlen(&tunnel->encap);
 	if (max_headroom > dev->needed_headroom)
 		dev->needed_headroom = max_headroom;
 
@@ -853,9 +829,14 @@ int ip_tunnel_ioctl(struct net_device *dev, struct ip_tunnel_parm *p, int cmd)
 
 		t = ip_tunnel_find(itn, p, itn->fb_tunnel_dev->type);
 
-		if (!t && (cmd == SIOCADDTUNNEL)) {
-			t = ip_tunnel_create(net, itn, p);
-			err = PTR_ERR_OR_ZERO(t);
+		if (cmd == SIOCADDTUNNEL) {
+			if (!t) {
+				t = ip_tunnel_create(net, itn, p);
+				err = PTR_ERR_OR_ZERO(t);
+				break;
+			}
+
+			err = -EEXIST;
 			break;
 		}
 		if (dev != itn->fb_tunnel_dev && cmd == SIOCCHGTUNNEL) {

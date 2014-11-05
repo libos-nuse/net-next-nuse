@@ -47,7 +47,6 @@ EXPORT_SYMBOL(default_qdisc_ops);
 
 static inline int dev_requeue_skb(struct sk_buff *skb, struct Qdisc *q)
 {
-	skb_dst_force(skb);
 	q->gso_skb = skb;
 	q->qstats.requeues++;
 	q->q.qlen++;	/* it's still part of the queue */
@@ -56,11 +55,38 @@ static inline int dev_requeue_skb(struct sk_buff *skb, struct Qdisc *q)
 	return 0;
 }
 
-static inline struct sk_buff *dequeue_skb(struct Qdisc *q)
+static void try_bulk_dequeue_skb(struct Qdisc *q,
+				 struct sk_buff *skb,
+				 const struct netdev_queue *txq,
+				 int *packets)
+{
+	int bytelimit = qdisc_avail_bulklimit(txq) - skb->len;
+
+	while (bytelimit > 0) {
+		struct sk_buff *nskb = q->dequeue(q);
+
+		if (!nskb)
+			break;
+
+		bytelimit -= nskb->len; /* covers GSO len */
+		skb->next = nskb;
+		skb = nskb;
+		(*packets)++; /* GSO counts as one pkt */
+	}
+	skb->next = NULL;
+}
+
+/* Note that dequeue_skb can possibly return a SKB list (via skb->next).
+ * A requeued skb (via q->gso_skb) can also be a SKB list.
+ */
+static struct sk_buff *dequeue_skb(struct Qdisc *q, bool *validate,
+				   int *packets)
 {
 	struct sk_buff *skb = q->gso_skb;
 	const struct netdev_queue *txq = q->dev_queue;
 
+	*packets = 1;
+	*validate = true;
 	if (unlikely(skb)) {
 		/* check the reason of requeuing without tx lock first */
 		txq = skb_get_tx_queue(txq->dev, skb);
@@ -69,14 +95,16 @@ static inline struct sk_buff *dequeue_skb(struct Qdisc *q)
 			q->q.qlen--;
 		} else
 			skb = NULL;
+		/* skb in gso_skb were already validated */
+		*validate = false;
 	} else {
-		if (!(q->flags & TCQ_F_ONETXQUEUE) || !netif_xmit_frozen_or_stopped(txq)) {
+		if (!(q->flags & TCQ_F_ONETXQUEUE) ||
+		    !netif_xmit_frozen_or_stopped(txq)) {
 			skb = q->dequeue(q);
-			if (skb)
-				skb = validate_xmit_skb(skb, qdisc_dev(q));
+			if (skb && qdisc_may_bulk(q))
+				try_bulk_dequeue_skb(q, skb, txq, packets);
 		}
 	}
-
 	return skb;
 }
 
@@ -120,19 +148,24 @@ static inline int handle_dev_cpu_collision(struct sk_buff *skb,
  */
 int sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 		    struct net_device *dev, struct netdev_queue *txq,
-		    spinlock_t *root_lock)
+		    spinlock_t *root_lock, bool validate)
 {
 	int ret = NETDEV_TX_BUSY;
 
 	/* And release qdisc */
 	spin_unlock(root_lock);
 
-	HARD_TX_LOCK(dev, txq, smp_processor_id());
-	if (!netif_xmit_frozen_or_stopped(txq))
-		skb = dev_hard_start_xmit(skb, dev, txq, &ret);
+	/* Note that we validate skb (GSO, checksum, ...) outside of locks */
+	if (validate)
+		skb = validate_xmit_skb_list(skb, dev);
 
-	HARD_TX_UNLOCK(dev, txq);
+	if (skb) {
+		HARD_TX_LOCK(dev, txq, smp_processor_id());
+		if (!netif_xmit_frozen_or_stopped(txq))
+			skb = dev_hard_start_xmit(skb, dev, txq, &ret);
 
+		HARD_TX_UNLOCK(dev, txq);
+	}
 	spin_lock(root_lock);
 
 	if (dev_xmit_complete(ret)) {
@@ -175,38 +208,39 @@ int sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
  *				>0 - queue is not empty.
  *
  */
-static inline int qdisc_restart(struct Qdisc *q)
+static inline int qdisc_restart(struct Qdisc *q, int *packets)
 {
 	struct netdev_queue *txq;
 	struct net_device *dev;
 	spinlock_t *root_lock;
 	struct sk_buff *skb;
+	bool validate;
 
 	/* Dequeue packet */
-	skb = dequeue_skb(q);
+	skb = dequeue_skb(q, &validate, packets);
 	if (unlikely(!skb))
 		return 0;
-
-	WARN_ON_ONCE(skb_dst_is_noref(skb));
 
 	root_lock = qdisc_lock(q);
 	dev = qdisc_dev(q);
 	txq = skb_get_tx_queue(dev, skb);
 
-	return sch_direct_xmit(skb, q, dev, txq, root_lock);
+	return sch_direct_xmit(skb, q, dev, txq, root_lock, validate);
 }
 
 void __qdisc_run(struct Qdisc *q)
 {
 	int quota = weight_p;
+	int packets;
 
-	while (qdisc_restart(q)) {
+	while (qdisc_restart(q, &packets)) {
 		/*
 		 * Ordered by possible occurrence: Postpone processing if
 		 * 1. we've exceeded packet quota
 		 * 2. another process needs the CPU;
 		 */
-		if (--quota <= 0 || need_resched()) {
+		quota -= packets;
+		if (quota <= 0 || need_resched()) {
 			__netif_schedule(q);
 			break;
 		}
@@ -631,6 +665,9 @@ EXPORT_SYMBOL(qdisc_reset);
 static void qdisc_rcu_free(struct rcu_head *head)
 {
 	struct Qdisc *qdisc = container_of(head, struct Qdisc, rcu_head);
+
+	if (qdisc_is_percpu_stats(qdisc))
+		free_percpu(qdisc->cpu_bstats);
 
 	kfree((char *) qdisc - qdisc->padded);
 }

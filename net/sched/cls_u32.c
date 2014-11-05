@@ -354,24 +354,52 @@ static int u32_init(struct tcf_proto *tp)
 	return 0;
 }
 
-static int u32_destroy_key(struct tcf_proto *tp, struct tc_u_knode *n)
+static int u32_destroy_key(struct tcf_proto *tp,
+			   struct tc_u_knode *n,
+			   bool free_pf)
 {
-	tcf_unbind_filter(tp, &n->res);
-	tcf_exts_destroy(tp, &n->exts);
+	tcf_exts_destroy(&n->exts);
 	if (n->ht_down)
 		n->ht_down->refcnt--;
 #ifdef CONFIG_CLS_U32_PERF
-	free_percpu(n->pf);
+	if (free_pf)
+		free_percpu(n->pf);
+#endif
+#ifdef CONFIG_CLS_U32_MARK
+	if (free_pf)
+		free_percpu(n->pcpu_success);
 #endif
 	kfree(n);
 	return 0;
 }
 
+/* u32_delete_key_rcu should be called when free'ing a copied
+ * version of a tc_u_knode obtained from u32_init_knode(). When
+ * copies are obtained from u32_init_knode() the statistics are
+ * shared between the old and new copies to allow readers to
+ * continue to update the statistics during the copy. To support
+ * this the u32_delete_key_rcu variant does not free the percpu
+ * statistics.
+ */
 static void u32_delete_key_rcu(struct rcu_head *rcu)
 {
 	struct tc_u_knode *key = container_of(rcu, struct tc_u_knode, rcu);
 
-	u32_destroy_key(key->tp, key);
+	u32_destroy_key(key->tp, key, false);
+}
+
+/* u32_delete_key_freepf_rcu is the rcu callback variant
+ * that free's the entire structure including the statistics
+ * percpu variables. Only use this if the key is not a copy
+ * returned by u32_init_knode(). See u32_delete_key_rcu()
+ * for the variant that should be used with keys return from
+ * u32_init_knode()
+ */
+static void u32_delete_key_freepf_rcu(struct rcu_head *rcu)
+{
+	struct tc_u_knode *key = container_of(rcu, struct tc_u_knode, rcu);
+
+	u32_destroy_key(key->tp, key, true);
 }
 
 static int u32_delete_key(struct tcf_proto *tp, struct tc_u_knode *key)
@@ -387,7 +415,8 @@ static int u32_delete_key(struct tcf_proto *tp, struct tc_u_knode *key)
 			if (pkp == key) {
 				RCU_INIT_POINTER(*kp, key->next);
 
-				call_rcu(&key->rcu, u32_delete_key_rcu);
+				tcf_unbind_filter(tp, &key->res);
+				call_rcu(&key->rcu, u32_delete_key_freepf_rcu);
 				return 0;
 			}
 		}
@@ -396,7 +425,7 @@ static int u32_delete_key(struct tcf_proto *tp, struct tc_u_knode *key)
 	return 0;
 }
 
-static void u32_clear_hnode(struct tc_u_hnode *ht)
+static void u32_clear_hnode(struct tcf_proto *tp, struct tc_u_hnode *ht)
 {
 	struct tc_u_knode *n;
 	unsigned int h;
@@ -405,7 +434,8 @@ static void u32_clear_hnode(struct tc_u_hnode *ht)
 		while ((n = rtnl_dereference(ht->ht[h])) != NULL) {
 			RCU_INIT_POINTER(ht->ht[h],
 					 rtnl_dereference(n->next));
-			call_rcu(&n->rcu, u32_delete_key_rcu);
+			tcf_unbind_filter(tp, &n->res);
+			call_rcu(&n->rcu, u32_delete_key_freepf_rcu);
 		}
 	}
 }
@@ -418,7 +448,7 @@ static int u32_destroy_hnode(struct tcf_proto *tp, struct tc_u_hnode *ht)
 
 	WARN_ON(ht->refcnt);
 
-	u32_clear_hnode(ht);
+	u32_clear_hnode(tp, ht);
 
 	hn = &tp_c->hlist;
 	for (phn = rtnl_dereference(*hn);
@@ -453,7 +483,7 @@ static void u32_destroy(struct tcf_proto *tp)
 		     ht;
 		     ht = rtnl_dereference(ht->next)) {
 			ht->refcnt--;
-			u32_clear_hnode(ht);
+			u32_clear_hnode(tp, ht);
 		}
 
 		while ((ht = rtnl_dereference(tp_c->hlist)) != NULL) {
@@ -577,8 +607,84 @@ static int u32_set_parms(struct net *net, struct tcf_proto *tp,
 
 	return 0;
 errout:
-	tcf_exts_destroy(tp, &e);
+	tcf_exts_destroy(&e);
 	return err;
+}
+
+static void u32_replace_knode(struct tcf_proto *tp,
+			      struct tc_u_common *tp_c,
+			      struct tc_u_knode *n)
+{
+	struct tc_u_knode __rcu **ins;
+	struct tc_u_knode *pins;
+	struct tc_u_hnode *ht;
+
+	if (TC_U32_HTID(n->handle) == TC_U32_ROOT)
+		ht = rtnl_dereference(tp->root);
+	else
+		ht = u32_lookup_ht(tp_c, TC_U32_HTID(n->handle));
+
+	ins = &ht->ht[TC_U32_HASH(n->handle)];
+
+	/* The node must always exist for it to be replaced if this is not the
+	 * case then something went very wrong elsewhere.
+	 */
+	for (pins = rtnl_dereference(*ins); ;
+	     ins = &pins->next, pins = rtnl_dereference(*ins))
+		if (pins->handle == n->handle)
+			break;
+
+	RCU_INIT_POINTER(n->next, pins->next);
+	rcu_assign_pointer(*ins, n);
+}
+
+static struct tc_u_knode *u32_init_knode(struct tcf_proto *tp,
+					 struct tc_u_knode *n)
+{
+	struct tc_u_knode *new;
+	struct tc_u32_sel *s = &n->sel;
+
+	new = kzalloc(sizeof(*n) + s->nkeys*sizeof(struct tc_u32_key),
+		      GFP_KERNEL);
+
+	if (!new)
+		return NULL;
+
+	RCU_INIT_POINTER(new->next, n->next);
+	new->handle = n->handle;
+	RCU_INIT_POINTER(new->ht_up, n->ht_up);
+
+#ifdef CONFIG_NET_CLS_IND
+	new->ifindex = n->ifindex;
+#endif
+	new->fshift = n->fshift;
+	new->res = n->res;
+	RCU_INIT_POINTER(new->ht_down, n->ht_down);
+
+	/* bump reference count as long as we hold pointer to structure */
+	if (new->ht_down)
+		new->ht_down->refcnt++;
+
+#ifdef CONFIG_CLS_U32_PERF
+	/* Statistics may be incremented by readers during update
+	 * so we must keep them in tact. When the node is later destroyed
+	 * a special destroy call must be made to not free the pf memory.
+	 */
+	new->pf = n->pf;
+#endif
+
+#ifdef CONFIG_CLS_U32_MARK
+	new->val = n->val;
+	new->mask = n->mask;
+	/* Similarly success statistics must be moved as pointers */
+	new->pcpu_success = n->pcpu_success;
+#endif
+	new->tp = tp;
+	memcpy(&new->sel, s, sizeof(*s) + s->nkeys*sizeof(struct tc_u32_key));
+
+	tcf_exts_init(&new->exts, TCA_U32_ACT, TCA_U32_POLICE);
+
+	return new;
 }
 
 static int u32_change(struct net *net, struct sk_buff *in_skb,
@@ -607,12 +713,28 @@ static int u32_change(struct net *net, struct sk_buff *in_skb,
 
 	n = (struct tc_u_knode *)*arg;
 	if (n) {
+		struct tc_u_knode *new;
+
 		if (TC_U32_KEY(n->handle) == 0)
 			return -EINVAL;
 
-		return u32_set_parms(net, tp, base,
-				     rtnl_dereference(n->ht_up), n, tb,
-				     tca[TCA_RATE], ovr);
+		new = u32_init_knode(tp, n);
+		if (!new)
+			return -ENOMEM;
+
+		err = u32_set_parms(net, tp, base,
+				    rtnl_dereference(n->ht_up), new, tb,
+				    tca[TCA_RATE], ovr);
+
+		if (err) {
+			u32_destroy_key(tp, new, false);
+			return err;
+		}
+
+		u32_replace_knode(tp, tp_c, new);
+		tcf_unbind_filter(tp, &n->res);
+		call_rcu(&n->rcu, u32_delete_key_rcu);
+		return 0;
 	}
 
 	if (tb[TCA_U32_DIVISOR]) {
@@ -693,6 +815,10 @@ static int u32_change(struct net *net, struct sk_buff *in_skb,
 
 #ifdef CONFIG_CLS_U32_MARK
 	n->pcpu_success = alloc_percpu(u32);
+	if (!n->pcpu_success) {
+		err = -ENOMEM;
+		goto errout;
+	}
 
 	if (tb[TCA_U32_MARK]) {
 		struct tc_u32_mark *mark;
@@ -720,6 +846,12 @@ static int u32_change(struct net *net, struct sk_buff *in_skb,
 		*arg = (unsigned long)n;
 		return 0;
 	}
+
+#ifdef CONFIG_CLS_U32_MARK
+	free_percpu(n->pcpu_success);
+errout:
+#endif
+
 #ifdef CONFIG_CLS_U32_PERF
 	free_percpu(n->pf);
 #endif

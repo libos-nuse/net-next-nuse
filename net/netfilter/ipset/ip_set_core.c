@@ -337,6 +337,12 @@ const struct ip_set_ext_type ip_set_extensions[] = {
 		.len	= sizeof(unsigned long),
 		.align	= __alignof__(unsigned long),
 	},
+	[IPSET_EXT_ID_SKBINFO] = {
+		.type	= IPSET_EXT_SKBINFO,
+		.flag	= IPSET_FLAG_WITH_SKBINFO,
+		.len	= sizeof(struct ip_set_skbinfo),
+		.align	= __alignof__(struct ip_set_skbinfo),
+	},
 	[IPSET_EXT_ID_COMMENT] = {
 		.type	 = IPSET_EXT_COMMENT | IPSET_EXT_DESTROY,
 		.flag	 = IPSET_FLAG_WITH_COMMENT,
@@ -382,6 +388,7 @@ int
 ip_set_get_extensions(struct ip_set *set, struct nlattr *tb[],
 		      struct ip_set_ext *ext)
 {
+	u64 fullmark;
 	if (tb[IPSET_ATTR_TIMEOUT]) {
 		if (!(set->extensions & IPSET_EXT_TIMEOUT))
 			return -IPSET_ERR_TIMEOUT;
@@ -402,7 +409,25 @@ ip_set_get_extensions(struct ip_set *set, struct nlattr *tb[],
 			return -IPSET_ERR_COMMENT;
 		ext->comment = ip_set_comment_uget(tb[IPSET_ATTR_COMMENT]);
 	}
-
+	if (tb[IPSET_ATTR_SKBMARK]) {
+		if (!(set->extensions & IPSET_EXT_SKBINFO))
+			return -IPSET_ERR_SKBINFO;
+		fullmark = be64_to_cpu(nla_get_be64(tb[IPSET_ATTR_SKBMARK]));
+		ext->skbmark = fullmark >> 32;
+		ext->skbmarkmask = fullmark & 0xffffffff;
+	}
+	if (tb[IPSET_ATTR_SKBPRIO]) {
+		if (!(set->extensions & IPSET_EXT_SKBINFO))
+			return -IPSET_ERR_SKBINFO;
+		ext->skbprio = be32_to_cpu(nla_get_be32(
+					    tb[IPSET_ATTR_SKBPRIO]));
+	}
+	if (tb[IPSET_ATTR_SKBQUEUE]) {
+		if (!(set->extensions & IPSET_EXT_SKBINFO))
+			return -IPSET_ERR_SKBINFO;
+		ext->skbqueue = be16_to_cpu(nla_get_be16(
+					    tb[IPSET_ATTR_SKBQUEUE]));
+	}
 	return 0;
 }
 EXPORT_SYMBOL_GPL(ip_set_get_extensions);
@@ -477,7 +502,7 @@ ip_set_test(ip_set_id_t index, const struct sk_buff *skb,
 
 	if (ret == -EAGAIN) {
 		/* Type requests element to be completed */
-		pr_debug("element must be competed, ADD is triggered\n");
+		pr_debug("element must be completed, ADD is triggered\n");
 		write_lock_bh(&set->lock);
 		set->variant->kadt(set, skb, par, IPSET_ADD, opt);
 		write_unlock_bh(&set->lock);
@@ -634,7 +659,7 @@ ip_set_nfnl_get_byindex(struct net *net, ip_set_id_t index)
 	struct ip_set *set;
 	struct ip_set_net *inst = ip_set_pernet(net);
 
-	if (index > inst->ip_set_max)
+	if (index >= inst->ip_set_max)
 		return IPSET_INVALID_ID;
 
 	nfnl_lock(NFNL_SUBSYS_IPSET);
@@ -1397,7 +1422,8 @@ call_ad(struct sock *ctnl, struct sk_buff *skb, struct ip_set *set,
 		struct nlmsghdr *rep, *nlh = nlmsg_hdr(skb);
 		struct sk_buff *skb2;
 		struct nlmsgerr *errmsg;
-		size_t payload = sizeof(*errmsg) + nlmsg_len(nlh);
+		size_t payload = min(SIZE_MAX,
+				     sizeof(*errmsg) + nlmsg_len(nlh));
 		int min_len = nlmsg_total_size(sizeof(struct nfgenmsg));
 		struct nlattr *cda[IPSET_ATTR_CMD_MAX+1];
 		struct nlattr *cmdattr;

@@ -290,7 +290,7 @@ static struct sk_buff *fq_dequeue_head(struct Qdisc *sch, struct fq_flow *flow)
 		flow->head = skb->next;
 		skb->next = NULL;
 		flow->qlen--;
-		sch->qstats.backlog -= qdisc_pkt_len(skb);
+		qdisc_qstats_backlog_dec(sch, skb);
 		sch->q.qlen--;
 	}
 	return skb;
@@ -371,13 +371,12 @@ static int fq_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	f->qlen++;
 	if (skb_is_retransmit(skb))
 		q->stat_tcp_retrans++;
-	sch->qstats.backlog += qdisc_pkt_len(skb);
+	qdisc_qstats_backlog_inc(sch, skb);
 	if (fq_flow_is_detached(f)) {
 		fq_flow_add_tail(&q->new_flows, f);
 		if (time_after(jiffies, f->age + q->flow_refill_delay))
 			f->credit = max_t(u32, f->credit, q->quantum);
 		q->inactive_flows--;
-		qdisc_unthrottled(sch);
 	}
 
 	/* Note: this overwrites f->age */
@@ -385,7 +384,6 @@ static int fq_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 
 	if (unlikely(f == &q->internal)) {
 		q->stat_internal_packets++;
-		qdisc_unthrottled(sch);
 	}
 	sch->q.qlen++;
 
@@ -433,7 +431,8 @@ begin:
 		if (!head->first) {
 			if (q->time_next_delayed_flow != ~0ULL)
 				qdisc_watchdog_schedule_ns(&q->watchdog,
-							   q->time_next_delayed_flow);
+							   q->time_next_delayed_flow,
+							   false);
 			return NULL;
 		}
 	}
@@ -495,7 +494,6 @@ begin:
 	}
 out:
 	qdisc_bstats_update(sch, skb);
-	qdisc_unthrottled(sch);
 	return skb;
 }
 

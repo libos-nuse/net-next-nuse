@@ -69,7 +69,7 @@ struct neigh_parms {
 	struct net *net;
 #endif
 	struct net_device *dev;
-	struct neigh_parms *next;
+	struct list_head list;
 	int	(*neigh_setup)(struct neighbour *);
 	void	(*neigh_cleanup)(struct neighbour *);
 	struct neigh_table *tbl;
@@ -203,6 +203,7 @@ struct neigh_table {
 	void			(*proxy_redo)(struct sk_buff *skb);
 	char			*id;
 	struct neigh_parms	parms;
+	struct list_head	parms_list;
 	int			gc_interval;
 	int			gc_thresh1;
 	int			gc_thresh2;
@@ -373,7 +374,7 @@ static inline int neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 	return 0;
 }
 
-#ifdef CONFIG_BRIDGE_NETFILTER
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 static inline int neigh_hh_bridge(struct hh_cache *hh, struct sk_buff *skb)
 {
 	unsigned int seq, hh_alen;

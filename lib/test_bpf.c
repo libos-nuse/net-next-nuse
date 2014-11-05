@@ -1738,7 +1738,7 @@ static struct bpf_test tests[] = {
 	{
 		"load 64-bit immediate",
 		.u.insns_int = {
-			BPF_LD_IMM64(R1, 0x567800001234L),
+			BPF_LD_IMM64(R1, 0x567800001234LL),
 			BPF_MOV64_REG(R2, R1),
 			BPF_MOV64_REG(R3, R2),
 			BPF_ALU64_IMM(BPF_RSH, R2, 32),
@@ -1755,6 +1755,49 @@ static struct bpf_test tests[] = {
 		INTERNAL,
 		{ },
 		{ { 0, 1 } }
+	},
+	{
+		"nmap reduced",
+		.u.insns_int = {
+			BPF_MOV64_REG(R6, R1),
+			BPF_LD_ABS(BPF_H, 12),
+			BPF_JMP_IMM(BPF_JNE, R0, 0x806, 28),
+			BPF_LD_ABS(BPF_H, 12),
+			BPF_JMP_IMM(BPF_JNE, R0, 0x806, 26),
+			BPF_MOV32_IMM(R0, 18),
+			BPF_STX_MEM(BPF_W, R10, R0, -64),
+			BPF_LDX_MEM(BPF_W, R7, R10, -64),
+			BPF_LD_IND(BPF_W, R7, 14),
+			BPF_STX_MEM(BPF_W, R10, R0, -60),
+			BPF_MOV32_IMM(R0, 280971478),
+			BPF_STX_MEM(BPF_W, R10, R0, -56),
+			BPF_LDX_MEM(BPF_W, R7, R10, -56),
+			BPF_LDX_MEM(BPF_W, R0, R10, -60),
+			BPF_ALU32_REG(BPF_SUB, R0, R7),
+			BPF_JMP_IMM(BPF_JNE, R0, 0, 15),
+			BPF_LD_ABS(BPF_H, 12),
+			BPF_JMP_IMM(BPF_JNE, R0, 0x806, 13),
+			BPF_MOV32_IMM(R0, 22),
+			BPF_STX_MEM(BPF_W, R10, R0, -56),
+			BPF_LDX_MEM(BPF_W, R7, R10, -56),
+			BPF_LD_IND(BPF_H, R7, 14),
+			BPF_STX_MEM(BPF_W, R10, R0, -52),
+			BPF_MOV32_IMM(R0, 17366),
+			BPF_STX_MEM(BPF_W, R10, R0, -48),
+			BPF_LDX_MEM(BPF_W, R7, R10, -48),
+			BPF_LDX_MEM(BPF_W, R0, R10, -52),
+			BPF_ALU32_REG(BPF_SUB, R0, R7),
+			BPF_JMP_IMM(BPF_JNE, R0, 0, 2),
+			BPF_MOV32_IMM(R0, 256),
+			BPF_EXIT_INSN(),
+			BPF_MOV32_IMM(R0, 0),
+			BPF_EXIT_INSN(),
+		},
+		INTERNAL,
+		{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08, 0x06, 0, 0,
+		  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		  0x10, 0xbf, 0x48, 0xd6, 0x43, 0xd6},
+		{ { 38, 256 } }
 	},
 };
 
@@ -1894,7 +1937,7 @@ static int __run_one(const struct bpf_prog *fp, const void *data,
 		     int runs, u64 *duration)
 {
 	u64 start, finish;
-	int ret, i;
+	int ret = 0, i;
 
 	start = ktime_to_us(ktime_get());
 

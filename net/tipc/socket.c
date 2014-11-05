@@ -1372,8 +1372,7 @@ restart:
 			sz = buf_len;
 			m->msg_flags |= MSG_TRUNC;
 		}
-		res = skb_copy_datagram_iovec(buf, msg_hdr_sz(msg),
-					      m->msg_iov, sz);
+		res = skb_copy_datagram_msg(buf, msg_hdr_sz(msg), m, sz);
 		if (res)
 			goto exit;
 		res = sz;
@@ -1473,8 +1472,8 @@ restart:
 		needed = (buf_len - sz_copied);
 		sz_to_copy = (sz <= needed) ? sz : needed;
 
-		res = skb_copy_datagram_iovec(buf, msg_hdr_sz(msg) + offset,
-					      m->msg_iov, sz_to_copy);
+		res = skb_copy_datagram_msg(buf, msg_hdr_sz(msg) + offset,
+					    m, sz_to_copy);
 		if (res)
 			goto exit;
 
@@ -1556,7 +1555,7 @@ static void tipc_data_ready(struct sock *sk)
  * @tsk: TIPC socket
  * @msg: message
  *
- * Returns 0 (TIPC_OK) if everyting ok, -TIPC_ERR_NO_PORT otherwise
+ * Returns 0 (TIPC_OK) if everything ok, -TIPC_ERR_NO_PORT otherwise
  */
 static int filter_connect(struct tipc_sock *tsk, struct sk_buff **buf)
 {
@@ -1776,7 +1775,7 @@ int tipc_sk_rcv(struct sk_buff *buf)
 	sk = &tsk->sk;
 
 	/* Queue message */
-	bh_lock_sock(sk);
+	spin_lock_bh(&sk->sk_lock.slock);
 
 	if (!sock_owned_by_user(sk)) {
 		rc = filter_rcv(sk, buf);
@@ -1787,7 +1786,7 @@ int tipc_sk_rcv(struct sk_buff *buf)
 		if (sk_add_backlog(sk, buf, limit))
 			rc = -TIPC_ERR_OVERLOAD;
 	}
-	bh_unlock_sock(sk);
+	spin_unlock_bh(&sk->sk_lock.slock);
 	tipc_sk_put(tsk);
 	if (likely(!rc))
 		return 0;
@@ -2673,7 +2672,7 @@ static int tipc_ioctl(struct socket *sk, unsigned int cmd, unsigned long arg)
 	case SIOCGETLINKNAME:
 		if (copy_from_user(&lnr, argp, sizeof(lnr)))
 			return -EFAULT;
-		if (!tipc_node_get_linkname(lnr.bearer_id, lnr.peer,
+		if (!tipc_node_get_linkname(lnr.bearer_id & 0xffff, lnr.peer,
 					    lnr.linkname, TIPC_MAX_LINK_NAME)) {
 			if (copy_to_user(argp, &lnr, sizeof(lnr)))
 				return -EFAULT;

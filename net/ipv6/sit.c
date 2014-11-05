@@ -485,11 +485,11 @@ static void ipip6_tunnel_uninit(struct net_device *dev)
  */
 static int ipip6_err_gen_icmpv6_unreach(struct sk_buff *skb)
 {
-	const struct iphdr *iph = (const struct iphdr *) skb->data;
+	int ihl = ((const struct iphdr *)skb->data)->ihl*4;
 	struct rt6_info *rt;
 	struct sk_buff *skb2;
 
-	if (!pskb_may_pull(skb, iph->ihl * 4 + sizeof(struct ipv6hdr) + 8))
+	if (!pskb_may_pull(skb, ihl + sizeof(struct ipv6hdr) + 8))
 		return 1;
 
 	skb2 = skb_clone(skb, GFP_ATOMIC);
@@ -498,7 +498,7 @@ static int ipip6_err_gen_icmpv6_unreach(struct sk_buff *skb)
 		return 1;
 
 	skb_dst_drop(skb2);
-	skb_pull(skb2, iph->ihl * 4);
+	skb_pull(skb2, ihl);
 	skb_reset_network_header(skb2);
 
 	rt = rt6_lookup(dev_net(skb->dev), &ipv6_hdr(skb2)->saddr, NULL, 0, 0);
@@ -982,6 +982,8 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 		goto tx_error;
 	}
 
+	skb_set_inner_ipproto(skb, IPPROTO_IPV6);
+
 	err = iptunnel_xmit(skb->sk, rt, skb, fl4.saddr, fl4.daddr,
 			    protocol, tos, ttl, df,
 			    !net_eq(tunnel->net, dev_net(dev)));
@@ -1005,6 +1007,8 @@ static netdev_tx_t ipip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	skb = iptunnel_handle_offloads(skb, false, SKB_GSO_IPIP);
 	if (IS_ERR(skb))
 		goto out;
+
+	skb_set_inner_ipproto(skb, IPPROTO_IPIP);
 
 	ip_tunnel_xmit(skb, dev, tiph, IPPROTO_IPIP);
 	return NETDEV_TX_OK;
@@ -1360,7 +1364,7 @@ static void ipip6_tunnel_setup(struct net_device *dev)
 	dev->hard_header_len	= LL_MAX_HEADER + t_hlen;
 	dev->mtu		= ETH_DATA_LEN - t_hlen;
 	dev->flags		= IFF_NOARP;
-	dev->priv_flags	       &= ~IFF_XMIT_DST_RELEASE;
+	netif_keep_dst(dev);
 	dev->iflink		= 0;
 	dev->addr_len		= 4;
 	dev->features		|= NETIF_F_LLTX;

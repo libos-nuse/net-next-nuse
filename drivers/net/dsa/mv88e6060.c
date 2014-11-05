@@ -21,8 +21,12 @@
 
 static int reg_read(struct dsa_switch *ds, int addr, int reg)
 {
-	return mdiobus_read(to_mii_bus(ds->master_dev),
-			    ds->pd->sw_addr + addr, reg);
+	struct mii_bus *bus = dsa_host_dev_to_mii_bus(ds->master_dev);
+
+	if (bus == NULL)
+		return -EINVAL;
+
+	return mdiobus_read(bus, ds->pd->sw_addr + addr, reg);
 }
 
 #define REG_READ(addr, reg)					\
@@ -38,8 +42,12 @@ static int reg_read(struct dsa_switch *ds, int addr, int reg)
 
 static int reg_write(struct dsa_switch *ds, int addr, int reg, u16 val)
 {
-	return mdiobus_write(to_mii_bus(ds->master_dev),
-			     ds->pd->sw_addr + addr, reg, val);
+	struct mii_bus *bus = dsa_host_dev_to_mii_bus(ds->master_dev);
+
+	if (bus == NULL)
+		return -EINVAL;
+
+	return mdiobus_write(bus, ds->pd->sw_addr + addr, reg, val);
 }
 
 #define REG_WRITE(addr, reg, val)				\
@@ -61,8 +69,11 @@ static char *mv88e6060_probe(struct device *host_dev, int sw_addr)
 
 	ret = mdiobus_read(bus, sw_addr + REG_PORT(0), 0x03);
 	if (ret >= 0) {
-		ret &= 0xfff0;
 		if (ret == 0x0600)
+			return "Marvell 88E6060 (A0)";
+		if (ret == 0x0601 || ret == 0x0602)
+			return "Marvell 88E6060 (B0)";
+		if ((ret & 0xfff0) == 0x0600)
 			return "Marvell 88E6060";
 	}
 

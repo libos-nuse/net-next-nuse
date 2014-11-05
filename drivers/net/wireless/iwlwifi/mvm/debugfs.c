@@ -288,6 +288,9 @@ static ssize_t iwl_dbgfs_set_nic_temperature_write(struct iwl_mvm *mvm,
 {
 	int temperature;
 
+	if (!mvm->ucode_loaded && !mvm->temperature_test)
+		return -EIO;
+
 	if (kstrtoint(buf, 10, &temperature))
 		return -EINVAL;
 	/* not a legal temperature */
@@ -321,6 +324,29 @@ out:
 	mutex_unlock(&mvm->mutex);
 
 	return count;
+}
+
+static ssize_t iwl_dbgfs_nic_temp_read(struct file *file,
+				       char __user *user_buf,
+				       size_t count, loff_t *ppos)
+{
+	struct iwl_mvm *mvm = file->private_data;
+	char buf[16];
+	int pos, temp;
+
+	if (!mvm->ucode_loaded)
+		return -EIO;
+
+	mutex_lock(&mvm->mutex);
+	temp = iwl_mvm_get_temp(mvm);
+	mutex_unlock(&mvm->mutex);
+
+	if (temp < 0)
+		return temp;
+
+	pos = scnprintf(buf , sizeof(buf), "%d\n", temp);
+
+	return simple_read_from_buffer(user_buf, count, ppos, buf, pos);
 }
 
 static ssize_t iwl_dbgfs_stations_read(struct file *file, char __user *user_buf,
@@ -1256,6 +1282,18 @@ static ssize_t iwl_dbgfs_d0i3_refs_read(struct file *file,
 	PRINT_MVM_REF(IWL_MVM_REF_P2P_CLIENT);
 	PRINT_MVM_REF(IWL_MVM_REF_AP_IBSS);
 	PRINT_MVM_REF(IWL_MVM_REF_USER);
+	PRINT_MVM_REF(IWL_MVM_REF_TX);
+	PRINT_MVM_REF(IWL_MVM_REF_TX_AGG);
+	PRINT_MVM_REF(IWL_MVM_REF_ADD_IF);
+	PRINT_MVM_REF(IWL_MVM_REF_START_AP);
+	PRINT_MVM_REF(IWL_MVM_REF_BSS_CHANGED);
+	PRINT_MVM_REF(IWL_MVM_REF_PREPARE_TX);
+	PRINT_MVM_REF(IWL_MVM_REF_PROTECT_TDLS);
+	PRINT_MVM_REF(IWL_MVM_REF_CHECK_CTKILL);
+	PRINT_MVM_REF(IWL_MVM_REF_PRPH_READ);
+	PRINT_MVM_REF(IWL_MVM_REF_PRPH_WRITE);
+	PRINT_MVM_REF(IWL_MVM_REF_NMI);
+	PRINT_MVM_REF(IWL_MVM_REF_TM_CMD);
 	PRINT_MVM_REF(IWL_MVM_REF_EXIT_WORK);
 
 	return simple_read_from_buffer(user_buf, count, ppos, buf, pos);
@@ -1363,6 +1401,7 @@ MVM_DEBUGFS_WRITE_FILE_OPS(tx_flush, 16);
 MVM_DEBUGFS_WRITE_FILE_OPS(sta_drain, 8);
 MVM_DEBUGFS_READ_WRITE_FILE_OPS(sram, 64);
 MVM_DEBUGFS_READ_WRITE_FILE_OPS(set_nic_temperature, 64);
+MVM_DEBUGFS_READ_FILE_OPS(nic_temp);
 MVM_DEBUGFS_READ_FILE_OPS(stations);
 MVM_DEBUGFS_READ_FILE_OPS(bt_notif);
 MVM_DEBUGFS_READ_FILE_OPS(bt_cmd);
@@ -1405,6 +1444,7 @@ int iwl_mvm_dbgfs_register(struct iwl_mvm *mvm, struct dentry *dbgfs_dir)
 	MVM_DEBUGFS_ADD_FILE(sram, mvm->debugfs_dir, S_IWUSR | S_IRUSR);
 	MVM_DEBUGFS_ADD_FILE(set_nic_temperature, mvm->debugfs_dir,
 			     S_IWUSR | S_IRUSR);
+	MVM_DEBUGFS_ADD_FILE(nic_temp, dbgfs_dir, S_IRUSR);
 	MVM_DEBUGFS_ADD_FILE(stations, dbgfs_dir, S_IRUSR);
 	MVM_DEBUGFS_ADD_FILE(fw_error_dump, dbgfs_dir, S_IRUSR);
 	MVM_DEBUGFS_ADD_FILE(bt_notif, dbgfs_dir, S_IRUSR);

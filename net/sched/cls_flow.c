@@ -354,8 +354,8 @@ static void flow_destroy_filter(struct rcu_head *head)
 	struct flow_filter *f = container_of(head, struct flow_filter, rcu);
 
 	del_timer_sync(&f->perturb_timer);
-	tcf_exts_destroy(f->tp, &f->exts);
-	tcf_em_tree_destroy(f->tp, &f->ematches);
+	tcf_exts_destroy(&f->exts);
+	tcf_em_tree_destroy(&f->ematches);
 	kfree(f);
 }
 
@@ -493,6 +493,8 @@ static int flow_change(struct net *net, struct sk_buff *in_skb,
 	tcf_exts_change(tp, &fnew->exts, &e);
 	tcf_em_tree_change(tp, &fnew->ematches, &t);
 
+	netif_keep_dst(qdisc_dev(tp->q));
+
 	if (tb[TCA_FLOW_KEYS]) {
 		fnew->keymask = keymask;
 		fnew->nkeys   = nkeys;
@@ -530,10 +532,10 @@ static int flow_change(struct net *net, struct sk_buff *in_skb,
 	return 0;
 
 err2:
-	tcf_em_tree_destroy(tp, &t);
+	tcf_em_tree_destroy(&t);
 	kfree(fnew);
 err1:
-	tcf_exts_destroy(tp, &e);
+	tcf_exts_destroy(&e);
 	return err;
 }
 

@@ -235,7 +235,6 @@ static struct ifacaddr6 *aca_alloc(struct rt6_info *rt,
 	/* aca_tstamp should be updated upon changes */
 	aca->aca_cstamp = aca->aca_tstamp = jiffies;
 	atomic_set(&aca->aca_refcnt, 1);
-	spin_lock_init(&aca->aca_lock);
 
 	return aca;
 }
@@ -343,6 +342,27 @@ static int ipv6_dev_ac_dec(struct net_device *dev, const struct in6_addr *addr)
 	if (idev == NULL)
 		return -ENODEV;
 	return __ipv6_dev_ac_dec(idev, addr);
+}
+
+void ipv6_ac_destroy_dev(struct inet6_dev *idev)
+{
+	struct ifacaddr6 *aca;
+
+	write_lock_bh(&idev->lock);
+	while ((aca = idev->ac_list) != NULL) {
+		idev->ac_list = aca->aca_next;
+		write_unlock_bh(&idev->lock);
+
+		addrconf_leave_solict(idev, &aca->aca_addr);
+
+		dst_hold(&aca->aca_rt->dst);
+		ip6_del_rt(aca->aca_rt);
+
+		aca_put(aca);
+
+		write_lock_bh(&idev->lock);
+	}
+	write_unlock_bh(&idev->lock);
 }
 
 /*

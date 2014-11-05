@@ -29,11 +29,11 @@ config OPENVSWITCH
 	  If unsure, say N.
 
 config OPENVSWITCH_GRE
-	bool "Open vSwitch GRE tunneling support"
+	tristate "Open vSwitch GRE tunneling support"
 	depends on INET
 	depends on OPENVSWITCH
-	depends on NET_IPGRE_DEMUX && !(OPENVSWITCH=y && NET_IPGRE_DEMUX=m)
-	default y
+	depends on NET_IPGRE_DEMUX
+	default OPENVSWITCH
 	---help---
 	  If you say Y here, then the Open vSwitch will be able create GRE
 	  vport.
@@ -43,14 +43,25 @@ config OPENVSWITCH_GRE
 	  If unsure, say Y.
 
 config OPENVSWITCH_VXLAN
-	bool "Open vSwitch VXLAN tunneling support"
+	tristate "Open vSwitch VXLAN tunneling support"
 	depends on INET
 	depends on OPENVSWITCH
-	depends on VXLAN && !(OPENVSWITCH=y && VXLAN=m)
-	default y
+	depends on VXLAN
+	default OPENVSWITCH
 	---help---
 	  If you say Y here, then the Open vSwitch will be able create vxlan vport.
 
 	  Say N to exclude this support and reduce the binary size.
 
 	  If unsure, say Y.
+
+config OPENVSWITCH_GENEVE
+	tristate "Open vSwitch Geneve tunneling support"
+	depends on INET
+	depends on OPENVSWITCH
+	depends on GENEVE
+	default OPENVSWITCH
+	---help---
+	  If you say Y here, then the Open vSwitch will be able create geneve vport.
+
+	  Say N to exclude this support and reduce the binary size.

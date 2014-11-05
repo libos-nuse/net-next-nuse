@@ -175,7 +175,7 @@ MODULE_PARM_DESC(fail_over_mac, "For active-backup, do not set all slaves to "
 				"the same MAC; 0 for none (default), "
 				"1 for active, 2 for follow");
 module_param(all_slaves_active, int, 0);
-MODULE_PARM_DESC(all_slaves_active, "Keep all frames received on an interface"
+MODULE_PARM_DESC(all_slaves_active, "Keep all frames received on an interface "
 				     "by setting active flag for all slaves; "
 				     "0 for never (default), 1 for always.");
 module_param(resend_igmp, int, 0);
@@ -208,6 +208,9 @@ static int lacp_fast;
 
 static int bond_init(struct net_device *bond_dev);
 static void bond_uninit(struct net_device *bond_dev);
+static struct rtnl_link_stats64 *bond_get_stats(struct net_device *bond_dev,
+						struct rtnl_link_stats64 *stats);
+static void bond_slave_arr_handler(struct work_struct *work);
 
 /*---------------------------- General routines -----------------------------*/
 
@@ -999,7 +1002,8 @@ static netdev_features_t bond_fix_features(struct net_device *dev,
 
 static void bond_compute_features(struct bonding *bond)
 {
-	unsigned int flags, dst_release_flag = IFF_XMIT_DST_RELEASE;
+	unsigned int dst_release_flag = IFF_XMIT_DST_RELEASE |
+					IFF_XMIT_DST_RELEASE_PERM;
 	netdev_features_t vlan_features = BOND_VLAN_FEATURES;
 	netdev_features_t enc_features  = BOND_ENC_FEATURES;
 	struct net_device *bond_dev = bond->dev;
@@ -1035,8 +1039,10 @@ done:
 	bond_dev->gso_max_segs = gso_max_segs;
 	netif_set_gso_max_size(bond_dev, gso_max_size);
 
-	flags = bond_dev->priv_flags & ~IFF_XMIT_DST_RELEASE;
-	bond_dev->priv_flags = flags | dst_release_flag;
+	bond_dev->priv_flags &= ~IFF_XMIT_DST_RELEASE;
+	if ((bond_dev->priv_flags & IFF_XMIT_DST_RELEASE_PERM) &&
+	    dst_release_flag == (IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM))
+		bond_dev->priv_flags |= IFF_XMIT_DST_RELEASE;
 
 	netdev_change_features(bond_dev);
 }
@@ -1344,6 +1350,8 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev)
 	}
 
 	slave_dev->priv_flags |= IFF_BONDING;
+	/* initialize slave stats */
+	dev_get_stats(new_slave->dev, &new_slave->slave_stats);
 
 	if (bond_is_lb(bond)) {
 		/* bond_alb_init_slave() must be called before all other stages since
@@ -1547,6 +1555,9 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev)
 		unblock_netpoll_tx();
 	}
 
+	if (bond_mode_uses_xmit_hash(bond))
+		bond_update_slave_arr(bond, NULL);
+
 	netdev_info(bond_dev, "Enslaving %s as %s interface with %s link\n",
 		    slave_dev->name,
 		    bond_is_active_slave(new_slave) ? "an active" : "a backup",
@@ -1652,6 +1663,9 @@ static int __bond_release_one(struct net_device *bond_dev,
 
 	bond_sysfs_slave_del(slave);
 
+	/* recompute stats just before removing the slave */
+	bond_get_stats(bond->dev, &bond->bond_stats);
+
 	bond_upper_dev_unlink(bond_dev, slave_dev);
 	/* unregister rx_handler early so bond_handle_frame wouldn't be called
 	 * for this slave anymore.
@@ -1660,6 +1674,9 @@ static int __bond_release_one(struct net_device *bond_dev,
 
 	if (BOND_MODE(bond) == BOND_MODE_8023AD)
 		bond_3ad_unbind_slave(slave);
+
+	if (bond_mode_uses_xmit_hash(bond))
+		bond_update_slave_arr(bond, slave);
 
 	netdev_info(bond_dev, "Releasing %s interface %s\n",
 		    bond_is_active_slave(slave) ? "active" : "backup",
@@ -1963,6 +1980,9 @@ static void bond_miimon_commit(struct bonding *bond)
 				bond_alb_handle_link_change(bond, slave,
 							    BOND_LINK_UP);
 
+			if (BOND_MODE(bond) == BOND_MODE_XOR)
+				bond_update_slave_arr(bond, NULL);
+
 			if (!bond->curr_active_slave || slave == primary)
 				goto do_failover;
 
@@ -1989,6 +2009,9 @@ static void bond_miimon_commit(struct bonding *bond)
 			if (bond_is_lb(bond))
 				bond_alb_handle_link_change(bond, slave,
 							    BOND_LINK_DOWN);
+
+			if (BOND_MODE(bond) == BOND_MODE_XOR)
+				bond_update_slave_arr(bond, NULL);
 
 			if (slave == rcu_access_pointer(bond->curr_active_slave))
 				goto do_failover;
@@ -2446,6 +2469,8 @@ static void bond_loadbalance_arp_mon(struct work_struct *work)
 
 		if (slave_state_changed) {
 			bond_slave_state_change(bond);
+			if (BOND_MODE(bond) == BOND_MODE_XOR)
+				bond_update_slave_arr(bond, NULL);
 		} else if (do_failover) {
 			block_netpoll_tx();
 			bond_select_active_slave(bond);
@@ -2822,8 +2847,20 @@ static int bond_slave_netdev_event(unsigned long event,
 			if (old_duplex != slave->duplex)
 				bond_3ad_adapter_duplex_changed(slave);
 		}
+		/* Refresh slave-array if applicable!
+		 * If the setup does not use miimon or arpmon (mode-specific!),
+		 * then these events will not cause the slave-array to be
+		 * refreshed. This will cause xmit to use a slave that is not
+		 * usable. Avoid such situation by refeshing the array at these
+		 * events. If these (miimon/arpmon) parameters are configured
+		 * then array gets refreshed twice and that should be fine!
+		 */
+		if (bond_mode_uses_xmit_hash(bond))
+			bond_update_slave_arr(bond, NULL);
 		break;
 	case NETDEV_DOWN:
+		if (bond_mode_uses_xmit_hash(bond))
+			bond_update_slave_arr(bond, NULL);
 		break;
 	case NETDEV_CHANGEMTU:
 		/* TODO: Should slaves be allowed to
@@ -3003,6 +3040,7 @@ static void bond_work_init_all(struct bonding *bond)
 	else
 		INIT_DELAYED_WORK(&bond->arp_work, bond_loadbalance_arp_mon);
 	INIT_DELAYED_WORK(&bond->ad_work, bond_3ad_state_machine_handler);
+	INIT_DELAYED_WORK(&bond->slave_arr_work, bond_slave_arr_handler);
 }
 
 static void bond_work_cancel_all(struct bonding *bond)
@@ -3012,6 +3050,7 @@ static void bond_work_cancel_all(struct bonding *bond)
 	cancel_delayed_work_sync(&bond->alb_work);
 	cancel_delayed_work_sync(&bond->ad_work);
 	cancel_delayed_work_sync(&bond->mcast_work);
+	cancel_delayed_work_sync(&bond->slave_arr_work);
 }
 
 static int bond_open(struct net_device *bond_dev)
@@ -3061,6 +3100,9 @@ static int bond_open(struct net_device *bond_dev)
 		bond_3ad_initiate_agg_selection(bond, 1);
 	}
 
+	if (bond_mode_uses_xmit_hash(bond))
+		bond_update_slave_arr(bond, NULL);
+
 	return 0;
 }
 
@@ -3085,38 +3127,43 @@ static struct rtnl_link_stats64 *bond_get_stats(struct net_device *bond_dev,
 	struct list_head *iter;
 	struct slave *slave;
 
-	memset(stats, 0, sizeof(*stats));
+	memcpy(stats, &bond->bond_stats, sizeof(*stats));
 
 	bond_for_each_slave(bond, slave, iter) {
 		const struct rtnl_link_stats64 *sstats =
 			dev_get_stats(slave->dev, &temp);
+		struct rtnl_link_stats64 *pstats = &slave->slave_stats;
 
-		stats->rx_packets += sstats->rx_packets;
-		stats->rx_bytes += sstats->rx_bytes;
-		stats->rx_errors += sstats->rx_errors;
-		stats->rx_dropped += sstats->rx_dropped;
+		stats->rx_packets +=  sstats->rx_packets - pstats->rx_packets;
+		stats->rx_bytes += sstats->rx_bytes - pstats->rx_bytes;
+		stats->rx_errors += sstats->rx_errors - pstats->rx_errors;
+		stats->rx_dropped += sstats->rx_dropped - pstats->rx_dropped;
 
-		stats->tx_packets += sstats->tx_packets;
-		stats->tx_bytes += sstats->tx_bytes;
-		stats->tx_errors += sstats->tx_errors;
-		stats->tx_dropped += sstats->tx_dropped;
+		stats->tx_packets += sstats->tx_packets - pstats->tx_packets;;
+		stats->tx_bytes += sstats->tx_bytes - pstats->tx_bytes;
+		stats->tx_errors += sstats->tx_errors - pstats->tx_errors;
+		stats->tx_dropped += sstats->tx_dropped - pstats->tx_dropped;
 
-		stats->multicast += sstats->multicast;
-		stats->collisions += sstats->collisions;
+		stats->multicast += sstats->multicast - pstats->multicast;
+		stats->collisions += sstats->collisions - pstats->collisions;
 
-		stats->rx_length_errors += sstats->rx_length_errors;
-		stats->rx_over_errors += sstats->rx_over_errors;
-		stats->rx_crc_errors += sstats->rx_crc_errors;
-		stats->rx_frame_errors += sstats->rx_frame_errors;
-		stats->rx_fifo_errors += sstats->rx_fifo_errors;
-		stats->rx_missed_errors += sstats->rx_missed_errors;
+		stats->rx_length_errors += sstats->rx_length_errors - pstats->rx_length_errors;
+		stats->rx_over_errors += sstats->rx_over_errors - pstats->rx_over_errors;
+		stats->rx_crc_errors += sstats->rx_crc_errors - pstats->rx_crc_errors;
+		stats->rx_frame_errors += sstats->rx_frame_errors - pstats->rx_frame_errors;
+		stats->rx_fifo_errors += sstats->rx_fifo_errors - pstats->rx_fifo_errors;
+		stats->rx_missed_errors += sstats->rx_missed_errors - pstats->rx_missed_errors;
 
-		stats->tx_aborted_errors += sstats->tx_aborted_errors;
-		stats->tx_carrier_errors += sstats->tx_carrier_errors;
-		stats->tx_fifo_errors += sstats->tx_fifo_errors;
-		stats->tx_heartbeat_errors += sstats->tx_heartbeat_errors;
-		stats->tx_window_errors += sstats->tx_window_errors;
+		stats->tx_aborted_errors += sstats->tx_aborted_errors - pstats->tx_aborted_errors;
+		stats->tx_carrier_errors += sstats->tx_carrier_errors - pstats->tx_carrier_errors;
+		stats->tx_fifo_errors += sstats->tx_fifo_errors - pstats->tx_fifo_errors;
+		stats->tx_heartbeat_errors += sstats->tx_heartbeat_errors - pstats->tx_heartbeat_errors;
+		stats->tx_window_errors += sstats->tx_window_errors - pstats->tx_window_errors;
+
+		/* save off the slave stats for the next run */
+		memcpy(pstats, sstats, sizeof(*sstats));
 	}
+	memcpy(&bond->bond_stats, stats, sizeof(*stats));
 
 	return stats;
 }
@@ -3475,7 +3522,7 @@ static void bond_xmit_slave_id(struct bonding *bond, struct sk_buff *skb, int sl
 		}
 	}
 	/* no slave that can tx has been found */
-	dev_kfree_skb_any(skb);
+	bond_tx_drop(bond->dev, skb);
 }
 
 /**
@@ -3526,13 +3573,19 @@ static int bond_xmit_roundrobin(struct sk_buff *skb, struct net_device *bond_dev
 	 */
 	if (iph->protocol == IPPROTO_IGMP && skb->protocol == htons(ETH_P_IP)) {
 		slave = rcu_dereference(bond->curr_active_slave);
-		if (slave && bond_slave_can_tx(slave))
+		if (slave)
 			bond_dev_queue_xmit(bond, skb, slave->dev);
 		else
 			bond_xmit_slave_id(bond, skb, 0);
 	} else {
-		slave_id = bond_rr_gen_slave_id(bond);
-		bond_xmit_slave_id(bond, skb, slave_id % bond->slave_cnt);
+		int slave_cnt = ACCESS_ONCE(bond->slave_cnt);
+
+		if (likely(slave_cnt)) {
+			slave_id = bond_rr_gen_slave_id(bond);
+			bond_xmit_slave_id(bond, skb, slave_id % slave_cnt);
+		} else {
+			bond_tx_drop(bond_dev, skb);
+		}
 	}
 
 	return NETDEV_TX_OK;
@@ -3550,20 +3603,152 @@ static int bond_xmit_activebackup(struct sk_buff *skb, struct net_device *bond_d
 	if (slave)
 		bond_dev_queue_xmit(bond, skb, slave->dev);
 	else
-		dev_kfree_skb_any(skb);
+		bond_tx_drop(bond_dev, skb);
 
 	return NETDEV_TX_OK;
 }
 
-/* In bond_xmit_xor() , we determine the output device by using a pre-
- * determined xmit_hash_policy(), If the selected device is not enabled,
- * find the next active slave.
+/* Use this to update slave_array when (a) it's not appropriate to update
+ * slave_array right away (note that update_slave_array() may sleep)
+ * and / or (b) RTNL is not held.
  */
-static int bond_xmit_xor(struct sk_buff *skb, struct net_device *bond_dev)
+void bond_slave_arr_work_rearm(struct bonding *bond, unsigned long delay)
 {
-	struct bonding *bond = netdev_priv(bond_dev);
+	queue_delayed_work(bond->wq, &bond->slave_arr_work, delay);
+}
 
-	bond_xmit_slave_id(bond, skb, bond_xmit_hash(bond, skb) % bond->slave_cnt);
+/* Slave array work handler. Holds only RTNL */
+static void bond_slave_arr_handler(struct work_struct *work)
+{
+	struct bonding *bond = container_of(work, struct bonding,
+					    slave_arr_work.work);
+	int ret;
+
+	if (!rtnl_trylock())
+		goto err;
+
+	ret = bond_update_slave_arr(bond, NULL);
+	rtnl_unlock();
+	if (ret) {
+		pr_warn_ratelimited("Failed to update slave array from WT\n");
+		goto err;
+	}
+	return;
+
+err:
+	bond_slave_arr_work_rearm(bond, 1);
+}
+
+/* Build the usable slaves array in control path for modes that use xmit-hash
+ * to determine the slave interface -
+ * (a) BOND_MODE_8023AD
+ * (b) BOND_MODE_XOR
+ * (c) BOND_MODE_TLB && tlb_dynamic_lb == 0
+ *
+ * The caller is expected to hold RTNL only and NO other lock!
+ */
+int bond_update_slave_arr(struct bonding *bond, struct slave *skipslave)
+{
+	struct slave *slave;
+	struct list_head *iter;
+	struct bond_up_slave *new_arr, *old_arr;
+	int slaves_in_agg;
+	int agg_id = 0;
+	int ret = 0;
+
+#ifdef CONFIG_LOCKDEP
+	WARN_ON(lockdep_is_held(&bond->mode_lock));
+#endif
+
+	new_arr = kzalloc(offsetof(struct bond_up_slave, arr[bond->slave_cnt]),
+			  GFP_KERNEL);
+	if (!new_arr) {
+		ret = -ENOMEM;
+		pr_err("Failed to build slave-array.\n");
+		goto out;
+	}
+	if (BOND_MODE(bond) == BOND_MODE_8023AD) {
+		struct ad_info ad_info;
+
+		if (bond_3ad_get_active_agg_info(bond, &ad_info)) {
+			pr_debug("bond_3ad_get_active_agg_info failed\n");
+			kfree_rcu(new_arr, rcu);
+			/* No active aggragator means it's not safe to use
+			 * the previous array.
+			 */
+			old_arr = rtnl_dereference(bond->slave_arr);
+			if (old_arr) {
+				RCU_INIT_POINTER(bond->slave_arr, NULL);
+				kfree_rcu(old_arr, rcu);
+			}
+			goto out;
+		}
+		slaves_in_agg = ad_info.ports;
+		agg_id = ad_info.aggregator_id;
+	}
+	bond_for_each_slave(bond, slave, iter) {
+		if (BOND_MODE(bond) == BOND_MODE_8023AD) {
+			struct aggregator *agg;
+
+			agg = SLAVE_AD_INFO(slave)->port.aggregator;
+			if (!agg || agg->aggregator_identifier != agg_id)
+				continue;
+		}
+		if (!bond_slave_can_tx(slave))
+			continue;
+		if (skipslave == slave)
+			continue;
+		new_arr->arr[new_arr->count++] = slave;
+	}
+
+	old_arr = rtnl_dereference(bond->slave_arr);
+	rcu_assign_pointer(bond->slave_arr, new_arr);
+	if (old_arr)
+		kfree_rcu(old_arr, rcu);
+out:
+	if (ret != 0 && skipslave) {
+		int idx;
+
+		/* Rare situation where caller has asked to skip a specific
+		 * slave but allocation failed (most likely!). BTW this is
+		 * only possible when the call is initiated from
+		 * __bond_release_one(). In this situation; overwrite the
+		 * skipslave entry in the array with the last entry from the
+		 * array to avoid a situation where the xmit path may choose
+		 * this to-be-skipped slave to send a packet out.
+		 */
+		old_arr = rtnl_dereference(bond->slave_arr);
+		for (idx = 0; idx < old_arr->count; idx++) {
+			if (skipslave == old_arr->arr[idx]) {
+				old_arr->arr[idx] =
+				    old_arr->arr[old_arr->count-1];
+				old_arr->count--;
+				break;
+			}
+		}
+	}
+	return ret;
+}
+
+/* Use this Xmit function for 3AD as well as XOR modes. The current
+ * usable slave array is formed in the control path. The xmit function
+ * just calculates hash and sends the packet out.
+ */
+int bond_3ad_xor_xmit(struct sk_buff *skb, struct net_device *dev)
+{
+	struct bonding *bond = netdev_priv(dev);
+	struct slave *slave;
+	struct bond_up_slave *slaves;
+	unsigned int count;
+
+	slaves = rcu_dereference(bond->slave_arr);
+	count = slaves ? ACCESS_ONCE(slaves->count) : 0;
+	if (likely(count)) {
+		slave = slaves->arr[bond_xmit_hash(bond, skb) % count];
+		bond_dev_queue_xmit(bond, skb, slave->dev);
+	} else {
+		bond_tx_drop(dev, skb);
+	}
 
 	return NETDEV_TX_OK;
 }
@@ -3586,14 +3771,13 @@ static int bond_xmit_broadcast(struct sk_buff *skb, struct net_device *bond_dev)
 						    bond_dev->name, __func__);
 				continue;
 			}
-			/* bond_dev_queue_xmit always returns 0 */
 			bond_dev_queue_xmit(bond, skb2, slave->dev);
 		}
 	}
 	if (slave && bond_slave_is_up(slave) && slave->link == BOND_LINK_UP)
 		bond_dev_queue_xmit(bond, skb, slave->dev);
 	else
-		dev_kfree_skb_any(skb);
+		bond_tx_drop(bond_dev, skb);
 
 	return NETDEV_TX_OK;
 }
@@ -3660,12 +3844,11 @@ static netdev_tx_t __bond_start_xmit(struct sk_buff *skb, struct net_device *dev
 		return bond_xmit_roundrobin(skb, dev);
 	case BOND_MODE_ACTIVEBACKUP:
 		return bond_xmit_activebackup(skb, dev);
+	case BOND_MODE_8023AD:
 	case BOND_MODE_XOR:
-		return bond_xmit_xor(skb, dev);
+		return bond_3ad_xor_xmit(skb, dev);
 	case BOND_MODE_BROADCAST:
 		return bond_xmit_broadcast(skb, dev);
-	case BOND_MODE_8023AD:
-		return bond_3ad_xmit_xor(skb, dev);
 	case BOND_MODE_ALB:
 		return bond_alb_xmit(skb, dev);
 	case BOND_MODE_TLB:
@@ -3674,7 +3857,7 @@ static netdev_tx_t __bond_start_xmit(struct sk_buff *skb, struct net_device *dev
 		/* Should never happen, mode already checked */
 		netdev_err(dev, "Unknown bonding mode %d\n", BOND_MODE(bond));
 		WARN_ON_ONCE(1);
-		dev_kfree_skb_any(skb);
+		bond_tx_drop(dev, skb);
 		return NETDEV_TX_OK;
 	}
 }
@@ -3694,7 +3877,7 @@ static netdev_tx_t bond_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (bond_has_slaves(bond))
 		ret = __bond_start_xmit(skb, dev);
 	else
-		dev_kfree_skb_any(skb);
+		bond_tx_drop(dev, skb);
 	rcu_read_unlock();
 
 	return ret;
@@ -3839,6 +4022,7 @@ static void bond_uninit(struct net_device *bond_dev)
 	struct bonding *bond = netdev_priv(bond_dev);
 	struct list_head *iter;
 	struct slave *slave;
+	struct bond_up_slave *arr;
 
 	bond_netpoll_cleanup(bond_dev);
 
@@ -3846,6 +4030,12 @@ static void bond_uninit(struct net_device *bond_dev)
 	bond_for_each_slave(bond, slave, iter)
 		__bond_release_one(bond_dev, slave->dev, true);
 	netdev_info(bond_dev, "Released all slaves\n");
+
+	arr = rtnl_dereference(bond->slave_arr);
+	if (arr) {
+		RCU_INIT_POINTER(bond->slave_arr, NULL);
+		kfree_rcu(arr, rcu);
+	}
 
 	list_del(&bond->bond_list);
 

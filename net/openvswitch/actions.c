@@ -504,11 +504,6 @@ static int output_userspace(struct datapath *dp, struct sk_buff *skb,
 	return ovs_dp_upcall(dp, skb, &upcall);
 }
 
-static bool last_action(const struct nlattr *a, int rem)
-{
-	return a->nla_len == rem;
-}
-
 static int sample(struct datapath *dp, struct sk_buff *skb,
 		  struct sw_flow_key *key, const struct nlattr *attr)
 {
@@ -543,7 +538,7 @@ static int sample(struct datapath *dp, struct sk_buff *skb,
 	 * user space. This skb will be consumed by its caller.
 	 */
 	if (likely(nla_type(a) == OVS_ACTION_ATTR_USERSPACE &&
-		   last_action(a, rem)))
+		   nla_is_last(a, rem)))
 		return output_userspace(dp, skb, key, a);
 
 	skb = skb_clone(skb, GFP_ATOMIC);
@@ -590,8 +585,8 @@ static int execute_set_action(struct sk_buff *skb,
 		skb->mark = nla_get_u32(nested_attr);
 		break;
 
-	case OVS_KEY_ATTR_IPV4_TUNNEL:
-		OVS_CB(skb)->egress_tun_key = nla_data(nested_attr);
+	case OVS_KEY_ATTR_TUNNEL_INFO:
+		OVS_CB(skb)->egress_tun_info = nla_data(nested_attr);
 		break;
 
 	case OVS_KEY_ATTR_ETHERNET:
@@ -633,7 +628,7 @@ static int execute_recirc(struct datapath *dp, struct sk_buff *skb,
 	if (err)
 		return err;
 
-	if (!last_action(a, rem)) {
+	if (!nla_is_last(a, rem)) {
 		/* Recirc action is the not the last action
 		 * of the action list, need to clone the skb.
 		 */
@@ -707,7 +702,7 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 
 		case OVS_ACTION_ATTR_RECIRC:
 			err = execute_recirc(dp, skb, key, a, rem);
-			if (last_action(a, rem)) {
+			if (nla_is_last(a, rem)) {
 				/* If this is the last action, the skb has
 				 * been consumed or freed.
 				 * Return immediately.
@@ -778,6 +773,7 @@ int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb,
 	acts = rcu_dereference(OVS_CB(skb)->flow->sf_acts);
 
 	this_cpu_inc(exec_actions_level);
+	OVS_CB(skb)->egress_tun_info = NULL;
 	err = do_execute_actions(dp, skb, key,
 				 acts->actions, acts->actions_len);
 

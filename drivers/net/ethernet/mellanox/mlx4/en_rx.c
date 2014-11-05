@@ -74,12 +74,12 @@ static int mlx4_alloc_pages(struct mlx4_en_priv *priv,
 	page_alloc->page_size = PAGE_SIZE << order;
 	page_alloc->page = page;
 	page_alloc->dma = dma;
-	page_alloc->page_offset = frag_info->frag_align;
+	page_alloc->page_offset = 0;
 	/* Not doing get_page() for each frag is a big win
-	 * on asymetric workloads.
+	 * on asymetric workloads. Note we can not use atomic_set().
 	 */
-	atomic_set(&page->_count,
-		   page_alloc->page_size / frag_info->frag_stride);
+	atomic_add(page_alloc->page_size / frag_info->frag_stride - 1,
+		   &page->_count);
 	return 0;
 }
 
@@ -119,7 +119,6 @@ static int mlx4_en_alloc_frags(struct mlx4_en_priv *priv,
 
 out:
 	while (i--) {
-		frag_info = &priv->frag_info[i];
 		if (page_alloc[i].page != ring_alloc[i].page) {
 			dma_unmap_page(priv->ddev, page_alloc[i].dma,
 				page_alloc[i].page_size, PCI_DMA_FROMDEVICE);
@@ -157,7 +156,7 @@ static int mlx4_en_init_allocator(struct mlx4_en_priv *priv,
 		const struct mlx4_en_frag_info *frag_info = &priv->frag_info[i];
 
 		if (mlx4_alloc_pages(priv, &ring->page_alloc[i],
-				     frag_info, GFP_KERNEL))
+				     frag_info, GFP_KERNEL | __GFP_COLD))
 			goto out;
 	}
 	return 0;
@@ -269,7 +268,7 @@ static int mlx4_en_fill_rx_buffers(struct mlx4_en_priv *priv)
 
 			if (mlx4_en_prepare_rx_desc(priv, ring,
 						    ring->actual_size,
-						    GFP_KERNEL)) {
+						    GFP_KERNEL | __GFP_COLD)) {
 				if (ring->actual_size < MLX4_EN_MIN_RX_SIZE) {
 					en_err(priv, "Failed to allocate enough rx buffers\n");
 					return -ENOMEM;
@@ -636,7 +635,8 @@ static void mlx4_en_refill_rx_buffers(struct mlx4_en_priv *priv,
 	int index = ring->prod & ring->size_mask;
 
 	while ((u32) (ring->prod - ring->cons) < ring->actual_size) {
-		if (mlx4_en_prepare_rx_desc(priv, ring, index, GFP_ATOMIC))
+		if (mlx4_en_prepare_rx_desc(priv, ring, index,
+					    GFP_ATOMIC | __GFP_COLD))
 			break;
 		ring->prod++;
 		index = ring->prod & ring->size_mask;
@@ -879,8 +879,8 @@ void mlx4_en_rx_irq(struct mlx4_cq *mcq)
 	struct mlx4_en_cq *cq = container_of(mcq, struct mlx4_en_cq, mcq);
 	struct mlx4_en_priv *priv = netdev_priv(cq->dev);
 
-	if (priv->port_up)
-		napi_schedule(&cq->napi);
+	if (likely(priv->port_up))
+		napi_schedule_irqoff(&cq->napi);
 	else
 		mlx4_en_arm_cq(priv, cq);
 }
@@ -946,15 +946,8 @@ void mlx4_en_calc_rx_buf(struct net_device *dev)
 			(eff_mtu > buf_size + frag_sizes[i]) ?
 				frag_sizes[i] : eff_mtu - buf_size;
 		priv->frag_info[i].frag_prefix_size = buf_size;
-		if (!i)	{
-			priv->frag_info[i].frag_align = NET_IP_ALIGN;
-			priv->frag_info[i].frag_stride =
-				ALIGN(frag_sizes[i] + NET_IP_ALIGN, SMP_CACHE_BYTES);
-		} else {
-			priv->frag_info[i].frag_align = 0;
-			priv->frag_info[i].frag_stride =
-				ALIGN(frag_sizes[i], SMP_CACHE_BYTES);
-		}
+		priv->frag_info[i].frag_stride = ALIGN(frag_sizes[i],
+						       SMP_CACHE_BYTES);
 		buf_size += priv->frag_info[i].frag_size;
 		i++;
 	}
@@ -967,11 +960,10 @@ void mlx4_en_calc_rx_buf(struct net_device *dev)
 	       eff_mtu, priv->num_frags);
 	for (i = 0; i < priv->num_frags; i++) {
 		en_err(priv,
-		       "  frag:%d - size:%d prefix:%d align:%d stride:%d\n",
+		       "  frag:%d - size:%d prefix:%d stride:%d\n",
 		       i,
 		       priv->frag_info[i].frag_size,
 		       priv->frag_info[i].frag_prefix_size,
-		       priv->frag_info[i].frag_align,
 		       priv->frag_info[i].frag_stride);
 	}
 }

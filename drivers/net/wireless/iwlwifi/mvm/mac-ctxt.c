@@ -427,17 +427,17 @@ int iwl_mvm_mac_ctxt_init(struct iwl_mvm *mvm, struct ieee80211_vif *vif)
 
 	switch (vif->type) {
 	case NL80211_IFTYPE_P2P_DEVICE:
-		iwl_trans_ac_txq_enable(mvm->trans, IWL_MVM_OFFCHANNEL_QUEUE,
-					IWL_MVM_TX_FIFO_VO);
+		iwl_mvm_enable_ac_txq(mvm, IWL_MVM_OFFCHANNEL_QUEUE,
+				      IWL_MVM_TX_FIFO_VO);
 		break;
 	case NL80211_IFTYPE_AP:
-		iwl_trans_ac_txq_enable(mvm->trans, vif->cab_queue,
-					IWL_MVM_TX_FIFO_MCAST);
+		iwl_mvm_enable_ac_txq(mvm, vif->cab_queue,
+				      IWL_MVM_TX_FIFO_MCAST);
 		/* fall through */
 	default:
 		for (ac = 0; ac < IEEE80211_NUM_ACS; ac++)
-			iwl_trans_ac_txq_enable(mvm->trans, vif->hw_queue[ac],
-						iwl_mvm_ac_to_tx_fifo[ac]);
+			iwl_mvm_enable_ac_txq(mvm, vif->hw_queue[ac],
+					      iwl_mvm_ac_to_tx_fifo[ac]);
 		break;
 	}
 
@@ -452,16 +452,14 @@ void iwl_mvm_mac_ctxt_release(struct iwl_mvm *mvm, struct ieee80211_vif *vif)
 
 	switch (vif->type) {
 	case NL80211_IFTYPE_P2P_DEVICE:
-		iwl_trans_txq_disable(mvm->trans, IWL_MVM_OFFCHANNEL_QUEUE,
-				      true);
+		iwl_mvm_disable_txq(mvm, IWL_MVM_OFFCHANNEL_QUEUE);
 		break;
 	case NL80211_IFTYPE_AP:
-		iwl_trans_txq_disable(mvm->trans, vif->cab_queue, true);
+		iwl_mvm_disable_txq(mvm, vif->cab_queue);
 		/* fall through */
 	default:
 		for (ac = 0; ac < IEEE80211_NUM_ACS; ac++)
-			iwl_trans_txq_disable(mvm->trans, vif->hw_queue[ac],
-					      true);
+			iwl_mvm_disable_txq(mvm, vif->hw_queue[ac]);
 	}
 }
 
@@ -727,11 +725,6 @@ static int iwl_mvm_mac_ctxt_cmd_sta(struct iwl_mvm *mvm,
 	    !force_assoc_off) {
 		u32 dtim_offs;
 
-		/* Allow beacons to pass through as long as we are not
-		 * associated, or we do not have dtim period information.
-		 */
-		cmd.filter_flags |= cpu_to_le32(MAC_FILTER_IN_BEACON);
-
 		/*
 		 * The DTIM count counts down, so when it is N that means N
 		 * more beacon intervals happen until the DTIM TBTT. Therefore
@@ -765,6 +758,11 @@ static int iwl_mvm_mac_ctxt_cmd_sta(struct iwl_mvm *mvm,
 		ctxt_sta->is_assoc = cpu_to_le32(1);
 	} else {
 		ctxt_sta->is_assoc = cpu_to_le32(0);
+
+		/* Allow beacons to pass through as long as we are not
+		 * associated, or we do not have dtim period information.
+		 */
+		cmd.filter_flags |= cpu_to_le32(MAC_FILTER_IN_BEACON);
 	}
 
 	ctxt_sta->bi = cpu_to_le32(vif->bss_conf.beacon_int);
@@ -1234,13 +1232,13 @@ static void iwl_mvm_csa_count_down(struct iwl_mvm *mvm,
 		    !iwl_mvm_te_scheduled(&mvmvif->time_event_data) && gp2) {
 			u32 rel_time = (c + 1) *
 				       csa_vif->bss_conf.beacon_int -
-				       IWL_MVM_CHANNEL_SWITCH_TIME;
+				       IWL_MVM_CHANNEL_SWITCH_TIME_GO;
 			u32 apply_time = gp2 + rel_time * 1024;
 
-			iwl_mvm_schedule_csa_noa(mvm, csa_vif,
-						 IWL_MVM_CHANNEL_SWITCH_TIME -
-						 IWL_MVM_CHANNEL_SWITCH_MARGIN,
-						 apply_time);
+			iwl_mvm_schedule_csa_period(mvm, csa_vif,
+					 IWL_MVM_CHANNEL_SWITCH_TIME_GO -
+					 IWL_MVM_CHANNEL_SWITCH_MARGIN,
+					 apply_time);
 		}
 	} else if (!iwl_mvm_te_scheduled(&mvmvif->time_event_data)) {
 		/* we don't have CSA NoA scheduled yet, switch now */

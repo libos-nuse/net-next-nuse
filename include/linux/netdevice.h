@@ -30,6 +30,7 @@
 #include <linux/bug.h>
 #include <linux/delay.h>
 #include <linux/atomic.h>
+#include <linux/prefetch.h>
 #include <asm/cache.h>
 #include <asm/byteorder.h>
 
@@ -385,6 +386,7 @@ typedef enum rx_handler_result rx_handler_result_t;
 typedef rx_handler_result_t rx_handler_func_t(struct sk_buff **pskb);
 
 void __napi_schedule(struct napi_struct *n);
+void __napi_schedule_irqoff(struct napi_struct *n);
 
 static inline bool napi_disable_pending(struct napi_struct *n)
 {
@@ -417,6 +419,18 @@ static inline void napi_schedule(struct napi_struct *n)
 {
 	if (napi_schedule_prep(n))
 		__napi_schedule(n);
+}
+
+/**
+ *	napi_schedule_irqoff - schedule NAPI poll
+ *	@n: napi context
+ *
+ * Variant of napi_schedule(), assuming hard irqs are masked.
+ */
+static inline void napi_schedule_irqoff(struct napi_struct *n)
+{
+	if (napi_schedule_prep(n))
+		__napi_schedule_irqoff(n);
 }
 
 /* Try to reschedule poll. Called by dev->poll() after napi_complete().  */
@@ -997,6 +1011,12 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
  *	Callback to use for xmit over the accelerated station. This
  *	is used in place of ndo_start_xmit on accelerated net
  *	devices.
+ * bool	(*ndo_gso_check) (struct sk_buff *skb,
+ *			  struct net_device *dev);
+ *	Called by core transmit path to determine if device is capable of
+ *	performing GSO on a packet. The device returns true if it is
+ *	able to GSO the packet, false otherwise. If the return value is
+ *	false the stack will do software GSO.
  */
 struct net_device_ops {
 	int			(*ndo_init)(struct net_device *dev);
@@ -1146,6 +1166,8 @@ struct net_device_ops {
 							struct net_device *dev,
 							void *priv);
 	int			(*ndo_get_lock_subclass)(struct net_device *dev);
+	bool			(*ndo_gso_check) (struct sk_buff *skb,
+						  struct net_device *dev);
 };
 
 /**
@@ -1206,6 +1228,7 @@ enum netdev_priv_flags {
 	IFF_SUPP_NOFCS			= 1<<19,
 	IFF_LIVE_ADDR_CHANGE		= 1<<20,
 	IFF_MACVLAN			= 1<<21,
+	IFF_XMIT_DST_RELEASE_PERM	= 1<<22,
 };
 
 #define IFF_802_1Q_VLAN			IFF_802_1Q_VLAN
@@ -1230,6 +1253,7 @@ enum netdev_priv_flags {
 #define IFF_SUPP_NOFCS			IFF_SUPP_NOFCS
 #define IFF_LIVE_ADDR_CHANGE		IFF_LIVE_ADDR_CHANGE
 #define IFF_MACVLAN			IFF_MACVLAN
+#define IFF_XMIT_DST_RELEASE_PERM	IFF_XMIT_DST_RELEASE_PERM
 
 /**
  *	struct net_device - The DEVICE structure.
@@ -1415,6 +1439,8 @@ enum netdev_priv_flags {
  *
  *	@gso_max_size:	Maximum size of generic segmentation offload
  *	@gso_max_segs:	Maximum number of segments that can be passed to the
+ *			NIC for GSO
+ *	@gso_min_segs:	Minimum number of segments that can be passed to the
  *			NIC for GSO
  *
  *	@dcbnl_ops:	Data Center Bridging netlink ops
@@ -1666,7 +1692,7 @@ struct net_device {
 	unsigned int		gso_max_size;
 #define GSO_MAX_SEGS		65535
 	u16			gso_max_segs;
-
+	u16			gso_min_segs;
 #ifdef CONFIG_DCB
 	const struct dcbnl_rtnl_ops *dcbnl_ops;
 #endif
@@ -1886,6 +1912,9 @@ struct napi_gro_cb {
 	/* Number of checksums via CHECKSUM_UNNECESSARY */
 	u8	csum_cnt:3;
 
+	/* Used in foo-over-udp, set in udp[46]_gro_receive */
+	u8	is_ipv6:1;
+
 	/* used to support CHECKSUM_COMPLETE for tunneling protocols */
 	__wsum	csum;
 
@@ -1911,7 +1940,6 @@ struct packet_type {
 struct offload_callbacks {
 	struct sk_buff		*(*gso_segment)(struct sk_buff *skb,
 						netdev_features_t features);
-	int			(*gso_send_check)(struct sk_buff *skb);
 	struct sk_buff		**(*gro_receive)(struct sk_buff **head,
 					       struct sk_buff *skb);
 	int			(*gro_complete)(struct sk_buff *skb, int nhoff);
@@ -2301,10 +2329,7 @@ extern int netdev_flow_limit_table_len;
  * Incoming packets are placed on per-cpu queues
  */
 struct softnet_data {
-	struct Qdisc		*output_queue;
-	struct Qdisc		**output_queue_tailp;
 	struct list_head	poll_list;
-	struct sk_buff		*completion_queue;
 	struct sk_buff_head	process_queue;
 
 	/* stats */
@@ -2312,10 +2337,17 @@ struct softnet_data {
 	unsigned int		time_squeeze;
 	unsigned int		cpu_collision;
 	unsigned int		received_rps;
-
 #ifdef CONFIG_RPS
 	struct softnet_data	*rps_ipi_list;
+#endif
+#ifdef CONFIG_NET_FLOW_LIMIT
+	struct sd_flow_limit __rcu *flow_limit;
+#endif
+	struct Qdisc		*output_queue;
+	struct Qdisc		**output_queue_tailp;
+	struct sk_buff		*completion_queue;
 
+#ifdef CONFIG_RPS
 	/* Elements below can be accessed between CPUs for RPS */
 	struct call_single_data	csd ____cacheline_aligned_in_smp;
 	struct softnet_data	*rps_ipi_next;
@@ -2327,9 +2359,6 @@ struct softnet_data {
 	struct sk_buff_head	input_pkt_queue;
 	struct napi_struct	backlog;
 
-#ifdef CONFIG_NET_FLOW_LIMIT
-	struct sd_flow_limit __rcu *flow_limit;
-#endif
 };
 
 static inline void input_queue_head_incr(struct softnet_data *sd)
@@ -2472,6 +2501,34 @@ static inline bool
 netif_xmit_frozen_or_drv_stopped(const struct netdev_queue *dev_queue)
 {
 	return dev_queue->state & QUEUE_STATE_DRV_XOFF_OR_FROZEN;
+}
+
+/**
+ *	netdev_txq_bql_enqueue_prefetchw - prefetch bql data for write
+ *	@dev_queue: pointer to transmit queue
+ *
+ * BQL enabled drivers might use this helper in their ndo_start_xmit(),
+ * to give appropriate hint to the cpu.
+ */
+static inline void netdev_txq_bql_enqueue_prefetchw(struct netdev_queue *dev_queue)
+{
+#ifdef CONFIG_BQL
+	prefetchw(&dev_queue->dql.num_queued);
+#endif
+}
+
+/**
+ *	netdev_txq_bql_complete_prefetchw - prefetch bql data for write
+ *	@dev_queue: pointer to transmit queue
+ *
+ * BQL enabled drivers might use this helper in their TX completion path,
+ * to give appropriate hint to the cpu.
+ */
+static inline void netdev_txq_bql_complete_prefetchw(struct netdev_queue *dev_queue)
+{
+#ifdef CONFIG_BQL
+	prefetchw(&dev_queue->dql.limit);
+#endif
 }
 
 static inline void netdev_tx_sent_queue(struct netdev_queue *dev_queue,
@@ -2822,7 +2879,7 @@ int dev_set_mac_address(struct net_device *, struct sockaddr *);
 int dev_change_carrier(struct net_device *, bool new_carrier);
 int dev_get_phys_port_id(struct net_device *dev,
 			 struct netdev_phys_port_id *ppid);
-struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device *dev);
+struct sk_buff *validate_xmit_skb_list(struct sk_buff *skb, struct net_device *dev);
 struct sk_buff *dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 				    struct netdev_queue *txq, int *ret);
 int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
@@ -3527,6 +3584,7 @@ static inline bool net_gso_ok(netdev_features_t features, int gso_type)
 	BUILD_BUG_ON(SKB_GSO_UDP_TUNNEL != (NETIF_F_GSO_UDP_TUNNEL >> NETIF_F_GSO_SHIFT));
 	BUILD_BUG_ON(SKB_GSO_UDP_TUNNEL_CSUM != (NETIF_F_GSO_UDP_TUNNEL_CSUM >> NETIF_F_GSO_SHIFT));
 	BUILD_BUG_ON(SKB_GSO_MPLS    != (NETIF_F_GSO_MPLS >> NETIF_F_GSO_SHIFT));
+	BUILD_BUG_ON(SKB_GSO_TUNNEL_REMCSUM != (NETIF_F_GSO_TUNNEL_REMCSUM >> NETIF_F_GSO_SHIFT));
 
 	return (features & feature) == feature;
 }
@@ -3537,10 +3595,12 @@ static inline bool skb_gso_ok(struct sk_buff *skb, netdev_features_t features)
 	       (!skb_has_frag_list(skb) || (features & NETIF_F_FRAGLIST));
 }
 
-static inline bool netif_needs_gso(struct sk_buff *skb,
+static inline bool netif_needs_gso(struct net_device *dev, struct sk_buff *skb,
 				   netdev_features_t features)
 {
 	return skb_is_gso(skb) && (!skb_gso_ok(skb, features) ||
+		(dev->netdev_ops->ndo_gso_check &&
+		 !dev->netdev_ops->ndo_gso_check(skb, dev)) ||
 		unlikely((skb->ip_summed != CHECKSUM_PARTIAL) &&
 			 (skb->ip_summed != CHECKSUM_UNNECESSARY)));
 }
@@ -3584,6 +3644,12 @@ static inline bool netif_supports_nofcs(struct net_device *dev)
 	return dev->priv_flags & IFF_SUPP_NOFCS;
 }
 
+/* This device needs to keep skb dst for qdisc enqueue or ndo_start_xmit() */
+static inline void netif_keep_dst(struct net_device *dev)
+{
+	dev->priv_flags &= ~(IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM);
+}
+
 extern struct pernet_operations __net_initdata loopback_net_ops;
 
 /* Logging, debugging and troubleshooting/diagnostic helpers. */
@@ -3613,22 +3679,22 @@ static inline const char *netdev_reg_state(const struct net_device *dev)
 }
 
 __printf(3, 4)
-int netdev_printk(const char *level, const struct net_device *dev,
-		  const char *format, ...);
+void netdev_printk(const char *level, const struct net_device *dev,
+		   const char *format, ...);
 __printf(2, 3)
-int netdev_emerg(const struct net_device *dev, const char *format, ...);
+void netdev_emerg(const struct net_device *dev, const char *format, ...);
 __printf(2, 3)
-int netdev_alert(const struct net_device *dev, const char *format, ...);
+void netdev_alert(const struct net_device *dev, const char *format, ...);
 __printf(2, 3)
-int netdev_crit(const struct net_device *dev, const char *format, ...);
+void netdev_crit(const struct net_device *dev, const char *format, ...);
 __printf(2, 3)
-int netdev_err(const struct net_device *dev, const char *format, ...);
+void netdev_err(const struct net_device *dev, const char *format, ...);
 __printf(2, 3)
-int netdev_warn(const struct net_device *dev, const char *format, ...);
+void netdev_warn(const struct net_device *dev, const char *format, ...);
 __printf(2, 3)
-int netdev_notice(const struct net_device *dev, const char *format, ...);
+void netdev_notice(const struct net_device *dev, const char *format, ...);
 __printf(2, 3)
-int netdev_info(const struct net_device *dev, const char *format, ...);
+void netdev_info(const struct net_device *dev, const char *format, ...);
 
 #define MODULE_ALIAS_NETDEV(device) \
 	MODULE_ALIAS("netdev-" device)
@@ -3646,7 +3712,6 @@ do {								\
 ({								\
 	if (0)							\
 		netdev_printk(KERN_DEBUG, __dev, format, ##args); \
-	0;							\
 })
 #endif
 

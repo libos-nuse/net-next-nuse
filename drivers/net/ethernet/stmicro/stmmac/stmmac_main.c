@@ -44,10 +44,10 @@
 #include <linux/slab.h>
 #include <linux/prefetch.h>
 #include <linux/pinctrl/consumer.h>
-#ifdef CONFIG_STMMAC_DEBUG_FS
+#ifdef CONFIG_DEBUG_FS
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
-#endif /* CONFIG_STMMAC_DEBUG_FS */
+#endif /* CONFIG_DEBUG_FS */
 #include <linux/net_tstamp.h>
 #include "stmmac_ptp.h"
 #include "stmmac.h"
@@ -116,7 +116,7 @@ MODULE_PARM_DESC(chain_mode, "To use chain instead of ring mode");
 
 static irqreturn_t stmmac_interrupt(int irq, void *dev_id);
 
-#ifdef CONFIG_STMMAC_DEBUG_FS
+#ifdef CONFIG_DEBUG_FS
 static int stmmac_init_fs(struct net_device *dev);
 static void stmmac_exit_fs(void);
 #endif
@@ -1688,7 +1688,7 @@ static int stmmac_hw_setup(struct net_device *dev)
 	if (ret && ret != -EOPNOTSUPP)
 		pr_warn("%s: failed PTP initialisation\n", __func__);
 
-#ifdef CONFIG_STMMAC_DEBUG_FS
+#ifdef CONFIG_DEBUG_FS
 	ret = stmmac_init_fs(dev);
 	if (ret < 0)
 		pr_warn("%s: failed debugFS registration\n", __func__);
@@ -1866,7 +1866,7 @@ static int stmmac_release(struct net_device *dev)
 
 	netif_carrier_off(dev);
 
-#ifdef CONFIG_STMMAC_DEBUG_FS
+#ifdef CONFIG_DEBUG_FS
 	stmmac_exit_fs();
 #endif
 
@@ -2453,7 +2453,7 @@ static int stmmac_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	return ret;
 }
 
-#ifdef CONFIG_STMMAC_DEBUG_FS
+#ifdef CONFIG_DEBUG_FS
 static struct dentry *stmmac_fs_dir;
 static struct dentry *stmmac_rings_status;
 static struct dentry *stmmac_dma_cap;
@@ -2638,7 +2638,7 @@ static void stmmac_exit_fs(void)
 	debugfs_remove(stmmac_dma_cap);
 	debugfs_remove(stmmac_fs_dir);
 }
-#endif /* CONFIG_STMMAC_DEBUG_FS */
+#endif /* CONFIG_DEBUG_FS */
 
 static const struct net_device_ops stmmac_netdev_ops = {
 	.ndo_open = stmmac_open,
@@ -2765,8 +2765,6 @@ struct stmmac_priv *stmmac_dvr_probe(struct device *device,
 	priv->device = device;
 	priv->dev = ndev;
 
-	ether_setup(ndev);
-
 	stmmac_set_ethtool_ops(ndev);
 	priv->pause = pause;
 	priv->plat = plat_dat;
@@ -2786,8 +2784,15 @@ struct stmmac_priv *stmmac_dvr_probe(struct device *device,
 	if (IS_ERR(priv->stmmac_clk)) {
 		dev_warn(priv->device, "%s: warning: cannot get CSR clock\n",
 			 __func__);
-		ret = PTR_ERR(priv->stmmac_clk);
-		goto error_clk_get;
+		/* If failed to obtain stmmac_clk and specific clk_csr value
+		 * is NOT passed from the platform, probe fail.
+		 */
+		if (!priv->plat->clk_csr) {
+			ret = PTR_ERR(priv->stmmac_clk);
+			goto error_clk_get;
+		} else {
+			priv->stmmac_clk = NULL;
+		}
 	}
 	clk_prepare_enable(priv->stmmac_clk);
 

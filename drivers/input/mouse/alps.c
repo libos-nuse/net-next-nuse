@@ -835,8 +835,8 @@ static void alps_process_packet_v4(struct psmouse *psmouse)
 		f->fingers = alps_process_bitmap(priv, f);
 	}
 
-	f->left = packet[4] & 0x01;
-	f->right = packet[4] & 0x02;
+	f->left = !!(packet[4] & 0x01);
+	f->right = !!(packet[4] & 0x02);
 
 	f->st.x = ((packet[1] & 0x7f) << 4) | ((packet[3] & 0x30) >> 2) |
 		  ((packet[0] & 0x30) >> 4);
@@ -2372,6 +2372,10 @@ int alps_init(struct psmouse *psmouse)
 	dev2->relbit[BIT_WORD(REL_X)] = BIT_MASK(REL_X) | BIT_MASK(REL_Y);
 	dev2->keybit[BIT_WORD(BTN_LEFT)] =
 		BIT_MASK(BTN_LEFT) | BIT_MASK(BTN_MIDDLE) | BIT_MASK(BTN_RIGHT);
+
+	__set_bit(INPUT_PROP_POINTER, dev2->propbit);
+	if (priv->flags & ALPS_DUALPOINT)
+		__set_bit(INPUT_PROP_POINTING_STICK, dev2->propbit);
 
 	if (input_register_device(priv->dev2))
 		goto init_fail;

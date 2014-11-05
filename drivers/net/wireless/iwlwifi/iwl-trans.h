@@ -377,6 +377,7 @@ enum iwl_trans_status {
  *	if unset 4k will be the RX buffer size
  * @bc_table_dword: set to true if the BC table expects the byte count to be
  *	in DWORD (as opposed to bytes)
+ * @scd_set_active: should the transport configure the SCD for HCMD queue
  * @queue_watchdog_timeout: time (in ms) after which queues
  *	are considered stuck and will trigger device restart
  * @command_names: array of command names, must be 256 entries
@@ -392,6 +393,7 @@ struct iwl_trans_config {
 
 	bool rx_buf_size_8k;
 	bool bc_table_dword;
+	bool scd_set_active;
 	unsigned int queue_watchdog_timeout;
 	const char *const *command_names;
 };
@@ -561,6 +563,7 @@ enum iwl_trans_state {
  *	Set during transport allocation.
  * @hw_id_str: a string with info about HW ID. Set during transport allocation.
  * @pm_support: set to true in start_hw if link pm is supported
+ * @ltr_enabled: set to true if the LTR is enabled
  * @dev_cmd_pool: pool for Tx cmd allocation - for internal use only.
  *	The user should use iwl_trans_{alloc,free}_tx_cmd.
  * @dev_cmd_headroom: room needed for the transport's private use before the
@@ -587,6 +590,7 @@ struct iwl_trans {
 	u8 rx_mpdu_cmd, rx_mpdu_cmd_hdr_size;
 
 	bool pm_support;
+	bool ltr_enabled;
 
 	/* The following fields are internal only */
 	struct kmem_cache *dev_cmd_pool;
@@ -824,12 +828,6 @@ static inline void iwl_trans_ac_txq_enable(struct iwl_trans *trans, int queue,
 	};
 
 	iwl_trans_txq_enable_cfg(trans, queue, 0, &cfg);
-}
-
-static inline void
-iwl_trans_txq_enable_no_scd(struct iwl_trans *trans, int queue, u16 ssn)
-{
-	iwl_trans_txq_enable_cfg(trans, queue, ssn, NULL);
 }
 
 static inline int iwl_trans_wait_tx_queue_empty(struct iwl_trans *trans,
