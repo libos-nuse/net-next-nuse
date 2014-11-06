@@ -56,6 +56,7 @@ int overflowuid = 0;
 int fs_overflowgid = 0;
 int fs_overflowuid = 0;
 unsigned long sysctl_overcommit_kbytes __read_mostly;
+DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
 
 /* from kobject_uevent.c */
 char uevent_helper[UEVENT_HELPER_PATH_LEN] = "dummy-uevent";

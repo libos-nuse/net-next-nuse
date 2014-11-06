@@ -321,10 +321,10 @@ struct SimTask *sim_task_start (void (*callback) (void *), void *context)
   ctx->context = context;
   return g_imported.task_start (g_kernel, &sim_task_start_trampoline, ctx);
 }
-extern void rcu_sched_qs (int);
+extern void rcu_sched_qs(void);
 void sim_task_wait (void)
 {
-  rcu_sched_qs (0);
+  rcu_sched_qs ();
   g_imported.task_wait (g_kernel);
   sim_update_jiffies ();
 }
