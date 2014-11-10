@@ -290,6 +290,8 @@ nuse_netdev_create (const char *ifname, int ifindex)
 	type = NUSE_VIF_RAWSOCK;
       else if (strncmp (nusevif, "NETMAP", 6) == 0)
 	type = NUSE_VIF_NETMAP;
+      else if (strncmp (nusevif, "TAP", 3) == 0)
+        type = NUSE_VIF_TAP;
     }
 
   struct nuse_vif *vif = nuse_vif_create (type, ifname);
@@ -303,9 +305,11 @@ nuse_netdev_create (const char *ifname, int ifindex)
   /* create new net_device (sim%d FIXME: nuse%d). */
   struct SimDevice *dev = sim_dev_create (vif, 0);
   /* assign new hw address */
+  hwaddr_base[4] = getpid ();
   sim_dev_set_address (dev, hwaddr_base);
   hwaddr_base[5]++;
   ether_setup ((struct net_device *)dev);
+
 
   struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
   printf ("assign nuse interface %s IPv4 address %s\n", ifnamebuf, ifv4addr);
@@ -380,6 +384,21 @@ nuse_netdevs_create (void)
   return;
 }
 
+void
+nuse_netdevs_create2 (void)
+{
+	char * ifname;
+
+	ifname = getenv ("NUSEDEV");
+	if (!ifname) {
+		printf ("interface name does not specified\n");
+		return;
+	}
+
+	nuse_netdev_create (ifname, 2);
+	return;
+}
+
 
 void __attribute__((constructor))
 nuse_init (void)
@@ -417,5 +436,5 @@ nuse_init (void)
   memset (g_fd_table, 0, sizeof (g_fd_table));
 
   /* create netdev sim%s corresponding to underlying netdevs */
-  nuse_netdevs_create ();
+  nuse_netdevs_create2 ();
 }

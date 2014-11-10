@@ -23,7 +23,9 @@ nuse_vif_create (enum viftype type, const char *ifname)
   struct nuse_vif_impl *impl = nuse_vif[type];
 
   /* configure promiscus */
-  nuse_set_if_promisc (ifname);
+  if (type != NUSE_VIF_TAP)
+	  nuse_set_if_promisc (ifname);
+
   return impl->create (ifname);
 }
 
