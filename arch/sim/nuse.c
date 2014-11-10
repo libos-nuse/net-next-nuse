@@ -2,6 +2,8 @@
 #include <linux/list.h> // linked-list
 #include <linux/kernel.h> // SYSTEM_BOOTING
 #include <linux/sched.h> // struct task_struct
+#include <uapi/linux/route.h> // struct rtentry
+#include <net/ipconfig.h> // ip_route_iotcl()
 #include <net/net_namespace.h> 
 #include <bits/pthreadtypes.h>
 #include <stdio.h>
@@ -273,8 +275,9 @@ nuse_netdev_create (const char *ifname, int ifindex)
 {
   int err;
   char ifnamebuf[IFNAMSIZ];
-  char *ifv4addr, *nusevif;
+  char *ifv4addr, *nusevif, *defaultrt;
   struct ifreq ifr;
+  struct sockaddr_in *sin;
   enum viftype type = NUSE_VIF_RAWSOCK; /* default: raw socket */
 
   sprintf (ifnamebuf, "nuse-%s", ifname);
@@ -311,7 +314,7 @@ nuse_netdev_create (const char *ifname, int ifindex)
   ether_setup ((struct net_device *)dev);
 
 
-  struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
+  sin = (struct sockaddr_in *)&ifr.ifr_addr;
   printf ("assign nuse interface %s IPv4 address %s\n", ifnamebuf, ifv4addr);
   sin->sin_family = AF_INET;
   sin->sin_addr.s_addr = inet_addr (ifv4addr);
@@ -319,7 +322,7 @@ nuse_netdev_create (const char *ifname, int ifindex)
   err = devinet_ioctl (&init_net, SIOCSIFADDR, &ifr);
   if (err)
     {
-      sim_printf ("err devinet_ioctl %d\n", err);
+      sim_printf ("err devinet_ioctl for assign address %d\n", err);
     }
 
   /* IFF_UP */
@@ -331,6 +334,35 @@ nuse_netdev_create (const char *ifname, int ifindex)
     {
       sim_printf ("err devinet_ioctl %d\n", err);
     }
+
+  /* set default route */
+  if ((defaultrt = getenv ("DEFAULTROUTE"))) {
+    struct rtentry rt;
+
+    memset (&rt, 0, sizeof (rt));
+
+    sin = (struct sockaddr_in *) &rt.rt_gateway;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = inet_addr (defaultrt);
+
+    sin = (struct sockaddr_in *) &rt.rt_dst;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = INADDR_ANY;
+
+    sin = (struct sockaddr_in *) &rt.rt_genmask;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = INADDR_ANY;
+
+    rt.rt_flags = RTF_UP | RTF_GATEWAY;
+    rt.rt_metric = 0;
+
+    err = ip_rt_ioctl (&init_net, SIOCADDRT, &rt);
+    if (err)
+      {
+	sim_printf ("err devinet_ioctl for default route %s %d\n",
+		    defaultrt, err);
+      }
+  }
 
   /* wait for packets */
   void *fiber = nuse_fiber_new (&nuse_netdev_rx_trampoline, dev, 1 << 16, "NET_RX");
