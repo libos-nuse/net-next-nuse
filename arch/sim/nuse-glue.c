@@ -98,6 +98,7 @@ extern ssize_t (*host_write) (int fd, const void *buf, size_t count);
 extern ssize_t (*host_writev) (int fd, const struct iovec *iovec, size_t count);
 extern int (*host_open) (const char *pathname, int flags);
 extern int (*host_close) (int fd);
+extern int nuse_poll (struct pollfd *fds, unsigned int nfds, struct timespec *end_time);
 
 __u64 curfd = 3;
 struct socket *g_fd_table[1024];
@@ -431,92 +432,20 @@ int open (const char *pathname, int flags)
 }
 
 
-void sim_poll_event (int flag, void *context)
-{
-  sim_assert (1);
-  return;
-}
-
-/* FIXME: dup */
-struct poll_table_ref {
-  int ret;
-  void *opaque;
-};
-extern void sim_sock_poll (struct socket *socket, struct poll_table_ref *ret);
 int
 poll (struct pollfd *fds, nfds_t nfds, int timeout)
 {
+  struct timespec *to = NULL, end_time;
   sim_update_jiffies ();
 
-  int count = 0;
-  int timed_out = 0;
-  int i;
+  if (timeout >= 0) {
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    end_time.tv_sec += timeout / MSEC_PER_SEC;
+    end_time.tv_nsec += NSEC_PER_MSEC * (timeout % MSEC_PER_SEC);
+    to = &end_time;
+  }
 
-  struct timespec start, end;
-  clock_gettime(CLOCK_MONOTONIC, &start);
-
-  if (0 == timeout)
-    {
-      timed_out = 1;
-    }
-
-  for (i = 0; i < nfds; ++i)
-    {
-      // initialize all outgoing events.
-      fds[i].revents = 0;
-    }
-
-  /* input information */
-  struct poll_table_ref poll_table;
-  poll_table.opaque = &poll_table;
-  poll_table.ret = fds[i].events | POLLERR | POLLHUP;
-
-restart:
-
-  /* call (sim) kernel side */
-  for (i = 0; i < nfds; ++i)
-    {
-      if (!g_fd_table[fds[i].fd])
-        {
-          continue;
-        }
-
-      sim_sock_poll (g_fd_table[fds[i].fd], &poll_table);
-      int mask = poll_table.ret;
-      mask &= (fds[i].events | POLLERR | POLLHUP);
-      fds[i].revents = mask;
-      if (mask)
-        {
-          count++;
-        }
-    }
-
-  if (count || timeout == 0)
-    {
-      return count;
-    }
-
-  if (timeout < 0)
-    {
-      /* XXX: should wait */
-      sleep (1);
-      goto restart;
-    }
-  else
-    {
-      clock_gettime(CLOCK_MONOTONIC, &end);
-      if (((end.tv_sec - start.tv_sec) * 1000 +
-           (end.tv_nsec - start.tv_nsec) / 1000000) > timeout)
-        {
-          return count;
-        }
-      else
-        {
-          goto restart;
-        }
-    }
-
-  return count;
+  return nuse_poll (fds, nfds, to);
 }
 
 int
