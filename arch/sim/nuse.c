@@ -13,6 +13,8 @@
 #include "nuse.h"
 #include "nuse-hostcalls.h"
 #include "sim.h"
+#include "nuse-config.h"
+
 
 int kptr_restrict __read_mostly;
 extern struct socket *g_fd_table[1024];
@@ -24,7 +26,8 @@ extern void sim_softirq_wakeup (void);
 extern void sim_update_jiffies (void);
 extern struct SimTask *sim_task_create (void *private, unsigned long pid);
 extern void *sim_dev_get_private (struct SimDevice *);
-extern struct SimDevice *sim_dev_create (void *priv, enum SimDevFlags flags);
+extern struct SimDevice *sim_dev_create (char * ifname, 
+					 void *priv, enum SimDevFlags flags);
 extern void sim_dev_set_address (struct SimDevice *dev, unsigned char buffer[6]);
 
 
@@ -43,6 +46,9 @@ extern int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg);
 extern void ether_setup(struct net_device *dev);
 typedef uint32_t in_addr_t;
 extern in_addr_t inet_addr(const char *cp);
+
+/* ip_rt_ioctl */
+extern int ip_rt_ioctl(struct net*net, unsigned int cmd, void __user * arg);
 
 
 int sim_vprintf (const char *str, va_list args)
@@ -268,104 +274,73 @@ void sim_signal_raised (struct SimTask *task, int sig)
   return;
 }
 
-unsigned char hwaddr_base[6] = {0,0,0,0,0,0x01};
-
 void
-nuse_netdev_create (const char *ifname, int ifindex)
+nuse_netdev_create (struct nuse_vif_config * vifcf)
 {
+  /* create net_device for nuse process from nuse_vif_config */
+
   int err;
-  char ifnamebuf[IFNAMSIZ];
-  char *ifv4addr, *nusevif, *defaultrt;
+  struct nuse_vif * vif;
   struct ifreq ifr;
-  struct sockaddr_in *sin;
-  enum viftype type = NUSE_VIF_RAWSOCK; /* default: raw socket */
 
-  sprintf (ifnamebuf, "nuse-%s", ifname);
-  if (!(ifv4addr = getenv (ifnamebuf)))
-    {
-      /* skipped */
-      return;
-    }
+#ifdef DEBUG
+  printf ("create vif\n");
+  printf ("vif name = %s\n", vifcf->ifname);
+  printf ("address = %s\n", vifcf->address);
+  printf ("netmask = %s\n", vifcf->netmask);
+  printf ("macaddr = %s\n", vifcf->macaddr);
+  printf ("type    = %d\n", vifcf->type);
+#endif
 
-  if ((nusevif = getenv ("NUSEVIF")))
-    {
-      if (strncmp (nusevif, "RAW", 3) == 0)
-	type = NUSE_VIF_RAWSOCK;
-      else if (strncmp (nusevif, "NETMAP", 6) == 0)
-	type = NUSE_VIF_NETMAP;
-      else if (strncmp (nusevif, "TAP", 3) == 0)
-        type = NUSE_VIF_TAP;
-    }
-
-  struct nuse_vif *vif = nuse_vif_create (type, ifname);
-  if (!vif)
-    {
+  vif = nuse_vif_create (vifcf->type, vifcf->ifname);
+  if (!vif) {
       sim_printf ("vif create error\n");
       sim_assert (0);
-      return;
-    }
+  }
+  
+  /* create new new_device */
+  struct SimDevice * dev = sim_dev_create (vifcf->ifname, vif, 0);
 
-  /* create new net_device (sim%d FIXME: nuse%d). */
-  struct SimDevice *dev = sim_dev_create (vif, 0);
   /* assign new hw address */
-  hwaddr_base[4] = getpid ();
-  sim_dev_set_address (dev, hwaddr_base);
-  hwaddr_base[5]++;
-  ether_setup ((struct net_device *)dev);
+  sim_dev_set_address (dev, vifcf->mac);
+  ether_setup ((struct net_device *) dev);
 
 
-  sin = (struct sockaddr_in *)&ifr.ifr_addr;
-  printf ("assign nuse interface %s IPv4 address %s\n", ifnamebuf, ifv4addr);
-  sin->sin_family = AF_INET;
-  sin->sin_addr.s_addr = inet_addr (ifv4addr);
-  sprintf (ifr.ifr_name, "sim%d", ifindex - 2);
-  err = devinet_ioctl (&init_net, SIOCSIFADDR, &ifr);
-  if (err)
-    {
-      sim_printf ("err devinet_ioctl for assign address %d\n", err);
-    }
+  /* assign IPv4 address */
+  
+  /* XXX: ifr_name is already fileed by nuse_config_parse_interface, 
+     I don't know why, but vifcf->ifr_vif_addr.ifr_name is NULL in here. */
+  strcpy (vifcf->ifr_vif_addr.ifr_name, vifcf->ifname);
+
+  err = devinet_ioctl (&init_net, SIOCSIFADDR, &vifcf->ifr_vif_addr);
+  if (err) {
+    perror ("devinet_ioctl");
+    printf ("err devinet_ioctl for assign address %s for %s,%s %d\n",
+	    vifcf->address, vifcf->ifname, vifcf->ifr_vif_addr.ifr_name, err);
+  }
+
+  /* set netmask */
+  err = devinet_ioctl (&init_net, SIOCSIFNETMASK, &vifcf->ifr_vif_mask);
+  if (err) {
+    perror ("devinet_ioctl");
+    printf ("err devinet_ioctl for assign netmask %s for %s,%s %d\n",
+	    vifcf->netmask, vifcf->ifname, vifcf->ifr_vif_mask.ifr_name, err);
+  }
 
   /* IFF_UP */
-  memset (&ifr, 0, sizeof (struct ifreq));
+  memset (&ifr, 0, sizeof (ifr));
   ifr.ifr_flags = IFF_UP;
-  sprintf (ifr.ifr_name, "sim%d", ifindex - 2);
+  strncpy (ifr.ifr_name, vifcf->ifname, IFNAMSIZ);
+  
   err = devinet_ioctl (&init_net, SIOCSIFFLAGS, &ifr);
-  if (err)
-    {
-      sim_printf ("err devinet_ioctl %d\n", err);
-    }
-
-  /* set default route */
-  if ((defaultrt = getenv ("DEFAULTROUTE"))) {
-    struct rtentry rt;
-
-    memset (&rt, 0, sizeof (rt));
-
-    sin = (struct sockaddr_in *) &rt.rt_gateway;
-    sin->sin_family = AF_INET;
-    sin->sin_addr.s_addr = inet_addr (defaultrt);
-
-    sin = (struct sockaddr_in *) &rt.rt_dst;
-    sin->sin_family = AF_INET;
-    sin->sin_addr.s_addr = INADDR_ANY;
-
-    sin = (struct sockaddr_in *) &rt.rt_genmask;
-    sin->sin_family = AF_INET;
-    sin->sin_addr.s_addr = INADDR_ANY;
-
-    rt.rt_flags = RTF_UP | RTF_GATEWAY;
-    rt.rt_metric = 0;
-
-    err = ip_rt_ioctl (&init_net, SIOCADDRT, &rt);
-    if (err)
-      {
-	sim_printf ("err devinet_ioctl for default route %s %d\n",
-		    defaultrt, err);
-      }
+  if (err) {
+    perror ("devinet_ioctl");
+    printf ("err devinet_ioctl to set ifup dev %s %d\n", vifcf->ifname, err);
   }
 
   /* wait for packets */
-  void *fiber = nuse_fiber_new (&nuse_netdev_rx_trampoline, dev, 1 << 16, "NET_RX");
+  void *fiber = nuse_fiber_new (&nuse_netdev_rx_trampoline, dev, 
+				1 << 16, "NET_RX");
   struct SimTask *task = NULL;
   task = sim_task_create (fiber, getpid ());
   list_add_tail_rcu (&task->head, &g_task_lists);
@@ -374,67 +349,28 @@ nuse_netdev_create (const char *ifname, int ifindex)
   return;
 }
 
+
 void
-nuse_netdevs_create (void)
+nuse_route_install (struct nuse_route_config * rtcf)
 {
-  char buf[1024];
-  struct ifconf ifc;
-  struct ifreq *ifr;
-  int sock;
-  int nifs;
-  int i;
+  int err;
 
-  sock = host_socket (AF_INET, SOCK_DGRAM, 0);
-  if (sock < 0)
-    {
-      perror("socket");
-      return;
-    }
+  err = ip_rt_ioctl (&init_net, SIOCADDRT, &rtcf->route);
+  if (err) {
+    sim_printf ("err ip_rt_ioctl to add route to %s via %s %d\n",
+		rtcf->network, rtcf->gateway, err);
+  }
 
-  ifc.ifc_len = sizeof (buf);
-  ifc.ifc_buf = buf;
-  if(host_ioctl (sock, SIOCGIFCONF, &ifc) < 0)
-    {
-      perror ("ioctl(SIOCGIFCONF)");
-      return;
-    }
-
-  ifr = ifc.ifc_req;
-  nifs = ifc.ifc_len / sizeof(struct ifreq);
-  for (i = 0; i < nifs; i++)
-    {
-      struct ifreq *item = &ifr[i];
-
-      if (strncmp (item->ifr_name, "lo", 2) == 0)
-        {
-          continue;
-        }
-      
-      nuse_netdev_create (item->ifr_name, item->ifr_ifindex);
-    }
-  host_close (sock);
   return;
 }
-
-void
-nuse_netdevs_create2 (void)
-{
-	char * ifname;
-
-	ifname = getenv ("NUSEDEV");
-	if (!ifname) {
-		printf ("interface name does not specified\n");
-		return;
-	}
-
-	nuse_netdev_create (ifname, 2);
-	return;
-}
-
 
 void __attribute__((constructor))
 nuse_init (void)
 {
+  int n;
+  char * config;
+  struct nuse_config cf;
+
   nuse_set_affinity ();
 
   nuse_hijack_init ();
@@ -467,6 +403,24 @@ nuse_init (void)
   /* create descriptor table */
   memset (g_fd_table, 0, sizeof (g_fd_table));
 
-  /* create netdev sim%s corresponding to underlying netdevs */
-  nuse_netdevs_create2 ();
+  /* read and parse a config file */
+  if ((config = getenv ("NUSECONF")) == NULL) {
+    printf ("config file is not specified\n");
+    sim_assert (0);
+  }
+
+  if (!nuse_config_parse (&cf, config)) {
+    printf ("parse config file failed\n");
+    sim_assert (0);
+  }
+
+  /* create netdevs specified by config file */
+  for (n = 0; n < cf.vif_cnt; n++) {
+    nuse_netdev_create (cf.vifs[n]);
+  }
+
+  /* setup route entries */
+  for (n = 0; n < cf.route_cnt; n++) {
+    nuse_route_install (cf.routes[n]);
+  }
 }
