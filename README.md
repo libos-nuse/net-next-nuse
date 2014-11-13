@@ -56,6 +56,11 @@ And if you want to use tun/tap driver for network i/o, **NUSEVIF=TAP** is offere
            RX bytes:462 (462.0 B)  TX bytes:648 (648.0 B)
 ```
 
+How to set default route of nuse process.
+```
+ sudo NUSEVIF=TAP NUSEDEV=eth0 nuse-eth0=192.168.0.10 DEFAULTROUTE=192.168.0.1 ./nuse ping 172.16.0.1
+```
+
 And, iperf
 
 ```
