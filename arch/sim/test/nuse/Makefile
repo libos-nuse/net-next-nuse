@@ -4,7 +4,7 @@
 TARGET=udp-client
 SRCS=udp-client.c udp-server.c tcp-client.c tcp-server.c
 OBJS=udp-client.o udp-server.o tcp-client.o tcp-server.o
-LIBLINUX=-L ../../../../ -llinux
+LIBLINUX=-L ../../../../ -lnuse-linux
 
 CFLAGS=-g -std=c99 -ffreestanding
 LDOPT= -Wl,-zlazy
