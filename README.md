@@ -43,7 +43,6 @@ interface p1p1
         macaddr 00:01:01:01:01:02
 
 # route entry definition.
-
 route
         network 0.0.0.0
         netmask 0.0.0.0
