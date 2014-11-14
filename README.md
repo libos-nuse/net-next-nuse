@@ -16,12 +16,6 @@ for a build with netmap,
 make library ARCH=sim OPT=no NETMAP=yes
 ```
 
-or with tap,
-
-```
-make library ARCH=sim OPT=no NETMAP=yes TAP=yes
-```
-
 you should see libnuse-linux.so.
 
 ## Run

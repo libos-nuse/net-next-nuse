@@ -12,14 +12,10 @@ NETMAP?=no
 netmap_yes=nuse-vif-netmap.c
 netmap_no=
 
-TAP?=no
-tap_yes=nuse-vif-tap.c
-tap_no=
-
 NUSE_SRC=\
 nuse.c nuse-fiber.c nuse-vif.c  nuse-poll.c \
 nuse-vif-rawsock.c nuse-glue.c nuse-hostcalls.c \
-$(netmap_$(NETMAP)) $(tap_$(TAP))
+nuse-vif-tap.c $(netmap_$(NETMAP))
 
 SIM_SRC=\
 fs.c random.c softirq.c time.c \
