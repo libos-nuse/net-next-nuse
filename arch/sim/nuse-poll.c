@@ -39,7 +39,6 @@ static struct poll_table_entry *poll_get_entry(struct poll_wqueues *p)
 
 static int __pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
 {
-  return 0;
 	struct poll_wqueues *pwq = wait->private;
 	DECLARE_WAITQUEUE(dummy_wait, pwq->polling_task);
 
@@ -171,8 +170,9 @@ do_poll (struct pollfd *fds, unsigned int nfds,
     {
       goto end;
     }
-  
-  if (!schedule_timeout(timespec_to_jiffies (end_time) - jiffies))
+
+  if (!schedule_timeout(end_time ?
+                        (timespec_to_jiffies (end_time) - jiffies) : MAX_SCHEDULE_TIMEOUT))
     timed_out = 1;
 
 end:
