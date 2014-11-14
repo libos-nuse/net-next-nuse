@@ -57,6 +57,10 @@ nuse_config_parse_interface (char * line, FILE * fp, struct nuse_config * cf)
 
 		ret = strsplit (buf, args, sizeof (args));
 
+		/* comment out */
+		if (args[0][0] == '#') 
+			continue;
+
 		if (ret == 0) {
 			/* no item in the line */
 			break;
@@ -147,6 +151,10 @@ nuse_config_parse_route (char * line, FILE * fp, struct nuse_config * cf)
 			/* no item in the line */
 			break;
 		}
+
+		/* comment out */
+		if (args[0][0] == '#') 
+			continue;
 
 		if (strncmp (args[0], "network", 7) == 0) {
 			strncpy (rtcf->network, args[1], NUSE_ADDR_STRLEN);
