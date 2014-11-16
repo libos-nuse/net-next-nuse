@@ -96,12 +96,30 @@ extern void sim_update_jiffies (void);
 extern void sim_softirq_wakeup (void);
 extern ssize_t (*host_write) (int fd, const void *buf, size_t count);
 extern ssize_t (*host_writev) (int fd, const struct iovec *iovec, size_t count);
-extern int (*host_open) (const char *pathname, int flags);
+extern ssize_t (*host_read)(int fd, void *buf, size_t count);
+extern int (*host_ioctl)(int d, int request, ...);
+extern int (*host_open) (const char *pathname, int flags, mode_t mode);
+extern int (*host_open64) (const char *pathname, int flags, mode_t mode);
 extern int (*host_close) (int fd);
+extern int (*host__fxstat) (int version, int fd, void *buf);
+extern int (*host__fxstat64) (int version, int fd, void *buf);
 extern int nuse_poll (struct pollfd *fds, unsigned int nfds, struct timespec *end_time);
+extern ssize_t (*host_pread64) (int fd, void *buf, size_t count, off_t offset);
+extern ssize_t (*host_pwrite64) (int fd, const void *buf, size_t count, off_t offset);
+extern int (*host_fcntl) (int fd, int cmd, ... /* arg */ );
+extern int (*host_dup2) (int oldfd, int newfd);
 
 __u64 curfd = 3;
-struct socket *g_fd_table[1024];
+struct nuse_fd nuse_fd_table[1024];
+
+/* epoll relates */
+struct epoll_fd
+{
+  struct epoll_fd *next;
+  struct epoll_event *ev;
+  int fd;
+};
+
 
 #define RETURN_void(rettype, v)			\
   ({						\
@@ -160,23 +178,40 @@ int socket (int v0, int v1, int v2)
   struct socket *kernel_socket = sim_malloc (sizeof (struct socket));
   memset (kernel_socket, 0, sizeof (struct socket));
   int ret = sim_sock_socket (v0, v1, v2, &kernel_socket);
-  g_fd_table [curfd++] = kernel_socket;
+  if (ret < 0)
+    {
+      errno = -ret;
+    }
+  nuse_fd_table[curfd].kern_sock = kernel_socket;
   sim_softirq_wakeup ();
-  return curfd - 1;
+  return curfd++;
 }
 //FORWARDER1(close, nvoid, int, struct SimSocket *);
 extern int sim_sock_close (struct socket *);
 int close (int fd)
 {
-  if (!g_fd_table[fd])
+  if (!nuse_fd_table[fd].kern_sock)
     {
-      g_fd_table[fd] = 0;
-      return host_close (fd);
+      if (nuse_fd_table[fd].epoll_fd > 0)
+        {
+          free (nuse_fd_table[fd].epoll_fd);
+          nuse_fd_table[fd].epoll_fd = NULL;
+          return 0;
+        }
+      else if (nuse_fd_table[fd].real_fd > 0)
+        {
+          return host_close (nuse_fd_table[fd].real_fd);
+        }
+      return EBADF;
     }
 
   sim_update_jiffies ();
-  int ret = sim_sock_close (g_fd_table[fd]);
-  g_fd_table[fd] = 0;
+  int ret = sim_sock_close (nuse_fd_table[fd].kern_sock);
+  if (ret < 0)
+    {
+      errno = -ret;
+    }
+  nuse_fd_table[fd].kern_sock = 0;
   sim_softirq_wakeup ();
   return ret;
 }
@@ -185,9 +220,12 @@ extern ssize_t sim_sock_recvmsg (struct socket *, const struct msghdr *, int);
 ssize_t recvmsg (int fd, const struct msghdr *v1, int v2)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[fd];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   ssize_t ret = sim_sock_recvmsg (kernel_socket, v1, v2);
-  if (ret < 0) errno = -ret;
+  if (ret < 0)
+    {
+      errno = -ret;
+    }
   sim_softirq_wakeup ();
   return ret;
 }
@@ -196,7 +234,7 @@ extern ssize_t sim_sock_sendmsg (struct socket *, const struct msghdr *, int);
 ssize_t sendmsg (int fd, const struct msghdr *v1, int v2)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[fd];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   ssize_t ret = sim_sock_sendmsg (kernel_socket, v1, v2);
   if (ret < 0) errno = -ret;
   sim_softirq_wakeup ();
@@ -207,7 +245,7 @@ extern int sim_sock_getsockname (struct socket *, struct sockaddr *name, int *na
 int getsockname (int fd, struct sockaddr *name, int *namelen)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[fd];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   int ret = sim_sock_getsockname (kernel_socket, name, namelen);
   sim_softirq_wakeup ();
   return ret;
@@ -217,7 +255,7 @@ extern int sim_sock_getpeername (struct socket *, struct sockaddr *name, int *na
 int getpeername (int fd, struct sockaddr *name, int *namelen)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[fd];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   int ret = sim_sock_getsockname (kernel_socket, name, namelen);
   sim_softirq_wakeup ();
   return ret;
@@ -227,27 +265,27 @@ extern int sim_sock_bind (struct socket *, const struct sockaddr *name, int name
 int bind (int fd, struct sockaddr *name, int namelen)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[fd];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   int ret = sim_sock_bind (kernel_socket, name, namelen);
   sim_softirq_wakeup ();
   return ret;
 }
 //FORWARDER4(connect, nvoid, int, struct SimSocket *,const struct sockaddr *, int, int);
 extern int sim_sock_connect (struct socket *, struct sockaddr *,int,int);
-int connect (int v0, struct sockaddr *v1, int v2)
+int connect (int fd, struct sockaddr *v1, int v2)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[v0];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   int ret = sim_sock_connect (kernel_socket, v1, v2, 0);
   sim_softirq_wakeup ();
   return ret;
 }
 /* FORWARDER2(sim_sock_listen,nvoid, int, struct SimSocket *,int); */
 extern int sim_sock_listen (struct socket *socket, int backlog);
-int listen (int v0, int v1)
+int listen (int fd, int v1)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[v0];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   int retval = sim_sock_listen (kernel_socket, v1);
   sim_softirq_wakeup ();
   return retval;
@@ -266,7 +304,7 @@ extern int sim_sock_accept (struct socket *socket, struct socket **new_socket, i
 int accept4 (int fd, struct sockaddr *addr, int *addrlen, int flags)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[fd];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   struct socket *new_socket = sim_malloc (sizeof (struct socket));
   int retval = sim_sock_accept (kernel_socket, &new_socket, flags);
   if (retval < 0)
@@ -287,7 +325,7 @@ int accept4 (int fd, struct sockaddr *addr, int *addrlen, int flags)
           return -1;
         }
     }
-  g_fd_table [curfd++] = new_socket;
+  nuse_fd_table[curfd++].kern_sock = new_socket;
   sim_softirq_wakeup ();
   return curfd - 1;
 }
@@ -298,9 +336,9 @@ int accept (int fd, struct sockaddr *addr, int *addrlen, int flags)
 
 ssize_t write (int fd, const void *buf, size_t count)
 {
-  if (!g_fd_table[fd])
+  if (!nuse_fd_table[fd].kern_sock)
     {
-      return host_write (fd, buf, count);
+      return host_write (nuse_fd_table[fd].real_fd, buf, count);
     }
 
   struct msghdr msg;
@@ -318,9 +356,9 @@ ssize_t write (int fd, const void *buf, size_t count)
 
 ssize_t writev (int fd, const struct iovec *iov, size_t count)
 {
-  if (!g_fd_table[fd])
+  if (!nuse_fd_table[fd].kern_sock)
     {
-      return host_writev (fd, iov, count);
+      return host_writev (nuse_fd_table[fd].real_fd, iov, count);
     }
 
   struct msghdr msg;
@@ -335,6 +373,11 @@ ssize_t writev (int fd, const struct iovec *iov, size_t count)
 
 ssize_t read (int fd, void *buf, size_t count)
 {
+  if (!nuse_fd_table[fd].kern_sock)
+    {
+      return host_read (nuse_fd_table[fd].real_fd, buf, count);
+    }
+
   struct msghdr msg;
   struct iovec iov;
   msg.msg_control = 0;
@@ -391,11 +434,11 @@ int recv (int fd, void *buf, size_t count, int flags)
 
 extern int sim_sock_setsockopt (struct socket *socket, int level, int optname,
                                 const void *optval, int optlen);
-int setsockopt(int sockfd, int level, int optname,
+int setsockopt(int fd, int level, int optname,
                const void *optval, int optlen)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[sockfd];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   int retval = sim_sock_setsockopt (kernel_socket, level, optname, optval, optlen);
   if (retval < 0)
     {
@@ -409,11 +452,11 @@ int setsockopt(int sockfd, int level, int optname,
 
 extern int sim_sock_getsockopt (struct socket *socket, int level, int optname,
                                 void *optval, int *optlen);
-int getsockopt(int sockfd, int level, int optname,
+int getsockopt(int fd, int level, int optname,
                void *optval, int *optlen)
 {
   sim_update_jiffies ();
-  struct socket *kernel_socket = g_fd_table[sockfd];
+  struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
   int retval = sim_sock_getsockopt (kernel_socket, level, optname, optval, optlen);
   if (retval < 0)
     {
@@ -425,10 +468,103 @@ int getsockopt(int sockfd, int level, int optname,
   return retval;
 }
 
-int open (const char *pathname, int flags)
+int open (const char *pathname, int flags, mode_t mode)
 {
-  curfd++;
-  return host_open (pathname, flags);
+  nuse_fd_table[curfd].real_fd = host_open (pathname, flags, mode);
+  if (nuse_fd_table[curfd].real_fd < 0)
+    {
+      printf ("open error %d\n", errno);
+      return -1;
+    }
+  return curfd++;
+}
+
+int open64 (const char *pathname, int flags, mode_t mode)
+{
+  nuse_fd_table[curfd].real_fd = host_open64 (pathname, flags, mode);
+  //  printf ("%d, %llu %s %s\n", nuse_fd_table[curfd].real_fd, curfd, pathname, __FUNCTION__);
+  if (nuse_fd_table[curfd].real_fd < 0)
+    {
+      printf ("open error %d\n", errno);
+      return -1;
+    }
+  return curfd++;
+}
+
+int __fxstat (int ver, int fd, void *buf)
+{
+  if (nuse_fd_table[fd].real_fd < 0)
+    {
+      return -1;
+    }
+  return host__fxstat (ver, nuse_fd_table[fd].real_fd, buf);
+}
+
+int __fxstat64 (int ver, int fd, void *buf)
+{
+  if (nuse_fd_table[fd].real_fd < 0)
+    {
+      return -1;
+    }
+  return host__fxstat64 (ver, nuse_fd_table[fd].real_fd, buf);
+}
+
+ssize_t pread64 (int fd, void *buf, size_t count, off_t offset)
+{
+  if (nuse_fd_table[fd].real_fd < 0)
+    {
+      return -1;
+    }
+  return host_pread64 (nuse_fd_table[fd].real_fd, buf, count, offset);
+}
+
+ssize_t pwrite64 (int fd, const void *buf, size_t count, off_t offset)
+{
+  if (nuse_fd_table[fd].real_fd < 0)
+    {
+      return -1;
+    }
+  return host_pwrite64 (nuse_fd_table[fd].real_fd, buf, count, offset);
+}
+
+int fcntl (int fd, int cmd, ... /* arg */ )
+{
+  if (nuse_fd_table[fd].real_fd < 0)
+    {
+      return -1;
+    }
+  va_list vl;
+  va_start (vl, cmd);
+  unsigned long arg = va_arg (vl, unsigned long);
+  va_end (vl);
+
+  return host_fcntl (nuse_fd_table[fd].real_fd, cmd, arg);
+}
+
+int dup2 (int oldfd, int newfd)
+{
+  if (nuse_fd_table[oldfd].real_fd < 0)
+    {
+      return -1;
+    }
+  return host_dup2 (nuse_fd_table[oldfd].real_fd, 
+                    nuse_fd_table[newfd].real_fd);
+}
+
+extern int sim_sock_ioctl (struct socket *socket, int request, char *argp);
+int ioctl (int fd, int request, ...)
+{
+  va_list vl;
+  va_start (vl, request);
+  char *argp = va_arg (vl, char*);
+  va_end (vl);
+
+  if (!nuse_fd_table[fd].kern_sock)
+    {
+      return host_fcntl (nuse_fd_table[fd].real_fd, request, argp);
+    }
+
+  return sim_sock_ioctl (nuse_fd_table[fd].kern_sock, request, argp);
 }
 
 
@@ -499,7 +635,7 @@ select (int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 
       if (event)
         {
-          if (!g_fd_table[fd])
+          if (!nuse_fd_table[fd].kern_sock)
             {
               errno = EBADF;
               return -1;
@@ -561,29 +697,19 @@ select (int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
   return ret;
 }
 
-/* epoll relates */
-struct epoll_fd
-{
-  struct epoll_fd *next;
-  struct epoll_event *ev;
-  int fd;
-};
-
-struct epoll_fd *g_epoll_fd_table[1024] = {0};
-
 int
 epoll_create (int size)
 {
   struct epoll_fd *epfd = malloc (sizeof (struct epoll_fd));
   memset (epfd, 0, sizeof (struct epoll_fd));
-  g_epoll_fd_table[curfd] = epfd;
+  nuse_fd_table[curfd].epoll_fd = epfd;
   return curfd++;
 }
 
 int
 epoll_ctl (int epollfd, int op, int fd, struct epoll_event *event)
 {
-  struct epoll_fd *prev, *epfd = g_epoll_fd_table[epollfd];
+  struct epoll_fd *prev, *epfd = nuse_fd_table[epollfd].epoll_fd;
   if (!epfd)
     return EBADF;
 
@@ -647,7 +773,7 @@ int
 epoll_wait (int epollfd, struct epoll_event *events,
            int maxevents, int timeout)
 {
-  struct epoll_fd *cur, *epfd = g_epoll_fd_table[epollfd];
+  struct epoll_fd *cur, *epfd = nuse_fd_table[epollfd].epoll_fd;
   if (!epfd)
     return EBADF;
 

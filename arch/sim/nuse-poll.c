@@ -1,7 +1,8 @@
 #include <linux/poll.h>
 #include <linux/net.h>
+#include "nuse.h"
 
-extern struct socket *g_fd_table[1024];
+extern struct nuse_fd nuse_fd_table[1024];
 
 
 struct poll_table_page {
@@ -148,7 +149,7 @@ do_poll (struct pollfd *fds, unsigned int nfds,
   /* call (sim) kernel side */
   for (i = 0; i < nfds; ++i)
     {
-      struct socket *sock = (struct socket *)g_fd_table[fds[i].fd];
+      struct socket *sock = (struct socket *)nuse_fd_table[fds[i].fd].kern_sock;
       struct file zero;
       if (!sock)
         {

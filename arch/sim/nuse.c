@@ -15,7 +15,6 @@
 #include "sim.h"
 
 int kptr_restrict __read_mostly;
-extern struct socket *g_fd_table[1024];
 
 struct SimTask;
 enum system_states system_state = SYSTEM_BOOTING;
@@ -244,6 +243,7 @@ nuse_netdev_rx_trampoline (void *context)
   struct SimDevice *dev = context;
   struct nuse_vif *vif = sim_dev_get_private (dev);
   nuse_vif_read (vif, dev);
+  printf ("should not reach here %s\n", __FUNCTION__);
   /* should not reach */
   return dev;
 }
@@ -438,6 +438,12 @@ nuse_init (void)
   nuse_set_affinity ();
 
   nuse_hijack_init ();
+
+  /* create descriptor table */
+  memset (nuse_fd_table, 0, sizeof (nuse_fd_table));
+  nuse_fd_table[1].real_fd = 1;
+  nuse_fd_table[2].real_fd = 2;
+
   rcu_init ();
 
   void *fiber = nuse_fiber_new_from_caller (1 << 16, "init");
@@ -463,9 +469,6 @@ nuse_init (void)
 
   // finally, put the system in RUNNING state.
   system_state = SYSTEM_RUNNING;
-
-  /* create descriptor table */
-  memset (g_fd_table, 0, sizeof (g_fd_table));
 
   /* create netdev sim%s corresponding to underlying netdevs */
   nuse_netdevs_create2 ();

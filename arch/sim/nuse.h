@@ -3,6 +3,15 @@
 
 #include "nuse-vif.h"
 
+/* nuse.c */
+struct nuse_fd
+{
+  int real_fd;
+  struct epoll_fd *epoll_fd;
+  struct socket *kern_sock;
+};
+extern struct nuse_fd nuse_fd_table[1024];
+
 /* nuse-vif.c */
 extern void *nuse_vif_create (enum viftype type, const char *ifname);
 extern void nuse_vif_read (struct nuse_vif *vif, struct SimDevice *dev);

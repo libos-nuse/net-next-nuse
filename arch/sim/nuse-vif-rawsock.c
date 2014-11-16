@@ -3,6 +3,7 @@
 #define _GNU_SOURCE /* Get RTLD_NEXT */
 #include <dlfcn.h>
 #include <sys/ioctl.h>
+#include <errno.h>
 #include "sim-init.h"
 #include "sim-assert.h"
 //#include "nuse-hostcalls.h"
@@ -20,6 +21,7 @@ extern ssize_t (*host_read)(int fd, void *buf, size_t count);
 extern int (*host_close)(int fd);
 extern int (*host_socket) (int fd, int type, int proto);
 extern int (*host_bind)(int, const struct sockaddr *, int);
+extern int (*host_ioctl)(int d, int request, ...);
 
 extern unsigned int if_nametoindex(const char *ifname);
 
@@ -33,12 +35,13 @@ nuse_vif_raw_read (struct nuse_vif *vif, struct SimDevice *dev)
       ssize_t size = host_read (sock, buf, sizeof (buf));
       if (size < 0)
         {
-          perror ("read");
+          printf ("read error errno=%d\n", errno);
           host_close (sock);
           return;
         }
       else if (size == 0)
         {
+          printf ("read error: closed. errno=%d\n", errno);
           host_close (sock);
           return;
         }
@@ -65,6 +68,8 @@ nuse_vif_raw_read (struct nuse_vif *vif, struct SimDevice *dev)
       sim_dev_rx (dev, packet);
       sim_softirq_wakeup ();
     }
+
+  printf ("%s: should not reach", __FUNCTION__);
   return;
 }
 
@@ -122,7 +127,7 @@ nuse_set_if_promisc (char * ifname)
   memset (&ifr, 0, sizeof (ifr));
   strncpy (ifr.ifr_name, ifname, IFNAMSIZ - 1);
 
-  if (ioctl (fd, SIOCGIFFLAGS, &ifr) != 0)
+  if (host_ioctl (fd, SIOCGIFFLAGS, &ifr) != 0)
     {
       printf ("failed to get interface status");
       return -1;
@@ -130,7 +135,7 @@ nuse_set_if_promisc (char * ifname)
 
   ifr.ifr_flags |= IFF_UP|IFF_PROMISC;
 
-  if (ioctl (fd, SIOCSIFFLAGS, &ifr) != 0) 
+  if (host_ioctl (fd, SIOCSIFFLAGS, &ifr) != 0) 
     {
       printf ("failed to set interface to promisc");
       return -1;
