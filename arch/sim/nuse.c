@@ -279,6 +279,7 @@ nuse_netdev_create (const char *ifname, int ifindex)
   struct ifreq ifr;
   struct sockaddr_in *sin;
   enum viftype type = NUSE_VIF_RAWSOCK; /* default: raw socket */
+  static int init_loopback = 0;
 
   sprintf (ifnamebuf, "nuse-%s", ifname);
   if (!(ifv4addr = getenv (ifnamebuf)))
@@ -303,6 +304,20 @@ nuse_netdev_create (const char *ifname, int ifindex)
       sim_printf ("vif create error\n");
       sim_assert (0);
       return;
+    }
+
+  /* loopback IFF_UP */
+  if (!init_loopback)
+    {
+      memset (&ifr, 0, sizeof (struct ifreq));
+      ifr.ifr_flags = IFF_UP;
+      sprintf (ifr.ifr_name, "lo");
+      err = devinet_ioctl (&init_net, SIOCSIFFLAGS, &ifr);
+      if (err)
+        {
+          sim_printf ("err devinet_ioctl %d\n", err);
+        }
+      init_loopback = 1;
     }
 
   /* create new net_device (sim%d FIXME: nuse%d). */
