@@ -109,7 +109,6 @@ extern ssize_t (*host_pwrite64) (int fd, const void *buf, size_t count, off_t of
 extern int (*host_fcntl) (int fd, int cmd, ... /* arg */ );
 extern int (*host_dup2) (int oldfd, int newfd);
 
-__u64 curfd = 3;
 struct nuse_fd nuse_fd_table[1024];
 
 /* epoll relates */
@@ -182,9 +181,11 @@ int socket (int v0, int v1, int v2)
     {
       errno = -ret;
     }
-  nuse_fd_table[curfd].kern_sock = kernel_socket;
+  int real_fd = host_open ("/", O_RDONLY, 0);
+  nuse_fd_table[real_fd].kern_sock = kernel_socket;
+  nuse_fd_table[real_fd].real_fd = real_fd;
   sim_softirq_wakeup ();
-  return curfd++;
+  return real_fd;
 }
 //FORWARDER1(close, nvoid, int, struct SimSocket *);
 extern int sim_sock_close (struct socket *);
@@ -212,6 +213,7 @@ int close (int fd)
       errno = -ret;
     }
   nuse_fd_table[fd].kern_sock = 0;
+  host_close (nuse_fd_table[fd].real_fd);
   sim_softirq_wakeup ();
   return ret;
 }
@@ -325,9 +327,11 @@ int accept4 (int fd, struct sockaddr *addr, int *addrlen, int flags)
           return -1;
         }
     }
-  nuse_fd_table[curfd++].kern_sock = new_socket;
+  int real_fd = host_open ("/", O_RDONLY, 0);
+  nuse_fd_table[real_fd].kern_sock = new_socket;
+  nuse_fd_table[real_fd].real_fd = real_fd;
   sim_softirq_wakeup ();
-  return curfd - 1;
+  return real_fd;
 }
 int accept (int fd, struct sockaddr *addr, int *addrlen, int flags)
 {
@@ -470,85 +474,27 @@ int getsockopt(int fd, int level, int optname,
 
 int open (const char *pathname, int flags, mode_t mode)
 {
-  nuse_fd_table[curfd].real_fd = host_open (pathname, flags, mode);
-  if (nuse_fd_table[curfd].real_fd < 0)
+  int real_fd = host_open (pathname, flags, mode);
+  if (nuse_fd_table[real_fd].real_fd < 0)
     {
       printf ("open error %d\n", errno);
       return -1;
     }
-  return curfd++;
+  nuse_fd_table[real_fd].real_fd = real_fd;
+  return real_fd;
 }
 
 int open64 (const char *pathname, int flags, mode_t mode)
 {
-  nuse_fd_table[curfd].real_fd = host_open64 (pathname, flags, mode);
+  int real_fd = host_open64 (pathname, flags, mode);
   //  printf ("%d, %llu %s %s\n", nuse_fd_table[curfd].real_fd, curfd, pathname, __FUNCTION__);
-  if (nuse_fd_table[curfd].real_fd < 0)
+  if (nuse_fd_table[real_fd].real_fd < 0)
     {
       printf ("open error %d\n", errno);
       return -1;
     }
-  return curfd++;
-}
-
-int __fxstat (int ver, int fd, void *buf)
-{
-  if (nuse_fd_table[fd].real_fd < 0)
-    {
-      return -1;
-    }
-  return host__fxstat (ver, nuse_fd_table[fd].real_fd, buf);
-}
-
-int __fxstat64 (int ver, int fd, void *buf)
-{
-  if (nuse_fd_table[fd].real_fd < 0)
-    {
-      return -1;
-    }
-  return host__fxstat64 (ver, nuse_fd_table[fd].real_fd, buf);
-}
-
-ssize_t pread64 (int fd, void *buf, size_t count, off_t offset)
-{
-  if (nuse_fd_table[fd].real_fd < 0)
-    {
-      return -1;
-    }
-  return host_pread64 (nuse_fd_table[fd].real_fd, buf, count, offset);
-}
-
-ssize_t pwrite64 (int fd, const void *buf, size_t count, off_t offset)
-{
-  if (nuse_fd_table[fd].real_fd < 0)
-    {
-      return -1;
-    }
-  return host_pwrite64 (nuse_fd_table[fd].real_fd, buf, count, offset);
-}
-
-int fcntl (int fd, int cmd, ... /* arg */ )
-{
-  if (nuse_fd_table[fd].real_fd < 0)
-    {
-      return -1;
-    }
-  va_list vl;
-  va_start (vl, cmd);
-  unsigned long arg = va_arg (vl, unsigned long);
-  va_end (vl);
-
-  return host_fcntl (nuse_fd_table[fd].real_fd, cmd, arg);
-}
-
-int dup2 (int oldfd, int newfd)
-{
-  if (nuse_fd_table[oldfd].real_fd < 0)
-    {
-      return -1;
-    }
-  return host_dup2 (nuse_fd_table[oldfd].real_fd, 
-                    nuse_fd_table[newfd].real_fd);
+  nuse_fd_table[real_fd].real_fd = real_fd;
+  return real_fd;
 }
 
 extern int sim_sock_ioctl (struct socket *socket, int request, char *argp);
@@ -561,7 +507,7 @@ int ioctl (int fd, int request, ...)
 
   if (!nuse_fd_table[fd].kern_sock)
     {
-      return host_fcntl (nuse_fd_table[fd].real_fd, request, argp);
+      return host_ioctl (nuse_fd_table[fd].real_fd, request, argp);
     }
 
   return sim_sock_ioctl (nuse_fd_table[fd].kern_sock, request, argp);
@@ -702,8 +648,10 @@ epoll_create (int size)
 {
   struct epoll_fd *epfd = malloc (sizeof (struct epoll_fd));
   memset (epfd, 0, sizeof (struct epoll_fd));
-  nuse_fd_table[curfd].epoll_fd = epfd;
-  return curfd++;
+  int real_fd = host_open ("/", O_RDONLY, 0);
+  nuse_fd_table[real_fd].real_fd = real_fd;
+  nuse_fd_table[real_fd].epoll_fd = epfd;
+  return real_fd;
 }
 
 int
