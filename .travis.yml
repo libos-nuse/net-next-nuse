@@ -7,10 +7,10 @@ compiler:
 # Change this to your needs
 script:
   - make defconfig ARCH=sim && make clean ARCH=sim && make library ARCH=sim
-  - sudo modprobe tun
-  - ls /lib/modules/`uname -r`/kernel/drivers/net/
-  - sudo NUSEDEV=tap0 NUSEVIF=TAP nuse-tap0=192.168.0.2 ./nuse sleep 100 &
-  - sudo ip addr add 192.168.0.1/24 dev nuse-tap0
-  - ping 192.168.0.2 -c 1 | grep ttl
+  - IFNAME=`ip route |grep default | awk '{print $5}'`
+  - GW=`ip route |grep default | awk '{print $3}'`
+  # XXX
+  - IPADDR=`echo $GW | sed -r "s/([0-9]+\.[0-9]+\.[0-9]+\.)([0-9]+)$/\1`expr \2 + 10`/"`
+  - sudo NUSEDEV=eth0 nuse-eth0=${IPADDR} ./nuse ping ${GW} -c 1
 #  - make bake -C arch/sim/test && make testbin -C arch/sim/test 
 #  - make test ARCH=sim ADD_PARAM="-r"
