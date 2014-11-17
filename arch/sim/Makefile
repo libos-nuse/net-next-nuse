@@ -14,7 +14,7 @@ netmap_no=
 
 NUSE_SRC=\
 nuse.c nuse-fiber.c nuse-vif.c  nuse-poll.c \
-nuse-vif-rawsock.c nuse-glue.c nuse-hostcalls.c \
+nuse-vif-rawsock.c nuse-glue.c nuse-hostcalls.c nuse-config.c \
 nuse-vif-tap.c $(netmap_$(NETMAP))
 
 SIM_SRC=\
