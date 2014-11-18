@@ -375,6 +375,32 @@ ssize_t writev (int fd, const struct iovec *iov, size_t count)
   return sendmsg (fd, &msg, 0);
 }
 
+ssize_t sendto (int fd, const void *buf, size_t len, int flags,
+                const struct sockaddr *dest_addr, socklen_t addrlen)
+{
+  struct msghdr msg;
+  struct iovec iov;
+  memset (&msg, 0, sizeof (struct msghdr));
+  msg.msg_control = 0;
+  msg.msg_controllen = 0;
+  msg.msg_iovlen = 1;
+  msg.msg_iov = &iov;
+  iov.iov_len = len;
+  iov.iov_base = (void*)buf;
+  if (dest_addr != 0)
+    {
+      memcpy (msg.msg_name, dest_addr, addrlen);
+      msg.msg_namelen = addrlen;
+    }
+  ssize_t retval = sendmsg (fd, &msg, flags);
+  return retval;
+}
+
+ssize_t send (int fd, const void *buf, size_t len, int flags)
+{
+  return sendto (fd, buf, len, flags, 0, 0);
+}
+
 ssize_t read (int fd, void *buf, size_t count)
 {
   if (!nuse_fd_table[fd].kern_sock)
