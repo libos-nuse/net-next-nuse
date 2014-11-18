@@ -21,6 +21,8 @@
 #include "nuse-vif.h"
 
 
+static int vale_rings = 0;
+
 #define MIN(X,Y) ((X) < (Y) ? (X) : (Y))
 typedef int (*initcall_t)(void);
 #define __define_initcall(fn, id)      \
@@ -30,8 +32,8 @@ typedef int (*initcall_t)(void);
 
 struct nuse_vif_netmap
 {
-  struct nm_desc *nmd;
   int fd;
+  struct netmap_if * nifp;
 };
 
 extern struct SimDevicePacket sim_dev_create_packet (struct SimDevice *dev, int size);
@@ -39,181 +41,178 @@ extern void sim_dev_rx (struct SimDevice *device, struct SimDevicePacket packet)
 extern void *sim_dev_get_private (struct SimDevice *);
 extern void sim_softirq_wakeup (void);
 extern void *sim_malloc (unsigned long size);
+extern void *sim_free (void * buffer);
 extern int (*host_poll)(struct pollfd *, int, int);
 
 #define BURST_MAX 1024
 
+
+
+static int
+netmap_get_nifp (const char * ifname, struct netmap_if ** _nifp)
+{
+  int fd;
+  char * mem;
+  struct nmreq nmr;
+  struct netmap_if * nifp;
+
+  /* open netmap for  ring */
+
+  fd = open ("/dev/netmap", O_RDWR);
+  if (fd < 0) {
+    printf ("unable to open /dev/netmap");
+    return 0;
+  }
+
+  memset (&nmr, 0, sizeof (nmr));
+  strcpy (nmr.nr_name, ifname);
+  nmr.nr_version = NETMAP_API;
+  nmr.nr_ringid = 0 | (NETMAP_NO_TX_POLL | NETMAP_DO_RX_POLL);
+  nmr.nr_flags |= NR_REG_ALL_NIC;
+
+  if (ioctl (fd, NIOCREGIF, &nmr) < 0) {
+    printf ("unable to register interface %s", ifname);
+    return 0;
+  }
+
+  if (vale_rings && strncmp (ifname, "vale", 4) == 0) {
+    nmr.nr_rx_rings = vale_rings;
+    nmr.nr_tx_rings = vale_rings;
+  }
+
+  mem = mmap (NULL, nmr.nr_memsize,
+	      PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+  if (mem == MAP_FAILED) {
+    printf ("unable to mmap");
+    return 0;
+  }
+
+  nifp = NETMAP_IF (mem, nmr.nr_offset);
+  *_nifp = nifp;
+
+  return fd;
+}
+
 void
 nuse_vif_netmap_read (struct nuse_vif *vif, struct SimDevice *dev)
 {
-  struct nuse_vif_netmap *netmap = vif->private;
-  struct netmap_ring *rxring;
-  struct pollfd pfd = { .fd = netmap->fd, .events = POLLIN };
-  struct netmap_if *nifp = netmap->nmd->nifp;
+  int n;
+  uint32_t burst, m, rx, cur, size;
+  struct netmap_slot * rs;
+  struct netmap_ring * ring;
+  struct nuse_vif_netmap * vifnm = vif->private;
+  struct netmap_if * nifp = vifnm->nifp;
 
-  uint32_t i, cur, rx, n, size;
+  while (1) {
 
-  while (1)
-    {
-      if (host_poll (&pfd, 1, 0) == 0)
-        continue;
+    ioctl (vifnm->fd, NIOCRXSYNC, 0);
+    
+    for (n = 0; n < nifp->ni_rx_rings; n++) {
+      ring = NETMAP_RXRING (nifp, n);
 
-      if (pfd.revents & POLLERR) {
-	printf ("poll err\n");
-	sim_assert (0);
-      }
+      if (nm_ring_empty (ring))
+	continue;
 
-      for (i = netmap->nmd->first_rx_ring; i <= netmap->nmd->last_rx_ring; i++) {
-	rxring = NETMAP_RXRING (nifp, i);
-	if (nm_ring_empty (rxring))
-	  continue;
+      m = nm_ring_space (ring);
+      m = MIN (m, BURST_MAX);
 
-        cur = rxring->cur;
-        n = nm_ring_space (rxring);
-        for (rx = 0; rx < n; rx++) {
-	  struct netmap_slot *slot = &rxring->slot[cur];
-	  char *p = NETMAP_BUF (rxring, slot->buf_idx);
+      cur = ring->cur;
 
-	  size = slot->len;
-	  struct ethhdr
-	  {
-	    unsigned char   h_dest[6];
-	    unsigned char   h_source[6];
-	    uint16_t        h_proto;
-	  } *hdr = (struct ethhdr *) p;
+      for (rx = 0; rx < m; rx++) {
+	rs = &ring->slot[cur];
+	char *p = NETMAP_BUF (ring, rs->buf_idx);
+
+	size = rs->len;
+
+          struct ethhdr
+          {
+            unsigned char   h_dest[6];
+            unsigned char   h_source[6];
+            uint16_t        h_proto;
+          } *hdr = (struct ethhdr *) p;
 
 #if DEBUG
-	  printf ("proto = 0x%x, dst= %X:%X:%X:%X:%X:%X\n",
-		  ntohs (hdr->h_proto), hdr->h_dest[0], hdr->h_dest[1], hdr->h_dest[2],
-		  hdr->h_dest[3], hdr->h_dest[4],hdr->h_dest[5]);
+          printf ("proto = 0x%x, dst= %X:%X:%X:%X:%X:%X\n",
+                  ntohs (hdr->h_proto), hdr->h_dest[0], hdr->h_dest[1], hdr->h_dest[2],
+                  hdr->h_dest[3], hdr->h_dest[4],hdr->h_dest[5]);
 #endif
 
-	  struct SimDevicePacket packet = sim_dev_create_packet (dev, size);
-	  /* XXX: FIXME should not copy */
-	  memcpy (packet.buffer, hdr, size);
-	  sim_dev_rx (dev, packet);
-	  sim_softirq_wakeup ();
+          struct SimDevicePacket packet = sim_dev_create_packet (dev, size);
+          /* XXX: FIXME should not copy */
+          memcpy (packet.buffer, hdr, size);
+          sim_dev_rx (dev, packet);
+          sim_softirq_wakeup ();
 
-	  cur = nm_ring_next (rxring, cur);
-        }
-        rxring->head = rxring->cur = cur;
+          cur = nm_ring_next (ring, cur);
       }
+
+      ring->head = ring->cur = cur;
     }
-  return;
+  }
 }
 
 void
-nuse_vif_netmap_write (struct nuse_vif *vif, struct SimDevice *dev, 
-                unsigned char *data, int len)
+nuse_vif_netmap_write (struct nuse_vif * vif, struct SimDevice * dev,
+		       unsigned char * data, int len)
 {
-  struct nuse_vif_netmap *netmap = vif->private;
+  int n;
+  uint32_t m, cur, size;
+  struct netmap_slot * ts;
+  struct netmap_ring * ring;
+  struct nuse_vif_netmap * vifnm = vif->private;
+  struct netmap_if * nifp = vifnm->nifp;
 
-  struct pollfd pfd = { .fd = netmap->fd, .events = POLLOUT };
-  struct netmap_if *nifp = netmap->nmd->nifp;
-  struct netmap_ring *txring;
+  /* XXX make it be parallel */
+  ring = NETMAP_TXRING (nifp, 0);
 
-  uint8_t *dst;
-  uint32_t i, cur, nm_frag_size, offset, last;
+  if (nm_ring_empty (ring))
+    return;
 
-  while (1)
-    {
-      if (host_poll (&pfd, 1, 0) == 0)
-	{
-	  perror ("poll");
-	  continue;
-	}
-      break;
-    }
+  cur = ring->cur;
+  ts = &ring->slot[cur];
+  memcpy (NETMAP_BUF(ring, ts->buf_idx), data, len);
+  ts->len = len;
+  
+  cur = nm_ring_next (ring, cur);
+  ring->head = ring->cur = cur;
 
-  for (i = netmap->nmd->first_tx_ring; i <= netmap->nmd->last_tx_ring; i++) {
-    if (len <= 0)
-      break;
-
-    txring = NETMAP_TXRING (nifp, i);
-    offset = 0;
-    cur = txring->cur;
-
-    if (nm_ring_empty (txring))
-      continue;
-
-    nm_frag_size = MIN (len, txring->nr_buf_size);
-    dst = (uint8_t *)NETMAP_BUF (txring, txring->slot[cur].buf_idx);
-    txring->slot[cur].len = nm_frag_size;
-    txring->slot[cur].flags = NS_MOREFRAG;
-    memcpy (dst, data + offset, nm_frag_size);
-
-    last = cur;
-    cur = nm_ring_next(txring, cur);
-
-    offset += nm_frag_size;
-    len -= nm_frag_size;
-  }
-  /* The last slot must not have NS_MOREFRAG set. */
-  txring->slot[last].flags &= ~NS_MOREFRAG;
-
-  /* Now update ring->cur and ring->head. */
-  txring->cur = txring->head = cur;
-  ioctl(netmap->fd, NIOCTXSYNC, NULL);
-
-  return;
+  ioctl(vifnm->fd, NIOCTXSYNC, 0);
 }
-
 
 void *
 nuse_vif_netmap_create (const char *ifname)
 {
-  int if_qnum;
-  struct nmreq nmr;
-  char nm_ifname[IFNAMSIZ];
 
-  struct nuse_vif_netmap *netmap = sim_malloc (sizeof (struct nuse_vif_netmap));
-  sprintf(nm_ifname, "netmap:%s", ifname);
-  netmap->nmd = nm_open (nm_ifname, NULL, NM_OPEN_IFNAME, NULL);
-  if (netmap->nmd == NULL)
-    {
-      printf ("Unable to open %s: %s\n",
-	      ifname, strerror (errno));
-      sim_free (netmap);
-      return NULL;
-  }
-  netmap->fd = netmap->nmd->fd;
+  struct nuse_vif * vif;
+  struct nuse_vif_netmap * vifnm;
 
-  if (1) {
-    struct netmap_if *nifp = netmap->nmd->nifp;
-    struct nmreq *req = &netmap->nmd->req;
-    int i;
+  vifnm = (struct nuse_vif_netmap *) sim_malloc (sizeof (*vifnm));
+  memset (vifnm, 0, sizeof (struct nuse_vif_netmap));
 
-    printf("nifp at offset %d, %d tx %d rx region %d\n",
-	   req->nr_offset, req->nr_tx_rings, req->nr_rx_rings,
-	   req->nr_arg2);
-    for (i = 0; i <= req->nr_tx_rings; i++) {
-      printf("   TX%d at 0x%lx\n", i,
-	     (char *)NETMAP_TXRING(nifp, i) - (char *)nifp);
-    }
-    for (i = 0; i <= req->nr_rx_rings; i++) {
-      printf ("   RX%d at 0x%lx\n", i,
-	      (char *)NETMAP_RXRING(nifp, i) - (char *)nifp);
-    }
-  }
-
-
-  struct nuse_vif *vif = sim_malloc (sizeof (struct nuse_vif));
+  vif = sim_malloc (sizeof (struct nuse_vif));
+  memset (vif, 0, sizeof (struct nuse_vif));
   vif->type = NUSE_VIF_NETMAP;
-  vif->private = netmap;
+  vif->private = vifnm;
+  
+  vifnm->fd = netmap_get_nifp (ifname, &vifnm->nifp);
+  if (!vifnm->fd) {
+    printf ("failed to open netmap for \"%s\"\n", ifname);
+    sim_free (vifnm);
+    sim_free (vif);
+    sim_assert (0);
+  }
+
   return vif;
 }
 
 void
 nuse_vif_netmap_delete (struct nuse_vif *vif)
 {
-  struct nuse_vif_netmap *netmap = vif->private;
+  struct nuse_vif_netmap * vifnm = vif->private;
 
-  nm_close (netmap->nmd);
-  close (netmap->fd);
-
-  sim_free (netmap);
+  close (vifnm->fd);
+  sim_free (vifnm);
   sim_free (vif);
-  return;
 }
 
 static struct nuse_vif_impl nuse_vif_netmap = {
