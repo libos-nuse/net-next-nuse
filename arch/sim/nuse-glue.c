@@ -386,12 +386,9 @@ ssize_t sendto (int fd, const void *buf, size_t len, int flags,
   msg.msg_iovlen = 1;
   msg.msg_iov = &iov;
   iov.iov_len = len;
-  iov.iov_base = (void*)buf;
-  if (dest_addr != 0)
-    {
-      memcpy (msg.msg_name, dest_addr, addrlen);
-      msg.msg_namelen = addrlen;
-    }
+  iov.iov_base = (void *)buf;
+  msg.msg_name = (void *)dest_addr;
+  msg.msg_namelen = addrlen;
   ssize_t retval = sendmsg (fd, &msg, flags);
   return retval;
 }
