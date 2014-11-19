@@ -36,6 +36,8 @@ typedef int (*initcall_t)(void);
 			__FUNCTION__, __LINE__, ##__VA_ARGS__);		\
 
 
+static int dpdk_init = 0;
+
 static const char *ealargs[] = {
         "nuse_vif_dpdk",
         "-c 1",
@@ -80,11 +82,15 @@ static const struct rte_eth_txconf txconf = {
 
 #define NUMDESC		256
 #define NUMQUEUE	1
-#define PORTID		0	/* XXX: how to specify a port... */
+#define PORTID		(dpdk->portid)
 
 
 struct nuse_vif_dpdk {
+
+	int portid;
 	struct rte_mempool * rxpool, * txpool;	/* rin buffer pool */
+
+	char txpoolname[16], rxpoolname[16];
 
 	/* burst receive context by rump dpdk code */
 	struct rte_mbuf * rms[MAX_PKT_BURST];
@@ -174,79 +180,74 @@ dpdk_if_init (struct nuse_vif_dpdk * dpdk)
 	struct rte_eth_conf portconf;
 	struct rte_eth_link link;
 
-	ret = rte_eal_init (sizeof (ealargs) / sizeof (ealargs[0]),
-			    (void *) (uintptr_t) ealargs);
-	if (ret < 0)
-          {
-		PE ("failed to initialize eal");
-          }
+	if (!dpdk_init) {
+		ret = rte_eal_init (sizeof (ealargs) / sizeof (ealargs[0]),
+				    (void *) (uintptr_t) ealargs);
+		if (ret < 0) {
+			PE ("failed to initialize eal");
+		}
 
-	ret = -EINVAL;
+		ret = -EINVAL;
+
+		ret = rte_eal_pci_probe ();
+		if (ret < 0) {
+			PE ("eal pci probe failed");
+		}
+
+		dpdk_init = 1;
+	}
 
 	dpdk->txpool = 
-		rte_mempool_create ("txpool", MBUF_NUM, MBUF_SIZ,
-				    MEMPOOL_CACHE_SZ,
-				    sizeof (struct rte_pktmbuf_pool_private),
-				    rte_pktmbuf_pool_init, NULL,
-				    rte_pktmbuf_init, NULL, 0, 0);
-
-	if (dpdk->txpool == NULL)
-          {
+		rte_mempool_create (dpdk->txpoolname,
+				    MBUF_NUM, MBUF_SIZ, MEMPOOL_CACHE_SZ,
+				     sizeof (struct rte_pktmbuf_pool_private),
+				     rte_pktmbuf_pool_init, NULL,
+				     rte_pktmbuf_init, NULL, 0, 0);
+	
+	if (dpdk->txpool == NULL) {
 		PE ("failed to allocate tx pool");
-          }
+	}
 
 
-	dpdk->rxpool = 
-		rte_mempool_create ("rxpool", MBUF_NUM, MBUF_SIZ,
-				    0,
+	dpdk->rxpool =
+		rte_mempool_create (dpdk->rxpoolname, MBUF_NUM, MBUF_SIZ, 0,
 				    sizeof (struct rte_pktmbuf_pool_private),
 				    rte_pktmbuf_pool_init, NULL, 
 				    rte_pktmbuf_init, NULL, 0, 0);
 
-	if (dpdk->rxpool == NULL) 
-          {
-            PE ("failed to allocate rx pool");
-          }
+	if (dpdk->rxpool == NULL) {
+		PE ("failed to allocate rx pool");
+	}
 
-
-	ret = rte_eal_pci_probe ();
-	if (ret < 0)
-          {
-		PE ("eal pci probe failed");
-          }
 
 	memset (&portconf, 0, sizeof (portconf));
 	ret = rte_eth_dev_configure (PORTID, NUMQUEUE, NUMQUEUE, &portconf);
-	if (ret < 0) 
-          {
+	if (ret < 0) {
 		PE ("failed to configure port");
-          }
+	}
 
 
 	ret = rte_eth_rx_queue_setup (PORTID, 0, NUMDESC, 0, &rxconf,
 				      dpdk->rxpool);
-	if (ret < 0) 
-          {
+
+	if (ret < 0) {
 		PE ("failed to setup rx queue");
-          }
+	}
 
 	ret = rte_eth_tx_queue_setup (PORTID, 0, NUMDESC, 0, &txconf);
-	if (ret < 0)
-          {
+	if (ret < 0) {
 		PE ("failed to setup tx queue");
-          }
+	}
 
 	ret = rte_eth_dev_start (PORTID);
-	if (ret < 0) 
-          {
+	if (ret < 0) {
 		PE ("failed to start device");
-          }
+	}
 
 	rte_eth_link_get (PORTID, &link);
-	if (!link.link_status) 
-          {
+	if (!link.link_status) {
 		PO ("interface state is down");
-          }
+	}
 
 	/* should be promisc ? */
 	rte_eth_promiscuous_enable (PORTID);
@@ -262,7 +263,10 @@ nuse_vif_dpdk_create (const char * ifname)
 	struct nuse_vif_dpdk * dpdk;
 
 	dpdk = sim_malloc (sizeof (struct nuse_vif_dpdk));
-	
+	sscanf (ifname, "dpdk%d", &dpdk->portid);
+	snprintf (dpdk->txpoolname, 16, "%s%s", "tx", ifname);
+	snprintf (dpdk->rxpoolname, 16, "%s%s", "rx", ifname);
+
 	if (dpdk_if_init (dpdk) < 0) {
 		sim_free (dpdk);
 		PO ("failed to init dpdk interface");

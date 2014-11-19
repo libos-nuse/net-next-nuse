@@ -42,7 +42,7 @@ Additional DPDK configuration is needed, hugepage setup, make an interface DPDK 
 
 ## Run
 
-At 1st, please write a configuration file for nuse **nuse.conf**.
+At first, please write a configuration file for nuse **nuse.conf**.
 Example of nuse.conf is shown below.
 
 ```
@@ -88,6 +88,42 @@ And, iperf
 should just work fine !
 
 since the LD_PRELOAD with sudo technique requires additional copy and permission changes to the library, the script will automatically conduct such an operation.
+
+
+### Run with DPDK
+
+If you want to use nuse with dpdk, interface names of dpdk on nuse.conf must 
+follow the **dpdk%d** format.  The digit X of _dpdkX_ indicates the 
+dpdk port number. An example is shown below.
+
+```
+nuse1:net-next-nuse % cat nuse-dpdk.conf
+interface dpdk0
+	address 172.16.0.1
+	netmask 255.255.255.0
+	macaddr 00:01:01:01:01:01
+	viftype DPDK
+
+interface dpdk1
+	address 172.16.1.1
+	netmask 255.255.255.0
+	macaddr 00:01:01:01:01:02
+	viftype DPDK
+
+
+nuse1:net-next-nuse % ./dpdk/tools/dpdk_nic_bind.py --status
+
+Network devices using DPDK-compatible driver
+============================================
+0000:0a:00.0 'Ethernet 10G 2P X520 Adapter' drv=igb_uio unused=
+0000:0a:00.1 'Ethernet 10G 2P X520 Adapter' drv=igb_uio unused=
+
+~ snip ~
+```
+
+This set up means 
+"use PCI 0000:0a:00.0 as dpdk0 and PCI 0000:0a:00.1 as dpdk1".
+
 
 ## Tested platform
 - Fedora 19 64bits
