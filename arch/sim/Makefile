@@ -13,22 +13,30 @@ netmap_yes=nuse-vif-netmap.c
 netmap_no=
 
 DPDK?=no
-dpdk_yes=nuse-vif-dpdk.c
+dpdk_yes=$(opt_$(OPT)) -g3 -fPIC -m64 -pthread -march=native $(DPDK_CFLAGS)
 dpdk_no=
-dpdkl_yes=-L $(ARCH_DIR)/dpdk/build -L$(RTE_SDK)/$(RTE_TARGET)/lib  -Wl,--whole-archive -lnuse-dpdk $(DPDK_LDLIBS) 
+dpdkl_yes=-L $(RTE_SDK)/$(RTE_TARGET) -L$(RTE_SDK)/$(RTE_TARGET)/lib $(ARCH_DIR)/nuse-vif-dpdk.o $(DPDK_LDLIBS) 
 dpdkl_no=
 
 RTE_SDK=$(shell expr `pwd`)/dpdk
 RTE_TARGET=build
+
+DPDK_CFLAGS += -include $(RTE_SDK)/$(RTE_TARGET)/include/rte_config.h \
+	-I$(RTE_SDK)/$(RTE_TARGET)/include -I$(ARCH_DIR)/include \
+	-DRTE_MACHINE_CPUFLAG_SSE -DRTE_MACHINE_CPUFLAG_SSE2 -DRTE_MACHINE_CPUFLAG_SSE3 \
+	-DRTE_MACHINE_CPUFLAG_SSSE3 -DRTE_MACHINE_CPUFLAG_SSE4_1 -DRTE_MACHINE_CPUFLAG_SSE4_2 \
+	-DRTE_MACHINE_CPUFLAG_AES -DRTE_MACHINE_CPUFLAG_PCLMULQDQ -DRTE_MACHINE_CPUFLAG_AVX \
+	-DRTE_MACHINE_CPUFLAG_RDRAND -DRTE_MACHINE_CPUFLAG_FSGSBASE -DRTE_MACHINE_CPUFLAG_F16C \
+	-DRTE_COMPILE_TIME_CPUFLAGS=RTE_CPUFLAG_SSE,RTE_CPUFLAG_SSE2,RTE_CPUFLAG_SSE3,RTE_CPUFLAG_SSSE3,RTE_CPUFLAG_SSE4_1,RTE_CPUFLAG_SSE4_2,RTE_CPUFLAG_AES,RTE_CPUFLAG_PCLMULQDQ,RTE_CPUFLAG_AVX,RTE_CPUFLAG_RDRAND,RTE_CPUFLAG_FSGSBASE,RTE_CPUFLAG_F16C 
 
 DPDK_LDLIBS += -lrte_pmd_virtio_uio -lrte_pmd_vmxnet3_uio -lrte_pmd_ixgbe \
           -lrte_pmd_e1000 -lrte_timer -lrte_hash \
           -lrte_mbuf -lethdev \
           -lrte_eal -lrte_mempool -lrte_ring -lrte_pmd_ring -lrte_malloc
 
-quiet_cmd_vif_dpdk = VIF-DPDK ($(DPDK)) $@
+quiet_cmd_vif_dpdk = VIF-DPDK $@
       cmd_vif_dpdk = \
-		    if test $(dpdk_$(DPDK)); then make -s -C $(ARCH_DIR)/dpdk ; fi
+		    $(CC) $(dpdk_$(DPDK)) -c $^ -o $@
 
 dpdk-sdk:
 	if test $(dpdk_$(DPDK)); then \
@@ -38,8 +46,12 @@ dpdk-sdk:
            make SRCARCH=x86 CONFIG_RTE_BUILD_COMBINE_LIBS=y EXTRA_CFLAGS="-fPIC -g" ;\
 	fi
 
-vif-dpdk: $(ARCH_DIR)/nuse-vif-dpdk.c
+$(ARCH_DIR)/nuse-vif-dpdk.o: $(ARCH_DIR)/nuse-vif-dpdk.c
+ifeq ($(DPDK), yes)
 	$(call if_changed,vif_dpdk)
+else
+	@echo -n ""
+endif
 
 
 NUSE_SRC=\
@@ -216,7 +228,7 @@ quiet_cmd_linklib = LIB   $@
       cmd_linklib = $(CC) -shared -Wl,--whole-archive $(dpdkl_$(DPDK)) $(OBJS) $(LDFLAGS) -o $@; \
 		    ln -s -f $(KERNEL_LIB) libnuse-linux.so
 
-$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds vif-dpdk
+$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(ARCH_DIR)/nuse-vif-dpdk.o $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linklib)
 
 test:
