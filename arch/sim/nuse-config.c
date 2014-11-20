@@ -140,6 +140,10 @@ nuse_config_parse_route (char * line, FILE * fp, struct nuse_config * cf)
 	
 	rtcf = (struct nuse_route_config *)
 		malloc (sizeof (struct nuse_route_config));
+        if (!rtcf)
+          sim_assert (0);
+
+        memset (rtcf, 0, sizeof (struct nuse_route_config));
 
 	while ((p = fgets (buf, sizeof (buf), fp)) != NULL) {
 
