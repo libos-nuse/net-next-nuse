@@ -87,12 +87,6 @@ nuse_config_parse_interface (char * line, FILE * fp, struct nuse_config * cf)
 		}
 	}
 
-	if (!p) {
-		printf ("Config error for interface %s\n", vifcf->ifname);
-		free (vifcf);
-		return 0;
-	}
-	
 	/* setup ifreq */
 	sin = (struct sockaddr_in *)&vifcf->ifr_vif_addr.ifr_addr;
 	sin->sin_family = AF_INET;
@@ -171,12 +165,6 @@ nuse_config_parse_route (char * line, FILE * fp, struct nuse_config * cf)
 			break;
 	}
 
-	if (!p) {
-		printf ("Config error for route entry\n");
-		free (rtcf);
-		return 0;
-	}
-
 	if (!net)
 		printf ("network is not configured !\n");
 	if (!mask)
@@ -184,8 +172,10 @@ nuse_config_parse_route (char * line, FILE * fp, struct nuse_config * cf)
 	if (!gate)
 		printf ("netmask is not configured !\n");
 
-	if (!net || !mask || !gate)
+	if (!net || !mask || !gate) {
+		free (rtcf);
 		return 0;
+	}
 
 	/* setup rtentry */
 	sin = (struct sockaddr_in *)&rtcf->route.rt_dst;
