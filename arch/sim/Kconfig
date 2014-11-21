@@ -8,7 +8,7 @@ config SIM
        help
           The 'sim' architecture is a user-mode version of the linux
 	  kernel that includes only its network stack and is used
-	  within the ns-3 simulator. For more information, about ns-3, 
+	  within the ns-3 simulator. For more information, about ns-3,
 	  see http://www.nsnam.org.
 
 config EXPERIMENTAL

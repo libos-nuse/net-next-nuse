@@ -4,23 +4,32 @@
 #include <linux/blkdev.h>
 #include <linux/mount.h>
 #include <linux/security.h>
-#include <linux/writeback.h>		/* for the emergency remount stuff */
+#include <linux/writeback.h>            /* for the emergency remount stuff */
 #include <linux/idr.h>
 #include <linux/mutex.h>
 #include <linux/backing-dev.h>
 #include <linux/rculist_bl.h>
 #include <linux/cleancache.h>
 #include <linux/fsnotify.h>
+#include <linux/fs.h>
 #include <sim-assert.h>
 
 
-void put_super(struct super_block *sb);
-int grab_super(struct super_block *s);
-void destroy_super(struct super_block *s);
+void put_super(struct super_block *sb)
+{
+}
+
+int grab_super(struct super_block *s)
+{
+	return 0;
+}
+void destroy_super(struct super_block *s)
+{
+}
 
 int set_anon_super(struct super_block *s, void *data)
 {
-	  return 0;
+	return 0;
 }
 
 struct super_block;
@@ -48,8 +57,10 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		INIT_HLIST_NODE(&s->s_instances);
 		INIT_HLIST_BL_HEAD(&s->s_anon);
 		INIT_LIST_HEAD(&s->s_inodes);
-		INIT_LIST_HEAD(&s->s_dentry_lru);
-		INIT_LIST_HEAD(&s->s_inode_lru);
+		if (list_lru_init(&s->s_dentry_lru))
+			goto out;
+		if (list_lru_init(&s->s_inode_lru))
+			goto out;
 		INIT_LIST_HEAD(&s->s_mounts);
 		init_rwsem(&s->s_umount);
 		/*
@@ -71,7 +82,8 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		s->s_count = 1;
 		atomic_set(&s->s_active, 1);
 		mutex_init(&s->s_vfs_rename_mutex);
-		lockdep_set_class(&s->s_vfs_rename_mutex, &type->s_vfs_rename_key);
+		lockdep_set_class(&s->s_vfs_rename_mutex,
+				  &type->s_vfs_rename_key);
 		mutex_init(&s->s_dquot.dqio_mutex);
 		mutex_init(&s->s_dquot.dqonoff_mutex);
 		s->s_maxbytes = MAX_NON_LFS;
@@ -100,6 +112,7 @@ out:
 void deactivate_locked_super(struct super_block *s)
 {
 	struct file_system_type *fs = s->s_type;
+
 	if (atomic_dec_and_test(&s->s_active)) {
 		cleancache_invalidate_fs(s);
 		fs->kill_sb(s);
@@ -114,9 +127,8 @@ void deactivate_locked_super(struct super_block *s)
 		rcu_barrier();
 		put_filesystem(fs);
 		put_super(s);
-	} else {
+	} else
 		up_write(&s->s_umount);
-	}
 }
 
 /* from fs/super.c */
@@ -129,9 +141,9 @@ DEFINE_SPINLOCK(sb_lock);
  *	@data:	argument to each of them
  */
 struct super_block *sget(struct file_system_type *type,
-			int (*test)(struct super_block *,void *),
-			int (*set)(struct super_block *,void *),
-			int flags, void *data)
+			 int (*test)(struct super_block *, void *),
+			 int (*set)(struct super_block *, void *),
+			 int flags, void *data)
 {
 	struct super_block *s = NULL;
 	struct super_block *old;
@@ -178,8 +190,8 @@ retry:
 	list_add_tail(&s->s_list, &super_blocks);
 	hlist_add_head(&s->s_instances, &type->fs_supers);
 	spin_unlock(&sb_lock);
-//	get_filesystem(type);
-//	register_shrinker(&s->s_shrink);
+/*	get_filesystem(type); */
+/*	register_shrinker(&s->s_shrink); */
 	return s;
 }
 

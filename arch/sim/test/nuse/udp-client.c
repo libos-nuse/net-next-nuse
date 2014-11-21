@@ -7,50 +7,46 @@
 #include <errno.h>
 #include <stdlib.h>
 
-int main (int argc, char *argv[])
+int main(int argc, char *argv[])
 {
-  int sock;
-  sock = socket (PF_INET, SOCK_DGRAM, 0);
+	int sock;
 
-  struct sockaddr_in addr;
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons (2000);
-  addr.sin_addr.s_addr = 0;
+	sock = socket(PF_INET, SOCK_DGRAM, 0);
 
-  if (argc == 1)
-    {
-      printf ("%s [dest hostname]\n", argv[0]);
-      exit (0);
-    }
+	struct sockaddr_in addr;
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(2000);
+	addr.sin_addr.s_addr = 0;
 
-  struct hostent *host = gethostbyname (argv[1]);
-  memcpy (&addr.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
+	if (argc == 1) {
+		printf("%s [dest hostname]\n", argv[0]);
+		exit(0);
+	}
 
-  int result;
-  result = connect (sock, (const struct sockaddr *) &addr, sizeof (addr));
-  if (result)
-    {
-      perror ("connect");
-    }
+	struct hostent *host = gethostbyname(argv[1]);
+	memcpy(&addr.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
 
-  uint8_t buf[10240];
+	int result;
+	result = connect(sock, (const struct sockaddr *)&addr, sizeof(addr));
+	if (result)
+		perror("connect");
 
-  memset (buf, 0x66, 20);
-  memset (buf + 20, 0x67, 1004);
+	uint8_t buf[10240];
 
-  for (uint32_t i = 0; i < 1000; i++)
-    {
-      ssize_t n;
-      n = write (sock, buf, 1024);
-      if (n < 0)
-        {
-          printf ("write: %s %d\n", strerror (errno), errno);
-          break;
-        }
-    }
-  printf ("did write all buffers\n");
+	memset(buf, 0x66, 20);
+	memset(buf + 20, 0x67, 1004);
 
-  close (sock);
+	for (uint32_t i = 0; i < 1000; i++) {
+		ssize_t n;
+		n = write(sock, buf, 1024);
+		if (n < 0) {
+			printf("write: %s %d\n", strerror(errno), errno);
+			break;
+		}
+	}
+	printf("did write all buffers\n");
 
-  return 0;
+	close(sock);
+
+	return 0;
 }

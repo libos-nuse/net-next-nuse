@@ -7,77 +7,80 @@
 #include "sim-types.h"
 
 int drop_caches_sysctl_handler(struct ctl_table *table, int write,
-			       void  *buffer, size_t *length, loff_t *ppos)
+			       void *buffer, size_t *length, loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int lowmem_reserve_ratio_sysctl_handler(struct ctl_table *table, int write,
-					void  *buffer, size_t *length, loff_t *ppos)
+					void *buffer, size_t *length,
+					loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
-				   void  *buffer, size_t *length, loff_t *ppos)
+				   void *buffer, size_t *length, loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 
 int percpu_pagelist_fraction_sysctl_handler(struct ctl_table *table, int write,
-					    void  *buffer, size_t *length, loff_t *ppos)
+					    void *buffer, size_t *length,
+					    loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int dirty_background_ratio_handler(struct ctl_table *table, int write,
-				   void  *buffer, size_t *lenp,
+				   void *buffer, size_t *lenp,
 				   loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int dirty_background_bytes_handler(struct ctl_table *table, int write,
-				   void  *buffer, size_t *lenp,
+				   void *buffer, size_t *lenp,
 				   loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int dirty_ratio_handler(struct ctl_table *table, int write,
-			void  *buffer, size_t *lenp,
+			void *buffer, size_t *lenp,
 			loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int dirty_bytes_handler(struct ctl_table *table, int write,
-			void  *buffer, size_t *lenp,
+			void *buffer, size_t *lenp,
 			loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int dirty_writeback_centisecs_handler(struct ctl_table *table, int write,
-				      void  *buffer, size_t *length, loff_t *ppos)
+				      void *buffer, size_t *length,
+				      loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int scan_unevictable_handler(struct ctl_table *table, int write,
 			     void __user *buffer,
 			     size_t *length, loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 int sched_rt_handler(struct ctl_table *table, int write,
 		     void __user *buffer, size_t *lenp,
 		     loff_t *ppos)
 {
-  sim_assert (false);
-  return 0;
+	sim_assert(false);
+	return 0;
 }
 
 int sysctl_overcommit_memory = OVERCOMMIT_GUESS;
@@ -85,12 +88,12 @@ int sysctl_overcommit_ratio = 50;
 int sysctl_panic_on_oom = 0;
 int sysctl_oom_dump_tasks = 0;
 int sysctl_oom_kill_allocating_task = 0;
-int sysctl_nr_open = 1024*1024;
+int sysctl_nr_open = 1024 * 1024;
 int sysctl_nr_open_min = BITS_PER_LONG;
 int sysctl_nr_open_max = 1024 * 1024;
 int sysctl_nr_trim_pages = 0;
 int sysctl_drop_caches = 0;
-int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES-1] = {32};
+int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES - 1] = { 32 };
 int sysctl_vfs_cache_pressure = 100;
 unsigned int sysctl_sched_child_runs_first = 0;
 unsigned int sysctl_sched_compat_yield = 0;
@@ -118,14 +121,14 @@ int min_free_kbytes = 1024;
 int max_threads = 100;
 int laptop_mode = 0;
 
-#define DEFAULT_MESSAGE_LOGLEVEL 4 /* KERN_WARNING */
-#define MINIMUM_CONSOLE_LOGLEVEL 1 /* Minimum loglevel we let people use */
-#define DEFAULT_CONSOLE_LOGLEVEL 7 /* anything MORE serious than KERN_DEBUG */
+#define DEFAULT_MESSAGE_LOGLEVEL 4
+#define MINIMUM_CONSOLE_LOGLEVEL 1
+#define DEFAULT_CONSOLE_LOGLEVEL 7
 int console_printk[4] = {
-  DEFAULT_CONSOLE_LOGLEVEL,       /* console_loglevel */
-  DEFAULT_MESSAGE_LOGLEVEL,       /* default_message_loglevel */
-  MINIMUM_CONSOLE_LOGLEVEL,       /* minimum_console_loglevel */
-  DEFAULT_CONSOLE_LOGLEVEL,       /* default_console_loglevel */
+	DEFAULT_CONSOLE_LOGLEVEL,       /* console_loglevel */
+	DEFAULT_MESSAGE_LOGLEVEL,       /* default_message_loglevel */
+	MINIMUM_CONSOLE_LOGLEVEL,       /* minimum_console_loglevel */
+	DEFAULT_CONSOLE_LOGLEVEL,       /* default_console_loglevel */
 };
 
 int print_fatal_signals = 0;
@@ -150,15 +153,15 @@ unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
 unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 
 int pipe_proc_fn(struct ctl_table *table, int write, void __user *buf,
-                 size_t *lenp, loff_t *ppos)
+		 size_t *lenp, loff_t *ppos)
 {
-  return -1;
+	return -1;
 }
 
 int pdflush_proc_obsolete(struct ctl_table *table, int write,
-                          void __user *buffer, size_t *lenp, loff_t *ppos)
+			  void __user *buffer, size_t *lenp, loff_t *ppos)
 {
-  return nr_pdflush_threads;
+	return nr_pdflush_threads;
 }
 
 #include <linux/fs.h>
@@ -173,96 +176,100 @@ int pdflush_proc_obsolete(struct ctl_table *table, int write,
 /* from proc_sysctl.c (XXX) */
 extern struct ctl_table_root sysctl_table_root;
 void first_entry(struct ctl_dir *dir,
-                 struct ctl_table_header **phead, struct ctl_table **pentry);
+		 struct ctl_table_header **phead, struct ctl_table **pentry);
 void next_entry(struct ctl_table_header **phead, struct ctl_table **pentry);
 struct ctl_table *find_entry(struct ctl_table_header **phead,
-                             struct ctl_dir *dir, const char *name, int namelen);
+			     struct ctl_dir *dir, const char *name,
+			     int namelen);
 struct ctl_dir *xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir);
 /* for init_net (XXX, should be fixed) */
 #include <net/net_namespace.h>
 
-static void iterate_table_recursive (const struct SimSysIterator *iter, struct ctl_table_header *head)
+static void iterate_table_recursive(const struct SimSysIterator *iter,
+				    struct ctl_table_header *head)
 {
-  struct ctl_table *entry;
+	struct ctl_table *entry;
 
-  for (entry = head->ctl_table; entry->procname; entry++) 
-    {
-      bool may_read = (head->ctl_table->mode & MAY_READ);
-      bool may_write = (head->ctl_table->mode & MAY_WRITE);
-      int flags = 0;
-      flags |= may_read?SIM_SYS_FILE_READ:0;
-      flags |= may_write?SIM_SYS_FILE_WRITE:0;
-      iter->report_file (iter, entry->procname, flags, (struct SimSysFile *)entry);
-    }
+	for (entry = head->ctl_table; entry->procname; entry++) {
+		bool may_read = (head->ctl_table->mode & MAY_READ);
+		bool may_write = (head->ctl_table->mode & MAY_WRITE);
+		int flags = 0;
+
+		flags |= may_read ? SIM_SYS_FILE_READ : 0;
+		flags |= may_write ? SIM_SYS_FILE_WRITE : 0;
+		iter->report_file(iter, entry->procname, flags,
+				  (struct SimSysFile *)entry);
+	}
 }
 
 
-static void iterate_recursive (const struct SimSysIterator *iter, struct ctl_table_header *head)
+static void iterate_recursive(const struct SimSysIterator *iter,
+			      struct ctl_table_header *head)
 {
-  struct ctl_table_header *h = NULL;
-  struct ctl_table *entry;
-  struct ctl_dir *ctl_dir;
+	struct ctl_table_header *h = NULL;
+	struct ctl_table *entry;
+	struct ctl_dir *ctl_dir;
 
-  ctl_dir = container_of(head, struct ctl_dir, header);
-  for (first_entry(ctl_dir, &h, &entry); h; next_entry(&h, &entry)) 
-    {
-      struct ctl_dir *dir;
-      int ret;
+	ctl_dir = container_of(head, struct ctl_dir, header);
+	for (first_entry(ctl_dir, &h, &entry); h; next_entry(&h, &entry)) {
+		struct ctl_dir *dir;
+		int ret;
+		const char *procname;
 
-      /* copy from sysctl_follow_link () */
-      if (S_ISLNK(entry->mode)) 
-        {
-          dir = xlate_dir(&init_net.sysctls, h->parent);
-          if (IS_ERR(dir))
-            {
-              ret = PTR_ERR(dir);
-              sim_assert (false);
-            }
-          else 
-            {
-              const char *procname = entry->procname;
-              h = NULL;
-              entry = find_entry(&h, dir, procname, strlen(procname));
-              ret = -ENOENT;
-            }
-        }
+		/* copy from sysctl_follow_link () */
+		if (S_ISLNK(entry->mode)) {
+			dir = xlate_dir(&init_net.sysctls, h->parent);
+			if (IS_ERR(dir)) {
+				ret = PTR_ERR(dir);
+				sim_assert(false);
+			} else {
+				procname = entry->procname;
+				h = NULL;
+				entry =
+					find_entry(&h, dir, procname,
+						   strlen(procname));
+				ret = -ENOENT;
+			}
+		}
 
-      if (S_ISDIR(entry->mode))
-        {
-          iter->report_start_dir (iter, entry->procname);
-          iterate_recursive (iter, h);
-          iter->report_end_dir (iter);
-        }
-      else
-        {
-          iterate_table_recursive (iter, h);
-        }
-    }
+		if (S_ISDIR(entry->mode)) {
+			iter->report_start_dir(iter, entry->procname);
+			iterate_recursive(iter, h);
+			iter->report_end_dir(iter);
+		} else
+			iterate_table_recursive(iter, h);
+	}
 
 }
 
 
-void sim_sys_iterate_files (const struct SimSysIterator *iter)
+void sim_sys_iterate_files(const struct SimSysIterator *iter)
 {
-  struct ctl_table_header *root = &sysctl_table_root.default_set.dir.header;
-  iterate_recursive (iter, root);
+	struct ctl_table_header *root =
+		&sysctl_table_root.default_set.dir.header;
+
+	iterate_recursive(iter, root);
 }
 
-int sim_sys_file_read (const struct SimSysFile *file, char *buffer, int size, int offset)
+int sim_sys_file_read(const struct SimSysFile *file, char *buffer, int size,
+		      int offset)
 {
-  struct ctl_table *table = (struct ctl_table *)file;
-  loff_t ppos = offset;
-  size_t result = size;
-  int error;
-  error = table->proc_handler (table, 0, buffer, &result, &ppos);
-  return result;
+	struct ctl_table *table = (struct ctl_table *)file;
+	loff_t ppos = offset;
+	size_t result = size;
+	int error;
+
+	error = table->proc_handler(table, 0, buffer, &result, &ppos);
+	return result;
 }
-int sim_sys_file_write (const struct SimSysFile *file, const char *buffer, int size, int offset)
+int sim_sys_file_write(const struct SimSysFile *file, const char *buffer,
+		       int size, int offset)
 {
-  struct ctl_table *table = (struct ctl_table *)file;
-  loff_t ppos = offset;
-  size_t result = size;
-  int error;
-  error = table->proc_handler (table, 1, (char *)buffer, &result, &ppos);
-  return result;
+	struct ctl_table *table = (struct ctl_table *)file;
+	loff_t ppos = offset;
+	size_t result = size;
+	int error;
+
+	error = table->proc_handler(table, 1, (char *)buffer, &result, &ppos);
+	return result;
 }

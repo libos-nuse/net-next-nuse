@@ -15,7 +15,7 @@ netmap_no=
 DPDK?=no
 dpdk_yes=$(opt_$(OPT)) -g3 -fPIC -m64 -pthread -march=native $(DPDK_CFLAGS)
 dpdk_no=
-dpdkl_yes=-L $(RTE_SDK)/$(RTE_TARGET) -L$(RTE_SDK)/$(RTE_TARGET)/lib $(ARCH_DIR)/nuse-vif-dpdk.o $(DPDK_LDLIBS) 
+dpdkl_yes=-L $(RTE_SDK)/$(RTE_TARGET) -L$(RTE_SDK)/$(RTE_TARGET)/lib $(ARCH_DIR)/nuse-vif-dpdk.o $(DPDK_LDLIBS)
 dpdkl_no=
 
 RTE_SDK=$(shell expr `pwd`)/dpdk
@@ -27,7 +27,7 @@ DPDK_CFLAGS += -include $(RTE_SDK)/$(RTE_TARGET)/include/rte_config.h \
 	-DRTE_MACHINE_CPUFLAG_SSSE3 -DRTE_MACHINE_CPUFLAG_SSE4_1 -DRTE_MACHINE_CPUFLAG_SSE4_2 \
 	-DRTE_MACHINE_CPUFLAG_AES -DRTE_MACHINE_CPUFLAG_PCLMULQDQ -DRTE_MACHINE_CPUFLAG_AVX \
 	-DRTE_MACHINE_CPUFLAG_RDRAND -DRTE_MACHINE_CPUFLAG_FSGSBASE -DRTE_MACHINE_CPUFLAG_F16C \
-	-DRTE_COMPILE_TIME_CPUFLAGS=RTE_CPUFLAG_SSE,RTE_CPUFLAG_SSE2,RTE_CPUFLAG_SSE3,RTE_CPUFLAG_SSSE3,RTE_CPUFLAG_SSE4_1,RTE_CPUFLAG_SSE4_2,RTE_CPUFLAG_AES,RTE_CPUFLAG_PCLMULQDQ,RTE_CPUFLAG_AVX,RTE_CPUFLAG_RDRAND,RTE_CPUFLAG_FSGSBASE,RTE_CPUFLAG_F16C 
+	-DRTE_COMPILE_TIME_CPUFLAGS=RTE_CPUFLAG_SSE,RTE_CPUFLAG_SSE2,RTE_CPUFLAG_SSE3,RTE_CPUFLAG_SSSE3,RTE_CPUFLAG_SSE4_1,RTE_CPUFLAG_SSE4_2,RTE_CPUFLAG_AES,RTE_CPUFLAG_PCLMULQDQ,RTE_CPUFLAG_AVX,RTE_CPUFLAG_RDRAND,RTE_CPUFLAG_FSGSBASE,RTE_CPUFLAG_F16C
 
 DPDK_LDLIBS += -lrte_pmd_virtio_uio -lrte_pmd_vmxnet3_uio -lrte_pmd_ixgbe \
           -lrte_pmd_e1000 -lrte_timer -lrte_hash \
@@ -123,7 +123,7 @@ kernel/time/_to_keep=time.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
-mm/_to_keep=util.o
+mm/_to_keep=util.o list_lru.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
@@ -148,7 +148,7 @@ quiet_cmd_objsmk = OBJS-MK   $@
 	    to_keep=$(subst $(space),$(colon),$($(d)_to_keep)) print;) \
 	done > $@
 
-$(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config
+$(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/Makefile
 	$(call if_changed,objsmk)
 
 -include $(srctree)/.config
@@ -194,8 +194,8 @@ quiet_cmd_builtin = BUILTIN   $@
 %.o:%.c
 	$(call if_changed,cc)
 
-library: $(KERNEL_LIB) nuse
-modules: $(modules) 
+library: $(KERNEL_LIB)
+modules: $(modules)
 
 quiet_cmd_nusetest = BUILDTEST   $@
       cmd_nusetest = $(MAKE) -s -C $(ARCH_DIR)/test/nuse
@@ -203,13 +203,13 @@ quiet_cmd_nusetest = BUILDTEST   $@
 nuse: $(ARCH_DIR)/test/nuse
 	$(call if_changed,nusetest)
 
-install: modules library nuse
+install: modules library
 
 install-dir:
 
 .patch.ts: $(ARCH_DIR)/kernel.patch
 	CWD=`pwd` && cd $(srctree) && patch -p1 < $(ARCH_DIR)/kernel$(KERNEL_VERSION).patch && cd $$CWD && touch $(ARCH_DIR)/.patch.ts
-unpatch: 
+unpatch:
 	CWD=`pwd` && cd $(srctree) && git reset --hard $(KERNEL_VERSION) && cd $$CWD && rm -f $(ARCH_DIR)/.patch.ts
 
 quiet_cmd_clean = CLEAN   $@

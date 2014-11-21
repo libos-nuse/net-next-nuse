@@ -4,8 +4,8 @@
 static inline int
 dma_supported(struct device *dev, u64 mask)
 {
-  BUG();
-  return(0);
+	BUG();
+	return 0;
 }
 
 #endif /* _ASM_SIM_DMA_MAPPING_H */

@@ -1,87 +1,75 @@
 
-#include <stdio.h>
 #include <linux/socket.h>
 #include <uapi/linux/in.h>
+#include <stdio.h>
+#include "sim-assert.h"
 #include "nuse-config.h"
-
-typedef unsigned int uint32_t;
-
-/* sdlib.h */
-extern void *malloc (size_t size);
-extern void free (void * ptr);
-
-
-/* ipaddress config  */
-typedef uint32_t in_addr_t;
-extern in_addr_t inet_addr (const char * cp);
-
-
+#include "nuse-libc.h"
 
 static int
-strsplit (char * str, char ** args, int max)
+strsplit(char *str, char **args, int max)
 {
 	int argc;
-	char * c;
+	char *c;
 
-	for (argc = 0, c = str; *c == ' ' || *c == '\t' || *c == '\n'; c++);
+	for (argc = 0, c = str; *c == ' ' || *c == '\t' || *c == '\n'; c++)
+		;
 	while (*c && argc < max) {
 		args[argc++] = c;
-		while (*c && *c > ' ') c++;
-		while (*c && *c <= ' ')	*c++ = '\0';
+		while (*c && *c > ' ')
+			c++;
+		while (*c && *c <= ' ')
+			*c++ = '\0';
 	}
 
 	return argc;
 }
 
 static int
-nuse_config_parse_interface (char * line, FILE * fp, struct nuse_config * cf)
+nuse_config_parse_interface(char *line, FILE *fp, struct nuse_config *cf)
 {
 	int ret;
-	char buf[1024], *p, * args[2];
-	struct nuse_vif_config * vifcf;
-	struct sockaddr_in * sin;
+	char buf[1024], *p, *args[2];
+	struct nuse_vif_config *vifcf;
+	struct sockaddr_in *sin;
 
-	memset (buf, 0, sizeof (buf));
+	memset(buf, 0, sizeof(buf));
 
-	vifcf = (struct nuse_vif_config *) 
-		malloc (sizeof (struct nuse_vif_config));
+	vifcf = (struct nuse_vif_config *)
+		malloc(sizeof(struct nuse_vif_config));
 
-	memset (vifcf, 0, sizeof (struct nuse_vif_config));
-	vifcf->type = NUSE_VIF_RAWSOCK;	// default
+	memset(vifcf, 0, sizeof(struct nuse_vif_config));
+	vifcf->type = NUSE_VIF_RAWSOCK; /* default */
 
-	strsplit (line, args, sizeof (args));
+	strsplit(line, args, sizeof(args));
 
-	strncpy (vifcf->ifname, args[1], IFNAMSIZ);
+	strncpy(vifcf->ifname, args[1], IFNAMSIZ);
 
-	while ((p = fgets (buf, sizeof (buf), fp)) != NULL) {
+	while ((p = fgets(buf, sizeof(buf), fp)) != NULL) {
 
-		ret = strsplit (buf, args, sizeof (args));
+		ret = strsplit(buf, args, sizeof(args));
 
-		if (ret == 0) {
+		if (ret == 0)
 			/* no item in the line */
 			break;
-		}
 
-		if (strncmp (args[0], "address", 7) == 0) {
-			strncpy (vifcf->address, args[1], NUSE_ADDR_STRLEN);
-		}
-		if (strncmp (args[0], "netmask", 7) == 0) {
-			strncpy (vifcf->netmask, args[1], NUSE_ADDR_STRLEN);
-		}
-		if (strncmp (args[0], "macaddr", 7) == 0) {
-			strncpy (vifcf->macaddr, args[1], NUSE_MACADDR_STRLEN);
-		}
-		if (strncmp (args[0], "viftype", 7) == 0) {
-			if (strncmp (args[1], "RAW", 3) == 0) {
+		if (strncmp(args[0], "address", 7) == 0)
+			strncpy(vifcf->address, args[1], NUSE_ADDR_STRLEN);
+		if (strncmp(args[0], "netmask", 7) == 0)
+			strncpy(vifcf->netmask, args[1], NUSE_ADDR_STRLEN);
+		if (strncmp(args[0], "macaddr", 7) == 0)
+			strncpy(vifcf->macaddr, args[1], NUSE_MACADDR_STRLEN);
+		if (strncmp(args[0], "viftype", 7) == 0) {
+			if (strncmp(args[1], "RAW", 3) == 0)
 				vifcf->type = NUSE_VIF_RAWSOCK;
-			} else if (strncmp (args[1], "NETMAP", 6) == 0) {
+			else if (strncmp(args[1], "NETMAP", 6) == 0)
 				vifcf->type = NUSE_VIF_NETMAP;
-			} else if (strncmp (args[1], "TAP", 3) == 0) {
+			else if (strncmp(args[1], "TAP", 3) == 0)
 				vifcf->type = NUSE_VIF_TAP;
-			} else if (strncmp (args[1], "DPDK", 4) == 0) {
+			else if (strncmp(args[1], "DPDK", 4) == 0)
 				vifcf->type = NUSE_VIF_DPDK;
-			} else {
-				printf ("invalid vif type %s\n", args[1]);
+			else {
+				printf("invalid vif type %s\n", args[1]);
 				return 0;
 			}
 		}
@@ -90,26 +78,26 @@ nuse_config_parse_interface (char * line, FILE * fp, struct nuse_config * cf)
 	/* setup ifreq */
 	sin = (struct sockaddr_in *)&vifcf->ifr_vif_addr.ifr_addr;
 	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = inet_addr (vifcf->address);
+	sin->sin_addr.s_addr = inet_addr(vifcf->address);
 
 	sin = (struct sockaddr_in *)&vifcf->ifr_vif_mask.ifr_netmask;
 	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = inet_addr (vifcf->netmask);
-	
+	sin->sin_addr.s_addr = inet_addr(vifcf->netmask);
+
 	/* XXX: ifname attached to nuse process is same as host stck */
-	strncpy (vifcf->ifr_vif_addr.ifr_name, vifcf->ifname, IFNAMSIZ);
-	strncpy (vifcf->ifr_vif_mask.ifr_name, vifcf->ifname, IFNAMSIZ);
+	strncpy(vifcf->ifr_vif_addr.ifr_name, vifcf->ifname, IFNAMSIZ);
+	strncpy(vifcf->ifr_vif_mask.ifr_name, vifcf->ifname, IFNAMSIZ);
 
 	/* reassemble mac address */
-	if (sscanf (vifcf->macaddr, "%u:%u:%u:%u:%u:%u", 
-		    (unsigned int *)&vifcf->mac[0],
-		    (unsigned int *)&vifcf->mac[1],
-		    (unsigned int *)&vifcf->mac[2], 
-		    (unsigned int *)&vifcf->mac[3],
-		    (unsigned int *)&vifcf->mac[4],
-		    (unsigned int *)&vifcf->mac[5]) < 1) {
-		printf ("failed to parse mac address %s\n", vifcf->macaddr);
-		free (vifcf);
+	if (sscanf(vifcf->macaddr, "%u:%u:%u:%u:%u:%u",
+		   (unsigned int *)&vifcf->mac[0],
+		   (unsigned int *)&vifcf->mac[1],
+		   (unsigned int *)&vifcf->mac[2],
+		   (unsigned int *)&vifcf->mac[3],
+		   (unsigned int *)&vifcf->mac[4],
+		   (unsigned int *)&vifcf->mac[5]) < 1) {
+		printf("failed to parse mac address %s\n", vifcf->macaddr);
+		free(vifcf);
 		return 0;
 	}
 
@@ -119,45 +107,44 @@ nuse_config_parse_interface (char * line, FILE * fp, struct nuse_config * cf)
 }
 
 static int
-nuse_config_parse_route (char * line, FILE * fp, struct nuse_config * cf)
+nuse_config_parse_route(char *line, FILE *fp, struct nuse_config *cf)
 {
 	int ret, net, mask, gate;
-	char buf[1024], * p, * args[2];
-	struct nuse_route_config * rtcf;
-	struct sockaddr_in * sin;
+	char buf[1024], *p, *args[2];
+	struct nuse_route_config *rtcf;
+	struct sockaddr_in *sin;
 
 	net = 0;
 	mask = 0;
 	gate = 0;
 
-	memset (buf, 0, sizeof (buf));
-	
+	memset(buf, 0, sizeof(buf));
+
 	rtcf = (struct nuse_route_config *)
-		malloc (sizeof (struct nuse_route_config));
-        if (!rtcf)
-          sim_assert (0);
+	       malloc(sizeof(struct nuse_route_config));
+	if (!rtcf)
+		sim_assert(0);
 
-        memset (rtcf, 0, sizeof (struct nuse_route_config));
+	memset(rtcf, 0, sizeof(struct nuse_route_config));
 
-	while ((p = fgets (buf, sizeof (buf), fp)) != NULL) {
+	while ((p = fgets(buf, sizeof(buf), fp)) != NULL) {
 
-		ret = strsplit (buf, args, sizeof (args));
+		ret = strsplit(buf, args, sizeof(args));
 
-		if (ret == 0) {
+		if (ret == 0)
 			/* no item in the line */
 			break;
-		}
 
-		if (strncmp (args[0], "network", 7) == 0) {
-			strncpy (rtcf->network, args[1], NUSE_ADDR_STRLEN);
+		if (strncmp(args[0], "network", 7) == 0) {
+			strncpy(rtcf->network, args[1], NUSE_ADDR_STRLEN);
 			net = 1;
 		}
-		if (strncmp (args[0], "netmask", 7) == 0) {
-			strncpy (rtcf->netmask, args[1], NUSE_ADDR_STRLEN);
+		if (strncmp(args[0], "netmask", 7) == 0) {
+			strncpy(rtcf->netmask, args[1], NUSE_ADDR_STRLEN);
 			mask = 1;
 		}
-		if (strncmp (args[0], "gateway", 7) == 0) {
-			strncpy (rtcf->gateway, args[1], NUSE_ADDR_STRLEN);
+		if (strncmp(args[0], "gateway", 7) == 0) {
+			strncpy(rtcf->gateway, args[1], NUSE_ADDR_STRLEN);
 			gate = 1;
 		}
 
@@ -166,11 +153,11 @@ nuse_config_parse_route (char * line, FILE * fp, struct nuse_config * cf)
 	}
 
 	if (!net)
-		printf ("network is not configured !\n");
+		printf("network is not configured !\n");
 	if (!mask)
-		printf ("netmask is not configured !\n");
+		printf("netmask is not configured !\n");
 	if (!gate)
-		printf ("netmask is not configured !\n");
+		printf("netmask is not configured !\n");
 
 	if (!net || !mask || !gate) {
 		free (rtcf);
@@ -180,15 +167,15 @@ nuse_config_parse_route (char * line, FILE * fp, struct nuse_config * cf)
 	/* setup rtentry */
 	sin = (struct sockaddr_in *)&rtcf->route.rt_dst;
 	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = inet_addr (rtcf->network);
+	sin->sin_addr.s_addr = inet_addr(rtcf->network);
 
-	sin = (struct sockaddr_in *) &rtcf->route.rt_genmask;
+	sin = (struct sockaddr_in *)&rtcf->route.rt_genmask;
 	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = inet_addr (rtcf->netmask);
+	sin->sin_addr.s_addr = inet_addr(rtcf->netmask);
 
-	sin = (struct sockaddr_in *) &rtcf->route.rt_gateway;
+	sin = (struct sockaddr_in *)&rtcf->route.rt_gateway;
 	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = inet_addr (rtcf->gateway);
+	sin->sin_addr.s_addr = inet_addr(rtcf->gateway);
 
 	rtcf->route.rt_flags = RTF_UP | RTF_GATEWAY;
 	rtcf->route.rt_metric = 0;
@@ -200,47 +187,42 @@ nuse_config_parse_route (char * line, FILE * fp, struct nuse_config * cf)
 
 
 int
-nuse_config_parse (struct nuse_config * cf, char * cfname)
+nuse_config_parse(struct nuse_config *cf, char *cfname)
 {
-	FILE	* fp;
-	int 	ret;
-	char	buf[1024];
+	FILE *fp;
+	int ret;
+	char buf[1024];
 
-	memset (cf, 0, sizeof (struct nuse_config));
-	
-	if ((fp = fopen (cfname, "r")) == NULL) {
-		perror ("fopen");
+	memset(cf, 0, sizeof(struct nuse_config));
+	fp = fopen(cfname, "r");
+	if (fp == NULL) {
+		perror("fopen");
 		return 0;
 	}
 
-	while (fgets (buf, sizeof (buf), fp) != NULL) {
-		if (strncmp (buf, "interface ", 10) == 0) {
-			ret = nuse_config_parse_interface (buf, fp, cf);
-		} else if (strncmp (buf, "route", 5) == 0) {
-			ret = nuse_config_parse_route (buf, fp, cf);
-		}
+	while (fgets(buf, sizeof(buf), fp) != NULL) {
+		if (strncmp(buf, "interface ", 10) == 0)
+			ret = nuse_config_parse_interface(buf, fp, cf);
+		else if (strncmp(buf, "route", 5) == 0)
+			ret = nuse_config_parse_route(buf, fp, cf);
 		if (!ret)
 			break;
 	}
 
-	fclose (fp);
+	fclose(fp);
 
 	return ret;
 }
 
 void
-nuse_config_free (struct nuse_config * cf)
+nuse_config_free(struct nuse_config *cf)
 {
 	int n;
 
-	for (n = 0; n < cf->vif_cnt; n++) {
-		free (cf->vifs[n]);
-	}
+	for (n = 0; n < cf->vif_cnt; n++)
+		free(cf->vifs[n]);
 
-	for (n = 0; n < cf->route_cnt; n++) {
-		free (cf->routes[n]);
-	}
-
-	return;
+	for (n = 0; n < cf->route_cnt; n++)
+		free(cf->routes[n]);
 }
 

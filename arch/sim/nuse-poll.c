@@ -6,13 +6,14 @@ extern struct nuse_fd nuse_fd_table[1024];
 
 
 struct poll_table_page {
-	struct poll_table_page * next;
-	struct poll_table_entry * entry;
+	struct poll_table_page *next;
+	struct poll_table_entry *entry;
 	struct poll_table_entry entries[0];
 };
 
 #define POLL_TABLE_FULL(table) \
-	((unsigned long)((table)->entry+1) > PAGE_SIZE + (unsigned long)(table))
+	((unsigned long)((table)->entry + \
+			 1) > PAGE_SIZE + (unsigned long)(table))
 
 static struct poll_table_entry *poll_get_entry(struct poll_wqueues *p)
 {
@@ -24,7 +25,8 @@ static struct poll_table_entry *poll_get_entry(struct poll_wqueues *p)
 	if (!table || POLL_TABLE_FULL(table)) {
 		struct poll_table_page *new_table;
 
-		new_table = (struct poll_table_page *) __get_free_page(GFP_KERNEL);
+		new_table =
+			(struct poll_table_page *)__get_free_page(GFP_KERNEL);
 		if (!new_table) {
 			p->error = -ENOMEM;
 			return NULL;
@@ -41,6 +43,7 @@ static struct poll_table_entry *poll_get_entry(struct poll_wqueues *p)
 static int __pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
 {
 	struct poll_wqueues *pwq = wait->private;
+
 	DECLARE_WAITQUEUE(dummy_wait, pwq->polling_task);
 
 	/*
@@ -75,120 +78,118 @@ static int pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
 }
 
 static void __pollwait(struct file *filp, wait_queue_head_t *wait_address,
-                       poll_table *p)
+		       poll_table *p)
 {
-  struct poll_wqueues *pwq = container_of(p, struct poll_wqueues, pt);
-  struct poll_table_entry *entry = poll_get_entry(pwq);
-  if (!entry)
-    return;
-  entry->wait_address = wait_address;
-  entry->key = p->_key;
-  init_waitqueue_func_entry(&entry->wait, pollwake);
-  entry->wait.private = pwq;
-  add_wait_queue(wait_address, &entry->wait);
+	struct poll_wqueues *pwq = container_of(p, struct poll_wqueues, pt);
+	struct poll_table_entry *entry = poll_get_entry(pwq);
+
+	if (!entry)
+		return;
+	entry->wait_address = wait_address;
+	entry->key = p->_key;
+	init_waitqueue_func_entry(&entry->wait, pollwake);
+	entry->wait.private = pwq;
+	add_wait_queue(wait_address, &entry->wait);
 }
 
 void poll_initwait(struct poll_wqueues *pwq)
 {
-  init_poll_funcptr(&pwq->pt, __pollwait);
-  pwq->polling_task = current;
-  pwq->triggered = 0;
-  pwq->error = 0;
-  pwq->table = NULL;
-  pwq->inline_index = 0;
+	init_poll_funcptr(&pwq->pt, __pollwait);
+	pwq->polling_task = current;
+	pwq->triggered = 0;
+	pwq->error = 0;
+	pwq->table = NULL;
+	pwq->inline_index = 0;
 }
 
 static void free_poll_entry(struct poll_table_entry *entry)
 {
-  remove_wait_queue(entry->wait_address, &entry->wait);
+	remove_wait_queue(entry->wait_address, &entry->wait);
 }
 
 void poll_freewait(struct poll_wqueues *pwq)
 {
-  struct poll_table_page * p = pwq->table;
-  int i;
-  for (i = 0; i < pwq->inline_index; i++)
-    free_poll_entry(pwq->inline_entries + i);
-  while (p) {
-    struct poll_table_entry * entry;
-    struct poll_table_page *old;
+	struct poll_table_page *p = pwq->table;
+	int i;
 
-    entry = p->entry;
-    do {
-      entry--;
-      free_poll_entry(entry);
-    } while (entry > p->entries);
-    old = p;
-    p = p->next;
-    free_page((unsigned long) old);
-  }
+	for (i = 0; i < pwq->inline_index; i++)
+		free_poll_entry(pwq->inline_entries + i);
+	while (p) {
+		struct poll_table_entry *entry;
+		struct poll_table_page *old;
+
+		entry = p->entry;
+		do {
+			entry--;
+			free_poll_entry(entry);
+		} while (entry > p->entries);
+		old = p;
+		p = p->next;
+		free_page((unsigned long)old);
+	}
 }
 
 static int
-do_poll (struct pollfd *fds, unsigned int nfds, 
-         struct poll_wqueues *wait, struct timespec *end_time)
+do_poll(struct pollfd *fds, unsigned int nfds,
+	struct poll_wqueues *wait, struct timespec *end_time)
 {
-  poll_table* pt = &wait->pt;
-  int timed_out = 0;
-  int i;
-  int count = 0;
+	poll_table *pt = &wait->pt;
+	int timed_out = 0;
+	int i;
+	int count = 0;
+	int mask;
 
-  /* Optimise the no-wait case */
-  if (end_time && !end_time->tv_sec && !end_time->tv_nsec) {
-    pt->_qproc = NULL;
-    timed_out = 1;
-  }
+	/* Optimise the no-wait case */
+	if (end_time && !end_time->tv_sec && !end_time->tv_nsec) {
+		pt->_qproc = NULL;
+		timed_out = 1;
+	}
 
-  // initialize all outgoing events.
-  for (i = 0; i < nfds; ++i)
-    {
-      fds[i].revents = 0;
-    }
+	/* initialize all outgoing events. */
+	for (i = 0; i < nfds; ++i)
+		fds[i].revents = 0;
 
 
-  /* call (sim) kernel side */
-  for (i = 0; i < nfds; ++i)
-    {
-      struct socket *sock = (struct socket *)nuse_fd_table[fds[i].fd].kern_sock;
-      struct file zero;
-      if (!sock)
-        {
-          continue;
-        }
+	/* call (sim) kernel side */
+	for (i = 0; i < nfds; ++i) {
+		struct socket *sock =
+			(struct socket *)nuse_fd_table[fds[i].fd].kern_sock;
+		struct file zero;
 
-      pt->_key = fds[i].events | POLLERR | POLLHUP;
-      int mask = sock->ops->poll(&zero, sock, pt);
-      mask &= (fds[i].events | POLLERR | POLLHUP);
-      fds[i].revents = mask;
-      if (mask)
-        {
-          count++;
-          pt->_qproc = NULL;
-        }
-    }
+		if (!sock)
+			continue;
 
-  if (count || timed_out)
-    {
-      goto end;
-    }
+		pt->_key = fds[i].events | POLLERR | POLLHUP;
+		mask = sock->ops->poll(&zero, sock, pt);
+		mask &= (fds[i].events | POLLERR | POLLHUP);
+		fds[i].revents = mask;
+		if (mask) {
+			count++;
+			pt->_qproc = NULL;
+		}
+	}
 
-  if (!schedule_timeout(end_time ?
-                        (timespec_to_jiffies (end_time) - jiffies) : MAX_SCHEDULE_TIMEOUT))
-    timed_out = 1;
+	if (count || timed_out)
+		goto end;
+
+	if (!schedule_timeout(end_time ?
+			      (timespec_to_jiffies(end_time) -
+			       jiffies) : MAX_SCHEDULE_TIMEOUT))
+		timed_out = 1;
 
 end:
-  return count;
+	return count;
 }
 
 int
-nuse_poll (struct pollfd *fds, unsigned int nfds, struct timespec *end_time)
+nuse_poll(struct pollfd *fds, unsigned int nfds, struct timespec *end_time)
 {
-  struct poll_wqueues table;
-  int count = 0;
+	struct poll_wqueues table;
+	int count = 0;
 
-  poll_initwait(&table);
-  count = do_poll (fds, nfds, &table, end_time);
-  poll_freewait(&table);
+	poll_initwait(&table);
+	count = do_poll(fds, nfds, &table, end_time);
+	poll_freewait(&table);
 
-  return count;
+	return count;
 }

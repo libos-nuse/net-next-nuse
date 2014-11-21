@@ -92,8 +92,8 @@ since the LD_PRELOAD with sudo technique requires additional copy and permission
 
 ### Run with DPDK
 
-If you want to use nuse with dpdk, interface names of dpdk on nuse.conf must 
-follow the **dpdk%d** format.  The digit X of _dpdkX_ indicates the 
+If you want to use nuse with dpdk, interface names of dpdk on nuse.conf must
+follow the **dpdk%d** format.  The digit X of _dpdkX_ indicates the
 dpdk port number. An example is shown below.
 
 ```
@@ -121,7 +121,7 @@ Network devices using DPDK-compatible driver
 ~ snip ~
 ```
 
-This set up means 
+This set up means
 "use PCI 0000:0a:00.0 as dpdk0 and PCI 0000:0a:00.1 as dpdk1".
 
 

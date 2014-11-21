@@ -43,8 +43,8 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_fop = &empty_fops;
 	inode->__i_nlink = 1;
 	inode->i_opflags = 0;
-	inode->i_uid = make_kuid (current_user_ns (), 0);
-	inode->i_gid = make_kgid (current_user_ns (), 0);
+	inode->i_uid = make_kuid(current_user_ns(), 0);
+	inode->i_gid = make_kgid(current_user_ns(), 0);
 	atomic_set(&inode->i_writecount, 0);
 	inode->i_size = 0;
 	inode->i_blocks = 0;
@@ -89,7 +89,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	}
 	inode->i_private = NULL;
 	inode->i_mapping = mapping;
-	INIT_HLIST_HEAD(&inode->i_dentry);	/* buggered by rcu freeing */
+	INIT_HLIST_HEAD(&inode->i_dentry);      /* buggered by rcu freeing */
 #ifdef CONFIG_FS_POSIX_ACL
 	inode->i_acl = inode->i_default_acl = ACL_NOT_CACHED;
 #endif
@@ -98,7 +98,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_fsnotify_mask = 0;
 #endif
 
-//	this_cpu_inc(nr_inodes);
+/*	this_cpu_inc(nr_inodes); */
 
 	return 0;
 out:
@@ -130,7 +130,7 @@ static struct inode *alloc_inode(struct super_block *sb)
 }
 
 /**
- *	new_inode_pseudo 	- obtain an inode
+ *	new_inode_pseudo        - obtain an inode
  *	@sb: superblock
  *
  *	Allocates a new inode for given superblock.

@@ -8,93 +8,89 @@ static struct softirq_action softirq_vec[NR_SOFTIRQS];
 static struct SimTask *g_softirq_task = 0;
 static int g_n_raises = 0;
 
-void sim_softirq_wakeup (void)
+void sim_softirq_wakeup(void)
 {
-  g_n_raises++;
-  sim_task_wakeup (g_softirq_task);
+	g_n_raises++;
+	sim_task_wakeup(g_softirq_task);
 }
 
-static void softirq_task_function (void *context)
+static void softirq_task_function(void *context)
 {
-  while (true)
-    {
-      do_softirq ();
-      g_n_raises--;
-      if (g_n_raises == 0 || local_softirq_pending() == 0)
-	{
-	  g_n_raises = 0;
-	  sim_task_wait ();
+	while (true) {
+		do_softirq();
+		g_n_raises--;
+		if (g_n_raises == 0 || local_softirq_pending() == 0) {
+			g_n_raises = 0;
+			sim_task_wait();
+		}
 	}
-    }
 }
 
-static void ensure_task_created (void)
+static void ensure_task_created(void)
 {
-  if (g_softirq_task != 0)
-    {
-      return;
-    }
-  g_softirq_task = sim_task_start (&softirq_task_function, 0);
+	if (g_softirq_task != 0)
+		return;
+	g_softirq_task = sim_task_start(&softirq_task_function, 0);
 }
 
 void open_softirq(int nr, void (*action)(struct softirq_action *))
 {
-  ensure_task_created ();
-  softirq_vec[nr].action = action;
+	ensure_task_created();
+	softirq_vec[nr].action = action;
 }
 #define MAX_SOFTIRQ_RESTART 10
 
-void do_softirq (void)
+void do_softirq(void)
 {
-  __u32 pending;
-  int max_restart = MAX_SOFTIRQ_RESTART;
-  struct softirq_action *h;
+	__u32 pending;
+	int max_restart = MAX_SOFTIRQ_RESTART;
+	struct softirq_action *h;
 
-  pending = local_softirq_pending();
+	pending = local_softirq_pending();
 
 restart:
-  /* Reset the pending bitmask before enabling irqs */
-  set_softirq_pending(0);
+	/* Reset the pending bitmask before enabling irqs */
+	set_softirq_pending(0);
 
-  local_irq_enable();
+	local_irq_enable();
 
-  h = softirq_vec;
+	h = softirq_vec;
 
-  do {
-    if (pending & 1) {
-      h->action(h);
-    }
-    h++;
-    pending >>= 1;
-  } while (pending);
+	do {
+		if (pending & 1)
+			h->action(h);
+		h++;
+		pending >>= 1;
+	} while (pending);
 
-  local_irq_disable();
+	local_irq_disable();
 
-  pending = local_softirq_pending();
-  if (pending && --max_restart)
-    goto restart;
+	pending = local_softirq_pending();
+	if (pending && --max_restart)
+		goto restart;
 }
 void raise_softirq_irqoff(unsigned int nr)
 {
-  __raise_softirq_irqoff(nr);
+	__raise_softirq_irqoff(nr);
 
-  sim_softirq_wakeup ();
+	sim_softirq_wakeup();
 }
 void __raise_softirq_irqoff(unsigned int nr)
 {
-	//trace_softirq_raise(nr);
+	/* trace_softirq_raise(nr); */
 	or_softirq_pending(1UL << nr);
 }
 int __cond_resched_softirq(void)
 {
-  // tell the caller that we did not need to re-schedule.
-  return 0;
+	/* tell the caller that we did not need to re-schedule. */
+	return 0;
 }
 void raise_softirq(unsigned int nr)
 {
-  // copy/paste from kernel/softirq.c
-  unsigned long flags;
-  local_irq_save(flags);
-  raise_softirq_irqoff(nr);
-  local_irq_restore(flags);
+	/* copy/paste from kernel/softirq.c */
+	unsigned long flags;
+
+	local_irq_save(flags);
+	raise_softirq_irqoff(nr);
+	local_irq_restore(flags);
 }

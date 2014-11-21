@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -e
 
 IFNAME=`ip route |grep default | awk '{print $5}'`
 GW=`ip route |grep default | awk '{print $3}'`
@@ -28,3 +28,4 @@ ENDCONF
 
 sudo NUSECONF=${NUSE_CONF} ./nuse ping 127.0.0.1 -c 1
 sudo NUSECONF=${NUSE_CONF} ./nuse ping ${GW} -c 1
+sudo NUSECONF=${NUSE_CONF} ./nuse iperf -c 192.168.209.1 -p 2000 -t 3

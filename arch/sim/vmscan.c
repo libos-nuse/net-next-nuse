@@ -6,7 +6,7 @@
  */
 int register_shrinker(struct shrinker *shrinker)
 {
-
+	return 0;
 }
 
 /*
@@ -14,6 +14,5 @@ int register_shrinker(struct shrinker *shrinker)
  */
 void unregister_shrinker(struct shrinker *shrinker)
 {
-
 }
 

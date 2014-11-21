@@ -3,8 +3,8 @@
 
 struct thread_struct {};
 
-#define cpu_relax() 
-#define KSTK_ESP(tsk)	(0)
+#define cpu_relax()
+#define KSTK_ESP(tsk)   (0)
 
 void *current_text_addr(void);
 
@@ -12,6 +12,6 @@ void *current_text_addr(void);
 
 #define thread_saved_pc(x) (unsigned long)0
 
-int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags);
+int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags);
 
 #endif /* _ASM_SIM_PROCESSOR_H */

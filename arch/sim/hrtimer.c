@@ -9,25 +9,24 @@
  * @mode:       timer mode abs/rel
  */
 void hrtimer_init(struct hrtimer *timer, clockid_t clock_id,
-                  enum hrtimer_mode mode)
+		  enum hrtimer_mode mode)
 {
-  memset (timer, 0, sizeof(*timer));
+	memset(timer, 0, sizeof(*timer));
 }
-static void trampoline (void *context)
+static void trampoline(void *context)
 {
-  struct hrtimer *timer = context;
-  enum hrtimer_restart restart = timer->function (timer);
-  if (restart == HRTIMER_RESTART)
-    {
-      void *event = sim_event_schedule_ns (ktime_to_ns (timer->_softexpires),
-						  &trampoline, timer);
-      timer->base = event;
-    }
-  else
-    {
-      // mark as completed.
-      timer->base = 0;
-    }
+	struct hrtimer *timer = context;
+	enum hrtimer_restart restart = timer->function(timer);
+
+	if (restart == HRTIMER_RESTART) {
+		void *event =
+			sim_event_schedule_ns(ktime_to_ns(timer->_softexpires),
+					      &trampoline, timer);
+		timer->base = event;
+	} else {
+		/* mark as completed. */
+		timer->base = 0;
+	}
 }
 /**
  * hrtimer_start_range_ns - (re)start an hrtimer on the current CPU
@@ -41,19 +40,20 @@ static void trampoline (void *context)
  *  1 when the timer was active
  */
 int __hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
-			     unsigned long delta_ns, const enum hrtimer_mode mode,
+			     unsigned long delta_ns,
+			     const enum hrtimer_mode mode,
 			     int wakeup)
 {
-  int ret = hrtimer_cancel (timer);
-  s64 ns = ktime_to_ns (tim);
-  if (mode == HRTIMER_MODE_ABS)
-    {
-      ns -= sim_current_ns ();
-    }
-  timer->_softexpires = ns_to_ktime (ns);
-  void *event = sim_event_schedule_ns (ns, &trampoline, timer);
-  timer->base = event;
-  return ret;
+	int ret = hrtimer_cancel(timer);
+	s64 ns = ktime_to_ns(tim);
+	void *event;
+
+	if (mode == HRTIMER_MODE_ABS)
+		ns -= sim_current_ns();
+	timer->_softexpires = ns_to_ktime(ns);
+	event = sim_event_schedule_ns(ns, &trampoline, timer);
+	timer->base = event;
+	return ret;
 }
 /**
  * hrtimer_try_to_cancel - try to deactivate a timer
@@ -67,15 +67,14 @@ int __hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
  */
 int hrtimer_try_to_cancel(struct hrtimer *timer)
 {
-  // Note: we cannot return -1 from this function. see comment in hrtimer_cancel.
-  if (timer->base == 0)
-    {
-      // timer was not active yet
-      return 1;
-    }
-  sim_event_cancel (timer->base);
-  timer->base = 0;
-  return 0;
+	/* Note: we cannot return -1 from this function.
+	   see comment in hrtimer_cancel. */
+	if (timer->base == 0)
+		/* timer was not active yet */
+		return 1;
+	sim_event_cancel(timer->base);
+	timer->base = 0;
+	return 0;
 }
 /**
  * hrtimer_cancel - cancel a timer and wait for the handler to finish.
@@ -87,28 +86,29 @@ int hrtimer_try_to_cancel(struct hrtimer *timer)
  */
 int hrtimer_cancel(struct hrtimer *timer)
 {
-  // Note: because we assume a uniprocessor non-interruptible 
-  // system when running in the kernel, we know that the timer 
-  // is not running when we execute this code, so, know that
-  // try_to_cancel cannot return -1 and we don't need to retry
-  // the cancel later to wait for the handler to finish.
-  int ret = hrtimer_try_to_cancel(timer);
-  sim_assert (ret >= 0);
-  return ret;
+	/* Note: because we assume a uniprocessor non-interruptible */
+	/* system when running in the kernel, we know that the timer */
+	/* is not running when we execute this code, so, know that */
+	/* try_to_cancel cannot return -1 and we don't need to retry */
+	/* the cancel later to wait for the handler to finish. */
+	int ret = hrtimer_try_to_cancel(timer);
+
+	sim_assert(ret >= 0);
+	return ret;
 }
 int
 hrtimer_start(struct hrtimer *timer, ktime_t tim, const enum hrtimer_mode mode)
 {
-  return __hrtimer_start_range_ns(timer, tim, 0, mode, 1);
+	return __hrtimer_start_range_ns(timer, tim, 0, mode, 1);
 }
 int hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
 			   unsigned long delta_ns, const enum hrtimer_mode mode)
 {
-  return __hrtimer_start_range_ns(timer, tim, delta_ns, mode, 1);
+	return __hrtimer_start_range_ns(timer, tim, delta_ns, mode, 1);
 }
 
 int hrtimer_get_res(const clockid_t which_clock, struct timespec *tp)
 {
-  *tp = ns_to_timespec (1);
-  return 0;
+	*tp = ns_to_timespec(1);
+	return 0;
 }

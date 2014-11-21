@@ -1,9 +1,9 @@
 {
    test-cwd suppression
    Memcheck:Free
-   fun:free 
+   fun:free
    fun:_ZL8test_cwdv
-   fun:main 
+   fun:main
 }
 {
    test-string suppression

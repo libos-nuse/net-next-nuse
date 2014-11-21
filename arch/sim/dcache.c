@@ -20,19 +20,18 @@ struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 	struct dentry *dentry;
 	unsigned char *dname;
 
-	dentry = kmalloc(sizeof (struct dentry), GFP_KERNEL); //  kmem_cache_alloc(dentry_cache, GFP_KERNEL);
+	dentry = kmalloc(sizeof(struct dentry), GFP_KERNEL);
 	if (!dentry)
 		return NULL;
 
-	if (name->len > DNAME_INLINE_LEN-1) {
+	if (name->len > DNAME_INLINE_LEN - 1) {
 		dname = kmalloc(name->len + 1, GFP_KERNEL);
 		if (!dname) {
 			kmem_cache_free(dentry_cache, dentry);
 			return NULL;
 		}
-	} else  {
+	} else
 		dname = dentry->d_iname;
-	}
 	dentry->d_name.name = dname;
 
 	dentry->d_name.len = name->len;
@@ -56,7 +55,7 @@ struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 	INIT_LIST_HEAD(&dentry->d_u.d_child);
 	d_set_d_op(dentry, dentry->d_sb->s_d_op);
 
-//	this_cpu_inc(nr_dentry);
+/*	this_cpu_inc(nr_dentry); */
 
 	return dentry;
 }
@@ -64,10 +63,10 @@ struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 void d_set_d_op(struct dentry *dentry, const struct dentry_operations *op)
 {
 	WARN_ON_ONCE(dentry->d_op);
-	WARN_ON_ONCE(dentry->d_flags & (DCACHE_OP_HASH	|
-				DCACHE_OP_COMPARE	|
-				DCACHE_OP_REVALIDATE	|
-				DCACHE_OP_DELETE ));
+	WARN_ON_ONCE(dentry->d_flags & (DCACHE_OP_HASH  |
+					DCACHE_OP_COMPARE       |
+					DCACHE_OP_REVALIDATE    |
+					DCACHE_OP_DELETE));
 	dentry->d_op = op;
 	if (!op)
 		return;
