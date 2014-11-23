@@ -10,6 +10,7 @@
 #include <sys/uio.h>
 #include <sys/socket.h>
 #include <stdint.h>
+#include <sys/prctl.h>
 #include "sim-assert.h"
 #include "nuse.h"
 
@@ -81,7 +82,7 @@ void nuse_fiber_start(void *handler)
 	error = host_pthread_create(&fiber->pthread, NULL,
 				    fiber->func, fiber->context);
 	sim_assert(error == 0);
-	pthread_setname_np(fiber->pthread, fiber->name);
+	prctl(PR_SET_NAME, fiber->name, 0, 0, 0);
 }
 
 int
@@ -156,7 +157,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 	fiber->pthread = *thread;
 	fiber->name = "app_thread";
 	fiber->canceled = 0;
-	pthread_setname_np(fiber->pthread, fiber->name);
+	prctl(PR_SET_NAME, fiber->name, 0, 0, 0);
 
 
 	error = pthread_mutex_init(&fiber->mutex, NULL);
