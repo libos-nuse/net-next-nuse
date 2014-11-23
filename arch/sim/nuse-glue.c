@@ -596,7 +596,7 @@ epoll_create(int size)
 int
 epoll_ctl(int epollfd, int op, int fd, struct epoll_event *event)
 {
-	struct epoll_fd *prev, *epfd = nuse_fd_table[epollfd].epoll_fd;
+	struct epoll_fd *prev = NULL, *epfd = nuse_fd_table[epollfd].epoll_fd;
 
 	if (!epfd)
 		return EBADF;
@@ -637,6 +637,10 @@ epoll_ctl(int epollfd, int op, int fd, struct epoll_event *event)
 			prev = epfd;
 			epfd = epfd->next;
 		}
+		if (!prev) {
+			pr_err("NUSE: no fd found for EPOLL_CTL_DEL (fd=%d)\n", fd);
+		}
+
 		prev->next = epfd->next;
 		ev = epfd->ev;
 		free(ev);
@@ -683,7 +687,8 @@ epoll_wait(int epollfd, struct epoll_event *events,
 		/* FIXME: c10k... far fast */
 		for (j = 0; j < maxevents; j++) {
 			int fd = pollFd[j].fd;
-			struct epoll_event *rev;
+			struct epoll_event *rev = NULL;
+
 			for (cur = epfd; cur && epfd->ev; cur = cur->next) {
 				rev = cur->ev;
 				if (cur->fd == fd)

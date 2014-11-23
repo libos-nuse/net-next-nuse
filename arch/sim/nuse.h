@@ -2,6 +2,7 @@
 #define NUSE_H
 
 #include "nuse-vif.h"
+struct pollfd;
 
 /* nuse.c */
 struct nuse_fd {
