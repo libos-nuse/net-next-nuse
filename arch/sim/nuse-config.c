@@ -205,6 +205,8 @@ nuse_config_parse(struct nuse_config *cf, char *cfname)
 			ret = nuse_config_parse_interface(buf, fp, cf);
 		else if (strncmp(buf, "route", 5) == 0)
 			ret = nuse_config_parse_route(buf, fp, cf);
+		else
+			continue;
 		if (!ret)
 			break;
 	}
