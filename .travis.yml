@@ -6,4 +6,4 @@ compiler:
   - gcc
 script:
   - make defconfig ARCH=sim && make clean ARCH=sim && make library ARCH=sim
-#  - ./arch/sim/test/nuse/nuse-test.sh
+  - ./arch/sim/test/nuse/nuse-test.sh
