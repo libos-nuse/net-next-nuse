@@ -190,7 +190,7 @@ int
 nuse_config_parse(struct nuse_config *cf, char *cfname)
 {
 	FILE *fp;
-	int ret = NULL;
+	int ret = 0;
 	char buf[1024];
 
 	memset(cf, 0, sizeof(struct nuse_config));
