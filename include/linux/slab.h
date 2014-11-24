@@ -205,7 +205,7 @@ size_t ksize(const void *);
 #endif
 #endif
 
-#ifdef CONFIG_SIM
+#ifdef CONFIG_LIB
 #define KMALLOC_SHIFT_MAX	30
 #define KMALLOC_SHIFT_HIGH	PAGE_SHIFT
 #ifndef KMALLOC_SHIFT_LOW
@@ -358,7 +358,7 @@ kmalloc_order_trace(size_t size, gfp_t flags, unsigned int order)
 }
 #endif
 
-#ifdef CONFIG_SIM
+#ifdef CONFIG_LIB
 #include <asm/slab.h>
 #else
 static __always_inline void *kmalloc_large(size_t size, gfp_t flags)

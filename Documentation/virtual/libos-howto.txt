@@ -1,0 +1,63 @@
+Library operating system (libos) version of Linux
+=================================================
+
+* Overview
+
+New hardware independent architecture 'arch/lib', configured by
+CONFIG_LIB gives you two features.
+
+- network stack in userspace (NUSE)
+- network simulator integration, which is called Direct Code Execution
+  (DCE)
+(- more abstracted rump hypercall implementation will be a future
+   direction)
+
+In both features, Linux kernel network stack is running on top of
+userspace application with a linked or dynamically loaded library.
+
+They have their own, isolated network stack from host operating system
+so they are configured different IP addresses as other virtualization
+methods do.
+
+* Install
+
+configuration of arch/lib follows a standard configuration of kernel.
+
+ make defconfig ARCH=lib
+
+or
+
+ make menuconfig ARCH=lib
+
+then you can build a set of libraries for libos.
+
+ make library ARCH=lib
+
+* Hello world
+
+you may first need to configure a configuration file, named
+'nuse.conf' so that the library version of network stack can know what
+kind of IP configuration should be used.
+
+ sudo NUSECONF=nuse.conf ./nuse ping 172.16.0.2
+
+
+* Features
+- per-userspace application network stack
+- netmap support
+- intel dpdk support
+
+
+* Setup
+
+* Files
+
+files sim*.[c] indicate to relate to simulator via Direct Code
+Execution (DCE), files nuse*.[ch] indicate to relate to Network Stack
+in Userspace (NUSE). other files are shared functions between them.
+
+
+* Authors
+ Mathieu Lacage <mathieu.lacage@gmail.com>
+ Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ Frederic Urbani <frederic.urbani@inria.fr>
