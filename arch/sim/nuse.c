@@ -4,6 +4,7 @@
 #include <linux/sched.h>        /* struct task_struct */
 #include <uapi/linux/route.h>   /* struct rtentry */
 #include <linux/netdevice.h>
+#include <linux/etherdevice.h>	/* eth_random_addr() */
 #include <linux/inetdevice.h>
 #include <net/route.h>
 #include <net/ipconfig.h>       /* ip_route_iotcl() */
@@ -288,6 +289,15 @@ nuse_netdev_create(struct nuse_vif_config *vifcf)
 	struct SimDevice *dev = sim_dev_create(vifcf->ifname, vif, 0);
 
 	/* assign new hw address */
+	if (vifcf->mac[0] == 0 && vifcf->mac[1] == 0 && vifcf->mac[2] == 0 &&
+	    vifcf->mac[3] == 0 && vifcf->mac[4] == 0 && vifcf->mac[5] == 0) {
+		eth_random_addr(vifcf->mac);
+		((struct net_device *)dev)->addr_assign_type = NET_ADDR_RANDOM;
+		printf("mac address for %s is randomized ", vifcf->ifname);
+		printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
+		       vifcf->mac[0], vifcf->mac[1], vifcf->mac[2],
+		       vifcf->mac[3], vifcf->mac[4], vifcf->mac[5]);
+	}
 	sim_dev_set_address(dev, vifcf->mac);
 	ether_setup((struct net_device *)dev);
 

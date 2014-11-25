@@ -40,6 +40,7 @@ nuse_config_parse_interface(char *line, FILE *fp, struct nuse_config *cf)
 
 	memset(vifcf, 0, sizeof(struct nuse_vif_config));
 	vifcf->type = NUSE_VIF_RAWSOCK; /* default */
+	strcpy(vifcf->macaddr, "00:00:00:00:00:00"); /* means random */
 
 	strsplit(line, args, sizeof(args));
 
