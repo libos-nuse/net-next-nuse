@@ -1,4 +1,4 @@
-NUSE (Network Stack in Userspace) [![Build Status](https://travis-ci.org/libos-nuse/net-next-nuse.png)](https://travis-ci.org/libos-nuse/net-next-nuse)
+NUSE (Network Stack in Userspace) [![Build Status](https://travis-ci.org/libos-nuse/net-next-nuse.png)](https://travis-ci.org/libos-nuse/net-next-nuse) [![Code Health](https://landscape.io/github/libos-nuse/net-next-nuse/nuse/landscape.svg)](https://landscape.io/github/libos-nuse/net-next-nuse/nuse)
 ===============================
 
 
