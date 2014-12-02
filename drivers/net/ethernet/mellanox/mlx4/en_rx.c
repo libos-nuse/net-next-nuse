@@ -42,6 +42,10 @@
 #include <linux/vmalloc.h>
 #include <linux/irq.h>
 
+#if IS_ENABLED(CONFIG_IPV6)
+#include <net/ip6_checksum.h>
+#endif
+
 #include "mlx4_en.h"
 
 static int mlx4_alloc_pages(struct mlx4_en_priv *priv,
@@ -643,6 +647,86 @@ static void mlx4_en_refill_rx_buffers(struct mlx4_en_priv *priv,
 	}
 }
 
+/* When hardware doesn't strip the vlan, we need to calculate the checksum
+ * over it and add it to the hardware's checksum calculation
+ */
+static inline __wsum get_fixed_vlan_csum(__wsum hw_checksum,
+					 struct vlan_hdr *vlanh)
+{
+	return csum_add(hw_checksum, *(__wsum *)vlanh);
+}
+
+/* Although the stack expects checksum which doesn't include the pseudo
+ * header, the HW adds it. To address that, we are subtracting the pseudo
+ * header checksum from the checksum value provided by the HW.
+ */
+static void get_fixed_ipv4_csum(__wsum hw_checksum, struct sk_buff *skb,
+				struct iphdr *iph)
+{
+	__u16 length_for_csum = 0;
+	__wsum csum_pseudo_header = 0;
+
+	length_for_csum = (be16_to_cpu(iph->tot_len) - (iph->ihl << 2));
+	csum_pseudo_header = csum_tcpudp_nofold(iph->saddr, iph->daddr,
+						length_for_csum, iph->protocol, 0);
+	skb->csum = csum_sub(hw_checksum, csum_pseudo_header);
+}
+
+#if IS_ENABLED(CONFIG_IPV6)
+/* In IPv6 packets, besides subtracting the pseudo header checksum,
+ * we also compute/add the IP header checksum which
+ * is not added by the HW.
+ */
+static int get_fixed_ipv6_csum(__wsum hw_checksum, struct sk_buff *skb,
+			       struct ipv6hdr *ipv6h)
+{
+	__wsum csum_pseudo_hdr = 0;
+
+	if (ipv6h->nexthdr == IPPROTO_FRAGMENT || ipv6h->nexthdr == IPPROTO_HOPOPTS)
+		return -1;
+	hw_checksum = csum_add(hw_checksum, (__force __wsum)(ipv6h->nexthdr << 8));
+
+	csum_pseudo_hdr = csum_partial(&ipv6h->saddr,
+				       sizeof(ipv6h->saddr) + sizeof(ipv6h->daddr), 0);
+	csum_pseudo_hdr = csum_add(csum_pseudo_hdr, (__force __wsum)ipv6h->payload_len);
+	csum_pseudo_hdr = csum_add(csum_pseudo_hdr, (__force __wsum)ntohs(ipv6h->nexthdr));
+
+	skb->csum = csum_sub(hw_checksum, csum_pseudo_hdr);
+	skb->csum = csum_add(skb->csum, csum_partial(ipv6h, sizeof(struct ipv6hdr), 0));
+	return 0;
+}
+#endif
+static int check_csum(struct mlx4_cqe *cqe, struct sk_buff *skb, void *va,
+		      int hwtstamp_rx_filter)
+{
+	__wsum hw_checksum = 0;
+
+	void *hdr = (u8 *)va + sizeof(struct ethhdr);
+
+	hw_checksum = csum_unfold((__force __sum16)cqe->checksum);
+
+	if (((struct ethhdr *)va)->h_proto == htons(ETH_P_8021Q) &&
+	    hwtstamp_rx_filter != HWTSTAMP_FILTER_NONE) {
+		/* next protocol non IPv4 or IPv6 */
+		if (((struct vlan_hdr *)hdr)->h_vlan_encapsulated_proto
+		    != htons(ETH_P_IP) &&
+		    ((struct vlan_hdr *)hdr)->h_vlan_encapsulated_proto
+		    != htons(ETH_P_IPV6))
+			return -1;
+		hw_checksum = get_fixed_vlan_csum(hw_checksum, hdr);
+		hdr += sizeof(struct vlan_hdr);
+	}
+
+	if (cqe->status & cpu_to_be16(MLX4_CQE_STATUS_IPV4))
+		get_fixed_ipv4_csum(hw_checksum, skb, hdr);
+#if IS_ENABLED(CONFIG_IPV6)
+	else if (cqe->status & cpu_to_be16(MLX4_CQE_STATUS_IPV6))
+		if (get_fixed_ipv6_csum(hw_checksum, skb, hdr))
+			return -1;
+#endif
+	return 0;
+}
+
 int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int budget)
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
@@ -744,73 +828,95 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
 			(cqe->vlan_my_qpn & cpu_to_be32(MLX4_CQE_L2_TUNNEL));
 
 		if (likely(dev->features & NETIF_F_RXCSUM)) {
-			if ((cqe->status & cpu_to_be16(MLX4_CQE_STATUS_IPOK)) &&
-			    (cqe->checksum == cpu_to_be16(0xffff))) {
-				ring->csum_ok++;
-				/* This packet is eligible for GRO if it is:
-				 * - DIX Ethernet (type interpretation)
-				 * - TCP/IP (v4)
-				 * - without IP options
-				 * - not an IP fragment
-				 * - no LLS polling in progress
-				 */
-				if (!mlx4_en_cq_busy_polling(cq) &&
-				    (dev->features & NETIF_F_GRO)) {
-					struct sk_buff *gro_skb = napi_get_frags(&cq->napi);
-					if (!gro_skb)
-						goto next;
-
-					nr = mlx4_en_complete_rx_desc(priv,
-						rx_desc, frags, gro_skb,
-						length);
-					if (!nr)
-						goto next;
-
-					skb_shinfo(gro_skb)->nr_frags = nr;
-					gro_skb->len = length;
-					gro_skb->data_len = length;
-					gro_skb->ip_summed = CHECKSUM_UNNECESSARY;
-
-					if (l2_tunnel)
-						gro_skb->csum_level = 1;
-					if ((cqe->vlan_my_qpn &
-					    cpu_to_be32(MLX4_CQE_VLAN_PRESENT_MASK)) &&
-					    (dev->features & NETIF_F_HW_VLAN_CTAG_RX)) {
-						u16 vid = be16_to_cpu(cqe->sl_vid);
-
-						__vlan_hwaccel_put_tag(gro_skb, htons(ETH_P_8021Q), vid);
-					}
-
-					if (dev->features & NETIF_F_RXHASH)
-						skb_set_hash(gro_skb,
-							     be32_to_cpu(cqe->immed_rss_invalid),
-							     PKT_HASH_TYPE_L3);
-
-					skb_record_rx_queue(gro_skb, cq->ring);
-					skb_mark_napi_id(gro_skb, &cq->napi);
-
-					if (ring->hwtstamp_rx_filter == HWTSTAMP_FILTER_ALL) {
-						timestamp = mlx4_en_get_cqe_ts(cqe);
-						mlx4_en_fill_hwtstamps(mdev,
-								       skb_hwtstamps(gro_skb),
-								       timestamp);
-					}
-
-					napi_gro_frags(&cq->napi);
-					goto next;
+			if (cqe->status & cpu_to_be16(MLX4_CQE_STATUS_TCP |
+						      MLX4_CQE_STATUS_UDP)) {
+				if ((cqe->status & cpu_to_be16(MLX4_CQE_STATUS_IPOK)) &&
+				    cqe->checksum == cpu_to_be16(0xffff)) {
+					ip_summed = CHECKSUM_UNNECESSARY;
+					ring->csum_ok++;
+				} else {
+					ip_summed = CHECKSUM_NONE;
+					ring->csum_none++;
 				}
-
-				/* GRO not possible, complete processing here */
-				ip_summed = CHECKSUM_UNNECESSARY;
 			} else {
-				ip_summed = CHECKSUM_NONE;
-				ring->csum_none++;
+				if (priv->flags & MLX4_EN_FLAG_RX_CSUM_NON_TCP_UDP &&
+				    (cqe->status & cpu_to_be16(MLX4_CQE_STATUS_IPV4 |
+							       MLX4_CQE_STATUS_IPV6))) {
+					ip_summed = CHECKSUM_COMPLETE;
+					ring->csum_complete++;
+				} else {
+					ip_summed = CHECKSUM_NONE;
+					ring->csum_none++;
+				}
 			}
 		} else {
 			ip_summed = CHECKSUM_NONE;
 			ring->csum_none++;
 		}
 
+		/* This packet is eligible for GRO if it is:
+		 * - DIX Ethernet (type interpretation)
+		 * - TCP/IP (v4)
+		 * - without IP options
+		 * - not an IP fragment
+		 * - no LLS polling in progress
+		 */
+		if (!mlx4_en_cq_busy_polling(cq) &&
+		    (dev->features & NETIF_F_GRO)) {
+			struct sk_buff *gro_skb = napi_get_frags(&cq->napi);
+			if (!gro_skb)
+				goto next;
+
+			nr = mlx4_en_complete_rx_desc(priv,
+				rx_desc, frags, gro_skb,
+				length);
+			if (!nr)
+				goto next;
+
+			if (ip_summed == CHECKSUM_COMPLETE) {
+				void *va = skb_frag_address(skb_shinfo(gro_skb)->frags);
+				if (check_csum(cqe, gro_skb, va, ring->hwtstamp_rx_filter)) {
+					ip_summed = CHECKSUM_NONE;
+					ring->csum_none++;
+					ring->csum_complete--;
+				}
+			}
+
+			skb_shinfo(gro_skb)->nr_frags = nr;
+			gro_skb->len = length;
+			gro_skb->data_len = length;
+			gro_skb->ip_summed = ip_summed;
+
+			if (l2_tunnel && ip_summed == CHECKSUM_UNNECESSARY)
+				gro_skb->encapsulation = 1;
+			if ((cqe->vlan_my_qpn &
+			    cpu_to_be32(MLX4_CQE_VLAN_PRESENT_MASK)) &&
+			    (dev->features & NETIF_F_HW_VLAN_CTAG_RX)) {
+				u16 vid = be16_to_cpu(cqe->sl_vid);
+
+				__vlan_hwaccel_put_tag(gro_skb, htons(ETH_P_8021Q), vid);
+			}
+
+			if (dev->features & NETIF_F_RXHASH)
+				skb_set_hash(gro_skb,
+					     be32_to_cpu(cqe->immed_rss_invalid),
+					     PKT_HASH_TYPE_L3);
+
+			skb_record_rx_queue(gro_skb, cq->ring);
+			skb_mark_napi_id(gro_skb, &cq->napi);
+
+			if (ring->hwtstamp_rx_filter == HWTSTAMP_FILTER_ALL) {
+				timestamp = mlx4_en_get_cqe_ts(cqe);
+				mlx4_en_fill_hwtstamps(mdev,
+						       skb_hwtstamps(gro_skb),
+						       timestamp);
+			}
+
+			napi_gro_frags(&cq->napi);
+			goto next;
+		}
+
+		/* GRO not possible, complete processing here */
 		skb = mlx4_en_rx_skb(priv, rx_desc, frags, length);
 		if (!skb) {
 			priv->stats.rx_dropped++;
@@ -820,6 +926,14 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
                 if (unlikely(priv->validate_loopback)) {
 			validate_loopback(priv, skb);
 			goto next;
+		}
+
+		if (ip_summed == CHECKSUM_COMPLETE) {
+			if (check_csum(cqe, skb, skb->data, ring->hwtstamp_rx_filter)) {
+				ip_summed = CHECKSUM_NONE;
+				ring->csum_complete--;
+				ring->csum_none++;
+			}
 		}
 
 		skb->ip_summed = ip_summed;
@@ -910,20 +1024,18 @@ int mlx4_en_poll_rx_cq(struct napi_struct *napi, int budget)
 		cpu_curr = smp_processor_id();
 		aff = irq_desc_get_irq_data(cq->irq_desc)->affinity;
 
-		if (unlikely(!cpumask_test_cpu(cpu_curr, aff))) {
-			/* Current cpu is not according to smp_irq_affinity -
-			 * probably affinity changed. need to stop this NAPI
-			 * poll, and restart it on the right CPU
-			 */
-			napi_complete(napi);
-			mlx4_en_arm_cq(priv, cq);
-			return 0;
-		}
-	} else {
-		/* Done for now */
-		napi_complete(napi);
-		mlx4_en_arm_cq(priv, cq);
+		if (likely(cpumask_test_cpu(cpu_curr, aff)))
+			return budget;
+
+		/* Current cpu is not according to smp_irq_affinity -
+		 * probably affinity changed. need to stop this NAPI
+		 * poll, and restart it on the right CPU
+		 */
+		done = 0;
 	}
+	/* Done for now */
+	napi_complete_done(napi, done);
+	mlx4_en_arm_cq(priv, cq);
 	return done;
 }
 
@@ -1057,9 +1169,6 @@ int mlx4_en_config_rss_steer(struct mlx4_en_priv *priv)
 	int i, qpn;
 	int err = 0;
 	int good_qps = 0;
-	static const u32 rsskey[10] = { 0xD181C62C, 0xF7F4DB5B, 0x1983A2FC,
-				0x943E1ADB, 0xD9389E6B, 0xD1039C2C, 0xA74499AD,
-				0x593D56D9, 0xF3253C06, 0x2ADC1FFC};
 
 	en_dbg(DRV, priv, "Configuring rss steering\n");
 	err = mlx4_qp_reserve_range(mdev->dev, priv->rx_ring_num,
@@ -1114,9 +1223,7 @@ int mlx4_en_config_rss_steer(struct mlx4_en_priv *priv)
 
 	rss_context->flags = rss_mask;
 	rss_context->hash_fn = MLX4_RSS_HASH_TOP;
-	for (i = 0; i < 10; i++)
-		rss_context->rss_key[i] = cpu_to_be32(rsskey[i]);
-
+	memcpy(rss_context->rss_key, priv->rss_key, MLX4_EN_RSS_KEY_SIZE);
 	err = mlx4_qp_to_ready(mdev->dev, &priv->res.mtt, &context,
 			       &rss_map->indir_qp, &rss_map->indir_state);
 	if (err)

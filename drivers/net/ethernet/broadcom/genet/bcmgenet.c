@@ -613,6 +613,9 @@ static const struct bcmgenet_stats bcmgenet_gstrings_stats[] = {
 			UMAC_RBUF_OVFL_CNT),
 	STAT_GENET_MISC("rbuf_err_cnt", mib.rbuf_err_cnt, UMAC_RBUF_ERR_CNT),
 	STAT_GENET_MISC("mdf_err_cnt", mib.mdf_err_cnt, UMAC_MDF_ERR_CNT),
+	STAT_GENET_MIB_RX("alloc_rx_buff_failed", mib.alloc_rx_buff_failed),
+	STAT_GENET_MIB_RX("rx_dma_failed", mib.rx_dma_failed),
+	STAT_GENET_MIB_TX("tx_dma_failed", mib.tx_dma_failed),
 };
 
 #define BCMGENET_STATS_LEN	ARRAY_SIZE(bcmgenet_gstrings_stats)
@@ -711,6 +714,98 @@ static void bcmgenet_get_ethtool_stats(struct net_device *dev,
 	}
 }
 
+static void bcmgenet_eee_enable_set(struct net_device *dev, bool enable)
+{
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+	u32 off = priv->hw_params->tbuf_offset + TBUF_ENERGY_CTRL;
+	u32 reg;
+
+	if (enable && !priv->clk_eee_enabled) {
+		clk_prepare_enable(priv->clk_eee);
+		priv->clk_eee_enabled = true;
+	}
+
+	reg = bcmgenet_umac_readl(priv, UMAC_EEE_CTRL);
+	if (enable)
+		reg |= EEE_EN;
+	else
+		reg &= ~EEE_EN;
+	bcmgenet_umac_writel(priv, reg, UMAC_EEE_CTRL);
+
+	/* Enable EEE and switch to a 27Mhz clock automatically */
+	reg = __raw_readl(priv->base + off);
+	if (enable)
+		reg |= TBUF_EEE_EN | TBUF_PM_EN;
+	else
+		reg &= ~(TBUF_EEE_EN | TBUF_PM_EN);
+	__raw_writel(reg, priv->base + off);
+
+	/* Do the same for thing for RBUF */
+	reg = bcmgenet_rbuf_readl(priv, RBUF_ENERGY_CTRL);
+	if (enable)
+		reg |= RBUF_EEE_EN | RBUF_PM_EN;
+	else
+		reg &= ~(RBUF_EEE_EN | RBUF_PM_EN);
+	bcmgenet_rbuf_writel(priv, reg, RBUF_ENERGY_CTRL);
+
+	if (!enable && priv->clk_eee_enabled) {
+		clk_disable_unprepare(priv->clk_eee);
+		priv->clk_eee_enabled = false;
+	}
+
+	priv->eee.eee_enabled = enable;
+	priv->eee.eee_active = enable;
+}
+
+static int bcmgenet_get_eee(struct net_device *dev, struct ethtool_eee *e)
+{
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+	struct ethtool_eee *p = &priv->eee;
+
+	if (GENET_IS_V1(priv))
+		return -EOPNOTSUPP;
+
+	e->eee_enabled = p->eee_enabled;
+	e->eee_active = p->eee_active;
+	e->tx_lpi_timer = bcmgenet_umac_readl(priv, UMAC_EEE_LPI_TIMER);
+
+	return phy_ethtool_get_eee(priv->phydev, e);
+}
+
+static int bcmgenet_set_eee(struct net_device *dev, struct ethtool_eee *e)
+{
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+	struct ethtool_eee *p = &priv->eee;
+	int ret = 0;
+
+	if (GENET_IS_V1(priv))
+		return -EOPNOTSUPP;
+
+	p->eee_enabled = e->eee_enabled;
+
+	if (!p->eee_enabled) {
+		bcmgenet_eee_enable_set(dev, false);
+	} else {
+		ret = phy_init_eee(priv->phydev, 0);
+		if (ret) {
+			netif_err(priv, hw, dev, "EEE initialization failed\n");
+			return ret;
+		}
+
+		bcmgenet_umac_writel(priv, e->tx_lpi_timer, UMAC_EEE_LPI_TIMER);
+		bcmgenet_eee_enable_set(dev, true);
+	}
+
+	return phy_ethtool_set_eee(priv->phydev, e);
+}
+
+static int bcmgenet_nway_reset(struct net_device *dev)
+{
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+
+	return genphy_restart_aneg(priv->phydev);
+}
+
 /* standard ethtool support functions. */
 static struct ethtool_ops bcmgenet_ethtool_ops = {
 	.get_strings		= bcmgenet_get_strings,
@@ -724,6 +819,9 @@ static struct ethtool_ops bcmgenet_ethtool_ops = {
 	.set_msglevel		= bcmgenet_set_msglevel,
 	.get_wol		= bcmgenet_get_wol,
 	.set_wol		= bcmgenet_set_wol,
+	.get_eee		= bcmgenet_get_eee,
+	.set_eee		= bcmgenet_set_eee,
+	.nway_reset		= bcmgenet_nway_reset,
 };
 
 /* Power down the unimac, based on mode. */
@@ -989,6 +1087,7 @@ static int bcmgenet_xmit_single(struct net_device *dev,
 	mapping = dma_map_single(kdev, skb->data, skb_len, DMA_TO_DEVICE);
 	ret = dma_mapping_error(kdev, mapping);
 	if (ret) {
+		priv->mib.tx_dma_failed++;
 		netif_err(priv, tx_err, dev, "Tx DMA map failed\n");
 		dev_kfree_skb(skb);
 		return ret;
@@ -1035,6 +1134,7 @@ static int bcmgenet_xmit_frag(struct net_device *dev,
 				   skb_frag_size(frag), DMA_TO_DEVICE);
 	ret = dma_mapping_error(kdev, mapping);
 	if (ret) {
+		priv->mib.tx_dma_failed++;
 		netif_err(priv, tx_err, dev, "%s: Tx DMA map failed\n",
 			  __func__);
 		return ret;
@@ -1231,6 +1331,7 @@ static int bcmgenet_rx_refill(struct bcmgenet_priv *priv, struct enet_cb *cb)
 				 priv->rx_buf_len, DMA_FROM_DEVICE);
 	ret = dma_mapping_error(kdev, mapping);
 	if (ret) {
+		priv->mib.rx_dma_failed++;
 		bcmgenet_free_cb(cb);
 		netif_err(priv, rx_err, priv->dev,
 			  "%s DMA map failed\n", __func__);
@@ -1397,8 +1498,10 @@ static unsigned int bcmgenet_desc_rx(struct bcmgenet_priv *priv,
 		/* refill RX path on the current control block */
 refill:
 		err = bcmgenet_rx_refill(priv, cb);
-		if (err)
+		if (err) {
+			priv->mib.alloc_rx_buff_failed++;
 			netif_err(priv, rx_err, dev, "Rx refill failed\n");
+		}
 
 		rxpktprocessed++;
 		priv->rx_read_ptr++;
@@ -2140,6 +2243,12 @@ static int bcmgenet_open(struct net_device *dev)
 		goto err_irq0;
 	}
 
+	/* Re-configure the port multiplexer towards the PHY device */
+	bcmgenet_mii_config(priv->dev, false);
+
+	phy_connect_direct(dev, priv->phydev, bcmgenet_mii_setup,
+			   priv->phy_interface);
+
 	bcmgenet_netif_start(dev);
 
 	return 0;
@@ -2183,6 +2292,9 @@ static int bcmgenet_close(struct net_device *dev)
 	netif_dbg(priv, ifdown, dev, "bcmgenet_close\n");
 
 	bcmgenet_netif_stop(dev);
+
+	/* Really kill the PHY state machine and disconnect from it */
+	phy_disconnect(priv->phydev);
 
 	/* Disable MAC receive */
 	umac_enable_set(priv, CMD_RX_EN, false);
@@ -2568,6 +2680,12 @@ static int bcmgenet_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->clk_wol))
 		dev_warn(&priv->pdev->dev, "failed to get enet-wol clock\n");
 
+	priv->clk_eee = devm_clk_get(&priv->pdev->dev, "enet-eee");
+	if (IS_ERR(priv->clk_eee)) {
+		dev_warn(&priv->pdev->dev, "failed to get enet-eee clock\n");
+		priv->clk_eee = NULL;
+	}
+
 	err = reset_umac(priv);
 	if (err)
 		goto err_clk_disable;
@@ -2685,7 +2803,7 @@ static int bcmgenet_resume(struct device *d)
 
 	phy_init_hw(priv->phydev);
 	/* Speed settings must be restored */
-	bcmgenet_mii_config(priv->dev);
+	bcmgenet_mii_config(priv->dev, false);
 
 	/* disable ethernet MAC while updating its registers */
 	umac_enable_set(priv, CMD_TX_EN | CMD_RX_EN, false);
@@ -2717,6 +2835,9 @@ static int bcmgenet_resume(struct device *d)
 	netif_device_attach(dev);
 
 	phy_resume(priv->phydev);
+
+	if (priv->eee.eee_enabled)
+		bcmgenet_eee_enable_set(dev, true);
 
 	bcmgenet_netif_start(dev);
 

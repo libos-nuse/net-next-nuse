@@ -559,18 +559,20 @@ static int vnet_ack(struct vnet_port *port, void *msgbuf)
 		return 0;
 
 	end = pkt->end_idx;
-	if (unlikely(!idx_is_pending(dr, end)))
-		return 0;
-
 	vp = port->vp;
 	dev = vp->dev;
+	netif_tx_lock(dev);
+	if (unlikely(!idx_is_pending(dr, end))) {
+		netif_tx_unlock(dev);
+		return 0;
+	}
+
 	/* sync for race conditions with vnet_start_xmit() and tell xmit it
 	 * is time to send a trigger.
 	 */
-	netif_tx_lock(dev);
 	dr->cons = next_idx(end, dr);
 	desc = vio_dring_entry(dr, dr->cons);
-	if (desc->hdr.state == VIO_DESC_READY && port->start_cons) {
+	if (desc->hdr.state == VIO_DESC_READY && !port->start_cons) {
 		/* vnet_start_xmit() just populated this dring but missed
 		 * sending the "start" LDC message to the consumer.
 		 * Send a "start" trigger on its behalf.
@@ -627,7 +629,7 @@ static void maybe_tx_wakeup(struct vnet_port *port)
 		struct vio_dring_state *dr;
 
 		dr = &port->vio.drings[VIO_DRIVER_TX_RING];
-			netif_tx_wake_queue(txq);
+		netif_tx_wake_queue(txq);
 	}
 	__netif_tx_unlock(txq);
 }
@@ -691,7 +693,6 @@ ldc_ctrl:
 			pkt->end_idx = -1;
 			goto napi_resume;
 		}
-ldc_read:
 		err = ldc_read(vio->lp, &msgbuf, sizeof(msgbuf));
 		if (unlikely(err < 0)) {
 			if (err == -ECONNRESET)
@@ -722,8 +723,8 @@ napi_resume:
 				err = vnet_rx(port, &msgbuf, &npkts, budget);
 				if (npkts >= budget)
 					break;
-				if (npkts == 0 && err != -ECONNRESET)
-					goto ldc_read;
+				if (npkts == 0)
+					break;
 			} else if (msgbuf.tag.stype == VIO_SUBTYPE_ACK) {
 				err = vnet_ack(port, &msgbuf);
 				if (err > 0)
@@ -957,6 +958,8 @@ vnet_select_queue(struct net_device *dev, struct sk_buff *skb,
 	struct vnet *vp = netdev_priv(dev);
 	struct vnet_port *port = __tx_port_find(vp, skb);
 
+	if (port == NULL)
+		return 0;
 	return port->q_index;
 }
 
@@ -980,8 +983,10 @@ static int vnet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	rcu_read_lock();
 	port = __tx_port_find(vp, skb);
-	if (unlikely(!port))
+	if (unlikely(!port)) {
+		rcu_read_unlock();
 		goto out_dropped;
+	}
 
 	if (skb->len > port->rmtu) {
 		unsigned long localmtu = port->rmtu - ETH_HLEN;

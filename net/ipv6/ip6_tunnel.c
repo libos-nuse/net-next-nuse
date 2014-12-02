@@ -183,6 +183,7 @@ ip6_tnl_lookup(struct net *net, const struct in6_addr *remote, const struct in6_
 	unsigned int hash = HASH(remote, local);
 	struct ip6_tnl *t;
 	struct ip6_tnl_net *ip6n = net_generic(net, ip6_tnl_net_id);
+	struct in6_addr any;
 
 	for_each_ip6_tunnel_rcu(ip6n->tnls_r_l[hash]) {
 		if (ipv6_addr_equal(local, &t->parms.laddr) &&
@@ -190,6 +191,22 @@ ip6_tnl_lookup(struct net *net, const struct in6_addr *remote, const struct in6_
 		    (t->dev->flags & IFF_UP))
 			return t;
 	}
+
+	memset(&any, 0, sizeof(any));
+	hash = HASH(&any, local);
+	for_each_ip6_tunnel_rcu(ip6n->tnls_r_l[hash]) {
+		if (ipv6_addr_equal(local, &t->parms.laddr) &&
+		    (t->dev->flags & IFF_UP))
+			return t;
+	}
+
+	hash = HASH(remote, &any);
+	for_each_ip6_tunnel_rcu(ip6n->tnls_r_l[hash]) {
+		if (ipv6_addr_equal(remote, &t->parms.raddr) &&
+		    (t->dev->flags & IFF_UP))
+			return t;
+	}
+
 	t = rcu_dereference(ip6n->tnls_wc[0]);
 	if (t && (t->dev->flags & IFF_UP))
 		return t;
@@ -272,9 +289,6 @@ static int ip6_tnl_create2(struct net_device *dev)
 	int err;
 
 	t = netdev_priv(dev);
-	err = ip6_tnl_dev_init(dev);
-	if (err < 0)
-		goto out;
 
 	err = register_netdevice(dev);
 	if (err < 0)
@@ -487,8 +501,8 @@ ip6_tnl_err(struct sk_buff *skb, __u8 ipproto, struct inet6_skb_parm *opt,
 	   processing of the error. */
 
 	rcu_read_lock();
-	if ((t = ip6_tnl_lookup(dev_net(skb->dev), &ipv6h->daddr,
-					&ipv6h->saddr)) == NULL)
+	t = ip6_tnl_lookup(dev_net(skb->dev), &ipv6h->daddr, &ipv6h->saddr);
+	if (t == NULL)
 		goto out;
 
 	tproto = ACCESS_ONCE(t->parms.proto);
@@ -536,7 +550,8 @@ ip6_tnl_err(struct sk_buff *skb, __u8 ipproto, struct inet6_skb_parm *opt,
 			mtu = IPV6_MIN_MTU;
 		t->dev->mtu = mtu;
 
-		if ((len = sizeof(*ipv6h) + ntohs(ipv6h->payload_len)) > mtu) {
+		len = sizeof(*ipv6h) + ntohs(ipv6h->payload_len);
+		if (len > mtu) {
 			rel_type = ICMPV6_PKT_TOOBIG;
 			rel_code = 0;
 			rel_info = mtu;
@@ -797,9 +812,8 @@ static int ip6_tnl_rcv(struct sk_buff *skb, __u16 protocol,
 	int err;
 
 	rcu_read_lock();
-
-	if ((t = ip6_tnl_lookup(dev_net(skb->dev), &ipv6h->saddr,
-					&ipv6h->daddr)) != NULL) {
+	t = ip6_tnl_lookup(dev_net(skb->dev), &ipv6h->saddr, &ipv6h->daddr);
+	if (t != NULL) {
 		struct pcpu_sw_netstats *tstats;
 
 		tproto = ACCESS_ONCE(t->parms.proto);
@@ -909,24 +923,28 @@ ip6_tnl_addr_conflict(const struct ip6_tnl *t, const struct ipv6hdr *hdr)
 	return ipv6_addr_equal(&t->parms.raddr, &hdr->saddr);
 }
 
-int ip6_tnl_xmit_ctl(struct ip6_tnl *t)
+int ip6_tnl_xmit_ctl(struct ip6_tnl *t,
+		     const struct in6_addr *laddr,
+		     const struct in6_addr *raddr)
 {
 	struct __ip6_tnl_parm *p = &t->parms;
 	int ret = 0;
 	struct net *net = t->net;
 
-	if (p->flags & IP6_TNL_F_CAP_XMIT) {
+	if ((p->flags & IP6_TNL_F_CAP_XMIT) ||
+	    ((p->flags & IP6_TNL_F_CAP_PER_PACKET) &&
+	     (ip6_tnl_get_cap(t, laddr, raddr) & IP6_TNL_F_CAP_XMIT))) {
 		struct net_device *ldev = NULL;
 
 		rcu_read_lock();
 		if (p->link)
 			ldev = dev_get_by_index_rcu(net, p->link);
 
-		if (unlikely(!ipv6_chk_addr(net, &p->laddr, ldev, 0)))
+		if (unlikely(!ipv6_chk_addr(net, laddr, ldev, 0)))
 			pr_warn("%s xmit: Local address not yet configured!\n",
 				p->name);
-		else if (!ipv6_addr_is_multicast(&p->raddr) &&
-			 unlikely(ipv6_chk_addr(net, &p->raddr, NULL, 0)))
+		else if (!ipv6_addr_is_multicast(raddr) &&
+			 unlikely(ipv6_chk_addr(net, raddr, NULL, 0)))
 			pr_warn("%s xmit: Routing loop! Remote address found on this node!\n",
 				p->name);
 		else
@@ -975,8 +993,34 @@ static int ip6_tnl_xmit2(struct sk_buff *skb,
 	u8 proto;
 	int err = -1;
 
-	if (!fl6->flowi6_mark)
+	/* NBMA tunnel */
+	if (ipv6_addr_any(&t->parms.raddr)) {
+		struct in6_addr *addr6;
+		struct neighbour *neigh;
+		int addr_type;
+
+		if (!skb_dst(skb))
+			goto tx_err_link_failure;
+
+		neigh = dst_neigh_lookup(skb_dst(skb),
+					 &ipv6_hdr(skb)->daddr);
+		if (!neigh)
+			goto tx_err_link_failure;
+
+		addr6 = (struct in6_addr *)&neigh->primary_key;
+		addr_type = ipv6_addr_type(addr6);
+
+		if (addr_type == IPV6_ADDR_ANY)
+			addr6 = &ipv6_hdr(skb)->daddr;
+
+		memcpy(&fl6->daddr, addr6, sizeof(fl6->daddr));
+		neigh_release(neigh);
+	} else if (!fl6->flowi6_mark)
 		dst = ip6_tnl_dst_check(t);
+
+	if (!ip6_tnl_xmit_ctl(t, &fl6->saddr, &fl6->daddr))
+		goto tx_err_link_failure;
+
 	if (!dst) {
 		ndst = ip6_route_output(net, NULL, fl6);
 
@@ -1025,7 +1069,8 @@ static int ip6_tnl_xmit2(struct sk_buff *skb,
 	    (skb_cloned(skb) && !skb_clone_writable(skb, 0))) {
 		struct sk_buff *new_skb;
 
-		if (!(new_skb = skb_realloc_headroom(skb, max_headroom)))
+		new_skb = skb_realloc_headroom(skb, max_headroom);
+		if (!new_skb)
 			goto tx_err_dst_release;
 
 		if (skb->sk)
@@ -1086,8 +1131,7 @@ ip4ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 	int err;
 
 	tproto = ACCESS_ONCE(t->parms.proto);
-	if ((tproto != IPPROTO_IPIP && tproto != 0) ||
-	    !ip6_tnl_xmit_ctl(t))
+	if (tproto != IPPROTO_IPIP && tproto != 0)
 		return -1;
 
 	if (!(t->parms.flags & IP6_TNL_F_IGN_ENCAP_LIMIT))
@@ -1131,7 +1175,7 @@ ip6ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	tproto = ACCESS_ONCE(t->parms.proto);
 	if ((tproto != IPPROTO_IPV6 && tproto != 0) ||
-	    !ip6_tnl_xmit_ctl(t) || ip6_tnl_addr_conflict(t, ipv6h))
+	    ip6_tnl_addr_conflict(t, ipv6h))
 		return -1;
 
 	offset = ip6_tnl_parse_tlv_enc_lim(skb, skb_network_header(skb));
@@ -1480,6 +1524,7 @@ ip6_tnl_change_mtu(struct net_device *dev, int new_mtu)
 
 
 static const struct net_device_ops ip6_tnl_netdev_ops = {
+	.ndo_init	= ip6_tnl_dev_init,
 	.ndo_uninit	= ip6_tnl_dev_uninit,
 	.ndo_start_xmit = ip6_tnl_xmit,
 	.ndo_do_ioctl	= ip6_tnl_ioctl,
@@ -1564,15 +1609,9 @@ static int __net_init ip6_fb_tnl_dev_init(struct net_device *dev)
 	struct ip6_tnl *t = netdev_priv(dev);
 	struct net *net = dev_net(dev);
 	struct ip6_tnl_net *ip6n = net_generic(net, ip6_tnl_net_id);
-	int err = ip6_tnl_dev_init_gen(dev);
-
-	if (err)
-		return err;
 
 	t->parms.proto = IPPROTO_IPV6;
 	dev_hold(dev);
-
-	ip6_tnl_link_config(t);
 
 	rcu_assign_pointer(ip6n->tnls_wc[0], t);
 	return 0;

@@ -644,10 +644,18 @@ static void i40e_get_pauseparam(struct net_device *netdev,
 	struct i40e_pf *pf = np->vsi->back;
 	struct i40e_hw *hw = &pf->hw;
 	struct i40e_link_status *hw_link_info = &hw->phy.link_info;
+	struct i40e_dcbx_config *dcbx_cfg = &hw->local_dcbx_config;
 
 	pause->autoneg =
 		((hw_link_info->an_info & I40E_AQ_AN_COMPLETED) ?
 		  AUTONEG_ENABLE : AUTONEG_DISABLE);
+
+	/* PFC enabled so report LFC as off */
+	if (dcbx_cfg->pfc.pfcenable) {
+		pause->rx_pause = 0;
+		pause->tx_pause = 0;
+		return;
+	}
 
 	if (hw->fc.current_mode == I40E_FC_RX_PAUSE) {
 		pause->rx_pause = 1;
@@ -672,6 +680,7 @@ static int i40e_set_pauseparam(struct net_device *netdev,
 	struct i40e_vsi *vsi = np->vsi;
 	struct i40e_hw *hw = &pf->hw;
 	struct i40e_link_status *hw_link_info = &hw->phy.link_info;
+	struct i40e_dcbx_config *dcbx_cfg = &hw->local_dcbx_config;
 	bool link_up = hw_link_info->link_info & I40E_AQ_LINK_UP;
 	i40e_status status;
 	u8 aq_failures;
@@ -693,8 +702,9 @@ static int i40e_set_pauseparam(struct net_device *netdev,
 		netdev_info(netdev, "Autoneg did not complete so changing settings may not result in an actual change.\n");
 	}
 
-	if (hw->fc.current_mode == I40E_FC_PFC) {
-		netdev_info(netdev, "Priority flow control enabled. Cannot set link flow control.\n");
+	if (dcbx_cfg->pfc.pfcenable) {
+		netdev_info(netdev,
+			    "Priority flow control enabled. Cannot set link flow control.\n");
 		return -EOPNOTSUPP;
 	}
 
@@ -1390,7 +1400,10 @@ static int i40e_intr_test(struct net_device *netdev, u64 *data)
 	netif_info(pf, hw, netdev, "interrupt test\n");
 	wr32(&pf->hw, I40E_PFINT_DYN_CTL0,
 	     (I40E_PFINT_DYN_CTL0_INTENA_MASK |
-	      I40E_PFINT_DYN_CTL0_SWINT_TRIG_MASK));
+	      I40E_PFINT_DYN_CTL0_SWINT_TRIG_MASK |
+	      I40E_PFINT_DYN_CTL0_ITR_INDX_MASK |
+	      I40E_PFINT_DYN_CTL0_SW_ITR_INDX_ENA_MASK |
+	      I40E_PFINT_DYN_CTL0_SW_ITR_INDX_MASK));
 	usleep_range(1000, 2000);
 	*data = (swc_old == pf->sw_int_count);
 
@@ -1575,11 +1588,9 @@ static int i40e_set_coalesce(struct net_device *netdev,
 	} else if (ec->rx_coalesce_usecs == 0) {
 		vsi->rx_itr_setting = ec->rx_coalesce_usecs;
 		if (ec->use_adaptive_rx_coalesce)
-			netif_info(pf, drv, netdev,
-				   "Rx-secs=0, need to disable adaptive-Rx for a complete disable\n");
+			netif_info(pf, drv, netdev, "rx-usecs=0, need to disable adaptive-rx for a complete disable\n");
 	} else {
-		netif_info(pf, drv, netdev,
-			   "Invalid value, Rx-usecs range is 0, 8-8160\n");
+		netif_info(pf, drv, netdev, "Invalid value, rx-usecs range is 0-8160\n");
 		return -EINVAL;
 	}
 
@@ -1589,11 +1600,10 @@ static int i40e_set_coalesce(struct net_device *netdev,
 	} else if (ec->tx_coalesce_usecs == 0) {
 		vsi->tx_itr_setting = ec->tx_coalesce_usecs;
 		if (ec->use_adaptive_tx_coalesce)
-			netif_info(pf, drv, netdev,
-				   "Tx-secs=0, need to disable adaptive-Tx for a complete disable\n");
+			netif_info(pf, drv, netdev, "tx-usecs=0, need to disable adaptive-tx for a complete disable\n");
 	} else {
 		netif_info(pf, drv, netdev,
-			   "Invalid value, Tx-usecs range is 0, 8-8160\n");
+			   "Invalid value, tx-usecs range is 0-8160\n");
 		return -EINVAL;
 	}
 

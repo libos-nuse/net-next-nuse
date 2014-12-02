@@ -19,10 +19,10 @@
 #include <linux/pci.h>
 #include <linux/vmalloc.h>
 #include <linux/delay.h>
-#include <linux/unaligned/access_ok.h>
 #include <linux/interrupt.h>
 #include <linux/bcma/bcma.h>
 #include <linux/sched.h>
+#include <asm/unaligned.h>
 
 #include <soc.h>
 #include <chipcommon.h>
@@ -30,8 +30,8 @@
 #include <brcmu_wifi.h>
 #include <brcm_hw_ids.h>
 
-#include "dhd_dbg.h"
-#include "dhd_bus.h"
+#include "debug.h"
+#include "bus.h"
 #include "commonring.h"
 #include "msgbuf.h"
 #include "pcie.h"

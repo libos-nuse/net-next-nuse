@@ -146,6 +146,7 @@ enum i40e_state_t {
 	__I40E_DOWN_REQUESTED,
 	__I40E_FD_FLUSH_REQUESTED,
 	__I40E_RESET_FAILED,
+	__I40E_PORT_TX_SUSPENDED,
 };
 
 enum i40e_interrupt_policy {
@@ -269,7 +270,8 @@ struct i40e_pf {
 	u16 msg_enable;
 	char misc_int_name[IFNAMSIZ + 9];
 	u16 adminq_work_limit; /* num of admin receive queue desc to process */
-	int service_timer_period;
+	unsigned long service_timer_period;
+	unsigned long service_timer_previous;
 	struct timer_list service_timer;
 	struct work_struct service_task;
 

@@ -270,7 +270,8 @@ static void iwl_mvm_scan_condition_iterator(void *data, u8 *mac,
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 	bool *global_bound = data;
 
-	if (mvmvif->phy_ctxt && mvmvif->phy_ctxt->id < MAX_PHYS)
+	if (vif->type != NL80211_IFTYPE_P2P_DEVICE && mvmvif->phy_ctxt &&
+	    mvmvif->phy_ctxt->id < MAX_PHYS)
 		*global_bound = true;
 }
 
@@ -602,16 +603,6 @@ static int iwl_mvm_cancel_regular_scan(struct iwl_mvm *mvm)
 					       SCAN_COMPLETE_NOTIFICATION };
 	int ret;
 
-	if (mvm->scan_status == IWL_MVM_SCAN_NONE)
-		return 0;
-
-	if (iwl_mvm_is_radio_killed(mvm)) {
-		ieee80211_scan_completed(mvm->hw, true);
-		iwl_mvm_unref(mvm, IWL_MVM_REF_SCAN);
-		mvm->scan_status = IWL_MVM_SCAN_NONE;
-		return 0;
-	}
-
 	iwl_init_notification_wait(&mvm->notif_wait, &wait_scan_abort,
 				   scan_abort_notif,
 				   ARRAY_SIZE(scan_abort_notif),
@@ -672,6 +663,7 @@ int iwl_mvm_rx_scan_offload_complete_notif(struct iwl_mvm *mvm,
 		mvm->scan_status = IWL_MVM_SCAN_NONE;
 		ieee80211_scan_completed(mvm->hw,
 					 status == IWL_SCAN_OFFLOAD_ABORTED);
+		iwl_mvm_unref(mvm, IWL_MVM_REF_SCAN);
 	}
 
 	mvm->last_ebs_successful = !ebs_status;
@@ -1007,6 +999,31 @@ int iwl_mvm_sched_scan_start(struct iwl_mvm *mvm,
 				    sizeof(scan_req), &scan_req);
 }
 
+int iwl_mvm_scan_offload_start(struct iwl_mvm *mvm,
+			       struct ieee80211_vif *vif,
+			       struct cfg80211_sched_scan_request *req,
+			       struct ieee80211_scan_ies *ies)
+{
+	int ret;
+
+	if ((mvm->fw->ucode_capa.api[0] & IWL_UCODE_TLV_API_LMAC_SCAN)) {
+		ret = iwl_mvm_config_sched_scan_profiles(mvm, req);
+		if (ret)
+			return ret;
+		ret = iwl_mvm_unified_sched_scan_lmac(mvm, vif, req, ies);
+	} else {
+		ret = iwl_mvm_config_sched_scan(mvm, vif, req, ies);
+		if (ret)
+			return ret;
+		ret = iwl_mvm_config_sched_scan_profiles(mvm, req);
+		if (ret)
+			return ret;
+		ret = iwl_mvm_sched_scan_start(mvm, req);
+	}
+
+	return ret;
+}
+
 static int iwl_mvm_send_scan_offload_abort(struct iwl_mvm *mvm)
 {
 	int ret;
@@ -1081,8 +1098,12 @@ int iwl_mvm_scan_offload_stop(struct iwl_mvm *mvm, bool notify)
 	/*
 	 * Clear the scan status so the next scan requests will succeed. This
 	 * also ensures the Rx handler doesn't do anything, as the scan was
-	 * stopped from above.
+	 * stopped from above. Since the rx handler won't do anything now,
+	 * we have to release the scan reference here.
 	 */
+	if (mvm->scan_status == IWL_MVM_SCAN_OS)
+		iwl_mvm_unref(mvm, IWL_MVM_REF_SCAN);
+
 	mvm->scan_status = IWL_MVM_SCAN_NONE;
 
 	if (notify) {
@@ -1400,6 +1421,16 @@ int iwl_mvm_unified_sched_scan_lmac(struct iwl_mvm *mvm,
 
 int iwl_mvm_cancel_scan(struct iwl_mvm *mvm)
 {
+	if (mvm->scan_status == IWL_MVM_SCAN_NONE)
+		return 0;
+
+	if (iwl_mvm_is_radio_killed(mvm)) {
+		ieee80211_scan_completed(mvm->hw, true);
+		iwl_mvm_unref(mvm, IWL_MVM_REF_SCAN);
+		mvm->scan_status = IWL_MVM_SCAN_NONE;
+		return 0;
+	}
+
 	if (mvm->fw->ucode_capa.api[0] & IWL_UCODE_TLV_API_LMAC_SCAN)
 		return iwl_mvm_scan_offload_stop(mvm, true);
 	return iwl_mvm_cancel_regular_scan(mvm);

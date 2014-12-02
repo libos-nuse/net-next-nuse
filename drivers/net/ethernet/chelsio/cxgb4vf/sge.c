@@ -51,14 +51,6 @@
 #include "../cxgb4/t4_msg.h"
 
 /*
- * Decoded Adapter Parameters.
- */
-static u32 FL_PG_ORDER;		/* large page allocation size */
-static u32 STAT_LEN;		/* length of status page at ring end */
-static u32 PKTSHIFT;		/* padding between CPL and packet data */
-static u32 FL_ALIGN;		/* response queue message alignment */
-
-/*
  * Constants ...
  */
 enum {
@@ -102,12 +94,6 @@ enum {
 	MAX_TIMER_TX_RECLAIM = 100,
 
 	/*
-	 * An FL with <= FL_STARVE_THRES buffers is starving and a periodic
-	 * timer will attempt to refill it.
-	 */
-	FL_STARVE_THRES = 4,
-
-	/*
 	 * Suspend an Ethernet TX queue with fewer available descriptors than
 	 * this.  We always want to have room for a maximum sized packet:
 	 * inline immediate data + MAX_SKB_FRAGS. This is the same as
@@ -132,7 +118,7 @@ enum {
 	 * we can specify for immediate data in the firmware Ethernet TX
 	 * Work Request.
 	 */
-	MAX_IMM_TX_PKT_LEN = FW_WR_IMMDLEN_MASK,
+	MAX_IMM_TX_PKT_LEN = FW_WR_IMMDLEN_M,
 
 	/*
 	 * Max size of a WR sent through a control TX queue.
@@ -264,15 +250,19 @@ static inline unsigned int fl_cap(const struct sge_fl *fl)
 
 /**
  *	fl_starving - return whether a Free List is starving.
+ *	@adapter: pointer to the adapter
  *	@fl: the Free List
  *
  *	Tests specified Free List to see whether the number of buffers
  *	available to the hardware has falled below our "starvation"
  *	threshold.
  */
-static inline bool fl_starving(const struct sge_fl *fl)
+static inline bool fl_starving(const struct adapter *adapter,
+			       const struct sge_fl *fl)
 {
-	return fl->avail - fl->pend_cred <= FL_STARVE_THRES;
+	const struct sge *s = &adapter->sge;
+
+	return fl->avail - fl->pend_cred <= s->fl_starve_thres;
 }
 
 /**
@@ -457,13 +447,16 @@ static inline void reclaim_completed_tx(struct adapter *adapter,
 
 /**
  *	get_buf_size - return the size of an RX Free List buffer.
+ *	@adapter: pointer to the associated adapter
  *	@sdesc: pointer to the software buffer descriptor
  */
-static inline int get_buf_size(const struct rx_sw_desc *sdesc)
+static inline int get_buf_size(const struct adapter *adapter,
+			       const struct rx_sw_desc *sdesc)
 {
-	return FL_PG_ORDER > 0 && (sdesc->dma_addr & RX_LARGE_BUF)
-		? (PAGE_SIZE << FL_PG_ORDER)
-		: PAGE_SIZE;
+	const struct sge *s = &adapter->sge;
+
+	return (s->fl_pg_order > 0 && (sdesc->dma_addr & RX_LARGE_BUF)
+		? (PAGE_SIZE << s->fl_pg_order) : PAGE_SIZE);
 }
 
 /**
@@ -483,7 +476,8 @@ static void free_rx_bufs(struct adapter *adapter, struct sge_fl *fl, int n)
 
 		if (is_buf_mapped(sdesc))
 			dma_unmap_page(adapter->pdev_dev, get_buf_addr(sdesc),
-				       get_buf_size(sdesc), PCI_DMA_FROMDEVICE);
+				       get_buf_size(adapter, sdesc),
+				       PCI_DMA_FROMDEVICE);
 		put_page(sdesc->page);
 		sdesc->page = NULL;
 		if (++fl->cidx == fl->size)
@@ -511,7 +505,8 @@ static void unmap_rx_buf(struct adapter *adapter, struct sge_fl *fl)
 
 	if (is_buf_mapped(sdesc))
 		dma_unmap_page(adapter->pdev_dev, get_buf_addr(sdesc),
-			       get_buf_size(sdesc), PCI_DMA_FROMDEVICE);
+			       get_buf_size(adapter, sdesc),
+			       PCI_DMA_FROMDEVICE);
 	sdesc->page = NULL;
 	if (++fl->cidx == fl->size)
 		fl->cidx = 0;
@@ -589,6 +584,7 @@ static inline void poison_buf(struct page *page, size_t sz)
 static unsigned int refill_fl(struct adapter *adapter, struct sge_fl *fl,
 			      int n, gfp_t gfp)
 {
+	struct sge *s = &adapter->sge;
 	struct page *page;
 	dma_addr_t dma_addr;
 	unsigned int cred = fl->avail;
@@ -602,18 +598,19 @@ static unsigned int refill_fl(struct adapter *adapter, struct sge_fl *fl,
 	 */
 	BUG_ON(fl->avail + n > fl->size - FL_PER_EQ_UNIT);
 
+	gfp |= __GFP_NOWARN;
+
 	/*
 	 * If we support large pages, prefer large buffers and fail over to
 	 * small pages if we can't allocate large pages to satisfy the refill.
 	 * If we don't support large pages, drop directly into the small page
 	 * allocation code.
 	 */
-	if (FL_PG_ORDER == 0)
+	if (s->fl_pg_order == 0)
 		goto alloc_small_pages;
 
 	while (n) {
-		page = alloc_pages(gfp | __GFP_COMP | __GFP_NOWARN,
-				   FL_PG_ORDER);
+		page = __dev_alloc_pages(gfp, s->fl_pg_order);
 		if (unlikely(!page)) {
 			/*
 			 * We've failed inour attempt to allocate a "large
@@ -623,10 +620,10 @@ static unsigned int refill_fl(struct adapter *adapter, struct sge_fl *fl,
 			fl->large_alloc_failed++;
 			break;
 		}
-		poison_buf(page, PAGE_SIZE << FL_PG_ORDER);
+		poison_buf(page, PAGE_SIZE << s->fl_pg_order);
 
 		dma_addr = dma_map_page(adapter->pdev_dev, page, 0,
-					PAGE_SIZE << FL_PG_ORDER,
+					PAGE_SIZE << s->fl_pg_order,
 					PCI_DMA_FROMDEVICE);
 		if (unlikely(dma_mapping_error(adapter->pdev_dev, dma_addr))) {
 			/*
@@ -637,7 +634,7 @@ static unsigned int refill_fl(struct adapter *adapter, struct sge_fl *fl,
 			 * because DMA mapping resources are typically
 			 * critical resources once they become scarse.
 			 */
-			__free_pages(page, FL_PG_ORDER);
+			__free_pages(page, s->fl_pg_order);
 			goto out;
 		}
 		dma_addr |= RX_LARGE_BUF;
@@ -657,7 +654,7 @@ static unsigned int refill_fl(struct adapter *adapter, struct sge_fl *fl,
 
 alloc_small_pages:
 	while (n--) {
-		page = __skb_alloc_page(gfp | __GFP_NOWARN, NULL);
+		page = __dev_alloc_page(gfp);
 		if (unlikely(!page)) {
 			fl->alloc_failed++;
 			break;
@@ -693,7 +690,7 @@ out:
 	fl->pend_cred += cred;
 	ring_fl_db(adapter, fl);
 
-	if (unlikely(fl_starving(fl))) {
+	if (unlikely(fl_starving(adapter, fl))) {
 		smp_wmb();
 		set_bit(fl->cntxt_id, adapter->sge.starving_fl);
 	}
@@ -906,7 +903,7 @@ static void write_sgl(const struct sk_buff *skb, struct sge_txq *tq,
 		sgl->addr0 = cpu_to_be64(addr[1]);
 	}
 
-	sgl->cmd_nsge = htonl(ULPTX_CMD(ULP_TX_SC_DSGL) |
+	sgl->cmd_nsge = htonl(ULPTX_CMD_V(ULP_TX_SC_DSGL) |
 			      ULPTX_NSGE(nfrags));
 	if (likely(--nfrags == 0))
 		return;
@@ -1149,7 +1146,7 @@ int t4vf_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto out_free;
 	}
 
-	wr_mid = FW_WR_LEN16(DIV_ROUND_UP(flits, 2));
+	wr_mid = FW_WR_LEN16_V(DIV_ROUND_UP(flits, 2));
 	if (unlikely(credits < ETHTXQ_STOP_THRES)) {
 		/*
 		 * After we're done injecting the Work Request for this
@@ -1161,7 +1158,7 @@ int t4vf_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 		 * has opened up.
 		 */
 		txq_stop(txq);
-		wr_mid |= FW_WR_EQUEQ | FW_WR_EQUIQ;
+		wr_mid |= FW_WR_EQUEQ_F | FW_WR_EQUIQ_F;
 	}
 
 	/*
@@ -1191,9 +1188,9 @@ int t4vf_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 		int eth_xtra_len = skb_network_offset(skb) - ETH_HLEN;
 
 		wr->op_immdlen =
-			cpu_to_be32(FW_WR_OP(FW_ETH_TX_PKT_VM_WR) |
-				    FW_WR_IMMDLEN(sizeof(*lso) +
-						  sizeof(*cpl)));
+			cpu_to_be32(FW_WR_OP_V(FW_ETH_TX_PKT_VM_WR) |
+				    FW_WR_IMMDLEN_V(sizeof(*lso) +
+						    sizeof(*cpl)));
 		/*
 		 * Fill in the LSO CPL message.
 		 */
@@ -1228,8 +1225,8 @@ int t4vf_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 
 		len = is_eth_imm(skb) ? skb->len + sizeof(*cpl) : sizeof(*cpl);
 		wr->op_immdlen =
-			cpu_to_be32(FW_WR_OP(FW_ETH_TX_PKT_VM_WR) |
-				    FW_WR_IMMDLEN(len));
+			cpu_to_be32(FW_WR_OP_V(FW_ETH_TX_PKT_VM_WR) |
+				    FW_WR_IMMDLEN_V(len));
 
 		/*
 		 * Set up TX Packet CPL pointer, control word and perform
@@ -1468,6 +1465,8 @@ static void t4vf_pktgl_free(const struct pkt_gl *gl)
 static void do_gro(struct sge_eth_rxq *rxq, const struct pkt_gl *gl,
 		   const struct cpl_rx_pkt *pkt)
 {
+	struct adapter *adapter = rxq->rspq.adapter;
+	struct sge *s = &adapter->sge;
 	int ret;
 	struct sk_buff *skb;
 
@@ -1478,8 +1477,8 @@ static void do_gro(struct sge_eth_rxq *rxq, const struct pkt_gl *gl,
 		return;
 	}
 
-	copy_frags(skb, gl, PKTSHIFT);
-	skb->len = gl->tot_len - PKTSHIFT;
+	copy_frags(skb, gl, s->pktshift);
+	skb->len = gl->tot_len - s->pktshift;
 	skb->data_len = skb->len;
 	skb->truesize += skb->data_len;
 	skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -1516,6 +1515,8 @@ int t4vf_ethrx_handler(struct sge_rspq *rspq, const __be64 *rsp,
 	bool csum_ok = pkt->csum_calc && !pkt->err_vec &&
 		       (rspq->netdev->features & NETIF_F_RXCSUM);
 	struct sge_eth_rxq *rxq = container_of(rspq, struct sge_eth_rxq, rspq);
+	struct adapter *adapter = rspq->adapter;
+	struct sge *s = &adapter->sge;
 
 	/*
 	 * If this is a good TCP packet and we have Generic Receive Offload
@@ -1537,7 +1538,7 @@ int t4vf_ethrx_handler(struct sge_rspq *rspq, const __be64 *rsp,
 		rxq->stats.rx_drops++;
 		return 0;
 	}
-	__skb_pull(skb, PKTSHIFT);
+	__skb_pull(skb, s->pktshift);
 	skb->protocol = eth_type_trans(skb, rspq->netdev);
 	skb_record_rx_queue(skb, rspq->idx);
 	rxq->stats.pkts++;
@@ -1648,6 +1649,8 @@ static inline void rspq_next(struct sge_rspq *rspq)
 static int process_responses(struct sge_rspq *rspq, int budget)
 {
 	struct sge_eth_rxq *rxq = container_of(rspq, struct sge_eth_rxq, rspq);
+	struct adapter *adapter = rspq->adapter;
+	struct sge *s = &adapter->sge;
 	int budget_left = budget;
 
 	while (likely(budget_left)) {
@@ -1697,7 +1700,7 @@ static int process_responses(struct sge_rspq *rspq, int budget)
 				BUG_ON(frag >= MAX_SKB_FRAGS);
 				BUG_ON(rxq->fl.avail == 0);
 				sdesc = &rxq->fl.sdesc[rxq->fl.cidx];
-				bufsz = get_buf_size(sdesc);
+				bufsz = get_buf_size(adapter, sdesc);
 				fp->page = sdesc->page;
 				fp->offset = rspq->offset;
 				fp->size = min(bufsz, len);
@@ -1726,7 +1729,7 @@ static int process_responses(struct sge_rspq *rspq, int budget)
 			 */
 			ret = rspq->handler(rspq, rspq->cur_desc, &gl);
 			if (likely(ret == 0))
-				rspq->offset += ALIGN(fp->size, FL_ALIGN);
+				rspq->offset += ALIGN(fp->size, s->fl_align);
 			else
 				restore_rx_bufs(&gl, &rxq->fl, frag);
 		} else if (likely(rsp_type == RSP_TYPE_CPL)) {
@@ -1963,7 +1966,7 @@ static void sge_rx_timer_cb(unsigned long data)
 			 * schedule napi but the FL is no longer starving.
 			 * No biggie.
 			 */
-			if (fl_starving(fl)) {
+			if (fl_starving(adapter, fl)) {
 				struct sge_eth_rxq *rxq;
 
 				rxq = container_of(fl, struct sge_eth_rxq, fl);
@@ -2047,6 +2050,7 @@ int t4vf_sge_alloc_rxq(struct adapter *adapter, struct sge_rspq *rspq,
 		       int intr_dest,
 		       struct sge_fl *fl, rspq_handler_t hnd)
 {
+	struct sge *s = &adapter->sge;
 	struct port_info *pi = netdev_priv(dev);
 	struct fw_iq_cmd cmd, rpl;
 	int ret, iqandst, flsz = 0;
@@ -2084,26 +2088,26 @@ int t4vf_sge_alloc_rxq(struct adapter *adapter, struct sge_rspq *rspq,
 	 * into OS-independent common code ...
 	 */
 	memset(&cmd, 0, sizeof(cmd));
-	cmd.op_to_vfn = cpu_to_be32(FW_CMD_OP(FW_IQ_CMD) |
-				    FW_CMD_REQUEST |
-				    FW_CMD_WRITE |
-				    FW_CMD_EXEC);
-	cmd.alloc_to_len16 = cpu_to_be32(FW_IQ_CMD_ALLOC |
-					 FW_IQ_CMD_IQSTART(1) |
+	cmd.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_IQ_CMD) |
+				    FW_CMD_REQUEST_F |
+				    FW_CMD_WRITE_F |
+				    FW_CMD_EXEC_F);
+	cmd.alloc_to_len16 = cpu_to_be32(FW_IQ_CMD_ALLOC_F |
+					 FW_IQ_CMD_IQSTART_F |
 					 FW_LEN16(cmd));
 	cmd.type_to_iqandstindex =
-		cpu_to_be32(FW_IQ_CMD_TYPE(FW_IQ_TYPE_FL_INT_CAP) |
-			    FW_IQ_CMD_IQASYNCH(iqasynch) |
-			    FW_IQ_CMD_VIID(pi->viid) |
-			    FW_IQ_CMD_IQANDST(iqandst) |
-			    FW_IQ_CMD_IQANUS(1) |
-			    FW_IQ_CMD_IQANUD(SGE_UPDATEDEL_INTR) |
-			    FW_IQ_CMD_IQANDSTINDEX(intr_dest));
+		cpu_to_be32(FW_IQ_CMD_TYPE_V(FW_IQ_TYPE_FL_INT_CAP) |
+			    FW_IQ_CMD_IQASYNCH_V(iqasynch) |
+			    FW_IQ_CMD_VIID_V(pi->viid) |
+			    FW_IQ_CMD_IQANDST_V(iqandst) |
+			    FW_IQ_CMD_IQANUS_V(1) |
+			    FW_IQ_CMD_IQANUD_V(SGE_UPDATEDEL_INTR) |
+			    FW_IQ_CMD_IQANDSTINDEX_V(intr_dest));
 	cmd.iqdroprss_to_iqesize =
-		cpu_to_be16(FW_IQ_CMD_IQPCIECH(pi->port_id) |
-			    FW_IQ_CMD_IQGTSMODE |
-			    FW_IQ_CMD_IQINTCNTTHRESH(rspq->pktcnt_idx) |
-			    FW_IQ_CMD_IQESIZE(ilog2(rspq->iqe_len) - 4));
+		cpu_to_be16(FW_IQ_CMD_IQPCIECH_V(pi->port_id) |
+			    FW_IQ_CMD_IQGTSMODE_F |
+			    FW_IQ_CMD_IQINTCNTTHRESH_V(rspq->pktcnt_idx) |
+			    FW_IQ_CMD_IQESIZE_V(ilog2(rspq->iqe_len) - 4));
 	cmd.iqsize = cpu_to_be16(rspq->size);
 	cmd.iqaddr = cpu_to_be64(rspq->phys_addr);
 
@@ -2117,7 +2121,7 @@ int t4vf_sge_alloc_rxq(struct adapter *adapter, struct sge_rspq *rspq,
 		fl->size = roundup(fl->size, FL_PER_EQ_UNIT);
 		fl->desc = alloc_ring(adapter->pdev_dev, fl->size,
 				      sizeof(__be64), sizeof(struct rx_sw_desc),
-				      &fl->addr, &fl->sdesc, STAT_LEN);
+				      &fl->addr, &fl->sdesc, s->stat_len);
 		if (!fl->desc) {
 			ret = -ENOMEM;
 			goto err;
@@ -2129,7 +2133,7 @@ int t4vf_sge_alloc_rxq(struct adapter *adapter, struct sge_rspq *rspq,
 		 * free list ring) in Egress Queue Units.
 		 */
 		flsz = (fl->size / FL_PER_EQ_UNIT +
-			STAT_LEN / EQ_UNIT);
+			s->stat_len / EQ_UNIT);
 
 		/*
 		 * Fill in all the relevant firmware Ingress Queue Command
@@ -2137,13 +2141,13 @@ int t4vf_sge_alloc_rxq(struct adapter *adapter, struct sge_rspq *rspq,
 		 */
 		cmd.iqns_to_fl0congen =
 			cpu_to_be32(
-				FW_IQ_CMD_FL0HOSTFCMODE(SGE_HOSTFCMODE_NONE) |
-				FW_IQ_CMD_FL0PACKEN(1) |
-				FW_IQ_CMD_FL0PADEN(1));
+				FW_IQ_CMD_FL0HOSTFCMODE_V(SGE_HOSTFCMODE_NONE) |
+				FW_IQ_CMD_FL0PACKEN_F |
+				FW_IQ_CMD_FL0PADEN_F);
 		cmd.fl0dcaen_to_fl0cidxfthresh =
 			cpu_to_be16(
-				FW_IQ_CMD_FL0FBMIN(SGE_FETCHBURSTMIN_64B) |
-				FW_IQ_CMD_FL0FBMAX(SGE_FETCHBURSTMAX_512B));
+				FW_IQ_CMD_FL0FBMIN_V(SGE_FETCHBURSTMIN_64B) |
+				FW_IQ_CMD_FL0FBMAX_V(SGE_FETCHBURSTMAX_512B));
 		cmd.fl0size = cpu_to_be16(flsz);
 		cmd.fl0addr = cpu_to_be64(fl->addr);
 	}
@@ -2217,6 +2221,7 @@ int t4vf_sge_alloc_eth_txq(struct adapter *adapter, struct sge_eth_txq *txq,
 			   struct net_device *dev, struct netdev_queue *devq,
 			   unsigned int iqid)
 {
+	struct sge *s = &adapter->sge;
 	int ret, nentries;
 	struct fw_eq_eth_cmd cmd, rpl;
 	struct port_info *pi = netdev_priv(dev);
@@ -2225,7 +2230,7 @@ int t4vf_sge_alloc_eth_txq(struct adapter *adapter, struct sge_eth_txq *txq,
 	 * Calculate the size of the hardware TX Queue (including the Status
 	 * Page on the end of the TX Queue) in units of TX Descriptors.
 	 */
-	nentries = txq->q.size + STAT_LEN / sizeof(struct tx_desc);
+	nentries = txq->q.size + s->stat_len / sizeof(struct tx_desc);
 
 	/*
 	 * Allocate the hardware ring for the TX ring (with space for its
@@ -2234,7 +2239,7 @@ int t4vf_sge_alloc_eth_txq(struct adapter *adapter, struct sge_eth_txq *txq,
 	txq->q.desc = alloc_ring(adapter->pdev_dev, txq->q.size,
 				 sizeof(struct tx_desc),
 				 sizeof(struct tx_sw_desc),
-				 &txq->q.phys_addr, &txq->q.sdesc, STAT_LEN);
+				 &txq->q.phys_addr, &txq->q.sdesc, s->stat_len);
 	if (!txq->q.desc)
 		return -ENOMEM;
 
@@ -2246,24 +2251,25 @@ int t4vf_sge_alloc_eth_txq(struct adapter *adapter, struct sge_eth_txq *txq,
 	 * into the common code ...
 	 */
 	memset(&cmd, 0, sizeof(cmd));
-	cmd.op_to_vfn = cpu_to_be32(FW_CMD_OP(FW_EQ_ETH_CMD) |
-				    FW_CMD_REQUEST |
-				    FW_CMD_WRITE |
-				    FW_CMD_EXEC);
-	cmd.alloc_to_len16 = cpu_to_be32(FW_EQ_ETH_CMD_ALLOC |
-					 FW_EQ_ETH_CMD_EQSTART |
+	cmd.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_EQ_ETH_CMD) |
+				    FW_CMD_REQUEST_F |
+				    FW_CMD_WRITE_F |
+				    FW_CMD_EXEC_F);
+	cmd.alloc_to_len16 = cpu_to_be32(FW_EQ_ETH_CMD_ALLOC_F |
+					 FW_EQ_ETH_CMD_EQSTART_F |
 					 FW_LEN16(cmd));
-	cmd.viid_pkd = cpu_to_be32(FW_EQ_ETH_CMD_AUTOEQUEQE |
-				   FW_EQ_ETH_CMD_VIID(pi->viid));
+	cmd.viid_pkd = cpu_to_be32(FW_EQ_ETH_CMD_AUTOEQUEQE_F |
+				   FW_EQ_ETH_CMD_VIID_V(pi->viid));
 	cmd.fetchszm_to_iqid =
-		cpu_to_be32(FW_EQ_ETH_CMD_HOSTFCMODE(SGE_HOSTFCMODE_STPG) |
-			    FW_EQ_ETH_CMD_PCIECHN(pi->port_id) |
-			    FW_EQ_ETH_CMD_IQID(iqid));
+		cpu_to_be32(FW_EQ_ETH_CMD_HOSTFCMODE_V(SGE_HOSTFCMODE_STPG) |
+			    FW_EQ_ETH_CMD_PCIECHN_V(pi->port_id) |
+			    FW_EQ_ETH_CMD_IQID_V(iqid));
 	cmd.dcaen_to_eqsize =
-		cpu_to_be32(FW_EQ_ETH_CMD_FBMIN(SGE_FETCHBURSTMIN_64B) |
-			    FW_EQ_ETH_CMD_FBMAX(SGE_FETCHBURSTMAX_512B) |
-			    FW_EQ_ETH_CMD_CIDXFTHRESH(SGE_CIDXFLUSHTHRESH_32) |
-			    FW_EQ_ETH_CMD_EQSIZE(nentries));
+		cpu_to_be32(FW_EQ_ETH_CMD_FBMIN_V(SGE_FETCHBURSTMIN_64B) |
+			    FW_EQ_ETH_CMD_FBMAX_V(SGE_FETCHBURSTMAX_512B) |
+			    FW_EQ_ETH_CMD_CIDXFTHRESH_V(
+						SGE_CIDXFLUSHTHRESH_32) |
+			    FW_EQ_ETH_CMD_EQSIZE_V(nentries));
 	cmd.eqaddr = cpu_to_be64(txq->q.phys_addr);
 
 	/*
@@ -2289,9 +2295,9 @@ int t4vf_sge_alloc_eth_txq(struct adapter *adapter, struct sge_eth_txq *txq,
 	txq->q.cidx = 0;
 	txq->q.pidx = 0;
 	txq->q.stat = (void *)&txq->q.desc[txq->q.size];
-	txq->q.cntxt_id = FW_EQ_ETH_CMD_EQID_GET(be32_to_cpu(rpl.eqid_pkd));
+	txq->q.cntxt_id = FW_EQ_ETH_CMD_EQID_G(be32_to_cpu(rpl.eqid_pkd));
 	txq->q.abs_id =
-		FW_EQ_ETH_CMD_PHYSEQID_GET(be32_to_cpu(rpl.physeqid_pkd));
+		FW_EQ_ETH_CMD_PHYSEQID_G(be32_to_cpu(rpl.physeqid_pkd));
 	txq->txq = devq;
 	txq->tso = 0;
 	txq->tx_cso = 0;
@@ -2307,8 +2313,10 @@ int t4vf_sge_alloc_eth_txq(struct adapter *adapter, struct sge_eth_txq *txq,
  */
 static void free_txq(struct adapter *adapter, struct sge_txq *tq)
 {
+	struct sge *s = &adapter->sge;
+
 	dma_free_coherent(adapter->pdev_dev,
-			  tq->size * sizeof(*tq->desc) + STAT_LEN,
+			  tq->size * sizeof(*tq->desc) + s->stat_len,
 			  tq->desc, tq->phys_addr);
 	tq->cntxt_id = 0;
 	tq->sdesc = NULL;
@@ -2322,6 +2330,7 @@ static void free_txq(struct adapter *adapter, struct sge_txq *tq)
 static void free_rspq_fl(struct adapter *adapter, struct sge_rspq *rspq,
 			 struct sge_fl *fl)
 {
+	struct sge *s = &adapter->sge;
 	unsigned int flid = fl ? fl->cntxt_id : 0xffff;
 
 	t4vf_iq_free(adapter, FW_IQ_TYPE_FL_INT_CAP,
@@ -2337,7 +2346,7 @@ static void free_rspq_fl(struct adapter *adapter, struct sge_rspq *rspq,
 	if (fl) {
 		free_rx_bufs(adapter, fl, fl->avail);
 		dma_free_coherent(adapter->pdev_dev,
-				  fl->size * sizeof(*fl->desc) + STAT_LEN,
+				  fl->size * sizeof(*fl->desc) + s->stat_len,
 				  fl->desc, fl->addr);
 		kfree(fl->sdesc);
 		fl->sdesc = NULL;
@@ -2423,6 +2432,7 @@ int t4vf_sge_init(struct adapter *adapter)
 	u32 fl0 = sge_params->sge_fl_buffer_size[0];
 	u32 fl1 = sge_params->sge_fl_buffer_size[1];
 	struct sge *s = &adapter->sge;
+	unsigned int ingpadboundary, ingpackboundary;
 
 	/*
 	 * Start by vetting the basic SGE parameters which have been set up by
@@ -2443,12 +2453,48 @@ int t4vf_sge_init(struct adapter *adapter)
 	 * Now translate the adapter parameters into our internal forms.
 	 */
 	if (fl1)
-		FL_PG_ORDER = ilog2(fl1) - PAGE_SHIFT;
-	STAT_LEN = ((sge_params->sge_control & EGRSTATUSPAGESIZE_MASK)
-		    ? 128 : 64);
-	PKTSHIFT = PKTSHIFT_GET(sge_params->sge_control);
-	FL_ALIGN = 1 << (INGPADBOUNDARY_GET(sge_params->sge_control) +
-			 SGE_INGPADBOUNDARY_SHIFT);
+		s->fl_pg_order = ilog2(fl1) - PAGE_SHIFT;
+	s->stat_len = ((sge_params->sge_control & EGRSTATUSPAGESIZE_MASK)
+			? 128 : 64);
+	s->pktshift = PKTSHIFT_GET(sge_params->sge_control);
+
+	/* T4 uses a single control field to specify both the PCIe Padding and
+	 * Packing Boundary.  T5 introduced the ability to specify these
+	 * separately.  The actual Ingress Packet Data alignment boundary
+	 * within Packed Buffer Mode is the maximum of these two
+	 * specifications.  (Note that it makes no real practical sense to
+	 * have the Pading Boudary be larger than the Packing Boundary but you
+	 * could set the chip up that way and, in fact, legacy T4 code would
+	 * end doing this because it would initialize the Padding Boundary and
+	 * leave the Packing Boundary initialized to 0 (16 bytes).)
+	 */
+	ingpadboundary = 1 << (INGPADBOUNDARY_GET(sge_params->sge_control) +
+			       X_INGPADBOUNDARY_SHIFT);
+	if (is_t4(adapter->params.chip)) {
+		s->fl_align = ingpadboundary;
+	} else {
+		/* T5 has a different interpretation of one of the PCIe Packing
+		 * Boundary values.
+		 */
+		ingpackboundary = INGPACKBOUNDARY_G(sge_params->sge_control2);
+		if (ingpackboundary == INGPACKBOUNDARY_16B_X)
+			ingpackboundary = 16;
+		else
+			ingpackboundary = 1 << (ingpackboundary +
+						INGPACKBOUNDARY_SHIFT_X);
+
+		s->fl_align = max(ingpadboundary, ingpackboundary);
+	}
+
+	/* A FL with <= fl_starve_thres buffers is starving and a periodic
+	 * timer will attempt to refill it.  This needs to be larger than the
+	 * SGE's Egress Congestion Threshold.  If it isn't, then we can get
+	 * stuck waiting for new packets while the SGE is waiting for us to
+	 * give it more Free List entries.  (Note that the SGE's Egress
+	 * Congestion Threshold is in units of 2 Free List pointers.)
+	 */
+	s->fl_starve_thres
+		= EGRTHRESHOLD_GET(sge_params->sge_congestion_control)*2 + 1;
 
 	/*
 	 * Set up tasklet timers.

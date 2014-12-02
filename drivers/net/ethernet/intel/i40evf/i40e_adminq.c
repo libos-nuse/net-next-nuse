@@ -801,7 +801,6 @@ i40e_status i40evf_asq_send_command(struct i40e_hw *hw,
 	 */
 	if (!details->async && !details->postpone) {
 		u32 total_delay = 0;
-		u32 delay_len = 10;
 
 		do {
 			/* AQ designers suggest use of head for better
@@ -809,9 +808,8 @@ i40e_status i40evf_asq_send_command(struct i40e_hw *hw,
 			 */
 			if (i40evf_asq_done(hw))
 				break;
-			/* ugh! delay while spin_lock */
-			udelay(delay_len);
-			total_delay += delay_len;
+			usleep_range(1000, 2000);
+			total_delay++;
 		} while (total_delay < hw->aq.asq_cmd_timeout);
 	}
 
@@ -931,10 +929,10 @@ i40e_status i40evf_clean_arq_element(struct i40e_hw *hw,
 
 	e->desc = *desc;
 	datalen = le16_to_cpu(desc->datalen);
-	e->msg_size = min(datalen, e->msg_size);
-	if (e->msg_buf != NULL && (e->msg_size != 0))
+	e->msg_len = min(datalen, e->buf_len);
+	if (e->msg_buf != NULL && (e->msg_len != 0))
 		memcpy(e->msg_buf, hw->aq.arq.r.arq_bi[desc_idx].va,
-		       e->msg_size);
+		       e->msg_len);
 
 	if (i40e_is_nvm_update_op(&e->desc))
 		hw->aq.nvm_busy = false;
