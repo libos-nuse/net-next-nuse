@@ -72,7 +72,7 @@ kernel/time/_to_keep=time.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
-mm/_to_keep=util.o list_lru.o
+mm/_to_keep=util.o list_lru.o iov_iter.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
