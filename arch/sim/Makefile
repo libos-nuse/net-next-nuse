@@ -39,12 +39,10 @@ quiet_cmd_vif_dpdk = VIF-DPDK $@
 		    $(CC) $(dpdk_$(DPDK)) -c $^ -o $@
 
 dpdk-sdk:
-	if test $(dpdk_$(DPDK)); then \
 	git submodule init; \
 	git submodule update; \
 	cd $(srctree)/dpdk ; make CONFIG_RTE_LIBRTE_ETHDEV_DEBUG=y T=$(shell expr `uname -m`)-native-linuxapp-gcc config && \
            make SRCARCH=x86 CONFIG_RTE_BUILD_COMBINE_LIBS=y EXTRA_CFLAGS="-fPIC -g" ;\
-	fi
 
 $(ARCH_DIR)/nuse-vif-dpdk.o: $(ARCH_DIR)/nuse-vif-dpdk.c
 ifeq ($(DPDK), yes)

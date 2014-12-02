@@ -37,6 +37,7 @@ Additional DPDK configuration is needed, hugepage setup, make an interface DPDK 
 
 ```
  ./dpdk/tools/setup.sh
+ sudo insmod dpdk/build/kmod/igb_uio.ko
  sudo ./dpdk/tools/dpdk_nic_bind.py -b igb_uio 0000:02:01.0
 ```
 

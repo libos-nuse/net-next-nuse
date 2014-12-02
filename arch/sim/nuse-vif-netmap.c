@@ -26,8 +26,9 @@ static int vale_rings = 0;
 
 #define MIN(X, Y) ((X) < (Y) ? (X) : (Y))
 typedef int (*initcall_t)(void);
-#define __define_initcall(fn, id)      \
-	static initcall_t __initcall_ ## fn ## id                \
+#define __define_initcall(fn, id)					\
+        static initcall_t __initcall_ ## fn ## id			\
+	__attribute__((__used__))					\
 	__attribute__((__section__(".initcall" #id ".init"))) = fn;
 
 
