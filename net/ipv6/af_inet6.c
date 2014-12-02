@@ -302,7 +302,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		/* Reproduce AF_INET checks to make the bindings consistent */
 		v4addr = addr->sin6_addr.s6_addr32[3];
 		chk_addr_ret = inet_addr_type(net, v4addr);
-		if (!sysctl_ip_nonlocal_bind &&
+		if (!net->ipv4.sysctl_ip_nonlocal_bind &&
 		    !(inet->freebind || inet->transparent) &&
 		    v4addr != htonl(INADDR_ANY) &&
 		    chk_addr_ret != RTN_LOCAL &&
@@ -672,10 +672,10 @@ int inet6_sk_rebuild_header(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(inet6_sk_rebuild_header);
 
-bool ipv6_opt_accepted(const struct sock *sk, const struct sk_buff *skb)
+bool ipv6_opt_accepted(const struct sock *sk, const struct sk_buff *skb,
+		       const struct inet6_skb_parm *opt)
 {
 	const struct ipv6_pinfo *np = inet6_sk(sk);
-	const struct inet6_skb_parm *opt = IP6CB(skb);
 
 	if (np->rxopt.all) {
 		if ((opt->hop && (np->rxopt.bits.hopopts ||
@@ -766,7 +766,7 @@ static int __net_init inet6_net_init(struct net *net)
 	net->ipv6.sysctl.icmpv6_time = 1*HZ;
 	net->ipv6.sysctl.flowlabel_consistency = 1;
 	net->ipv6.sysctl.auto_flowlabels = 0;
-	atomic_set(&net->ipv6.rt_genid, 0);
+	atomic_set(&net->ipv6.fib6_sernum, 1);
 
 	err = ipv6_init_mibs(net);
 	if (err)

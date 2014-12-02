@@ -674,7 +674,7 @@ void i40e_reset_vf(struct i40e_vf *vf, bool flr)
 		 * that the requested op was completed
 		 * successfully
 		 */
-		udelay(10);
+		usleep_range(10, 20);
 		reg = rd32(hw, I40E_VPGEN_VFRSTAT(vf->vf_id));
 		if (reg & I40E_VPGEN_VFRSTAT_VFRD_MASK) {
 			rsd = true;
@@ -706,35 +706,6 @@ complete_reset:
 	/* tell the VF the reset is done */
 	wr32(hw, I40E_VFGEN_RSTAT1(vf->vf_id), I40E_VFR_VFACTIVE);
 	i40e_flush(hw);
-}
-
-/**
- * i40e_vfs_are_assigned
- * @pf: pointer to the pf structure
- *
- * Determine if any VFs are assigned to VMs
- **/
-static bool i40e_vfs_are_assigned(struct i40e_pf *pf)
-{
-	struct pci_dev *pdev = pf->pdev;
-	struct pci_dev *vfdev;
-
-	/* loop through all the VFs to see if we own any that are assigned */
-	vfdev = pci_get_device(PCI_VENDOR_ID_INTEL, I40E_DEV_ID_VF , NULL);
-	while (vfdev) {
-		/* if we don't own it we don't care */
-		if (vfdev->is_virtfn && pci_physfn(vfdev) == pdev) {
-			/* if it is assigned we cannot release it */
-			if (vfdev->dev_flags & PCI_DEV_FLAGS_ASSIGNED)
-				return true;
-		}
-
-		vfdev = pci_get_device(PCI_VENDOR_ID_INTEL,
-				       I40E_DEV_ID_VF,
-				       vfdev);
-	}
-
-	return false;
 }
 #ifdef CONFIG_PCI_IOV
 
@@ -843,7 +814,7 @@ void i40e_free_vfs(struct i40e_pf *pf)
 	 * assigned. Setting the number of VFs to 0 through sysfs is caught
 	 * before this function ever gets called.
 	 */
-	if (!i40e_vfs_are_assigned(pf)) {
+	if (!pci_vfs_assigned(pf->pdev)) {
 		pci_disable_sriov(pf->pdev);
 		/* Acknowledge VFLR for all VFS. Without this, VFs will fail to
 		 * work correctly when SR-IOV gets re-enabled.
@@ -980,7 +951,7 @@ int i40e_pci_sriov_configure(struct pci_dev *pdev, int num_vfs)
 	if (num_vfs)
 		return i40e_pci_sriov_enable(pdev, num_vfs);
 
-	if (!i40e_vfs_are_assigned(pf)) {
+	if (!pci_vfs_assigned(pf->pdev)) {
 		i40e_free_vfs(pf);
 	} else {
 		dev_warn(&pdev->dev, "Unable to free VFs because some are assigned to VMs.\n");
@@ -1898,6 +1869,12 @@ int i40e_vc_process_vflr_event(struct i40e_pf *pf)
 	if (!test_bit(__I40E_VFLR_EVENT_PENDING, &pf->state))
 		return 0;
 
+	/* re-enable vflr interrupt cause */
+	reg = rd32(hw, I40E_PFINT_ICR0_ENA);
+	reg |= I40E_PFINT_ICR0_ENA_VFLR_MASK;
+	wr32(hw, I40E_PFINT_ICR0_ENA, reg);
+	i40e_flush(hw);
+
 	clear_bit(__I40E_VFLR_EVENT_PENDING, &pf->state);
 	for (vf_id = 0; vf_id < pf->num_alloc_vfs; vf_id++) {
 		reg_idx = (hw->func_caps.vf_base_id + vf_id) / 32;
@@ -1913,12 +1890,6 @@ int i40e_vc_process_vflr_event(struct i40e_pf *pf)
 				i40e_reset_vf(vf, true);
 		}
 	}
-
-	/* re-enable vflr interrupt cause */
-	reg = rd32(hw, I40E_PFINT_ICR0_ENA);
-	reg |= I40E_PFINT_ICR0_ENA_VFLR_MASK;
-	wr32(hw, I40E_PFINT_ICR0_ENA, reg);
-	i40e_flush(hw);
 
 	return 0;
 }
@@ -2098,7 +2069,6 @@ int i40e_ndo_set_vf_mac(struct net_device *netdev, int vf_id, u8 *mac)
 	/* Force the VF driver stop so it has to reload with new MAC address */
 	i40e_vc_disable_vf(pf, vf);
 	dev_info(&pf->pdev->dev, "Reload the VF driver to make this change effective.\n");
-	ret = 0;
 
 error_param:
 	return ret;
@@ -2423,7 +2393,7 @@ error_out:
  *
  * Enable or disable VF spoof checking
  **/
-int i40e_ndo_set_vf_spoofck(struct net_device *netdev, int vf_id, bool enable)
+int i40e_ndo_set_vf_spoofchk(struct net_device *netdev, int vf_id, bool enable)
 {
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
 	struct i40e_vsi *vsi = np->vsi;

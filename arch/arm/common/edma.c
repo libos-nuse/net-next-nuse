@@ -26,6 +26,7 @@
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/edma.h>
+#include <linux/dma-mapping.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/of_dma.h>
@@ -1443,14 +1444,14 @@ void edma_assign_channel_eventq(unsigned channel, enum dma_event_q eventq_no)
 EXPORT_SYMBOL(edma_assign_channel_eventq);
 
 static int edma_setup_from_hw(struct device *dev, struct edma_soc_info *pdata,
-			      struct edma *edma_cc)
+			      struct edma *edma_cc, int cc_id)
 {
 	int i;
 	u32 value, cccfg;
 	s8 (*queue_priority_map)[2];
 
 	/* Decode the eDMA3 configuration from CCCFG register */
-	cccfg = edma_read(0, EDMA_CCCFG);
+	cccfg = edma_read(cc_id, EDMA_CCCFG);
 
 	value = GET_NUM_REGN(cccfg);
 	edma_cc->num_region = BIT(value);
@@ -1464,7 +1465,8 @@ static int edma_setup_from_hw(struct device *dev, struct edma_soc_info *pdata,
 	value = GET_NUM_EVQUE(cccfg);
 	edma_cc->num_tc = value + 1;
 
-	dev_dbg(dev, "eDMA3 HW configuration (cccfg: 0x%08x):\n", cccfg);
+	dev_dbg(dev, "eDMA3 CC%d HW configuration (cccfg: 0x%08x):\n", cc_id,
+		cccfg);
 	dev_dbg(dev, "num_region: %u\n", edma_cc->num_region);
 	dev_dbg(dev, "num_channel: %u\n", edma_cc->num_channels);
 	dev_dbg(dev, "num_slot: %u\n", edma_cc->num_slots);
@@ -1622,6 +1624,11 @@ static int edma_probe(struct platform_device *pdev)
 	struct device_node	*node = pdev->dev.of_node;
 	struct device		*dev = &pdev->dev;
 	int			ret;
+	struct platform_device_info edma_dev_info = {
+		.name = "edma-dma-engine",
+		.dma_mask = DMA_BIT_MASK(32),
+		.parent = &pdev->dev,
+	};
 
 	if (node) {
 		/* Check if this is a second instance registered */
@@ -1684,7 +1691,7 @@ static int edma_probe(struct platform_device *pdev)
 			return -ENOMEM;
 
 		/* Get eDMA3 configuration from IP */
-		ret = edma_setup_from_hw(dev, info[j], edma_cc[j]);
+		ret = edma_setup_from_hw(dev, info[j], edma_cc[j], j);
 		if (ret)
 			return ret;
 
@@ -1792,6 +1799,9 @@ static int edma_probe(struct platform_device *pdev)
 			edma_write_array(j, EDMA_QRAE, i, 0x0);
 		}
 		arch_num_cc++;
+
+		edma_dev_info.id = j;
+		platform_device_register_full(&edma_dev_info);
 	}
 
 	return 0;

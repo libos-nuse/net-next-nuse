@@ -10,10 +10,14 @@
 #include <sys/uio.h>
 #include <sys/socket.h>
 #include <stdint.h>
-#include <sys/prctl.h>
+//#include <sys/prctl.h>
 #include "sim-assert.h"
 #include "nuse.h"
 
+/* XXX: sys/prctl.h */
+#define PR_SET_NAME    15               /* Set process name */
+int prctl(int option, unsigned long arg2, unsigned long arg3,
+                 unsigned long arg4, unsigned long arg5);
 /* FIXME */
 extern int (*host_pthread_create)(pthread_t *, const pthread_attr_t *,
 				void *(*)(void *), void *);

@@ -70,7 +70,6 @@ int vector_used_by_percpu_irq(unsigned int vector)
 void __init init_ISA_irqs(void)
 {
 	struct irq_chip *chip = legacy_pic->chip;
-	const char *name = chip->name;
 	int i;
 
 #if defined(CONFIG_X86_64) || defined(CONFIG_X86_LOCAL_APIC)
@@ -79,7 +78,7 @@ void __init init_ISA_irqs(void)
 	legacy_pic->init(0);
 
 	for (i = 0; i < nr_legacy_irqs(); i++)
-		irq_set_chip_and_handler_name(i, chip, handle_level_irq, name);
+		irq_set_chip_and_handler(i, chip, handle_level_irq);
 }
 
 void __init init_IRQ(void)
@@ -203,7 +202,7 @@ void __init native_init_IRQ(void)
 		set_intr_gate(i, interrupt[i - FIRST_EXTERNAL_VECTOR]);
 	}
 
-	if (!acpi_ioapic && !of_ioapic)
+	if (!acpi_ioapic && !of_ioapic && nr_legacy_irqs())
 		setup_irq(2, &irq2);
 
 #ifdef CONFIG_X86_32

@@ -701,11 +701,7 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 			return 0;
 		}
 
-		while (frag) {
-			skb = frag->next;
-			kfree_skb(frag);
-			frag = skb;
-		}
+		kfree_skb_list(frag);
 
 		IP6_INC_STATS(net, ip6_dst_idev(&rt->dst),
 			      IPSTATS_MIB_FRAGFAILS);
@@ -751,13 +747,11 @@ slow_path:
 		if (len < left)	{
 			len &= ~7;
 		}
-		/*
-		 *	Allocate buffer.
-		 */
 
-		if ((frag = alloc_skb(len + hlen + sizeof(struct frag_hdr) +
-				      hroom + troom, GFP_ATOMIC)) == NULL) {
-			NETDEBUG(KERN_INFO "IPv6: frag: no memory for new fragment!\n");
+		/* Allocate buffer */
+		frag = alloc_skb(len + hlen + sizeof(struct frag_hdr) +
+				 hroom + troom, GFP_ATOMIC);
+		if (!frag) {
 			IP6_INC_STATS(net, ip6_dst_idev(skb_dst(skb)),
 				      IPSTATS_MIB_FRAGFAILS);
 			err = -ENOMEM;
@@ -904,7 +898,8 @@ static int ip6_dst_lookup_tail(struct sock *sk,
 	if (*dst == NULL)
 		*dst = ip6_route_output(net, sk, fl6);
 
-	if ((err = (*dst)->error))
+	err = (*dst)->error;
+	if (err)
 		goto out_err_release;
 
 	if (ipv6_addr_any(&fl6->saddr)) {
@@ -952,7 +947,8 @@ static int ip6_dst_lookup_tail(struct sock *sk,
 			memcpy(&fl_gw6, fl6, sizeof(struct flowi6));
 			memset(&fl_gw6.daddr, 0, sizeof(struct in6_addr));
 			*dst = ip6_route_output(net, sk, &fl_gw6);
-			if ((err = (*dst)->error))
+			err = (*dst)->error;
+			if (err)
 				goto out_err_release;
 		}
 	}
@@ -1008,7 +1004,7 @@ struct dst_entry *ip6_dst_lookup_flow(struct sock *sk, struct flowi6 *fl6,
 	if (final_dst)
 		fl6->daddr = *final_dst;
 
-	return xfrm_lookup(sock_net(sk), dst, flowi6_to_flowi(fl6), sk, 0);
+	return xfrm_lookup_route(sock_net(sk), dst, flowi6_to_flowi(fl6), sk, 0);
 }
 EXPORT_SYMBOL_GPL(ip6_dst_lookup_flow);
 
@@ -1040,7 +1036,7 @@ struct dst_entry *ip6_sk_dst_lookup_flow(struct sock *sk, struct flowi6 *fl6,
 	if (final_dst)
 		fl6->daddr = *final_dst;
 
-	return xfrm_lookup(sock_net(sk), dst, flowi6_to_flowi(fl6), sk, 0);
+	return xfrm_lookup_route(sock_net(sk), dst, flowi6_to_flowi(fl6), sk, 0);
 }
 EXPORT_SYMBOL_GPL(ip6_sk_dst_lookup_flow);
 
@@ -1060,7 +1056,8 @@ static inline int ip6_ufo_append_data(struct sock *sk,
 	 * device, so create one single skb packet containing complete
 	 * udp datagram
 	 */
-	if ((skb = skb_peek_tail(&sk->sk_write_queue)) == NULL) {
+	skb = skb_peek_tail(&sk->sk_write_queue);
+	if (skb == NULL) {
 		skb = sock_alloc_send_skb(sk,
 			hh_len + fragheaderlen + transhdrlen + 20,
 			(flags & MSG_DONTWAIT), &err);
@@ -1540,7 +1537,8 @@ int ip6_push_pending_frames(struct sock *sk)
 	unsigned char proto = fl6->flowi6_proto;
 	int err = 0;
 
-	if ((skb = __skb_dequeue(&sk->sk_write_queue)) == NULL)
+	skb = __skb_dequeue(&sk->sk_write_queue);
+	if (skb == NULL)
 		goto out;
 	tail_skb = &(skb_shinfo(skb)->frag_list);
 

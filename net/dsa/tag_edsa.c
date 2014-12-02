@@ -10,7 +10,6 @@
 
 #include <linux/etherdevice.h>
 #include <linux/list.h>
-#include <linux/netdevice.h>
 #include <linux/slab.h>
 #include "dsa_priv.h"
 
@@ -76,8 +75,6 @@ static netdev_tx_t edsa_xmit(struct sk_buff *skb, struct net_device *dev)
 		edsa_header[6] = 0x00;
 		edsa_header[7] = 0x00;
 	}
-
-	skb->protocol = htons(ETH_P_EDSA);
 
 	skb->dev = p->parent->dst->master_netdev;
 	dev_queue_xmit(skb);

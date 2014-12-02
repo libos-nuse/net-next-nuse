@@ -129,6 +129,15 @@ enum {
 	 * during the hdev->setup vendor callback.
 	 */
 	HCI_QUIRK_INVALID_BDADDR,
+
+	/* When this quirk is set, the duplicate filtering during
+	 * scanning is based on Bluetooth devices addresses. To allow
+	 * RSSI based updates, restart scanning if needed.
+	 *
+	 * This quirk can be set before hci_register_dev is called or
+	 * during the hdev->setup vendor callback.
+	 */
+	HCI_QUIRK_STRICT_DUPLICATE_FILTER,
 };
 
 /* HCI device flags */
@@ -265,6 +274,7 @@ enum {
 /* Low Energy links do not have defined link type. Use invented one */
 #define LE_LINK		0x80
 #define AMP_LINK	0x81
+#define INVALID_LINK	0xff
 
 /* LMP features */
 #define LMP_3SLOT	0x01
@@ -385,6 +395,7 @@ enum {
 #define HCI_ERROR_AUTH_FAILURE		0x05
 #define HCI_ERROR_MEMORY_EXCEEDED	0x07
 #define HCI_ERROR_CONNECTION_TIMEOUT	0x08
+#define HCI_ERROR_REJ_LIMITED_RESOURCES	0x0d
 #define HCI_ERROR_REJ_BAD_ADDR		0x0f
 #define HCI_ERROR_REMOTE_USER_TERM	0x13
 #define HCI_ERROR_REMOTE_LOW_RESOURCES	0x14
@@ -628,7 +639,7 @@ struct hci_cp_user_passkey_reply {
 struct hci_cp_remote_oob_data_reply {
 	bdaddr_t bdaddr;
 	__u8     hash[16];
-	__u8     randomizer[16];
+	__u8     rand[16];
 } __packed;
 
 #define HCI_OP_REMOTE_OOB_DATA_NEG_REPLY	0x0433
@@ -720,9 +731,9 @@ struct hci_rp_set_csb {
 struct hci_cp_remote_oob_ext_data_reply {
 	bdaddr_t bdaddr;
 	__u8     hash192[16];
-	__u8     randomizer192[16];
+	__u8     rand192[16];
 	__u8     hash256[16];
-	__u8     randomizer256[16];
+	__u8     rand256[16];
 } __packed;
 
 #define HCI_OP_SNIFF_MODE		0x0803
@@ -929,7 +940,7 @@ struct hci_cp_write_ssp_mode {
 struct hci_rp_read_local_oob_data {
 	__u8     status;
 	__u8     hash[16];
-	__u8     randomizer[16];
+	__u8     rand[16];
 } __packed;
 
 #define HCI_OP_READ_INQ_RSP_TX_POWER	0x0c58
@@ -1013,9 +1024,9 @@ struct hci_cp_write_sc_support {
 struct hci_rp_read_local_oob_ext_data {
 	__u8     status;
 	__u8     hash192[16];
-	__u8     randomizer192[16];
+	__u8     rand192[16];
 	__u8     hash256[16];
-	__u8     randomizer256[16];
+	__u8     rand256[16];
 } __packed;
 
 #define HCI_OP_READ_LOCAL_VERSION	0x1001
@@ -1460,6 +1471,11 @@ struct hci_ev_cmd_status {
 	__u8     status;
 	__u8     ncmd;
 	__le16   opcode;
+} __packed;
+
+#define HCI_EV_HARDWARE_ERROR		0x10
+struct hci_ev_hardware_error {
+	__u8     code;
 } __packed;
 
 #define HCI_EV_ROLE_CHANGE		0x12

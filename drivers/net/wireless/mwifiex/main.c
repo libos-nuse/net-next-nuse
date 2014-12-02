@@ -28,90 +28,10 @@ const char driver_version[] = "mwifiex " VERSION " (%s) ";
 static char *cal_data_cfg;
 module_param(cal_data_cfg, charp, 0);
 
-static void scan_delay_timer_fn(unsigned long data)
-{
-	struct mwifiex_private *priv = (struct mwifiex_private *)data;
-	struct mwifiex_adapter *adapter = priv->adapter;
-	struct cmd_ctrl_node *cmd_node, *tmp_node;
-	spinlock_t *scan_q_lock = &adapter->scan_pending_q_lock;
-	unsigned long flags;
-
-	if (adapter->surprise_removed)
-		return;
-
-	if (adapter->scan_delay_cnt == MWIFIEX_MAX_SCAN_DELAY_CNT ||
-	    !adapter->scan_processing) {
-		/*
-		 * Abort scan operation by cancelling all pending scan
-		 * commands
-		 */
-		spin_lock_irqsave(scan_q_lock, flags);
-		list_for_each_entry_safe(cmd_node, tmp_node,
-					 &adapter->scan_pending_q, list) {
-			list_del(&cmd_node->list);
-			mwifiex_insert_cmd_to_free_q(adapter, cmd_node);
-		}
-		spin_unlock_irqrestore(scan_q_lock, flags);
-
-		spin_lock_irqsave(&adapter->mwifiex_cmd_lock, flags);
-		adapter->scan_processing = false;
-		adapter->scan_delay_cnt = 0;
-		adapter->empty_tx_q_cnt = 0;
-		spin_unlock_irqrestore(&adapter->mwifiex_cmd_lock, flags);
-
-		if (priv->scan_request) {
-			dev_dbg(adapter->dev, "info: aborting scan\n");
-			cfg80211_scan_done(priv->scan_request, 1);
-			priv->scan_request = NULL;
-		} else {
-			priv->scan_aborting = false;
-			dev_dbg(adapter->dev, "info: scan already aborted\n");
-		}
-		goto done;
-	}
-
-	if (!atomic_read(&priv->adapter->is_tx_received)) {
-		adapter->empty_tx_q_cnt++;
-		if (adapter->empty_tx_q_cnt == MWIFIEX_MAX_EMPTY_TX_Q_CNT) {
-			/*
-			 * No Tx traffic for 200msec. Get scan command from
-			 * scan pending queue and put to cmd pending queue to
-			 * resume scan operation
-			 */
-			adapter->scan_delay_cnt = 0;
-			adapter->empty_tx_q_cnt = 0;
-			spin_lock_irqsave(scan_q_lock, flags);
-
-			if (list_empty(&adapter->scan_pending_q)) {
-				spin_unlock_irqrestore(scan_q_lock, flags);
-				goto done;
-			}
-
-			cmd_node = list_first_entry(&adapter->scan_pending_q,
-						    struct cmd_ctrl_node, list);
-			list_del(&cmd_node->list);
-			spin_unlock_irqrestore(scan_q_lock, flags);
-
-			mwifiex_insert_cmd_to_pending_q(adapter, cmd_node,
-							true);
-			queue_work(adapter->workqueue, &adapter->main_work);
-			goto done;
-		}
-	} else {
-		adapter->empty_tx_q_cnt = 0;
-	}
-
-	/* Delay scan operation further by 20msec */
-	mod_timer(&priv->scan_delay_timer, jiffies +
-		  msecs_to_jiffies(MWIFIEX_SCAN_DELAY_MSEC));
-	adapter->scan_delay_cnt++;
-
-done:
-	if (atomic_read(&priv->adapter->is_tx_received))
-		atomic_set(&priv->adapter->is_tx_received, false);
-
-	return;
-}
+static unsigned short driver_mode;
+module_param(driver_mode, ushort, 0);
+MODULE_PARM_DESC(driver_mode,
+		 "station=0x1(default), ap-sta=0x3, station-p2p=0x5, ap-sta-p2p=0x7");
 
 /*
  * This function registers the device and performs all the necessary
@@ -160,10 +80,6 @@ static int mwifiex_register(void *card, struct mwifiex_if_ops *if_ops,
 
 		adapter->priv[i]->adapter = adapter;
 		adapter->priv_num++;
-
-		setup_timer(&adapter->priv[i]->scan_delay_timer,
-			    scan_delay_timer_fn,
-			    (unsigned long)adapter->priv[i]);
 	}
 	mwifiex_init_lock_list(adapter);
 
@@ -207,12 +123,46 @@ static int mwifiex_unregister(struct mwifiex_adapter *adapter)
 	for (i = 0; i < adapter->priv_num; i++) {
 		if (adapter->priv[i]) {
 			mwifiex_free_curr_bcn(adapter->priv[i]);
-			del_timer_sync(&adapter->priv[i]->scan_delay_timer);
 			kfree(adapter->priv[i]);
 		}
 	}
 
+	vfree(adapter->chan_stats);
 	kfree(adapter);
+	return 0;
+}
+
+static int mwifiex_process_rx(struct mwifiex_adapter *adapter)
+{
+	unsigned long flags;
+	struct sk_buff *skb;
+
+	spin_lock_irqsave(&adapter->rx_proc_lock, flags);
+	if (adapter->rx_processing || adapter->rx_locked) {
+		spin_unlock_irqrestore(&adapter->rx_proc_lock, flags);
+		goto exit_rx_proc;
+	} else {
+		adapter->rx_processing = true;
+		spin_unlock_irqrestore(&adapter->rx_proc_lock, flags);
+	}
+
+	/* Check for Rx data */
+	while ((skb = skb_dequeue(&adapter->rx_data_q))) {
+		atomic_dec(&adapter->rx_pending);
+		if (adapter->delay_main_work &&
+		    (atomic_read(&adapter->rx_pending) < LOW_RX_PENDING)) {
+			if (adapter->if_ops.submit_rem_rx_urbs)
+				adapter->if_ops.submit_rem_rx_urbs(adapter);
+			adapter->delay_main_work = false;
+			queue_work(adapter->workqueue, &adapter->main_work);
+		}
+		mwifiex_handle_rx_packet(adapter, skb);
+	}
+	spin_lock_irqsave(&adapter->rx_proc_lock, flags);
+	adapter->rx_processing = false;
+	spin_unlock_irqrestore(&adapter->rx_proc_lock, flags);
+
+exit_rx_proc:
 	return 0;
 }
 
@@ -235,7 +185,6 @@ int mwifiex_main_process(struct mwifiex_adapter *adapter)
 {
 	int ret = 0;
 	unsigned long flags;
-	struct sk_buff *skb;
 
 	spin_lock_irqsave(&adapter->main_proc_lock, flags);
 
@@ -253,6 +202,19 @@ process_start:
 		    (adapter->hw_status == MWIFIEX_HW_STATUS_NOT_READY))
 			break;
 
+		/* If we process interrupts first, it would increase RX pending
+		 * even further. Avoid this by checking if rx_pending has
+		 * crossed high threshold and schedule rx work queue
+		 * and then process interrupts
+		 */
+		if (atomic_read(&adapter->rx_pending) >= HIGH_RX_PENDING) {
+			adapter->delay_main_work = true;
+			if (!adapter->rx_processing)
+				queue_work(adapter->rx_workqueue,
+					   &adapter->rx_work);
+			break;
+		}
+
 		/* Handle pending interrupt if any */
 		if (adapter->int_status) {
 			if (adapter->hs_activated)
@@ -260,6 +222,9 @@ process_start:
 			if (adapter->if_ops.process_int_status)
 				adapter->if_ops.process_int_status(adapter);
 		}
+
+		if (adapter->rx_work_enabled && adapter->data_received)
+			queue_work(adapter->rx_workqueue, &adapter->rx_work);
 
 		/* Need to wake up the card ? */
 		if ((adapter->ps_state == PS_STATE_SLEEP) &&
@@ -273,6 +238,7 @@ process_start:
 		}
 
 		if (IS_CARD_RX_RCVD(adapter)) {
+			adapter->data_received = false;
 			adapter->pm_wakeup_fw_try = false;
 			if (adapter->ps_state == PS_STATE_SLEEP)
 				adapter->ps_state = PS_STATE_AWAKE;
@@ -284,19 +250,14 @@ process_start:
 			    adapter->tx_lock_flag)
 				break;
 
-			if ((adapter->scan_processing &&
-			     !adapter->scan_delay_cnt) || adapter->data_sent ||
+			if ((!adapter->scan_chan_gap_enabled &&
+			     adapter->scan_processing) || adapter->data_sent ||
 			    mwifiex_wmm_lists_empty(adapter)) {
 				if (adapter->cmd_sent || adapter->curr_cmd ||
 				    (!is_command_pending(adapter)))
 					break;
 			}
 		}
-
-		/* Check Rx data for USB */
-		if (adapter->iface_type == MWIFIEX_USB)
-			while ((skb = skb_dequeue(&adapter->usb_rx_data_q)))
-				mwifiex_handle_rx_packet(adapter, skb);
 
 		/* Check for event */
 		if (adapter->event_received) {
@@ -339,7 +300,8 @@ process_start:
 			}
 		}
 
-		if ((!adapter->scan_processing || adapter->scan_delay_cnt) &&
+		if ((adapter->scan_chan_gap_enabled ||
+		     !adapter->scan_processing) &&
 		    !adapter->data_sent && !mwifiex_wmm_lists_empty(adapter)) {
 			mwifiex_wmm_process_tx(adapter);
 			if (adapter->hs_activated) {
@@ -366,7 +328,8 @@ process_start:
 	} while (true);
 
 	spin_lock_irqsave(&adapter->main_proc_lock, flags);
-	if ((adapter->int_status) || IS_CARD_RX_RCVD(adapter)) {
+	if (!adapter->delay_main_work &&
+	    (adapter->int_status || IS_CARD_RX_RCVD(adapter))) {
 		spin_unlock_irqrestore(&adapter->main_proc_lock, flags);
 		goto process_start;
 	}
@@ -407,6 +370,12 @@ static void mwifiex_terminate_workqueue(struct mwifiex_adapter *adapter)
 	flush_workqueue(adapter->workqueue);
 	destroy_workqueue(adapter->workqueue);
 	adapter->workqueue = NULL;
+
+	if (adapter->rx_workqueue) {
+		flush_workqueue(adapter->rx_workqueue);
+		destroy_workqueue(adapter->rx_workqueue);
+		adapter->rx_workqueue = NULL;
+	}
 }
 
 /*
@@ -480,6 +449,16 @@ static void mwifiex_fw_dpc(const struct firmware *firmware, void *context)
 		goto err_init_fw;
 	}
 
+	if (mwifiex_init_channel_scan_gap(adapter)) {
+		dev_err(adapter->dev, "could not init channel stats table\n");
+		goto err_init_fw;
+	}
+
+	if (driver_mode) {
+		driver_mode &= MWIFIEX_DRIVER_MODE_BITMASK;
+		driver_mode |= MWIFIEX_DRIVER_MODE_STA;
+	}
+
 	rtnl_lock();
 	/* Create station interface by default */
 	wdev = mwifiex_add_virtual_intf(adapter->wiphy, "mlan%d",
@@ -488,6 +467,28 @@ static void mwifiex_fw_dpc(const struct firmware *firmware, void *context)
 		dev_err(adapter->dev, "cannot create default STA interface\n");
 		rtnl_unlock();
 		goto err_add_intf;
+	}
+
+	if (driver_mode & MWIFIEX_DRIVER_MODE_UAP) {
+		wdev = mwifiex_add_virtual_intf(adapter->wiphy, "uap%d",
+						NL80211_IFTYPE_AP, NULL, NULL);
+		if (IS_ERR(wdev)) {
+			dev_err(adapter->dev, "cannot create AP interface\n");
+			rtnl_unlock();
+			goto err_add_intf;
+		}
+	}
+
+	if (driver_mode & MWIFIEX_DRIVER_MODE_P2P) {
+		wdev = mwifiex_add_virtual_intf(adapter->wiphy, "p2p%d",
+						NL80211_IFTYPE_P2P_CLIENT, NULL,
+						NULL);
+		if (IS_ERR(wdev)) {
+			dev_err(adapter->dev,
+				"cannot create p2p client interface\n");
+			rtnl_unlock();
+			goto err_add_intf;
+		}
 	}
 	rtnl_unlock();
 
@@ -598,9 +599,6 @@ int mwifiex_queue_tx_pkt(struct mwifiex_private *priv, struct sk_buff *skb)
 	atomic_inc(&priv->adapter->tx_pending);
 	mwifiex_wmm_add_buf_txqueue(priv, skb);
 
-	if (priv->adapter->scan_delay_cnt)
-		atomic_set(&priv->adapter->is_tx_received, true);
-
 	queue_work(priv->adapter->workqueue, &priv->adapter->main_work);
 
 	return 0;
@@ -663,6 +661,13 @@ mwifiex_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	 * MSDU lifetime expiry.
 	 */
 	__net_timestamp(skb);
+
+	if (ISSUPP_TDLS_ENABLED(priv->adapter->fw_cap_info) &&
+	    priv->bss_type == MWIFIEX_BSS_TYPE_STA &&
+	    !ether_addr_equal_unaligned(priv->cfg_bssid, skb->data)) {
+		if (priv->adapter->auto_tdls && priv->check_tdls_tx)
+			mwifiex_tdls_check_tx(priv, skb);
+	}
 
 	mwifiex_queue_tx_pkt(priv, skb);
 
@@ -824,6 +829,21 @@ int is_command_pending(struct mwifiex_adapter *adapter)
 }
 
 /*
+ * This is the RX work queue function.
+ *
+ * It handles the RX operations.
+ */
+static void mwifiex_rx_work_queue(struct work_struct *work)
+{
+	struct mwifiex_adapter *adapter =
+		container_of(work, struct mwifiex_adapter, rx_work);
+
+	if (adapter->surprise_removed)
+		return;
+	mwifiex_process_rx(adapter);
+}
+
+/*
  * This is the main work queue function.
  *
  * It handles the main process, which in turn handles the complete
@@ -879,6 +899,11 @@ mwifiex_add_card(void *card, struct semaphore *sem,
 	adapter->cmd_wait_q.status = 0;
 	adapter->scan_wait_q_woken = false;
 
+	if ((num_possible_cpus() > 1) || adapter->iface_type == MWIFIEX_USB) {
+		adapter->rx_work_enabled = true;
+		pr_notice("rx work enabled, cpus %d\n", num_possible_cpus());
+	}
+
 	adapter->workqueue =
 		alloc_workqueue("MWIFIEX_WORK_QUEUE",
 				WQ_HIGHPRI | WQ_MEM_RECLAIM | WQ_UNBOUND, 1);
@@ -886,6 +911,18 @@ mwifiex_add_card(void *card, struct semaphore *sem,
 		goto err_kmalloc;
 
 	INIT_WORK(&adapter->main_work, mwifiex_main_work_queue);
+
+	if (adapter->rx_work_enabled) {
+		adapter->rx_workqueue = alloc_workqueue("MWIFIEX_RX_WORK_QUEUE",
+							WQ_HIGHPRI |
+							WQ_MEM_RECLAIM |
+							WQ_UNBOUND, 1);
+		if (!adapter->rx_workqueue)
+			goto err_kmalloc;
+
+		INIT_WORK(&adapter->rx_work, mwifiex_rx_work_queue);
+	}
+
 	if (adapter->if_ops.iface_work)
 		INIT_WORK(&adapter->iface_work, adapter->if_ops.iface_work);
 

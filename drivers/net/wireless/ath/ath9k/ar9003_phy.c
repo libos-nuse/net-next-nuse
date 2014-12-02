@@ -517,6 +517,23 @@ static void ar9003_hw_spur_mitigate(struct ath_hw *ah,
 	ar9003_hw_spur_mitigate_ofdm(ah, chan);
 }
 
+static u32 ar9003_hw_compute_pll_control_soc(struct ath_hw *ah,
+					     struct ath9k_channel *chan)
+{
+	u32 pll;
+
+	pll = SM(0x5, AR_RTC_9300_SOC_PLL_REFDIV);
+
+	if (chan && IS_CHAN_HALF_RATE(chan))
+		pll |= SM(0x1, AR_RTC_9300_SOC_PLL_CLKSEL);
+	else if (chan && IS_CHAN_QUARTER_RATE(chan))
+		pll |= SM(0x2, AR_RTC_9300_SOC_PLL_CLKSEL);
+
+	pll |= SM(0x2c, AR_RTC_9300_SOC_PLL_DIV_INT);
+
+	return pll;
+}
+
 static u32 ar9003_hw_compute_pll_control(struct ath_hw *ah,
 					 struct ath9k_channel *chan)
 {
@@ -647,6 +664,19 @@ static void ar9003_hw_override_ini(struct ath_hw *ah)
 		ah->enabled_cals |= TX_CL_CAL;
 	else
 		ah->enabled_cals &= ~TX_CL_CAL;
+
+	if (AR_SREV_9340(ah) || AR_SREV_9531(ah) || AR_SREV_9550(ah)) {
+		if (ah->is_clk_25mhz) {
+			REG_WRITE(ah, AR_RTC_DERIVED_CLK, 0x17c << 1);
+			REG_WRITE(ah, AR_SLP32_MODE, 0x0010f3d7);
+			REG_WRITE(ah, AR_SLP32_INC, 0x0001e7ae);
+		} else {
+			REG_WRITE(ah, AR_RTC_DERIVED_CLK, 0x261 << 1);
+			REG_WRITE(ah, AR_SLP32_MODE, 0x0010f400);
+			REG_WRITE(ah, AR_SLP32_INC, 0x0001e800);
+		}
+		udelay(100);
+	}
 }
 
 static void ar9003_hw_prog_ini(struct ath_hw *ah,
@@ -1331,7 +1361,7 @@ static void ar9003_hw_set_radar_params(struct ath_hw *ah,
 				       struct ath_hw_radar_conf *conf)
 {
 	unsigned int regWrites = 0;
-	u32 radar_0 = 0, radar_1 = 0;
+	u32 radar_0 = 0, radar_1;
 
 	if (!conf) {
 		REG_CLR_BIT(ah, AR_PHY_RADAR_0, AR_PHY_RADAR_0_ENA);
@@ -1345,6 +1375,9 @@ static void ar9003_hw_set_radar_params(struct ath_hw *ah,
 	radar_0 |= SM(conf->pulse_rssi, AR_PHY_RADAR_0_PRSSI);
 	radar_0 |= SM(conf->pulse_inband, AR_PHY_RADAR_0_INBAND);
 
+	radar_1 = REG_READ(ah, AR_PHY_RADAR_1);
+	radar_1 &= ~(AR_PHY_RADAR_1_MAXLEN | AR_PHY_RADAR_1_RELSTEP_THRESH |
+		     AR_PHY_RADAR_1_RELPWR_THRESH);
 	radar_1 |= AR_PHY_RADAR_1_MAX_RRSSI;
 	radar_1 |= AR_PHY_RADAR_1_BLOCK_CHECK;
 	radar_1 |= SM(conf->pulse_maxlen, AR_PHY_RADAR_1_MAXLEN);
@@ -1371,7 +1404,7 @@ static void ar9003_hw_set_radar_conf(struct ath_hw *ah)
 	conf->fir_power = -28;
 	conf->radar_rssi = 0;
 	conf->pulse_height = 10;
-	conf->pulse_rssi = 24;
+	conf->pulse_rssi = 15;
 	conf->pulse_inband = 8;
 	conf->pulse_maxlen = 255;
 	conf->pulse_inband_step = 12;
@@ -1781,7 +1814,12 @@ void ar9003_hw_attach_phy_ops(struct ath_hw *ah)
 
 	priv_ops->rf_set_freq = ar9003_hw_set_channel;
 	priv_ops->spur_mitigate_freq = ar9003_hw_spur_mitigate;
-	priv_ops->compute_pll_control = ar9003_hw_compute_pll_control;
+
+	if (AR_SREV_9340(ah) || AR_SREV_9550(ah) || AR_SREV_9531(ah))
+		priv_ops->compute_pll_control = ar9003_hw_compute_pll_control_soc;
+	else
+		priv_ops->compute_pll_control = ar9003_hw_compute_pll_control;
+
 	priv_ops->set_channel_regs = ar9003_hw_set_channel_regs;
 	priv_ops->init_bb = ar9003_hw_init_bb;
 	priv_ops->process_ini = ar9003_hw_process_ini;

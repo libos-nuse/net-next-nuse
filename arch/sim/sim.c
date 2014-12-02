@@ -323,7 +323,7 @@ struct SimTask *sim_task_start(void (*callback) (void *), void *context)
 }
 void sim_task_wait(void)
 {
-	rcu_sched_qs(0);
+	rcu_sched_qs();
 	g_imported.task_wait(g_kernel);
 	sim_update_jiffies();
 }

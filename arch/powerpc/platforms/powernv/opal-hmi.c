@@ -28,6 +28,7 @@
 
 #include <asm/opal.h>
 #include <asm/cputable.h>
+#include <asm/machdep.h>
 
 static int opal_hmi_handler_nb_init;
 struct OpalHmiEvtNode {
@@ -56,7 +57,7 @@ static void print_hmi_event_info(struct OpalHMIEvent *hmi_evt)
 	};
 
 	/* Print things out */
-	if (hmi_evt->version != OpalHMIEvt_V1) {
+	if (hmi_evt->version < OpalHMIEvt_V1) {
 		pr_err("HMI Interrupt, Unknown event version %d !\n",
 			hmi_evt->version);
 		return;
@@ -185,4 +186,4 @@ static int __init opal_hmi_handler_init(void)
 	}
 	return 0;
 }
-subsys_initcall(opal_hmi_handler_init);
+machine_subsys_initcall(powernv, opal_hmi_handler_init);

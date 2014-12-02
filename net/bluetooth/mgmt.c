@@ -129,9 +129,6 @@ static const u16 mgmt_events[] = {
 
 #define CACHE_TIMEOUT	msecs_to_jiffies(2 * 1000)
 
-#define hdev_is_powered(hdev) (test_bit(HCI_UP, &hdev->flags) && \
-				!test_bit(HCI_AUTO_OFF, &hdev->dev_flags))
-
 struct pending_cmd {
 	struct list_head list;
 	u16 opcode;
@@ -1536,9 +1533,11 @@ static void set_discoverable_complete(struct hci_dev *hdev, u8 status)
 
 	/* When the discoverable mode gets changed, make sure
 	 * that class of device has the limited discoverable
-	 * bit correctly set.
+	 * bit correctly set. Also update page scan based on whitelist
+	 * entries.
 	 */
 	hci_req_init(&req, hdev);
+	hci_update_page_scan(hdev, &req);
 	update_class(&req);
 	hci_req_run(&req, NULL);
 
@@ -1785,6 +1784,7 @@ static void set_connectable_complete(struct hci_dev *hdev, u8 status)
 
 	if (conn_changed || discov_changed) {
 		new_settings(hdev, cmd->sk);
+		hci_update_page_scan(hdev, NULL);
 		if (discov_changed)
 			mgmt_update_adv_data(hdev);
 		hci_update_background_scan(hdev);
@@ -1818,6 +1818,7 @@ static int set_connectable_update_settings(struct hci_dev *hdev,
 		return err;
 
 	if (changed) {
+		hci_update_page_scan(hdev, NULL);
 		hci_update_background_scan(hdev);
 		return new_settings(hdev, sk);
 	}
@@ -2724,9 +2725,39 @@ static int unpair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 	}
 
 	if (cp->addr.type == BDADDR_BREDR) {
+		/* If disconnection is requested, then look up the
+		 * connection. If the remote device is connected, it
+		 * will be later used to terminate the link.
+		 *
+		 * Setting it to NULL explicitly will cause no
+		 * termination of the link.
+		 */
+		if (cp->disconnect)
+			conn = hci_conn_hash_lookup_ba(hdev, ACL_LINK,
+						       &cp->addr.bdaddr);
+		else
+			conn = NULL;
+
 		err = hci_remove_link_key(hdev, &cp->addr.bdaddr);
 	} else {
 		u8 addr_type;
+
+		conn = hci_conn_hash_lookup_ba(hdev, LE_LINK,
+					       &cp->addr.bdaddr);
+		if (conn) {
+			/* Defer clearing up the connection parameters
+			 * until closing to give a chance of keeping
+			 * them if a repairing happens.
+			 */
+			set_bit(HCI_CONN_PARAM_REMOVAL_PEND, &conn->flags);
+
+			/* If disconnection is not requested, then
+			 * clear the connection variable so that the
+			 * link is not terminated.
+			 */
+			if (!cp->disconnect)
+				conn = NULL;
+		}
 
 		if (cp->addr.type == BDADDR_LE_PUBLIC)
 			addr_type = ADDR_LE_DEV_PUBLIC;
@@ -2734,8 +2765,6 @@ static int unpair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 			addr_type = ADDR_LE_DEV_RANDOM;
 
 		hci_remove_irk(hdev, &cp->addr.bdaddr, addr_type);
-
-		hci_conn_params_del(hdev, &cp->addr.bdaddr, addr_type);
 
 		err = hci_remove_ltk(hdev, &cp->addr.bdaddr, addr_type);
 	}
@@ -2746,17 +2775,9 @@ static int unpair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 		goto unlock;
 	}
 
-	if (cp->disconnect) {
-		if (cp->addr.type == BDADDR_BREDR)
-			conn = hci_conn_hash_lookup_ba(hdev, ACL_LINK,
-						       &cp->addr.bdaddr);
-		else
-			conn = hci_conn_hash_lookup_ba(hdev, LE_LINK,
-						       &cp->addr.bdaddr);
-	} else {
-		conn = NULL;
-	}
-
+	/* If the connection variable is set, then termination of the
+	 * link is requested.
+	 */
 	if (!conn) {
 		err = cmd_complete(sk, hdev->id, MGMT_OP_UNPAIR_DEVICE, 0,
 				   &rp, sizeof(rp));
@@ -2787,7 +2808,6 @@ static int disconnect(struct sock *sk, struct hci_dev *hdev, void *data,
 {
 	struct mgmt_cp_disconnect *cp = data;
 	struct mgmt_rp_disconnect rp;
-	struct hci_cp_disconnect dc;
 	struct pending_cmd *cmd;
 	struct hci_conn *conn;
 	int err;
@@ -2835,10 +2855,7 @@ static int disconnect(struct sock *sk, struct hci_dev *hdev, void *data,
 		goto failed;
 	}
 
-	dc.handle = cpu_to_le16(conn->handle);
-	dc.reason = HCI_ERROR_REMOTE_USER_TERM;
-
-	err = hci_send_cmd(hdev, HCI_OP_DISCONNECT, sizeof(dc), &dc);
+	err = hci_disconnect(conn, HCI_ERROR_REMOTE_USER_TERM);
 	if (err < 0)
 		mgmt_pending_remove(cmd);
 
@@ -3062,8 +3079,14 @@ static void pairing_complete(struct pending_cmd *cmd, u8 status)
 	conn->disconn_cfm_cb = NULL;
 
 	hci_conn_drop(conn);
+	hci_conn_put(conn);
 
 	mgmt_pending_remove(cmd);
+
+	/* The device is paired so there is no need to remove
+	 * its connection parameters anymore.
+	 */
+	clear_bit(HCI_CONN_PARAM_REMOVAL_PEND, &conn->flags);
 }
 
 void mgmt_smp_complete(struct hci_conn *conn, bool complete)
@@ -3211,7 +3234,7 @@ static int pair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 	}
 
 	conn->io_capability = cp->io_cap;
-	cmd->user_data = conn;
+	cmd->user_data = hci_conn_get(conn);
 
 	if ((conn->state == BT_CONNECTED || conn->state == BT_CONFIG) &&
 	    hci_conn_security(conn, sec_level, auth_type, true))
@@ -3566,8 +3589,16 @@ static int add_remote_oob_data(struct sock *sk, struct hci_dev *hdev,
 		struct mgmt_cp_add_remote_oob_data *cp = data;
 		u8 status;
 
+		if (cp->addr.type != BDADDR_BREDR) {
+			err = cmd_complete(sk, hdev->id,
+					   MGMT_OP_ADD_REMOTE_OOB_DATA,
+					   MGMT_STATUS_INVALID_PARAMS,
+					   &cp->addr, sizeof(cp->addr));
+			goto unlock;
+		}
+
 		err = hci_add_remote_oob_data(hdev, &cp->addr.bdaddr,
-					      cp->hash, cp->randomizer);
+					      cp->hash, cp->rand);
 		if (err < 0)
 			status = MGMT_STATUS_FAILED;
 		else
@@ -3579,11 +3610,17 @@ static int add_remote_oob_data(struct sock *sk, struct hci_dev *hdev,
 		struct mgmt_cp_add_remote_oob_ext_data *cp = data;
 		u8 status;
 
+		if (cp->addr.type != BDADDR_BREDR) {
+			err = cmd_complete(sk, hdev->id,
+					   MGMT_OP_ADD_REMOTE_OOB_DATA,
+					   MGMT_STATUS_INVALID_PARAMS,
+					   &cp->addr, sizeof(cp->addr));
+			goto unlock;
+		}
+
 		err = hci_add_remote_oob_ext_data(hdev, &cp->addr.bdaddr,
-						  cp->hash192,
-						  cp->randomizer192,
-						  cp->hash256,
-						  cp->randomizer256);
+						  cp->hash192, cp->rand192,
+						  cp->hash256, cp->rand256);
 		if (err < 0)
 			status = MGMT_STATUS_FAILED;
 		else
@@ -3597,6 +3634,7 @@ static int add_remote_oob_data(struct sock *sk, struct hci_dev *hdev,
 				 MGMT_STATUS_INVALID_PARAMS);
 	}
 
+unlock:
 	hci_dev_unlock(hdev);
 	return err;
 }
@@ -3610,7 +3648,18 @@ static int remove_remote_oob_data(struct sock *sk, struct hci_dev *hdev,
 
 	BT_DBG("%s", hdev->name);
 
+	if (cp->addr.type != BDADDR_BREDR)
+		return cmd_complete(sk, hdev->id, MGMT_OP_REMOVE_REMOTE_OOB_DATA,
+				    MGMT_STATUS_INVALID_PARAMS,
+				    &cp->addr, sizeof(cp->addr));
+
 	hci_dev_lock(hdev);
+
+	if (!bacmp(&cp->addr.bdaddr, BDADDR_ANY)) {
+		hci_remote_oob_data_clear(hdev);
+		status = MGMT_STATUS_SUCCESS;
+		goto done;
+	}
 
 	err = hci_remove_remote_oob_data(hdev, &cp->addr.bdaddr);
 	if (err < 0)
@@ -3618,6 +3667,7 @@ static int remove_remote_oob_data(struct sock *sk, struct hci_dev *hdev,
 	else
 		status = MGMT_STATUS_SUCCESS;
 
+done:
 	err = cmd_complete(sk, hdev->id, MGMT_OP_REMOVE_REMOTE_OOB_DATA,
 			   status, &cp->addr, sizeof(cp->addr));
 
@@ -3704,20 +3754,23 @@ static int start_discovery(struct sock *sk, struct hci_dev *hdev,
 	hci_dev_lock(hdev);
 
 	if (!hdev_is_powered(hdev)) {
-		err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-				 MGMT_STATUS_NOT_POWERED);
+		err = cmd_complete(sk, hdev->id, MGMT_OP_START_DISCOVERY,
+				   MGMT_STATUS_NOT_POWERED,
+				   &cp->type, sizeof(cp->type));
 		goto failed;
 	}
 
 	if (test_bit(HCI_PERIODIC_INQ, &hdev->dev_flags)) {
-		err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-				 MGMT_STATUS_BUSY);
+		err = cmd_complete(sk, hdev->id, MGMT_OP_START_DISCOVERY,
+				   MGMT_STATUS_BUSY, &cp->type,
+				   sizeof(cp->type));
 		goto failed;
 	}
 
 	if (hdev->discovery.state != DISCOVERY_STOPPED) {
-		err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-				 MGMT_STATUS_BUSY);
+		err = cmd_complete(sk, hdev->id, MGMT_OP_START_DISCOVERY,
+				   MGMT_STATUS_BUSY, &cp->type,
+				   sizeof(cp->type));
 		goto failed;
 	}
 
@@ -3735,15 +3788,18 @@ static int start_discovery(struct sock *sk, struct hci_dev *hdev,
 	case DISCOV_TYPE_BREDR:
 		status = mgmt_bredr_support(hdev);
 		if (status) {
-			err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-					 status);
+			err = cmd_complete(sk, hdev->id,
+					   MGMT_OP_START_DISCOVERY, status,
+					   &cp->type, sizeof(cp->type));
 			mgmt_pending_remove(cmd);
 			goto failed;
 		}
 
 		if (test_bit(HCI_INQUIRY, &hdev->flags)) {
-			err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-					 MGMT_STATUS_BUSY);
+			err = cmd_complete(sk, hdev->id,
+					   MGMT_OP_START_DISCOVERY,
+					   MGMT_STATUS_BUSY, &cp->type,
+					   sizeof(cp->type));
 			mgmt_pending_remove(cmd);
 			goto failed;
 		}
@@ -3760,16 +3816,19 @@ static int start_discovery(struct sock *sk, struct hci_dev *hdev,
 	case DISCOV_TYPE_INTERLEAVED:
 		status = mgmt_le_support(hdev);
 		if (status) {
-			err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-					 status);
+			err = cmd_complete(sk, hdev->id,
+					   MGMT_OP_START_DISCOVERY, status,
+					   &cp->type, sizeof(cp->type));
 			mgmt_pending_remove(cmd);
 			goto failed;
 		}
 
 		if (hdev->discovery.type == DISCOV_TYPE_INTERLEAVED &&
 		    !test_bit(HCI_BREDR_ENABLED, &hdev->dev_flags)) {
-			err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-					 MGMT_STATUS_NOT_SUPPORTED);
+			err = cmd_complete(sk, hdev->id,
+					   MGMT_OP_START_DISCOVERY,
+					   MGMT_STATUS_NOT_SUPPORTED,
+					   &cp->type, sizeof(cp->type));
 			mgmt_pending_remove(cmd);
 			goto failed;
 		}
@@ -3781,9 +3840,11 @@ static int start_discovery(struct sock *sk, struct hci_dev *hdev,
 			 */
 			if (hci_conn_hash_lookup_state(hdev, LE_LINK,
 						       BT_CONNECT)) {
-				err = cmd_status(sk, hdev->id,
-						 MGMT_OP_START_DISCOVERY,
-						 MGMT_STATUS_REJECTED);
+				err = cmd_complete(sk, hdev->id,
+						   MGMT_OP_START_DISCOVERY,
+						   MGMT_STATUS_REJECTED,
+						   &cp->type,
+						   sizeof(cp->type));
 				mgmt_pending_remove(cmd);
 				goto failed;
 			}
@@ -3806,8 +3867,10 @@ static int start_discovery(struct sock *sk, struct hci_dev *hdev,
 		 */
 		err = hci_update_random_address(&req, true, &own_addr_type);
 		if (err < 0) {
-			err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-					 MGMT_STATUS_FAILED);
+			err = cmd_complete(sk, hdev->id,
+					   MGMT_OP_START_DISCOVERY,
+					   MGMT_STATUS_FAILED,
+					   &cp->type, sizeof(cp->type));
 			mgmt_pending_remove(cmd);
 			goto failed;
 		}
@@ -3827,8 +3890,9 @@ static int start_discovery(struct sock *sk, struct hci_dev *hdev,
 		break;
 
 	default:
-		err = cmd_status(sk, hdev->id, MGMT_OP_START_DISCOVERY,
-				 MGMT_STATUS_INVALID_PARAMS);
+		err = cmd_complete(sk, hdev->id, MGMT_OP_START_DISCOVERY,
+				   MGMT_STATUS_INVALID_PARAMS,
+				   &cp->type, sizeof(cp->type));
 		mgmt_pending_remove(cmd);
 		goto failed;
 	}
@@ -4381,27 +4445,6 @@ unlock:
 	return err;
 }
 
-static void set_bredr_scan(struct hci_request *req)
-{
-	struct hci_dev *hdev = req->hdev;
-	u8 scan = 0;
-
-	/* Ensure that fast connectable is disabled. This function will
-	 * not do anything if the page scan parameters are already what
-	 * they should be.
-	 */
-	write_fast_connectable(req, false);
-
-	if (test_bit(HCI_CONNECTABLE, &hdev->dev_flags) ||
-	    !list_empty(&hdev->whitelist))
-		scan |= SCAN_PAGE;
-	if (test_bit(HCI_DISCOVERABLE, &hdev->dev_flags))
-		scan |= SCAN_INQUIRY;
-
-	if (scan)
-		hci_req_add(req, HCI_OP_WRITE_SCAN_ENABLE, 1, &scan);
-}
-
 static void set_bredr_complete(struct hci_dev *hdev, u8 status)
 {
 	struct pending_cmd *cmd;
@@ -4507,9 +4550,8 @@ static int set_bredr(struct sock *sk, struct hci_dev *hdev, void *data, u16 len)
 
 	hci_req_init(&req, hdev);
 
-	if (test_bit(HCI_CONNECTABLE, &hdev->dev_flags) ||
-	    !list_empty(&hdev->whitelist))
-		set_bredr_scan(&req);
+	write_fast_connectable(&req, false);
+	hci_update_page_scan(hdev, &req);
 
 	/* Since only the advertising data flags will change, there
 	 * is no need to update the scan response data.
@@ -4935,6 +4977,7 @@ static void get_conn_info_complete(struct pending_cmd *cmd, void *data)
 		     match->mgmt_status, &rp, sizeof(rp));
 
 	hci_conn_drop(conn);
+	hci_conn_put(conn);
 
 	mgmt_pending_remove(cmd);
 }
@@ -5091,7 +5134,7 @@ static int get_conn_info(struct sock *sk, struct hci_dev *hdev, void *data,
 		}
 
 		hci_conn_hold(conn);
-		cmd->user_data = conn;
+		cmd->user_data = hci_conn_get(conn);
 
 		conn->conn_info_timestamp = jiffies;
 	} else {
@@ -5155,8 +5198,10 @@ send_rsp:
 	cmd_complete(cmd->sk, cmd->index, cmd->opcode, mgmt_status(status),
 		     &rp, sizeof(rp));
 	mgmt_pending_remove(cmd);
-	if (conn)
+	if (conn) {
 		hci_conn_drop(conn);
+		hci_conn_put(conn);
+	}
 
 unlock:
 	hci_dev_unlock(hdev);
@@ -5219,7 +5264,7 @@ static int get_clock_info(struct sock *sk, struct hci_dev *hdev, void *data,
 
 	if (conn) {
 		hci_conn_hold(conn);
-		cmd->user_data = conn;
+		cmd->user_data = hci_conn_get(conn);
 
 		hci_cp.handle = cpu_to_le16(conn->handle);
 		hci_cp.which = 0x01; /* Piconet clock */
@@ -5233,27 +5278,6 @@ static int get_clock_info(struct sock *sk, struct hci_dev *hdev, void *data,
 unlock:
 	hci_dev_unlock(hdev);
 	return err;
-}
-
-/* Helper for Add/Remove Device commands */
-static void update_page_scan(struct hci_dev *hdev, u8 scan)
-{
-	if (!test_bit(HCI_BREDR_ENABLED, &hdev->dev_flags))
-		return;
-
-	if (!hdev_is_powered(hdev))
-		return;
-
-	/* If HCI_CONNECTABLE is set then Add/Remove Device should not
-	 * make any changes to page scanning.
-	 */
-	if (test_bit(HCI_CONNECTABLE, &hdev->dev_flags))
-		return;
-
-	if (test_bit(HCI_DISCOVERABLE, &hdev->dev_flags))
-		scan |= SCAN_INQUIRY;
-
-	hci_send_cmd(hdev, HCI_OP_WRITE_SCAN_ENABLE, 1, &scan);
 }
 
 static void device_added(struct sock *sk, struct hci_dev *hdev,
@@ -5291,8 +5315,6 @@ static int add_device(struct sock *sk, struct hci_dev *hdev,
 	hci_dev_lock(hdev);
 
 	if (cp->addr.type == BDADDR_BREDR) {
-		bool update_scan;
-
 		/* Only incoming connections action is supported for now */
 		if (cp->action != 0x01) {
 			err = cmd_complete(sk, hdev->id, MGMT_OP_ADD_DEVICE,
@@ -5301,15 +5323,12 @@ static int add_device(struct sock *sk, struct hci_dev *hdev,
 			goto unlock;
 		}
 
-		update_scan = list_empty(&hdev->whitelist);
-
 		err = hci_bdaddr_list_add(&hdev->whitelist, &cp->addr.bdaddr,
 					  cp->addr.type);
 		if (err)
 			goto unlock;
 
-		if (update_scan)
-			update_page_scan(hdev, SCAN_PAGE);
+		hci_update_page_scan(hdev, NULL);
 
 		goto added;
 	}
@@ -5392,8 +5411,7 @@ static int remove_device(struct sock *sk, struct hci_dev *hdev,
 				goto unlock;
 			}
 
-			if (list_empty(&hdev->whitelist))
-				update_page_scan(hdev, SCAN_DISABLED);
+			hci_update_page_scan(hdev, NULL);
 
 			device_removed(sk, hdev, &cp->addr.bdaddr,
 				       cp->addr.type);
@@ -5444,7 +5462,7 @@ static int remove_device(struct sock *sk, struct hci_dev *hdev,
 			kfree(b);
 		}
 
-		update_page_scan(hdev, SCAN_DISABLED);
+		hci_update_page_scan(hdev, NULL);
 
 		list_for_each_entry_safe(p, tmp, &hdev->le_conn_params, list) {
 			if (p->auto_connect == HCI_AUTO_CONN_DISABLED)
@@ -5749,7 +5767,7 @@ int mgmt_control(struct sock *sk, struct msghdr *msg, size_t msglen)
 	if (!buf)
 		return -ENOMEM;
 
-	if (memcpy_fromiovec(buf, msg->msg_iov, msglen)) {
+	if (memcpy_from_msg(buf, msg, msglen)) {
 		err = -EFAULT;
 		goto done;
 	}
@@ -5969,8 +5987,8 @@ static int powered_update_hci(struct hci_dev *hdev)
 			    sizeof(link_sec), &link_sec);
 
 	if (lmp_bredr_capable(hdev)) {
-		if (test_bit(HCI_BREDR_ENABLED, &hdev->dev_flags))
-			set_bredr_scan(&req);
+		write_fast_connectable(&req, false);
+		hci_update_page_scan(hdev, &req);
 		update_class(&req);
 		update_name(&req);
 		update_eir(&req);
@@ -6219,26 +6237,36 @@ static inline u16 eir_append_data(u8 *eir, u16 eir_len, u8 type, u8 *data,
 	return eir_len;
 }
 
-void mgmt_device_connected(struct hci_dev *hdev, bdaddr_t *bdaddr, u8 link_type,
-			   u8 addr_type, u32 flags, u8 *name, u8 name_len,
-			   u8 *dev_class)
+void mgmt_device_connected(struct hci_dev *hdev, struct hci_conn *conn,
+			   u32 flags, u8 *name, u8 name_len)
 {
 	char buf[512];
 	struct mgmt_ev_device_connected *ev = (void *) buf;
 	u16 eir_len = 0;
 
-	bacpy(&ev->addr.bdaddr, bdaddr);
-	ev->addr.type = link_to_bdaddr(link_type, addr_type);
+	bacpy(&ev->addr.bdaddr, &conn->dst);
+	ev->addr.type = link_to_bdaddr(conn->type, conn->dst_type);
 
 	ev->flags = __cpu_to_le32(flags);
 
-	if (name_len > 0)
-		eir_len = eir_append_data(ev->eir, 0, EIR_NAME_COMPLETE,
-					  name, name_len);
+	/* We must ensure that the EIR Data fields are ordered and
+	 * unique. Keep it simple for now and avoid the problem by not
+	 * adding any BR/EDR data to the LE adv.
+	 */
+	if (conn->le_adv_data_len > 0) {
+		memcpy(&ev->eir[eir_len],
+		       conn->le_adv_data, conn->le_adv_data_len);
+		eir_len = conn->le_adv_data_len;
+	} else {
+		if (name_len > 0)
+			eir_len = eir_append_data(ev->eir, 0, EIR_NAME_COMPLETE,
+						  name, name_len);
 
-	if (dev_class && memcmp(dev_class, "\0\0\0", 3) != 0)
-		eir_len = eir_append_data(ev->eir, eir_len,
-					  EIR_CLASS_OF_DEV, dev_class, 3);
+		if (memcmp(conn->dev_class, "\0\0\0", 3) != 0)
+			eir_len = eir_append_data(ev->eir, eir_len,
+						  EIR_CLASS_OF_DEV,
+						  conn->dev_class, 3);
+	}
 
 	ev->eir_len = cpu_to_le16(eir_len);
 
@@ -6281,25 +6309,35 @@ static void unpair_device_rsp(struct pending_cmd *cmd, void *data)
 	mgmt_pending_remove(cmd);
 }
 
+bool mgmt_powering_down(struct hci_dev *hdev)
+{
+	struct pending_cmd *cmd;
+	struct mgmt_mode *cp;
+
+	cmd = mgmt_pending_find(MGMT_OP_SET_POWERED, hdev);
+	if (!cmd)
+		return false;
+
+	cp = cmd->param;
+	if (!cp->val)
+		return true;
+
+	return false;
+}
+
 void mgmt_device_disconnected(struct hci_dev *hdev, bdaddr_t *bdaddr,
 			      u8 link_type, u8 addr_type, u8 reason,
 			      bool mgmt_connected)
 {
 	struct mgmt_ev_device_disconnected ev;
-	struct pending_cmd *power_off;
 	struct sock *sk = NULL;
 
-	power_off = mgmt_pending_find(MGMT_OP_SET_POWERED, hdev);
-	if (power_off) {
-		struct mgmt_mode *cp = power_off->param;
-
-		/* The connection is still in hci_conn_hash so test for 1
-		 * instead of 0 to know if this is the last one.
-		 */
-		if (!cp->val && hci_conn_count(hdev) == 1) {
-			cancel_delayed_work(&hdev->power_off);
-			queue_work(hdev->req_workqueue, &hdev->power_off.work);
-		}
+	/* The connection is still in hci_conn_hash so test for 1
+	 * instead of 0 to know if this is the last one.
+	 */
+	if (mgmt_powering_down(hdev) && hci_conn_count(hdev) == 1) {
+		cancel_delayed_work(&hdev->power_off);
+		queue_work(hdev->req_workqueue, &hdev->power_off.work);
 	}
 
 	if (!mgmt_connected)
@@ -6359,19 +6397,13 @@ void mgmt_connect_failed(struct hci_dev *hdev, bdaddr_t *bdaddr, u8 link_type,
 			 u8 addr_type, u8 status)
 {
 	struct mgmt_ev_connect_failed ev;
-	struct pending_cmd *power_off;
 
-	power_off = mgmt_pending_find(MGMT_OP_SET_POWERED, hdev);
-	if (power_off) {
-		struct mgmt_mode *cp = power_off->param;
-
-		/* The connection is still in hci_conn_hash so test for 1
-		 * instead of 0 to know if this is the last one.
-		 */
-		if (!cp->val && hci_conn_count(hdev) == 1) {
-			cancel_delayed_work(&hdev->power_off);
-			queue_work(hdev->req_workqueue, &hdev->power_off.work);
-		}
+	/* The connection is still in hci_conn_hash so test for 1
+	 * instead of 0 to know if this is the last one.
+	 */
+	if (mgmt_powering_down(hdev) && hci_conn_count(hdev) == 1) {
+		cancel_delayed_work(&hdev->power_off);
+		queue_work(hdev->req_workqueue, &hdev->power_off.work);
 	}
 
 	bacpy(&ev.addr.bdaddr, bdaddr);
@@ -6529,16 +6561,23 @@ int mgmt_user_passkey_notify(struct hci_dev *hdev, bdaddr_t *bdaddr,
 	return mgmt_event(MGMT_EV_PASSKEY_NOTIFY, hdev, &ev, sizeof(ev), NULL);
 }
 
-void mgmt_auth_failed(struct hci_dev *hdev, bdaddr_t *bdaddr, u8 link_type,
-		      u8 addr_type, u8 status)
+void mgmt_auth_failed(struct hci_conn *conn, u8 hci_status)
 {
 	struct mgmt_ev_auth_failed ev;
+	struct pending_cmd *cmd;
+	u8 status = mgmt_status(hci_status);
 
-	bacpy(&ev.addr.bdaddr, bdaddr);
-	ev.addr.type = link_to_bdaddr(link_type, addr_type);
-	ev.status = mgmt_status(status);
+	bacpy(&ev.addr.bdaddr, &conn->dst);
+	ev.addr.type = link_to_bdaddr(conn->type, conn->dst_type);
+	ev.status = status;
 
-	mgmt_event(MGMT_EV_AUTH_FAILED, hdev, &ev, sizeof(ev), NULL);
+	cmd = find_pairing(conn);
+
+	mgmt_event(MGMT_EV_AUTH_FAILED, conn->hdev, &ev, sizeof(ev),
+		    cmd ? cmd->sk : NULL);
+
+	if (cmd)
+		pairing_complete(cmd, status);
 }
 
 void mgmt_auth_enable_complete(struct hci_dev *hdev, u8 status)
@@ -6730,8 +6769,8 @@ void mgmt_set_local_name_complete(struct hci_dev *hdev, u8 *name, u8 status)
 }
 
 void mgmt_read_local_oob_data_complete(struct hci_dev *hdev, u8 *hash192,
-				       u8 *randomizer192, u8 *hash256,
-				       u8 *randomizer256, u8 status)
+				       u8 *rand192, u8 *hash256, u8 *rand256,
+				       u8 status)
 {
 	struct pending_cmd *cmd;
 
@@ -6746,16 +6785,14 @@ void mgmt_read_local_oob_data_complete(struct hci_dev *hdev, u8 *hash192,
 			   mgmt_status(status));
 	} else {
 		if (test_bit(HCI_SC_ENABLED, &hdev->dev_flags) &&
-		    hash256 && randomizer256) {
+		    hash256 && rand256) {
 			struct mgmt_rp_read_local_oob_ext_data rp;
 
 			memcpy(rp.hash192, hash192, sizeof(rp.hash192));
-			memcpy(rp.randomizer192, randomizer192,
-			       sizeof(rp.randomizer192));
+			memcpy(rp.rand192, rand192, sizeof(rp.rand192));
 
 			memcpy(rp.hash256, hash256, sizeof(rp.hash256));
-			memcpy(rp.randomizer256, randomizer256,
-			       sizeof(rp.randomizer256));
+			memcpy(rp.rand256, rand256, sizeof(rp.rand256));
 
 			cmd_complete(cmd->sk, hdev->id,
 				     MGMT_OP_READ_LOCAL_OOB_DATA, 0,
@@ -6764,8 +6801,7 @@ void mgmt_read_local_oob_data_complete(struct hci_dev *hdev, u8 *hash192,
 			struct mgmt_rp_read_local_oob_data rp;
 
 			memcpy(rp.hash, hash192, sizeof(rp.hash));
-			memcpy(rp.randomizer, randomizer192,
-			       sizeof(rp.randomizer));
+			memcpy(rp.rand, rand192, sizeof(rp.rand));
 
 			cmd_complete(cmd->sk, hdev->id,
 				     MGMT_OP_READ_LOCAL_OOB_DATA, 0,

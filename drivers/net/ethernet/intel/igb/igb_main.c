@@ -58,7 +58,7 @@
 
 #define MAJ 5
 #define MIN 2
-#define BUILD 13
+#define BUILD 15
 #define DRV_VERSION __stringify(MAJ) "." __stringify(MIN) "." \
 __stringify(BUILD) "-k"
 char igb_driver_name[] = "igb";
@@ -1012,7 +1012,8 @@ static void igb_free_q_vector(struct igb_adapter *adapter, int v_idx)
 	/* igb_get_stats64() might access the rings on this vector,
 	 * we must wait a grace period before freeing it.
 	 */
-	kfree_rcu(q_vector, rcu);
+	if (q_vector)
+		kfree_rcu(q_vector, rcu);
 }
 
 /**
@@ -1792,8 +1793,10 @@ void igb_down(struct igb_adapter *adapter)
 	adapter->flags &= ~IGB_FLAG_NEED_LINK_UPDATE;
 
 	for (i = 0; i < adapter->num_q_vectors; i++) {
-		napi_synchronize(&(adapter->q_vector[i]->napi));
-		napi_disable(&(adapter->q_vector[i]->napi));
+		if (adapter->q_vector[i]) {
+			napi_synchronize(&adapter->q_vector[i]->napi);
+			napi_disable(&adapter->q_vector[i]->napi);
+		}
 	}
 
 
@@ -2012,10 +2015,10 @@ void igb_reset(struct igb_adapter *adapter)
 		case e1000_i350:
 		case e1000_i210:
 		case e1000_i211:
-			igb_set_eee_i350(hw);
+			igb_set_eee_i350(hw, true, true);
 			break;
 		case e1000_i354:
-			igb_set_eee_i354(hw);
+			igb_set_eee_i354(hw, true, true);
 			break;
 		default:
 			break;
@@ -2619,7 +2622,7 @@ static int igb_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		case e1000_i210:
 		case e1000_i211:
 			/* Enable EEE for internal copper PHY devices */
-			err = igb_set_eee_i350(hw);
+			err = igb_set_eee_i350(hw, true, true);
 			if ((!err) &&
 			    (!hw->dev_spec._82575.eee_disable)) {
 				adapter->eee_advert =
@@ -2630,7 +2633,7 @@ static int igb_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		case e1000_i354:
 			if ((rd32(E1000_CTRL_EXT) &
 			    E1000_CTRL_EXT_LINK_MODE_SGMII)) {
-				err = igb_set_eee_i354(hw);
+				err = igb_set_eee_i354(hw, true, true);
 				if ((!err) &&
 					(!hw->dev_spec._82575.eee_disable)) {
 					adapter->eee_advert =
@@ -3372,14 +3375,11 @@ static void igb_setup_mrqc(struct igb_adapter *adapter)
 	struct e1000_hw *hw = &adapter->hw;
 	u32 mrqc, rxcsum;
 	u32 j, num_rx_queues;
-	static const u32 rsskey[10] = { 0xDA565A6D, 0xC20E5B25, 0x3D256741,
-					0xB08FA343, 0xCB2BCAD0, 0xB4307BAE,
-					0xA32DCB77, 0x0CF23080, 0x3BB7426A,
-					0xFA01ACBE };
+	u32 rss_key[10];
 
-	/* Fill out hash function seeds */
+	netdev_rss_key_fill(rss_key, sizeof(rss_key));
 	for (j = 0; j < 10; j++)
-		wr32(E1000_RSSRK(j), rsskey[j]);
+		wr32(E1000_RSSRK(j), rss_key[j]);
 
 	num_rx_queues = adapter->rss_queues;
 
@@ -3717,7 +3717,8 @@ static void igb_free_all_tx_resources(struct igb_adapter *adapter)
 	int i;
 
 	for (i = 0; i < adapter->num_tx_queues; i++)
-		igb_free_tx_resources(adapter->tx_ring[i]);
+		if (adapter->tx_ring[i])
+			igb_free_tx_resources(adapter->tx_ring[i]);
 }
 
 void igb_unmap_and_free_tx_resource(struct igb_ring *ring,
@@ -3782,7 +3783,8 @@ static void igb_clean_all_tx_rings(struct igb_adapter *adapter)
 	int i;
 
 	for (i = 0; i < adapter->num_tx_queues; i++)
-		igb_clean_tx_ring(adapter->tx_ring[i]);
+		if (adapter->tx_ring[i])
+			igb_clean_tx_ring(adapter->tx_ring[i]);
 }
 
 /**
@@ -3819,7 +3821,8 @@ static void igb_free_all_rx_resources(struct igb_adapter *adapter)
 	int i;
 
 	for (i = 0; i < adapter->num_rx_queues; i++)
-		igb_free_rx_resources(adapter->rx_ring[i]);
+		if (adapter->rx_ring[i])
+			igb_free_rx_resources(adapter->rx_ring[i]);
 }
 
 /**
@@ -3874,7 +3877,8 @@ static void igb_clean_all_rx_rings(struct igb_adapter *adapter)
 	int i;
 
 	for (i = 0; i < adapter->num_rx_queues; i++)
-		igb_clean_rx_ring(adapter->rx_ring[i]);
+		if (adapter->rx_ring[i])
+			igb_clean_rx_ring(adapter->rx_ring[i]);
 }
 
 /**
@@ -5206,13 +5210,10 @@ void igb_update_stats(struct igb_adapter *adapter,
 	struct e1000_hw *hw = &adapter->hw;
 	struct pci_dev *pdev = adapter->pdev;
 	u32 reg, mpc;
-	u16 phy_tmp;
 	int i;
 	u64 bytes, packets;
 	unsigned int start;
 	u64 _bytes, _packets;
-
-#define PHY_IDLE_ERROR_COUNT_MASK 0x00FF
 
 	/* Prevent stats update while adapter is being reset, or if the pci
 	 * connection is down.
@@ -5373,15 +5374,6 @@ void igb_update_stats(struct igb_adapter *adapter,
 	net_stats->tx_carrier_errors = adapter->stats.tncrs;
 
 	/* Tx Dropped needs to be maintained elsewhere */
-
-	/* Phy Stats */
-	if (hw->phy.media_type == e1000_media_type_copper) {
-		if ((adapter->link_speed == SPEED_1000) &&
-		   (!igb_read_phy_reg(hw, PHY_1000T_STATUS, &phy_tmp))) {
-			phy_tmp &= PHY_IDLE_ERROR_COUNT_MASK;
-			adapter->phy_stats.idle_errors += phy_tmp;
-		}
-	}
 
 	/* Management Stats */
 	adapter->stats.mgptc += rd32(E1000_MGTPTC);
@@ -6386,7 +6378,7 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector)
 		total_packets += tx_buffer->gso_segs;
 
 		/* free the skb */
-		dev_kfree_skb_any(tx_buffer->skb);
+		dev_consume_skb_any(tx_buffer->skb);
 
 		/* unmap skb header data */
 		dma_unmap_single(tx_ring->dev,
@@ -6549,6 +6541,9 @@ static bool igb_can_reuse_rx_page(struct igb_rx_buffer *rx_buffer,
 	if (unlikely(page_to_nid(page) != numa_node_id()))
 		return false;
 
+	if (unlikely(page->pfmemalloc))
+		return false;
+
 #if (PAGE_SIZE < 8192)
 	/* if we are only owner of page we can reuse it */
 	if (unlikely(page_count(page) != 1))
@@ -6557,11 +6552,10 @@ static bool igb_can_reuse_rx_page(struct igb_rx_buffer *rx_buffer,
 	/* flip page offset to other buffer */
 	rx_buffer->page_offset ^= IGB_RX_BUFSZ;
 
-	/* since we are the only owner of the page and we need to
-	 * increment it, just set the value to 2 in order to avoid
-	 * an unnecessary locked operation
+	/* Even if we own the page, we are not allowed to use atomic_set()
+	 * This would break get_page_unless_zero() users.
 	 */
-	atomic_set(&page->_count, 2);
+	atomic_inc(&page->_count);
 #else
 	/* move offset up to the next cache line */
 	rx_buffer->page_offset += truesize;
@@ -6616,7 +6610,8 @@ static bool igb_add_rx_frag(struct igb_ring *rx_ring,
 		memcpy(__skb_put(skb, size), va, ALIGN(size, sizeof(long)));
 
 		/* we can reuse buffer as-is, just make sure it is local */
-		if (likely(page_to_nid(page) == numa_node_id()))
+		if (likely((page_to_nid(page) == numa_node_id()) &&
+			   !page->pfmemalloc))
 			return true;
 
 		/* this page cannot be reused so discard it */
@@ -6769,113 +6764,6 @@ static bool igb_is_non_eop(struct igb_ring *rx_ring,
 }
 
 /**
- *  igb_get_headlen - determine size of header for LRO/GRO
- *  @data: pointer to the start of the headers
- *  @max_len: total length of section to find headers in
- *
- *  This function is meant to determine the length of headers that will
- *  be recognized by hardware for LRO, and GRO offloads.  The main
- *  motivation of doing this is to only perform one pull for IPv4 TCP
- *  packets so that we can do basic things like calculating the gso_size
- *  based on the average data per packet.
- **/
-static unsigned int igb_get_headlen(unsigned char *data,
-				    unsigned int max_len)
-{
-	union {
-		unsigned char *network;
-		/* l2 headers */
-		struct ethhdr *eth;
-		struct vlan_hdr *vlan;
-		/* l3 headers */
-		struct iphdr *ipv4;
-		struct ipv6hdr *ipv6;
-	} hdr;
-	__be16 protocol;
-	u8 nexthdr = 0;	/* default to not TCP */
-	u8 hlen;
-
-	/* this should never happen, but better safe than sorry */
-	if (max_len < ETH_HLEN)
-		return max_len;
-
-	/* initialize network frame pointer */
-	hdr.network = data;
-
-	/* set first protocol and move network header forward */
-	protocol = hdr.eth->h_proto;
-	hdr.network += ETH_HLEN;
-
-	/* handle any vlan tag if present */
-	if (protocol == htons(ETH_P_8021Q)) {
-		if ((hdr.network - data) > (max_len - VLAN_HLEN))
-			return max_len;
-
-		protocol = hdr.vlan->h_vlan_encapsulated_proto;
-		hdr.network += VLAN_HLEN;
-	}
-
-	/* handle L3 protocols */
-	if (protocol == htons(ETH_P_IP)) {
-		if ((hdr.network - data) > (max_len - sizeof(struct iphdr)))
-			return max_len;
-
-		/* access ihl as a u8 to avoid unaligned access on ia64 */
-		hlen = (hdr.network[0] & 0x0F) << 2;
-
-		/* verify hlen meets minimum size requirements */
-		if (hlen < sizeof(struct iphdr))
-			return hdr.network - data;
-
-		/* record next protocol if header is present */
-		if (!(hdr.ipv4->frag_off & htons(IP_OFFSET)))
-			nexthdr = hdr.ipv4->protocol;
-	} else if (protocol == htons(ETH_P_IPV6)) {
-		if ((hdr.network - data) > (max_len - sizeof(struct ipv6hdr)))
-			return max_len;
-
-		/* record next protocol */
-		nexthdr = hdr.ipv6->nexthdr;
-		hlen = sizeof(struct ipv6hdr);
-	} else {
-		return hdr.network - data;
-	}
-
-	/* relocate pointer to start of L4 header */
-	hdr.network += hlen;
-
-	/* finally sort out TCP */
-	if (nexthdr == IPPROTO_TCP) {
-		if ((hdr.network - data) > (max_len - sizeof(struct tcphdr)))
-			return max_len;
-
-		/* access doff as a u8 to avoid unaligned access on ia64 */
-		hlen = (hdr.network[12] & 0xF0) >> 2;
-
-		/* verify hlen meets minimum size requirements */
-		if (hlen < sizeof(struct tcphdr))
-			return hdr.network - data;
-
-		hdr.network += hlen;
-	} else if (nexthdr == IPPROTO_UDP) {
-		if ((hdr.network - data) > (max_len - sizeof(struct udphdr)))
-			return max_len;
-
-		hdr.network += sizeof(struct udphdr);
-	}
-
-	/* If everything has gone correctly hdr.network should be the
-	 * data section of the packet and will be the end of the header.
-	 * If not then it probably represents the end of the last recognized
-	 * header.
-	 */
-	if ((hdr.network - data) < max_len)
-		return hdr.network - data;
-	else
-		return max_len;
-}
-
-/**
  *  igb_pull_tail - igb specific version of skb_pull_tail
  *  @rx_ring: rx descriptor ring packet is being transacted on
  *  @rx_desc: pointer to the EOP Rx descriptor
@@ -6919,7 +6807,7 @@ static void igb_pull_tail(struct igb_ring *rx_ring,
 	/* we need the header to contain the greater of either ETH_HLEN or
 	 * 60 bytes if the skb->len is less than 60 for skb_pad.
 	 */
-	pull_len = igb_get_headlen(va, IGB_RX_HDR_LEN);
+	pull_len = eth_get_headlen(va, IGB_RX_HDR_LEN);
 
 	/* align pull length to size of long to optimize memcpy performance */
 	skb_copy_to_linear_data(skb, va, ALIGN(pull_len, sizeof(long)));
@@ -7104,7 +6992,7 @@ static bool igb_alloc_mapped_page(struct igb_ring *rx_ring,
 		return true;
 
 	/* alloc new page for storage */
-	page = __skb_alloc_page(GFP_ATOMIC | __GFP_COLD, NULL);
+	page = dev_alloc_page();
 	if (unlikely(!page)) {
 		rx_ring->rx_stats.alloc_failed++;
 		return false;
@@ -7520,6 +7408,8 @@ static int igb_resume(struct device *dev)
 	pci_restore_state(pdev);
 	pci_save_state(pdev);
 
+	if (!pci_device_is_present(pdev))
+		return -ENODEV;
 	err = pci_enable_device_mem(pdev);
 	if (err) {
 		dev_err(&pdev->dev,

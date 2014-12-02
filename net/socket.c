@@ -610,7 +610,7 @@ void sock_release(struct socket *sock)
 }
 EXPORT_SYMBOL(sock_release);
 
-void sock_tx_timestamp(const struct sock *sk, __u8 *tx_flags)
+void __sock_tx_timestamp(const struct sock *sk, __u8 *tx_flags)
 {
 	u8 flags = *tx_flags;
 
@@ -626,12 +626,9 @@ void sock_tx_timestamp(const struct sock *sk, __u8 *tx_flags)
 	if (sk->sk_tsflags & SOF_TIMESTAMPING_TX_ACK)
 		flags |= SKBTX_ACK_TSTAMP;
 
-	if (sock_flag(sk, SOCK_WIFI_STATUS))
-		flags |= SKBTX_WIFI_STATUS;
-
 	*tx_flags = flags;
 }
-EXPORT_SYMBOL(sock_tx_timestamp);
+EXPORT_SYMBOL(__sock_tx_timestamp);
 
 static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 				       struct msghdr *msg, size_t size)
@@ -734,8 +731,7 @@ void __sock_recv_timestamp(struct msghdr *msg, struct sock *sk,
 	}
 
 	memset(&tss, 0, sizeof(tss));
-	if ((sk->sk_tsflags & SOF_TIMESTAMPING_SOFTWARE ||
-	     skb_shinfo(skb)->tx_flags & SKBTX_ANY_SW_TSTAMP) &&
+	if ((sk->sk_tsflags & SOF_TIMESTAMPING_SOFTWARE) &&
 	    ktime_to_timespec_cond(skb->tstamp, tss.ts + 0))
 		empty = 0;
 	if (shhwtstamps &&
@@ -1069,7 +1065,8 @@ static long sock_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			err = -EFAULT;
 			if (get_user(pid, (int __user *)argp))
 				break;
-			err = f_setown(sock->file, pid, 1);
+			f_setown(sock->file, pid, 1);
+			err = 0;
 			break;
 		case FIOGETOWN:
 		case SIOCGPGRP:
@@ -1991,21 +1988,61 @@ struct used_address {
 	unsigned int name_len;
 };
 
-static int copy_msghdr_from_user(struct msghdr *kmsg,
-				 struct msghdr __user *umsg)
+static ssize_t copy_msghdr_from_user(struct msghdr *kmsg,
+				     struct user_msghdr __user *umsg,
+				     struct sockaddr __user **save_addr,
+				     struct iovec **iov)
 {
-	if (copy_from_user(kmsg, umsg, sizeof(struct msghdr)))
+	struct sockaddr __user *uaddr;
+	struct iovec __user *uiov;
+	ssize_t err;
+
+	if (!access_ok(VERIFY_READ, umsg, sizeof(*umsg)) ||
+	    __get_user(uaddr, &umsg->msg_name) ||
+	    __get_user(kmsg->msg_namelen, &umsg->msg_namelen) ||
+	    __get_user(uiov, &umsg->msg_iov) ||
+	    __get_user(kmsg->msg_iovlen, &umsg->msg_iovlen) ||
+	    __get_user(kmsg->msg_control, &umsg->msg_control) ||
+	    __get_user(kmsg->msg_controllen, &umsg->msg_controllen) ||
+	    __get_user(kmsg->msg_flags, &umsg->msg_flags))
 		return -EFAULT;
+
+	if (!uaddr)
+		kmsg->msg_namelen = 0;
 
 	if (kmsg->msg_namelen < 0)
 		return -EINVAL;
 
 	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
 		kmsg->msg_namelen = sizeof(struct sockaddr_storage);
-	return 0;
+
+	if (save_addr)
+		*save_addr = uaddr;
+
+	if (uaddr && kmsg->msg_namelen) {
+		if (!save_addr) {
+			err = move_addr_to_kernel(uaddr, kmsg->msg_namelen,
+						  kmsg->msg_name);
+			if (err < 0)
+				return err;
+		}
+	} else {
+		kmsg->msg_name = NULL;
+		kmsg->msg_namelen = 0;
+	}
+
+	if (kmsg->msg_iovlen > UIO_MAXIOV)
+		return -EMSGSIZE;
+
+	err = rw_copy_check_uvector(save_addr ? READ : WRITE,
+				    uiov, kmsg->msg_iovlen,
+				    UIO_FASTIOV, *iov, iov);
+	if (err >= 0)
+		kmsg->msg_iov = *iov;
+	return err;
 }
 
-static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
+static int ___sys_sendmsg(struct socket *sock, struct user_msghdr __user *msg,
 			 struct msghdr *msg_sys, unsigned int flags,
 			 struct used_address *used_address)
 {
@@ -2017,34 +2054,15 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 	    __attribute__ ((aligned(sizeof(__kernel_size_t))));
 	/* 20 is size of ipv6_pktinfo */
 	unsigned char *ctl_buf = ctl;
-	int err, ctl_len, total_len;
+	int ctl_len, total_len;
+	ssize_t err;
 
-	err = -EFAULT;
-	if (MSG_CMSG_COMPAT & flags) {
-		if (get_compat_msghdr(msg_sys, msg_compat))
-			return -EFAULT;
-	} else {
-		err = copy_msghdr_from_user(msg_sys, msg);
-		if (err)
-			return err;
-	}
+	msg_sys->msg_name = &address;
 
-	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
-		err = -EMSGSIZE;
-		if (msg_sys->msg_iovlen > UIO_MAXIOV)
-			goto out;
-		err = -ENOMEM;
-		iov = kmalloc(msg_sys->msg_iovlen * sizeof(struct iovec),
-			      GFP_KERNEL);
-		if (!iov)
-			goto out;
-	}
-
-	/* This will also move the address data into kernel space */
-	if (MSG_CMSG_COMPAT & flags) {
-		err = verify_compat_iovec(msg_sys, iov, &address, VERIFY_READ);
-	} else
-		err = verify_iovec(msg_sys, iov, &address, VERIFY_READ);
+	if (MSG_CMSG_COMPAT & flags)
+		err = get_compat_msghdr(msg_sys, msg_compat, NULL, &iov);
+	else
+		err = copy_msghdr_from_user(msg_sys, msg, NULL, &iov);
 	if (err < 0)
 		goto out_freeiov;
 	total_len = err;
@@ -2115,7 +2133,6 @@ out_freectl:
 out_freeiov:
 	if (iov != iovstack)
 		kfree(iov);
-out:
 	return err;
 }
 
@@ -2123,7 +2140,7 @@ out:
  *	BSD sendmsg interface
  */
 
-long __sys_sendmsg(int fd, struct msghdr __user *msg, unsigned flags)
+long __sys_sendmsg(int fd, struct user_msghdr __user *msg, unsigned flags)
 {
 	int fput_needed, err;
 	struct msghdr msg_sys;
@@ -2140,7 +2157,7 @@ out:
 	return err;
 }
 
-SYSCALL_DEFINE3(sendmsg, int, fd, struct msghdr __user *, msg, unsigned int, flags)
+SYSCALL_DEFINE3(sendmsg, int, fd, struct user_msghdr __user *, msg, unsigned int, flags)
 {
 	if (flags & MSG_CMSG_COMPAT)
 		return -EINVAL;
@@ -2177,7 +2194,7 @@ int __sys_sendmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 
 	while (datagrams < vlen) {
 		if (MSG_CMSG_COMPAT & flags) {
-			err = ___sys_sendmsg(sock, (struct msghdr __user *)compat_entry,
+			err = ___sys_sendmsg(sock, (struct user_msghdr __user *)compat_entry,
 					     &msg_sys, flags, &used_address);
 			if (err < 0)
 				break;
@@ -2185,7 +2202,7 @@ int __sys_sendmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 			++compat_entry;
 		} else {
 			err = ___sys_sendmsg(sock,
-					     (struct msghdr __user *)entry,
+					     (struct user_msghdr __user *)entry,
 					     &msg_sys, flags, &used_address);
 			if (err < 0)
 				break;
@@ -2215,7 +2232,7 @@ SYSCALL_DEFINE4(sendmmsg, int, fd, struct mmsghdr __user *, mmsg,
 	return __sys_sendmmsg(fd, mmsg, vlen, flags);
 }
 
-static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+static int ___sys_recvmsg(struct socket *sock, struct user_msghdr __user *msg,
 			 struct msghdr *msg_sys, unsigned int flags, int nosec)
 {
 	struct compat_msghdr __user *msg_compat =
@@ -2223,44 +2240,22 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
 	struct iovec iovstack[UIO_FASTIOV];
 	struct iovec *iov = iovstack;
 	unsigned long cmsg_ptr;
-	int err, total_len, len;
+	int total_len, len;
+	ssize_t err;
 
 	/* kernel mode address */
 	struct sockaddr_storage addr;
 
 	/* user mode address pointers */
 	struct sockaddr __user *uaddr;
-	int __user *uaddr_len;
+	int __user *uaddr_len = COMPAT_NAMELEN(msg);
 
-	if (MSG_CMSG_COMPAT & flags) {
-		if (get_compat_msghdr(msg_sys, msg_compat))
-			return -EFAULT;
-	} else {
-		err = copy_msghdr_from_user(msg_sys, msg);
-		if (err)
-			return err;
-	}
+	msg_sys->msg_name = &addr;
 
-	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
-		err = -EMSGSIZE;
-		if (msg_sys->msg_iovlen > UIO_MAXIOV)
-			goto out;
-		err = -ENOMEM;
-		iov = kmalloc(msg_sys->msg_iovlen * sizeof(struct iovec),
-			      GFP_KERNEL);
-		if (!iov)
-			goto out;
-	}
-
-	/* Save the user-mode address (verify_iovec will change the
-	 * kernel msghdr to use the kernel address space)
-	 */
-	uaddr = (__force void __user *)msg_sys->msg_name;
-	uaddr_len = COMPAT_NAMELEN(msg);
 	if (MSG_CMSG_COMPAT & flags)
-		err = verify_compat_iovec(msg_sys, iov, &addr, VERIFY_WRITE);
+		err = get_compat_msghdr(msg_sys, msg_compat, &uaddr, &iov);
 	else
-		err = verify_iovec(msg_sys, iov, &addr, VERIFY_WRITE);
+		err = copy_msghdr_from_user(msg_sys, msg, &uaddr, &iov);
 	if (err < 0)
 		goto out_freeiov;
 	total_len = err;
@@ -2303,7 +2298,6 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
 out_freeiov:
 	if (iov != iovstack)
 		kfree(iov);
-out:
 	return err;
 }
 
@@ -2311,7 +2305,7 @@ out:
  *	BSD recvmsg interface
  */
 
-long __sys_recvmsg(int fd, struct msghdr __user *msg, unsigned flags)
+long __sys_recvmsg(int fd, struct user_msghdr __user *msg, unsigned flags)
 {
 	int fput_needed, err;
 	struct msghdr msg_sys;
@@ -2328,7 +2322,7 @@ out:
 	return err;
 }
 
-SYSCALL_DEFINE3(recvmsg, int, fd, struct msghdr __user *, msg,
+SYSCALL_DEFINE3(recvmsg, int, fd, struct user_msghdr __user *, msg,
 		unsigned int, flags)
 {
 	if (flags & MSG_CMSG_COMPAT)
@@ -2373,7 +2367,7 @@ int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 		 * No need to ask LSM for more than the first datagram.
 		 */
 		if (MSG_CMSG_COMPAT & flags) {
-			err = ___sys_recvmsg(sock, (struct msghdr __user *)compat_entry,
+			err = ___sys_recvmsg(sock, (struct user_msghdr __user *)compat_entry,
 					     &msg_sys, flags & ~MSG_WAITFORONE,
 					     datagrams);
 			if (err < 0)
@@ -2382,7 +2376,7 @@ int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 			++compat_entry;
 		} else {
 			err = ___sys_recvmsg(sock,
-					     (struct msghdr __user *)entry,
+					     (struct user_msghdr __user *)entry,
 					     &msg_sys, flags & ~MSG_WAITFORONE,
 					     datagrams);
 			if (err < 0)
@@ -2571,13 +2565,13 @@ SYSCALL_DEFINE2(socketcall, int, call, unsigned long __user *, args)
 				   (int __user *)a[4]);
 		break;
 	case SYS_SENDMSG:
-		err = sys_sendmsg(a0, (struct msghdr __user *)a1, a[2]);
+		err = sys_sendmsg(a0, (struct user_msghdr __user *)a1, a[2]);
 		break;
 	case SYS_SENDMMSG:
 		err = sys_sendmmsg(a0, (struct mmsghdr __user *)a1, a[2], a[3]);
 		break;
 	case SYS_RECVMSG:
-		err = sys_recvmsg(a0, (struct msghdr __user *)a1, a[2]);
+		err = sys_recvmsg(a0, (struct user_msghdr __user *)a1, a[2]);
 		break;
 	case SYS_RECVMMSG:
 		err = sys_recvmmsg(a0, (struct mmsghdr __user *)a1, a[2], a[3],
@@ -2602,7 +2596,7 @@ SYSCALL_DEFINE2(socketcall, int, call, unsigned long __user *, args)
  *
  *	This function is called by a protocol handler that wants to
  *	advertise its address family, and have it linked into the
- *	socket interface. The value ops->family coresponds to the
+ *	socket interface. The value ops->family corresponds to the
  *	socket system call protocol family.
  */
 int sock_register(const struct net_proto_family *ops)

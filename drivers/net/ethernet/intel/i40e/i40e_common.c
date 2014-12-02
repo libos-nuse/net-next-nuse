@@ -50,6 +50,7 @@ static i40e_status i40e_set_mac_type(struct i40e_hw *hw)
 		case I40E_DEV_ID_QSFP_A:
 		case I40E_DEV_ID_QSFP_B:
 		case I40E_DEV_ID_QSFP_C:
+		case I40E_DEV_ID_10G_BASE_T:
 			hw->mac.type = I40E_MAC_XL710;
 			break;
 		case I40E_DEV_ID_VF:
@@ -752,6 +753,8 @@ static enum i40e_media_type i40e_get_media_type(struct i40e_hw *hw)
 	switch (hw->phy.link_info.phy_type) {
 	case I40E_PHY_TYPE_10GBASE_SR:
 	case I40E_PHY_TYPE_10GBASE_LR:
+	case I40E_PHY_TYPE_1000BASE_SX:
+	case I40E_PHY_TYPE_1000BASE_LX:
 	case I40E_PHY_TYPE_40GBASE_SR4:
 	case I40E_PHY_TYPE_40GBASE_LR4:
 		media = I40E_MEDIA_TYPE_FIBER;
@@ -1413,6 +1416,33 @@ i40e_status i40e_update_link_info(struct i40e_hw *hw, bool enable_lse)
 		hw->phy.link_info.an_enabled = true;
 	else
 		hw->phy.link_info.an_enabled = false;
+
+	return status;
+}
+
+/**
+ * i40e_aq_set_phy_int_mask
+ * @hw: pointer to the hw struct
+ * @mask: interrupt mask to be set
+ * @cmd_details: pointer to command details structure or NULL
+ *
+ * Set link interrupt mask.
+ **/
+i40e_status i40e_aq_set_phy_int_mask(struct i40e_hw *hw,
+				     u16 mask,
+				     struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_set_phy_int_mask *cmd =
+		(struct i40e_aqc_set_phy_int_mask *)&desc.params.raw;
+	i40e_status status;
+
+	i40e_fill_default_direct_cmd_desc(&desc,
+					  i40e_aqc_opc_set_phy_int_mask);
+
+	cmd->event_mask = cpu_to_le16(mask);
+
+	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
 
 	return status;
 }
@@ -2630,6 +2660,34 @@ i40e_status i40e_aq_start_lldp(struct i40e_hw *hw,
 }
 
 /**
+ * i40e_aq_get_cee_dcb_config
+ * @hw: pointer to the hw struct
+ * @buff: response buffer that stores CEE operational configuration
+ * @buff_size: size of the buffer passed
+ * @cmd_details: pointer to command details structure or NULL
+ *
+ * Get CEE DCBX mode operational configuration from firmware
+ **/
+i40e_status i40e_aq_get_cee_dcb_config(struct i40e_hw *hw,
+				       void *buff, u16 buff_size,
+				       struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	i40e_status status;
+
+	if (buff_size == 0 || !buff)
+		return I40E_ERR_PARAM;
+
+	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_get_cee_dcb_cfg);
+
+	desc.flags |= cpu_to_le16((u16)I40E_AQ_FLAG_BUF);
+	status = i40e_asq_send_command(hw, &desc, (void *)buff, buff_size,
+				       cmd_details);
+
+	return status;
+}
+
+/**
  * i40e_aq_add_udp_tunnel
  * @hw: pointer to the hw struct
  * @udp_port: the UDP port to add
@@ -3182,6 +3240,26 @@ i40e_status i40e_aq_add_rem_control_packet_filter(struct i40e_hw *hw,
 		stats->mac_etype_free = le16_to_cpu(resp->mac_etype_free);
 		stats->etype_free = le16_to_cpu(resp->etype_free);
 	}
+
+	return status;
+}
+
+/**
+ * i40e_aq_resume_port_tx
+ * @hw: pointer to the hardware structure
+ * @cmd_details: pointer to command details structure or NULL
+ *
+ * Resume port's Tx traffic
+ **/
+i40e_status i40e_aq_resume_port_tx(struct i40e_hw *hw,
+				   struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	i40e_status status;
+
+	i40e_fill_default_direct_cmd_desc(&desc, i40e_aqc_opc_resume_port_tx);
+
+	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
 
 	return status;
 }

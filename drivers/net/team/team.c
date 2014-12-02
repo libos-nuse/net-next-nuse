@@ -647,7 +647,7 @@ static void team_notify_peers(struct team *team)
 {
 	if (!team->notify_peers.count || !netif_running(team->dev))
 		return;
-	atomic_set(&team->notify_peers.count_pending, team->notify_peers.count);
+	atomic_add(team->notify_peers.count, &team->notify_peers.count_pending);
 	schedule_delayed_work(&team->notify_peers.dw, 0);
 }
 
@@ -687,7 +687,7 @@ static void team_mcast_rejoin(struct team *team)
 {
 	if (!team->mcast_rejoin.count || !netif_running(team->dev))
 		return;
-	atomic_set(&team->mcast_rejoin.count_pending, team->mcast_rejoin.count);
+	atomic_add(team->mcast_rejoin.count, &team->mcast_rejoin.count_pending);
 	schedule_delayed_work(&team->mcast_rejoin.dw, 0);
 }
 
@@ -970,7 +970,8 @@ static void __team_compute_features(struct team *team)
 	struct team_port *port;
 	u32 vlan_features = TEAM_VLAN_FEATURES & NETIF_F_ALL_FOR_ALL;
 	unsigned short max_hard_header_len = ETH_HLEN;
-	unsigned int flags, dst_release_flag = IFF_XMIT_DST_RELEASE;
+	unsigned int dst_release_flag = IFF_XMIT_DST_RELEASE |
+					IFF_XMIT_DST_RELEASE_PERM;
 
 	list_for_each_entry(port, &team->port_list, list) {
 		vlan_features = netdev_increment_features(vlan_features,
@@ -985,8 +986,9 @@ static void __team_compute_features(struct team *team)
 	team->dev->vlan_features = vlan_features;
 	team->dev->hard_header_len = max_hard_header_len;
 
-	flags = team->dev->priv_flags & ~IFF_XMIT_DST_RELEASE;
-	team->dev->priv_flags = flags | dst_release_flag;
+	team->dev->priv_flags &= ~IFF_XMIT_DST_RELEASE;
+	if (dst_release_flag == (IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM))
+		team->dev->priv_flags |= IFF_XMIT_DST_RELEASE;
 
 	netdev_change_features(team->dev);
 }
@@ -1176,6 +1178,9 @@ static int team_port_add(struct team *team, struct net_device *port_dev)
 			   portname);
 		goto err_enable_netpoll;
 	}
+
+	if (!(dev->features & NETIF_F_LRO))
+		dev_disable_lro(port_dev);
 
 	err = netdev_rx_handler_register(port_dev, team_handle_frame,
 					 port);

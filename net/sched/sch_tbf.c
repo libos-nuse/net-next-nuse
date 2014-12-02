@@ -175,7 +175,7 @@ static int tbf_segment(struct sk_buff *skb, struct Qdisc *sch)
 		ret = qdisc_enqueue(segs, q->qdisc);
 		if (ret != NET_XMIT_SUCCESS) {
 			if (net_xmit_drop_count(ret))
-				sch->qstats.drops++;
+				qdisc_qstats_drop(sch);
 		} else {
 			nb++;
 		}
@@ -201,7 +201,7 @@ static int tbf_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	ret = qdisc_enqueue(skb, q->qdisc);
 	if (ret != NET_XMIT_SUCCESS) {
 		if (net_xmit_drop_count(ret))
-			sch->qstats.drops++;
+			qdisc_qstats_drop(sch);
 		return ret;
 	}
 
@@ -216,7 +216,7 @@ static unsigned int tbf_drop(struct Qdisc *sch)
 
 	if (q->qdisc->ops->drop && (len = q->qdisc->ops->drop(q->qdisc)) != 0) {
 		sch->q.qlen--;
-		sch->qstats.drops++;
+		qdisc_qstats_drop(sch);
 	}
 	return len;
 }
@@ -268,7 +268,8 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
 		}
 
 		qdisc_watchdog_schedule_ns(&q->watchdog,
-					   now + max_t(long, -toks, -ptoks));
+					   now + max_t(long, -toks, -ptoks),
+					   true);
 
 		/* Maybe we have a shorter packet in the queue,
 		   which can be sent now. It sounds cool,
@@ -281,7 +282,7 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
 		   (cf. CSZ, HPFQ, HFSC)
 		 */
 
-		sch->qstats.overlimits++;
+		qdisc_qstats_overlimit(sch);
 	}
 	return NULL;
 }

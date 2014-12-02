@@ -83,7 +83,7 @@ enum KEY_TYPE_ID {
 #define WPA_PN_SIZE		8
 #define KEY_PARAMS_FIXED_LEN	10
 #define KEY_INDEX_MASK		0xf
-#define FW_KEY_API_VER_MAJOR_V2	2
+#define KEY_API_VER_MAJOR_V2	2
 
 #define KEY_MCAST	BIT(0)
 #define KEY_UNICAST	BIT(1)
@@ -170,7 +170,9 @@ enum MWIFIEX_802_11_PRIVACY_FILTER {
 #define TLV_TYPE_COALESCE_RULE      (PROPRIETARY_TLV_BASE_ID + 154)
 #define TLV_TYPE_KEY_PARAM_V2       (PROPRIETARY_TLV_BASE_ID + 156)
 #define TLV_TYPE_TDLS_IDLE_TIMEOUT  (PROPRIETARY_TLV_BASE_ID + 194)
-#define TLV_TYPE_FW_API_REV         (PROPRIETARY_TLV_BASE_ID + 199)
+#define TLV_TYPE_SCAN_CHANNEL_GAP   (PROPRIETARY_TLV_BASE_ID + 197)
+#define TLV_TYPE_API_REV            (PROPRIETARY_TLV_BASE_ID + 199)
+#define TLV_TYPE_CHANNEL_STATS      (PROPRIETARY_TLV_BASE_ID + 198)
 
 #define MWIFIEX_TX_DATA_BUF_SIZE_2K        2048
 
@@ -582,6 +584,7 @@ struct rxpd {
 	 * [Bit 7] Reserved
 	 */
 	u8 ht_info;
+	u8 reserved[3];
 	u8 flags;
 } __packed;
 
@@ -609,6 +612,16 @@ struct uap_rxpd {
 	u8 priority;
 	u8 reserved1;
 };
+
+struct mwifiex_fw_chan_stats {
+	u8 chan_num;
+	u8 bandcfg;
+	u8 flags;
+	s8 noise;
+	__le16 total_bss;
+	__le16 cca_scan_dur;
+	__le16 cca_busy_dur;
+} __packed;
 
 enum mwifiex_chan_scan_mode_bitmasks {
 	MWIFIEX_PASSIVE_SCAN = BIT(0),
@@ -651,6 +664,17 @@ struct mwifiex_ie_types_ssid_param_set {
 struct mwifiex_ie_types_num_probes {
 	struct mwifiex_ie_types_header header;
 	__le16 num_probes;
+} __packed;
+
+struct mwifiex_ie_types_scan_chan_gap {
+	struct mwifiex_ie_types_header header;
+	/* time gap in TUs to be used between two consecutive channels scan */
+	__le16 chan_gap;
+} __packed;
+
+struct mwifiex_ietypes_chanstats {
+	struct mwifiex_ie_types_header header;
+	struct mwifiex_fw_chan_stats chanstats[0];
 } __packed;
 
 struct mwifiex_ie_types_wildcard_ssid_params {
@@ -844,11 +868,12 @@ struct host_cmd_ds_802_11_ps_mode_enh {
 	} params;
 } __packed;
 
-enum FW_API_VER_ID {
+enum API_VER_ID {
 	KEY_API_VER_ID = 1,
+	FW_API_VER_ID = 2,
 };
 
-struct hw_spec_fw_api_rev {
+struct hw_spec_api_rev {
 	struct mwifiex_ie_types_header header;
 	__le16 api_id;
 	u8 major_ver;
@@ -1248,6 +1273,7 @@ struct mwifiex_user_scan_cfg {
 	u8 num_ssids;
 	/* Variable number (fixed maximum) of channels to scan up */
 	struct mwifiex_user_scan_chan chan_list[MWIFIEX_USER_SCAN_CHAN_MAX];
+	u16 scan_chan_gap;
 } __packed;
 
 struct ie_body {

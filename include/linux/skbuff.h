@@ -20,6 +20,8 @@
 #include <linux/time.h>
 #include <linux/bug.h>
 #include <linux/cache.h>
+#include <linux/rbtree.h>
+#include <linux/socket.h>
 
 #include <linux/atomic.h>
 #include <asm/types.h>
@@ -28,7 +30,6 @@
 #include <linux/textsearch.h>
 #include <net/checksum.h>
 #include <linux/rcupdate.h>
-#include <linux/dmaengine.h>
 #include <linux/hrtimer.h>
 #include <linux/dma-mapping.h>
 #include <linux/netdev_features.h>
@@ -149,6 +150,7 @@
 struct net_device;
 struct scatterlist;
 struct pipe_inode_info;
+struct iov_iter;
 
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 struct nf_conntrack {
@@ -156,7 +158,7 @@ struct nf_conntrack {
 };
 #endif
 
-#ifdef CONFIG_BRIDGE_NETFILTER
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 struct nf_bridge_info {
 	atomic_t		use;
 	unsigned int		mask;
@@ -339,9 +341,10 @@ struct skb_shared_info {
 
 
 enum {
-	SKB_FCLONE_UNAVAILABLE,
-	SKB_FCLONE_ORIG,
-	SKB_FCLONE_CLONE,
+	SKB_FCLONE_UNAVAILABLE,	/* skb has no fclone (from head_cache) */
+	SKB_FCLONE_ORIG,	/* orig skb (from fclone_cache) */
+	SKB_FCLONE_CLONE,	/* companion fclone skb (from fclone_cache) */
+	SKB_FCLONE_FREE,	/* this companion fclone skb is available */
 };
 
 enum {
@@ -370,8 +373,7 @@ enum {
 
 	SKB_GSO_UDP_TUNNEL_CSUM = 1 << 11,
 
-	SKB_GSO_MPLS = 1 << 12,
-
+	SKB_GSO_TUNNEL_REMCSUM = 1 << 12,
 };
 
 #if BITS_PER_LONG > 32
@@ -440,6 +442,7 @@ static inline u32 skb_mstamp_us_delta(const struct skb_mstamp *t1,
  *	@next: Next buffer in list
  *	@prev: Previous buffer in list
  *	@tstamp: Time we arrived/left
+ *	@rbnode: RB tree node, alternative to next/prev for netem/tcp
  *	@sk: Socket we are owned by
  *	@dev: Device we arrived on/are leaving by
  *	@cb: Control buffer. Free for use by every layer. Put private vars here
@@ -482,8 +485,6 @@ static inline u32 skb_mstamp_us_delta(const struct skb_mstamp *t1,
  *	@wifi_acked_valid: wifi_acked was set
  *	@wifi_acked: whether frame was acked on wifi or not
  *	@no_fcs:  Request NIC to treat last 4 bytes as Ethernet FCS
- *	@dma_cookie: a cookie to one of several possible DMA operations
- *		done by skb DMA functions
   *	@napi_id: id of the NAPI struct this skb came from
  *	@secmark: security marking
  *	@mark: Generic packet mark
@@ -506,15 +507,19 @@ static inline u32 skb_mstamp_us_delta(const struct skb_mstamp *t1,
  */
 
 struct sk_buff {
-	/* These two members must be first. */
-	struct sk_buff		*next;
-	struct sk_buff		*prev;
-
 	union {
-		ktime_t		tstamp;
-		struct skb_mstamp skb_mstamp;
-	};
+		struct {
+			/* These two members must be first. */
+			struct sk_buff		*next;
+			struct sk_buff		*prev;
 
+			union {
+				ktime_t		tstamp;
+				struct skb_mstamp skb_mstamp;
+			};
+		};
+		struct rb_node	rbnode; /* used in netem & tcp stack */
+	};
 	struct sock		*sk;
 	struct net_device	*dev;
 
@@ -527,49 +532,80 @@ struct sk_buff {
 	char			cb[48] __aligned(8);
 
 	unsigned long		_skb_refdst;
+	void			(*destructor)(struct sk_buff *skb);
 #ifdef CONFIG_XFRM
 	struct	sec_path	*sp;
+#endif
+#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+	struct nf_conntrack	*nfct;
+#endif
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
+	struct nf_bridge_info	*nf_bridge;
 #endif
 	unsigned int		len,
 				data_len;
 	__u16			mac_len,
 				hdr_len;
-	union {
-		__wsum		csum;
-		struct {
-			__u16	csum_start;
-			__u16	csum_offset;
-		};
-	};
-	__u32			priority;
+
+	/* Following fields are _not_ copied in __copy_skb_header()
+	 * Note that queue_mapping is here mostly to fill a hole.
+	 */
 	kmemcheck_bitfield_begin(flags1);
-	__u8			ignore_df:1,
-				cloned:1,
-				ip_summed:2,
+	__u16			queue_mapping;
+	__u8			cloned:1,
 				nohdr:1,
-				nfctinfo:3;
-	__u8			pkt_type:3,
 				fclone:2,
-				ipvs_property:1,
 				peeked:1,
-				nf_trace:1;
+				head_frag:1,
+				xmit_more:1;
+	/* one bit hole */
 	kmemcheck_bitfield_end(flags1);
-	__be16			protocol;
 
-	void			(*destructor)(struct sk_buff *skb);
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
-	struct nf_conntrack	*nfct;
+	/* fields enclosed in headers_start/headers_end are copied
+	 * using a single memcpy() in __copy_skb_header()
+	 */
+	/* private: */
+	__u32			headers_start[0];
+	/* public: */
+
+/* if you move pkt_type around you also must adapt those constants */
+#ifdef __BIG_ENDIAN_BITFIELD
+#define PKT_TYPE_MAX	(7 << 5)
+#else
+#define PKT_TYPE_MAX	7
 #endif
-#ifdef CONFIG_BRIDGE_NETFILTER
-	struct nf_bridge_info	*nf_bridge;
+#define PKT_TYPE_OFFSET()	offsetof(struct sk_buff, __pkt_type_offset)
+
+	__u8			__pkt_type_offset[0];
+	__u8			pkt_type:3;
+	__u8			pfmemalloc:1;
+	__u8			ignore_df:1;
+	__u8			nfctinfo:3;
+
+	__u8			nf_trace:1;
+	__u8			ip_summed:2;
+	__u8			ooo_okay:1;
+	__u8			l4_hash:1;
+	__u8			sw_hash:1;
+	__u8			wifi_acked_valid:1;
+	__u8			wifi_acked:1;
+
+	__u8			no_fcs:1;
+	/* Indicates the inner headers are valid in the skbuff. */
+	__u8			encapsulation:1;
+	__u8			encap_hdr_csum:1;
+	__u8			csum_valid:1;
+	__u8			csum_complete_sw:1;
+	__u8			csum_level:2;
+	__u8			csum_bad:1;
+
+#ifdef CONFIG_IPV6_NDISC_NODETYPE
+	__u8			ndisc_nodetype:2;
 #endif
-
-	int			skb_iif;
-
-	__u32			hash;
-
-	__be16			vlan_proto;
-	__u16			vlan_tci;
+	__u8			ipvs_property:1;
+	__u8			inner_protocol_type:1;
+	__u8			remcsum_offload:1;
+	/* 3 or 5 bit hole */
 
 #ifdef CONFIG_NET_SCHED
 	__u16			tc_index;	/* traffic control index */
@@ -578,33 +614,20 @@ struct sk_buff {
 #endif
 #endif
 
-	__u16			queue_mapping;
-	kmemcheck_bitfield_begin(flags2);
-	__u8			xmit_more:1;
-#ifdef CONFIG_IPV6_NDISC_NODETYPE
-	__u8			ndisc_nodetype:2;
-#endif
-	__u8			pfmemalloc:1;
-	__u8			ooo_okay:1;
-	__u8			l4_hash:1;
-	__u8			sw_hash:1;
-	__u8			wifi_acked_valid:1;
-	__u8			wifi_acked:1;
-	__u8			no_fcs:1;
-	__u8			head_frag:1;
-	/* Indicates the inner headers are valid in the skbuff. */
-	__u8			encapsulation:1;
-	__u8			encap_hdr_csum:1;
-	__u8			csum_valid:1;
-	__u8			csum_complete_sw:1;
-	/* 1/3 bit hole (depending on ndisc_nodetype presence) */
-	kmemcheck_bitfield_end(flags2);
-
-#if defined CONFIG_NET_DMA || defined CONFIG_NET_RX_BUSY_POLL
 	union {
-		unsigned int	napi_id;
-		dma_cookie_t	dma_cookie;
+		__wsum		csum;
+		struct {
+			__u16	csum_start;
+			__u16	csum_offset;
+		};
 	};
+	__u32			priority;
+	int			skb_iif;
+	__u32			hash;
+	__be16			vlan_proto;
+	__u16			vlan_tci;
+#ifdef CONFIG_NET_RX_BUSY_POLL
+	unsigned int	napi_id;
 #endif
 #ifdef CONFIG_NETWORK_SECMARK
 	__u32			secmark;
@@ -615,19 +638,24 @@ struct sk_buff {
 		__u32		reserved_tailroom;
 	};
 
-	kmemcheck_bitfield_begin(flags3);
-	__u8			csum_level:2;
-	__u8			csum_bad:1;
-	/* 13 bit hole */
-	kmemcheck_bitfield_end(flags3);
+	union {
+		__be16		inner_protocol;
+		__u8		inner_ipproto;
+	};
 
-	__be16			inner_protocol;
 	__u16			inner_transport_header;
 	__u16			inner_network_header;
 	__u16			inner_mac_header;
+
+	__be16			protocol;
 	__u16			transport_header;
 	__u16			network_header;
 	__u16			mac_header;
+
+	/* private: */
+	__u32			headers_end[0];
+	/* public: */
+
 	/* These elements must be at the end, see alloc_skb() for details.  */
 	sk_buff_data_t		tail;
 	sk_buff_data_t		end;
@@ -757,6 +785,41 @@ static inline struct sk_buff *alloc_skb(unsigned int size,
 					gfp_t priority)
 {
 	return __alloc_skb(size, priority, 0, NUMA_NO_NODE);
+}
+
+struct sk_buff *alloc_skb_with_frags(unsigned long header_len,
+				     unsigned long data_len,
+				     int max_page_order,
+				     int *errcode,
+				     gfp_t gfp_mask);
+
+/* Layout of fast clones : [skb1][skb2][fclone_ref] */
+struct sk_buff_fclones {
+	struct sk_buff	skb1;
+
+	struct sk_buff	skb2;
+
+	atomic_t	fclone_ref;
+};
+
+/**
+ *	skb_fclone_busy - check if fclone is busy
+ *	@skb: buffer
+ *
+ * Returns true is skb is a fast clone, and its clone is not freed.
+ * Some drivers call skb_orphan() in their ndo_start_xmit(),
+ * so we also check that this didnt happen.
+ */
+static inline bool skb_fclone_busy(const struct sock *sk,
+				   const struct sk_buff *skb)
+{
+	const struct sk_buff_fclones *fclones;
+
+	fclones = container_of(skb, struct sk_buff_fclones, skb1);
+
+	return skb->fclone == SKB_FCLONE_ORIG &&
+	       fclones->skb2.fclone == SKB_FCLONE_CLONE &&
+	       fclones->skb2.sk == sk;
 }
 
 static inline struct sk_buff *alloc_skb_fclone(unsigned int size,
@@ -1067,6 +1130,7 @@ static inline int skb_header_cloned(const struct sk_buff *skb)
  *	Drop a reference to the header part of the buffer.  This is done
  *	by acquiring a payload reference.  You must not read from the header
  *	part of skb->data after this.
+ *	Note : Check if you can use __skb_header_release() instead.
  */
 static inline void skb_header_release(struct sk_buff *skb)
 {
@@ -1074,6 +1138,20 @@ static inline void skb_header_release(struct sk_buff *skb)
 	skb->nohdr = 1;
 	atomic_add(1 << SKB_DATAREF_SHIFT, &skb_shinfo(skb)->dataref);
 }
+
+/**
+ *	__skb_header_release - release reference to header
+ *	@skb: buffer to operate on
+ *
+ *	Variant of skb_header_release() assuming skb is private to caller.
+ *	We can avoid one atomic operation.
+ */
+static inline void __skb_header_release(struct sk_buff *skb)
+{
+	skb->nohdr = 1;
+	atomic_set(&skb_shinfo(skb)->dataref, 1 + (1 << SKB_DATAREF_SHIFT));
+}
+
 
 /**
  *	skb_shared - is the buffer shared
@@ -1141,7 +1219,12 @@ static inline struct sk_buff *skb_unshare(struct sk_buff *skb,
 	might_sleep_if(pri & __GFP_WAIT);
 	if (skb_cloned(skb)) {
 		struct sk_buff *nskb = skb_copy(skb, pri);
-		kfree_skb(skb);	/* Free our shared copy */
+
+		/* Free our shared copy */
+		if (likely(nskb))
+			consume_skb(skb);
+		else
+			kfree_skb(skb);
 		skb = nskb;
 	}
 	return skb;
@@ -1700,6 +1783,23 @@ static inline void skb_reserve(struct sk_buff *skb, int len)
 	skb->tail += len;
 }
 
+#define ENCAP_TYPE_ETHER	0
+#define ENCAP_TYPE_IPPROTO	1
+
+static inline void skb_set_inner_protocol(struct sk_buff *skb,
+					  __be16 protocol)
+{
+	skb->inner_protocol = protocol;
+	skb->inner_protocol_type = ENCAP_TYPE_ETHER;
+}
+
+static inline void skb_set_inner_ipproto(struct sk_buff *skb,
+					 __u8 ipproto)
+{
+	skb->inner_ipproto = ipproto;
+	skb->inner_protocol_type = ENCAP_TYPE_IPPROTO;
+}
+
 static inline void skb_reset_inner_headers(struct sk_buff *skb)
 {
 	skb->inner_mac_header = skb->mac_header;
@@ -2085,46 +2185,51 @@ static inline struct sk_buff *netdev_alloc_skb_ip_align(struct net_device *dev,
 }
 
 /**
- *	__skb_alloc_pages - allocate pages for ps-rx on a skb and preserve pfmemalloc data
- *	@gfp_mask: alloc_pages_node mask. Set __GFP_NOMEMALLOC if not for network packet RX
- *	@skb: skb to set pfmemalloc on if __GFP_MEMALLOC is used
- *	@order: size of the allocation
+ * __dev_alloc_pages - allocate page for network Rx
+ * @gfp_mask: allocation priority. Set __GFP_NOMEMALLOC if not for network Rx
+ * @order: size of the allocation
  *
- * 	Allocate a new page.
+ * Allocate a new page.
  *
- * 	%NULL is returned if there is no free memory.
+ * %NULL is returned if there is no free memory.
 */
-static inline struct page *__skb_alloc_pages(gfp_t gfp_mask,
-					      struct sk_buff *skb,
-					      unsigned int order)
+static inline struct page *__dev_alloc_pages(gfp_t gfp_mask,
+					     unsigned int order)
 {
-	struct page *page;
+	/* This piece of code contains several assumptions.
+	 * 1.  This is for device Rx, therefor a cold page is preferred.
+	 * 2.  The expectation is the user wants a compound page.
+	 * 3.  If requesting a order 0 page it will not be compound
+	 *     due to the check to see if order has a value in prep_new_page
+	 * 4.  __GFP_MEMALLOC is ignored if __GFP_NOMEMALLOC is set due to
+	 *     code in gfp_to_alloc_flags that should be enforcing this.
+	 */
+	gfp_mask |= __GFP_COLD | __GFP_COMP | __GFP_MEMALLOC;
 
-	gfp_mask |= __GFP_COLD;
+	return alloc_pages_node(NUMA_NO_NODE, gfp_mask, order);
+}
 
-	if (!(gfp_mask & __GFP_NOMEMALLOC))
-		gfp_mask |= __GFP_MEMALLOC;
-
-	page = alloc_pages_node(NUMA_NO_NODE, gfp_mask, order);
-	if (skb && page && page->pfmemalloc)
-		skb->pfmemalloc = true;
-
-	return page;
+static inline struct page *dev_alloc_pages(unsigned int order)
+{
+	return __dev_alloc_pages(GFP_ATOMIC, order);
 }
 
 /**
- *	__skb_alloc_page - allocate a page for ps-rx for a given skb and preserve pfmemalloc data
- *	@gfp_mask: alloc_pages_node mask. Set __GFP_NOMEMALLOC if not for network packet RX
- *	@skb: skb to set pfmemalloc on if __GFP_MEMALLOC is used
+ * __dev_alloc_page - allocate a page for network Rx
+ * @gfp_mask: allocation priority. Set __GFP_NOMEMALLOC if not for network Rx
  *
- * 	Allocate a new page.
+ * Allocate a new page.
  *
- * 	%NULL is returned if there is no free memory.
+ * %NULL is returned if there is no free memory.
  */
-static inline struct page *__skb_alloc_page(gfp_t gfp_mask,
-					     struct sk_buff *skb)
+static inline struct page *__dev_alloc_page(gfp_t gfp_mask)
 {
-	return __skb_alloc_pages(gfp_mask, skb, 0);
+	return __dev_alloc_pages(gfp_mask, 0);
+}
+
+static inline struct page *dev_alloc_page(void)
+{
+	return __dev_alloc_page(GFP_ATOMIC);
 }
 
 /**
@@ -2539,16 +2644,23 @@ unsigned int datagram_poll(struct file *file, struct socket *sock,
 			   struct poll_table_struct *wait);
 int skb_copy_datagram_iovec(const struct sk_buff *from, int offset,
 			    struct iovec *to, int size);
+static inline int skb_copy_datagram_msg(const struct sk_buff *from, int offset,
+					struct msghdr *msg, int size)
+{
+	return skb_copy_datagram_iovec(from, offset, msg->msg_iov, size);
+}
 int skb_copy_and_csum_datagram_iovec(struct sk_buff *skb, int hlen,
 				     struct iovec *iov);
-int skb_copy_datagram_from_iovec(struct sk_buff *skb, int offset,
-				 const struct iovec *from, int from_offset,
-				 int len);
-int zerocopy_sg_from_iovec(struct sk_buff *skb, const struct iovec *frm,
-			   int offset, size_t count);
-int skb_copy_datagram_const_iovec(const struct sk_buff *from, int offset,
-				  const struct iovec *to, int to_offset,
-				  int size);
+static inline int skb_copy_and_csum_datagram_msg(struct sk_buff *skb, int hlen,
+			    struct msghdr *msg)
+{
+	return skb_copy_and_csum_datagram_iovec(skb, hlen, msg->msg_iov);
+}
+int skb_copy_datagram_from_iter(struct sk_buff *skb, int offset,
+				 struct iov_iter *from, int len);
+int skb_copy_datagram_iter(const struct sk_buff *from, int offset,
+			   struct iov_iter *to, int size);
+int zerocopy_sg_from_iter(struct sk_buff *skb, struct iov_iter *frm);
 void skb_free_datagram(struct sock *sk, struct sk_buff *skb);
 void skb_free_datagram_locked(struct sock *sk, struct sk_buff *skb);
 int skb_kill_datagram(struct sock *sk, struct sk_buff *skb, unsigned int flags);
@@ -2569,6 +2681,19 @@ void skb_scrub_packet(struct sk_buff *skb, bool xnet);
 unsigned int skb_gso_transport_seglen(const struct sk_buff *skb);
 struct sk_buff *skb_segment(struct sk_buff *skb, netdev_features_t features);
 struct sk_buff *skb_vlan_untag(struct sk_buff *skb);
+int skb_ensure_writable(struct sk_buff *skb, int write_len);
+int skb_vlan_pop(struct sk_buff *skb);
+int skb_vlan_push(struct sk_buff *skb, __be16 vlan_proto, u16 vlan_tci);
+
+static inline int memcpy_from_msg(void *data, struct msghdr *msg, int len)
+{
+	return memcpy_fromiovec(data, msg->msg_iov, len);
+}
+
+static inline int memcpy_to_msg(struct msghdr *msg, void *data, int len)
+{
+	return memcpy_toiovec(msg->msg_iov, data, len);
+}
 
 struct skb_checksum_ops {
 	__wsum (*update)(const void *mem, int len, __wsum wsum);
@@ -2689,6 +2814,8 @@ static inline ktime_t net_invalid_timestamp(void)
 {
 	return ktime_set(0, 0);
 }
+
+struct sk_buff *skb_clone_sk(struct sk_buff *skb);
 
 #ifdef CONFIG_NETWORK_PHY_TIMESTAMPING
 
@@ -2975,7 +3102,7 @@ static inline void nf_conntrack_get(struct nf_conntrack *nfct)
 		atomic_inc(&nfct->use);
 }
 #endif
-#ifdef CONFIG_BRIDGE_NETFILTER
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 static inline void nf_bridge_put(struct nf_bridge_info *nf_bridge)
 {
 	if (nf_bridge && atomic_dec_and_test(&nf_bridge->use))
@@ -2993,7 +3120,7 @@ static inline void nf_reset(struct sk_buff *skb)
 	nf_conntrack_put(skb->nfct);
 	skb->nfct = NULL;
 #endif
-#ifdef CONFIG_BRIDGE_NETFILTER
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 	nf_bridge_put(skb->nf_bridge);
 	skb->nf_bridge = NULL;
 #endif
@@ -3007,19 +3134,22 @@ static inline void nf_reset_trace(struct sk_buff *skb)
 }
 
 /* Note: This doesn't put any conntrack and bridge info in dst. */
-static inline void __nf_copy(struct sk_buff *dst, const struct sk_buff *src)
+static inline void __nf_copy(struct sk_buff *dst, const struct sk_buff *src,
+			     bool copy)
 {
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	dst->nfct = src->nfct;
 	nf_conntrack_get(src->nfct);
-	dst->nfctinfo = src->nfctinfo;
+	if (copy)
+		dst->nfctinfo = src->nfctinfo;
 #endif
-#ifdef CONFIG_BRIDGE_NETFILTER
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 	dst->nf_bridge  = src->nf_bridge;
 	nf_bridge_get(src->nf_bridge);
 #endif
 #if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE) || defined(CONFIG_NF_TABLES)
-	dst->nf_trace = src->nf_trace;
+	if (copy)
+		dst->nf_trace = src->nf_trace;
 #endif
 }
 
@@ -3028,10 +3158,10 @@ static inline void nf_copy(struct sk_buff *dst, const struct sk_buff *src)
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	nf_conntrack_put(dst->nfct);
 #endif
-#ifdef CONFIG_BRIDGE_NETFILTER
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 	nf_bridge_put(dst->nf_bridge);
 #endif
-	__nf_copy(dst, src);
+	__nf_copy(dst, src, true);
 }
 
 #ifdef CONFIG_NETWORK_SECMARK
@@ -3216,7 +3346,9 @@ bool skb_partial_csum_set(struct sk_buff *skb, u16 start, u16 off);
 
 int skb_checksum_setup(struct sk_buff *skb, bool recalculate);
 
-u32 __skb_get_poff(const struct sk_buff *skb);
+u32 skb_get_poff(const struct sk_buff *skb);
+u32 __skb_get_poff(const struct sk_buff *skb, void *data,
+		   const struct flow_keys *keys, int hlen);
 
 /**
  * skb_head_is_locked - Determine if the skb->head is locked down

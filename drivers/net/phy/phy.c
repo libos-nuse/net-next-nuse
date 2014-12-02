@@ -352,6 +352,7 @@ int phy_mii_ioctl(struct phy_device *phydev, struct ifreq *ifr, int cmd)
 {
 	struct mii_ioctl_data *mii_data = if_mii(ifr);
 	u16 val = mii_data->val_in;
+	bool change_autoneg = false;
 
 	switch (cmd) {
 	case SIOCGMIIPHY:
@@ -367,22 +368,29 @@ int phy_mii_ioctl(struct phy_device *phydev, struct ifreq *ifr, int cmd)
 		if (mii_data->phy_id == phydev->addr) {
 			switch (mii_data->reg_num) {
 			case MII_BMCR:
-				if ((val & (BMCR_RESET | BMCR_ANENABLE)) == 0)
+				if ((val & (BMCR_RESET | BMCR_ANENABLE)) == 0) {
+					if (phydev->autoneg == AUTONEG_ENABLE)
+						change_autoneg = true;
 					phydev->autoneg = AUTONEG_DISABLE;
-				else
+					if (val & BMCR_FULLDPLX)
+						phydev->duplex = DUPLEX_FULL;
+					else
+						phydev->duplex = DUPLEX_HALF;
+					if (val & BMCR_SPEED1000)
+						phydev->speed = SPEED_1000;
+					else if (val & BMCR_SPEED100)
+						phydev->speed = SPEED_100;
+					else phydev->speed = SPEED_10;
+				}
+				else {
+					if (phydev->autoneg == AUTONEG_DISABLE)
+						change_autoneg = true;
 					phydev->autoneg = AUTONEG_ENABLE;
-				if (!phydev->autoneg && (val & BMCR_FULLDPLX))
-					phydev->duplex = DUPLEX_FULL;
-				else
-					phydev->duplex = DUPLEX_HALF;
-				if (!phydev->autoneg && (val & BMCR_SPEED1000))
-					phydev->speed = SPEED_1000;
-				else if (!phydev->autoneg &&
-					 (val & BMCR_SPEED100))
-					phydev->speed = SPEED_100;
+				}
 				break;
 			case MII_ADVERTISE:
-				phydev->advertising = val;
+				phydev->advertising = mii_adv_to_ethtool_adv_t(val);
+				change_autoneg = true;
 				break;
 			default:
 				/* do nothing */
@@ -396,6 +404,10 @@ int phy_mii_ioctl(struct phy_device *phydev, struct ifreq *ifr, int cmd)
 		if (mii_data->reg_num == MII_BMCR &&
 		    val & BMCR_RESET)
 			return phy_init_hw(phydev);
+
+		if (change_autoneg)
+			return phy_start_aneg(phydev);
+
 		return 0;
 
 	case SIOCSHWTSTAMP:
@@ -1040,31 +1052,31 @@ int phy_init_eee(struct phy_device *phydev, bool clk_stop_enable)
 		/* First check if the EEE ability is supported */
 		eee_cap = phy_read_mmd_indirect(phydev, MDIO_PCS_EEE_ABLE,
 						MDIO_MMD_PCS, phydev->addr);
-		if (eee_cap < 0)
-			return eee_cap;
+		if (eee_cap <= 0)
+			goto eee_exit_err;
 
 		cap = mmd_eee_cap_to_ethtool_sup_t(eee_cap);
 		if (!cap)
-			return -EPROTONOSUPPORT;
+			goto eee_exit_err;
 
 		/* Check which link settings negotiated and verify it in
 		 * the EEE advertising registers.
 		 */
 		eee_lp = phy_read_mmd_indirect(phydev, MDIO_AN_EEE_LPABLE,
 					       MDIO_MMD_AN, phydev->addr);
-		if (eee_lp < 0)
-			return eee_lp;
+		if (eee_lp <= 0)
+			goto eee_exit_err;
 
 		eee_adv = phy_read_mmd_indirect(phydev, MDIO_AN_EEE_ADV,
 						MDIO_MMD_AN, phydev->addr);
-		if (eee_adv < 0)
-			return eee_adv;
+		if (eee_adv <= 0)
+			goto eee_exit_err;
 
 		adv = mmd_eee_adv_to_ethtool_adv_t(eee_adv);
 		lp = mmd_eee_adv_to_ethtool_adv_t(eee_lp);
 		idx = phy_find_setting(phydev->speed, phydev->duplex);
 		if (!(lp & adv & settings[idx].setting))
-			return -EPROTONOSUPPORT;
+			goto eee_exit_err;
 
 		if (clk_stop_enable) {
 			/* Configure the PHY to stop receiving xMII
@@ -1084,7 +1096,7 @@ int phy_init_eee(struct phy_device *phydev, bool clk_stop_enable)
 
 		return 0; /* EEE supported */
 	}
-
+eee_exit_err:
 	return -EPROTONOSUPPORT;
 }
 EXPORT_SYMBOL(phy_init_eee);

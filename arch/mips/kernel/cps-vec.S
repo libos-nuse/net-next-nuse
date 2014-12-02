@@ -13,6 +13,7 @@
 #include <asm/asm-offsets.h>
 #include <asm/asmmacro.h>
 #include <asm/cacheops.h>
+#include <asm/eva.h>
 #include <asm/mipsregs.h>
 #include <asm/mipsmtregs.h>
 #include <asm/pm.h>
@@ -166,6 +167,9 @@ dcache_done:
 1:	jal	mips_cps_core_init
 	 nop
 
+	/* Do any EVA initialization if necessary */
+	eva_init
+
 	/*
 	 * Boot any other VPEs within this core that should be online, and
 	 * deactivate this VPE if it should be offline.
@@ -225,6 +229,7 @@ LEAF(mips_cps_core_init)
 	 nop
 
 	.set	push
+	.set	mips32r2
 	.set	mt
 
 	/* Only allow 1 TC per VPE to execute... */
@@ -341,6 +346,7 @@ LEAF(mips_cps_boot_vpes)
 	 nop
 
 	.set	push
+	.set	mips32r2
 	.set	mt
 
 1:	/* Enter VPE configuration state */

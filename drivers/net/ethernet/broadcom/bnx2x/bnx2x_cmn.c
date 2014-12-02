@@ -1139,7 +1139,7 @@ static irqreturn_t bnx2x_msix_fp_int(int irq, void *fp_cookie)
 		prefetch(fp->txdata_ptr[cos]->tx_cons_sb);
 
 	prefetch(&fp->sb_running_index[SM_RX_ID]);
-	napi_schedule(&bnx2x_fp(bp, fp->index, napi));
+	napi_schedule_irqoff(&bnx2x_fp(bp, fp->index, napi));
 
 	return IRQ_HANDLED;
 }
@@ -1938,7 +1938,7 @@ void bnx2x_set_num_queues(struct bnx2x *bp)
 	bp->num_ethernet_queues = bnx2x_calc_num_queues(bp);
 
 	/* override in STORAGE SD modes */
-	if (IS_MF_STORAGE_SD(bp) || IS_MF_FCOE_AFEX(bp))
+	if (IS_MF_STORAGE_ONLY(bp))
 		bp->num_ethernet_queues = 1;
 
 	/* Add special queues */
@@ -2099,7 +2099,7 @@ int bnx2x_rss(struct bnx2x *bp, struct bnx2x_rss_config_obj *rss_obj,
 
 	if (config_hash) {
 		/* RSS keys */
-		prandom_bytes(params.rss_key, T_ETH_RSS_KEY * 4);
+		netdev_rss_key_fill(params.rss_key, T_ETH_RSS_KEY * 4);
 		__set_bit(BNX2X_RSS_SET_SRCH, &params.rss_flags);
 	}
 
@@ -4231,14 +4231,13 @@ int bnx2x_change_mac_addr(struct net_device *dev, void *p)
 	struct bnx2x *bp = netdev_priv(dev);
 	int rc = 0;
 
-	if (!bnx2x_is_valid_ether_addr(bp, addr->sa_data)) {
+	if (!is_valid_ether_addr(addr->sa_data)) {
 		BNX2X_ERR("Requested MAC address is not valid\n");
 		return -EINVAL;
 	}
 
-	if ((IS_MF_STORAGE_SD(bp) || IS_MF_FCOE_AFEX(bp)) &&
-	    !is_zero_ether_addr(addr->sa_data)) {
-		BNX2X_ERR("Can't configure non-zero address on iSCSI or FCoE functions in MF-SD mode\n");
+	if (IS_MF_STORAGE_ONLY(bp)) {
+		BNX2X_ERR("Can't change address on STORAGE ONLY function\n");
 		return -EINVAL;
 	}
 
@@ -4417,8 +4416,7 @@ static int bnx2x_alloc_fp_mem_at(struct bnx2x *bp, int index)
 	u8 cos;
 	int rx_ring_size = 0;
 
-	if (!bp->rx_ring_size &&
-	    (IS_MF_STORAGE_SD(bp) || IS_MF_FCOE_AFEX(bp))) {
+	if (!bp->rx_ring_size && IS_MF_STORAGE_ONLY(bp)) {
 		rx_ring_size = MIN_RX_SIZE_NONTPA;
 		bp->rx_ring_size = rx_ring_size;
 	} else if (!bp->rx_ring_size) {

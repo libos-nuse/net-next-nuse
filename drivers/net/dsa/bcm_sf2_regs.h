@@ -25,6 +25,7 @@
 #define  SWITCH_TOP_REV_MASK		0xffff
 
 #define REG_PHY_REVISION		0x1C
+#define  PHY_REVISION_MASK		0xffff
 
 #define REG_SPHY_CNTRL			0x2C
 #define  IDDQ_BIAS			(1 << 0)
@@ -223,5 +224,8 @@
 
 #define CORE_PORT_VLAN_CTL_PORT(x)	(0xc400 + ((x) * 0x8))
 #define  PORT_VLAN_CTRL_MASK		0x1ff
+
+#define CORE_EEE_EN_CTRL		0x24800
+#define CORE_EEE_LPI_INDICATE		0x24810
 
 #endif /* __BCM_SF2_REGS_H */

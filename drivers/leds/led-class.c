@@ -9,25 +9,20 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/init.h>
-#include <linux/list.h>
-#include <linux/spinlock.h>
+#include <linux/ctype.h>
 #include <linux/device.h>
 #include <linux/err.h>
-#include <linux/ctype.h>
+#include <linux/init.h>
+#include <linux/kernel.h>
 #include <linux/leds.h>
-#include <linux/workqueue.h>
+#include <linux/list.h>
+#include <linux/module.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
+#include <linux/timer.h>
 #include "leds.h"
 
 static struct class *leds_class;
-
-static void led_update_brightness(struct led_classdev *led_cdev)
-{
-	if (led_cdev->brightness_get)
-		led_cdev->brightness = led_cdev->brightness_get(led_cdev);
-}
 
 static ssize_t brightness_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -59,14 +54,14 @@ static ssize_t brightness_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(brightness);
 
-static ssize_t led_max_brightness_show(struct device *dev,
+static ssize_t max_brightness_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%u\n", led_cdev->max_brightness);
 }
-static DEVICE_ATTR(max_brightness, 0444, led_max_brightness_show, NULL);
+static DEVICE_ATTR_RO(max_brightness);
 
 #ifdef CONFIG_LEDS_TRIGGERS
 static DEVICE_ATTR(trigger, 0644, led_trigger_show, led_trigger_store);
@@ -97,10 +92,9 @@ static const struct attribute_group *led_groups[] = {
 	NULL,
 };
 
-static void led_work_function(struct work_struct *ws)
+static void led_timer_function(unsigned long data)
 {
-	struct led_classdev *led_cdev =
-		container_of(ws, struct led_classdev, blink_work.work);
+	struct led_classdev *led_cdev = (void *)data;
 	unsigned long brightness;
 	unsigned long delay;
 
@@ -144,8 +138,7 @@ static void led_work_function(struct work_struct *ws)
 		}
 	}
 
-	queue_delayed_work(system_wq, &led_cdev->blink_work,
-			   msecs_to_jiffies(delay));
+	mod_timer(&led_cdev->blink_timer, jiffies + msecs_to_jiffies(delay));
 }
 
 static void set_brightness_delayed(struct work_struct *ws)
@@ -233,7 +226,9 @@ int led_classdev_register(struct device *parent, struct led_classdev *led_cdev)
 
 	INIT_WORK(&led_cdev->set_brightness_work, set_brightness_delayed);
 
-	INIT_DELAYED_WORK(&led_cdev->blink_work, led_work_function);
+	init_timer(&led_cdev->blink_timer);
+	led_cdev->blink_timer.function = led_timer_function;
+	led_cdev->blink_timer.data = (unsigned long)led_cdev;
 
 #ifdef CONFIG_LEDS_TRIGGERS
 	led_trigger_set_default(led_cdev);

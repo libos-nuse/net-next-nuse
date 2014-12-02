@@ -51,16 +51,16 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		if (security_sb_alloc(s)) {
 			kfree(s);
 			s = NULL;
-			goto out;
+			goto fail;
 		}
 		s->s_bdi = &default_backing_dev_info;
 		INIT_HLIST_NODE(&s->s_instances);
 		INIT_HLIST_BL_HEAD(&s->s_anon);
 		INIT_LIST_HEAD(&s->s_inodes);
 		if (list_lru_init(&s->s_dentry_lru))
-			goto out;
+			goto fail;
 		if (list_lru_init(&s->s_inode_lru))
-			goto out;
+			goto fail;
 		INIT_LIST_HEAD(&s->s_mounts);
 		init_rwsem(&s->s_umount);
 		/*
@@ -93,9 +93,11 @@ static struct super_block *alloc_super(struct file_system_type *type)
 
 		s->s_shrink.seeks = DEFAULT_SEEKS;
 		s->s_shrink.batch = 1024;
+		return s;
 	}
-out:
-	return s;
+fail:
+	destroy_super(s);
+	return NULL;
 }
 
 /**

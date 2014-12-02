@@ -13,6 +13,7 @@
 #include <linux/if_pppox.h>
 #include <linux/ppp_defs.h>
 #include <net/flow_keys.h>
+#include <scsi/fc/fc_fcoe.h>
 
 /* copy saddr & daddr, possibly using 64bit load/store
  * Equivalent to :	flow->src = iph->saddr;
@@ -99,6 +100,13 @@ ip:
 		if (ip_is_fragment(iph))
 			ip_proto = 0;
 
+		/* skip the address processing if skb is NULL.  The assumption
+		 * here is that if there is no skb we are not looking for flow
+		 * info but lengths and protocols.
+		 */
+		if (!skb)
+			break;
+
 		iph_to_flow_copy_addrs(flow, iph);
 		break;
 	}
@@ -113,9 +121,14 @@ ipv6:
 			return false;
 
 		ip_proto = iph->nexthdr;
+		nhoff += sizeof(struct ipv6hdr);
+
+		/* see comment above in IPv4 section */
+		if (!skb)
+			break;
+
 		flow->src = (__force __be32)ipv6_addr_hash(&iph->saddr);
 		flow->dst = (__force __be32)ipv6_addr_hash(&iph->daddr);
-		nhoff += sizeof(struct ipv6hdr);
 
 		flow_label = ip6_flowlabel(iph);
 		if (flow_label) {
@@ -165,6 +178,9 @@ ipv6:
 			return false;
 		}
 	}
+	case htons(ETH_P_FCOE):
+		flow->thoff = (u16)(nhoff + FCOE_HEADER_LEN);
+		/* fall through */
 	default:
 		return false;
 	}
@@ -220,8 +236,12 @@ ipv6:
 
 	flow->n_proto = proto;
 	flow->ip_proto = ip_proto;
-	flow->ports = __skb_flow_get_ports(skb, nhoff, ip_proto, data, hlen);
 	flow->thoff = (u16) nhoff;
+
+	/* unless skb is set we don't need to record port info */
+	if (skb)
+		flow->ports = __skb_flow_get_ports(skb, nhoff, ip_proto,
+						   data, hlen);
 
 	return true;
 }
@@ -316,30 +336,23 @@ u16 __skb_tx_hash(const struct net_device *dev, struct sk_buff *skb,
 }
 EXPORT_SYMBOL(__skb_tx_hash);
 
-/* __skb_get_poff() returns the offset to the payload as far as it could
- * be dissected. The main user is currently BPF, so that we can dynamically
- * truncate packets without needing to push actual payload to the user
- * space and can analyze headers only, instead.
- */
-u32 __skb_get_poff(const struct sk_buff *skb)
+u32 __skb_get_poff(const struct sk_buff *skb, void *data,
+		   const struct flow_keys *keys, int hlen)
 {
-	struct flow_keys keys;
-	u32 poff = 0;
+	u32 poff = keys->thoff;
 
-	if (!skb_flow_dissect(skb, &keys))
-		return 0;
-
-	poff += keys.thoff;
-	switch (keys.ip_proto) {
+	switch (keys->ip_proto) {
 	case IPPROTO_TCP: {
-		const struct tcphdr *tcph;
-		struct tcphdr _tcph;
+		/* access doff as u8 to avoid unaligned access */
+		const u8 *doff;
+		u8 _doff;
 
-		tcph = skb_header_pointer(skb, poff, sizeof(_tcph), &_tcph);
-		if (!tcph)
+		doff = __skb_header_pointer(skb, poff + 12, sizeof(_doff),
+					    data, hlen, &_doff);
+		if (!doff)
 			return poff;
 
-		poff += max_t(u32, sizeof(struct tcphdr), tcph->doff * 4);
+		poff += max_t(u32, sizeof(struct tcphdr), (*doff & 0xF0) >> 2);
 		break;
 	}
 	case IPPROTO_UDP:
@@ -367,6 +380,21 @@ u32 __skb_get_poff(const struct sk_buff *skb)
 	}
 
 	return poff;
+}
+
+/* skb_get_poff() returns the offset to the payload as far as it could
+ * be dissected. The main user is currently BPF, so that we can dynamically
+ * truncate packets without needing to push actual payload to the user
+ * space and can analyze headers only, instead.
+ */
+u32 skb_get_poff(const struct sk_buff *skb)
+{
+	struct flow_keys keys;
+
+	if (!skb_flow_dissect(skb, &keys))
+		return 0;
+
+	return __skb_get_poff(skb, skb->data, &keys, skb_headlen(skb));
 }
 
 static inline int get_xps_queue(struct net_device *dev, struct sk_buff *skb)

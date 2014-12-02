@@ -188,18 +188,18 @@ static void send_act_open_req(struct cxgbi_sock *csk, struct sk_buff *skb,
 	unsigned int qid_atid = ((unsigned int)csk->atid) |
 				 (((unsigned int)csk->rss_qid) << 14);
 
-	opt0 = KEEP_ALIVE(1) |
-		WND_SCALE(wscale) |
-		MSS_IDX(csk->mss_idx) |
-		L2T_IDX(((struct l2t_entry *)csk->l2t)->idx) |
-		TX_CHAN(csk->tx_chan) |
-		SMAC_SEL(csk->smac_idx) |
-		ULP_MODE(ULP_MODE_ISCSI) |
-		RCV_BUFSIZ(cxgb4i_rcv_win >> 10);
-	opt2 = RX_CHANNEL(0) |
-		RSS_QUEUE_VALID |
-		(1 << 20) |
-		RSS_QUEUE(csk->rss_qid);
+	opt0 = KEEP_ALIVE_F |
+		WND_SCALE_V(wscale) |
+		MSS_IDX_V(csk->mss_idx) |
+		L2T_IDX_V(((struct l2t_entry *)csk->l2t)->idx) |
+		TX_CHAN_V(csk->tx_chan) |
+		SMAC_SEL_V(csk->smac_idx) |
+		ULP_MODE_V(ULP_MODE_ISCSI) |
+		RCV_BUFSIZ_V(cxgb4i_rcv_win >> 10);
+	opt2 = RX_CHANNEL_V(0) |
+		RSS_QUEUE_VALID_F |
+		(RX_FC_DISABLE_F) |
+		RSS_QUEUE_V(csk->rss_qid);
 
 	if (is_t4(lldi->adapter_type)) {
 		struct cpl_act_open_req *req =
@@ -216,7 +216,7 @@ static void send_act_open_req(struct cxgbi_sock *csk, struct sk_buff *skb,
 		req->params = cpu_to_be32(cxgb4_select_ntuple(
 					csk->cdev->ports[csk->port_id],
 					csk->l2t));
-		opt2 |= 1 << 22;
+		opt2 |= RX_FC_VALID_F;
 		req->opt2 = cpu_to_be32(opt2);
 
 		log_debug(1 << CXGBI_DBG_TOE | 1 << CXGBI_DBG_SOCK,
@@ -236,7 +236,7 @@ static void send_act_open_req(struct cxgbi_sock *csk, struct sk_buff *skb,
 		req->local_ip = csk->saddr.sin_addr.s_addr;
 		req->peer_ip = csk->daddr.sin_addr.s_addr;
 		req->opt0 = cpu_to_be64(opt0);
-		req->params = cpu_to_be64(V_FILTER_TUPLE(
+		req->params = cpu_to_be64(FILTER_TUPLE_V(
 				cxgb4_select_ntuple(
 					csk->cdev->ports[csk->port_id],
 					csk->l2t)));
@@ -259,6 +259,7 @@ static void send_act_open_req(struct cxgbi_sock *csk, struct sk_buff *skb,
 	cxgb4_l2t_send(csk->cdev->ports[csk->port_id], skb, csk->l2t);
 }
 
+#if IS_ENABLED(CONFIG_IPV6)
 static void send_act_open_req6(struct cxgbi_sock *csk, struct sk_buff *skb,
 			       struct l2t_entry *e)
 {
@@ -270,19 +271,19 @@ static void send_act_open_req6(struct cxgbi_sock *csk, struct sk_buff *skb,
 	unsigned int qid_atid = ((unsigned int)csk->atid) |
 				 (((unsigned int)csk->rss_qid) << 14);
 
-	opt0 = KEEP_ALIVE(1) |
-		WND_SCALE(wscale) |
-		MSS_IDX(csk->mss_idx) |
-		L2T_IDX(((struct l2t_entry *)csk->l2t)->idx) |
-		TX_CHAN(csk->tx_chan) |
-		SMAC_SEL(csk->smac_idx) |
-		ULP_MODE(ULP_MODE_ISCSI) |
-		RCV_BUFSIZ(cxgb4i_rcv_win >> 10);
+	opt0 = KEEP_ALIVE_F |
+		WND_SCALE_V(wscale) |
+		MSS_IDX_V(csk->mss_idx) |
+		L2T_IDX_V(((struct l2t_entry *)csk->l2t)->idx) |
+		TX_CHAN_V(csk->tx_chan) |
+		SMAC_SEL_V(csk->smac_idx) |
+		ULP_MODE_V(ULP_MODE_ISCSI) |
+		RCV_BUFSIZ_V(cxgb4i_rcv_win >> 10);
 
-	opt2 = RX_CHANNEL(0) |
-		RSS_QUEUE_VALID |
-		RX_FC_DISABLE |
-		RSS_QUEUE(csk->rss_qid);
+	opt2 = RX_CHANNEL_V(0) |
+		RSS_QUEUE_VALID_F |
+		RX_FC_DISABLE_F |
+		RSS_QUEUE_V(csk->rss_qid);
 
 	if (t4) {
 		struct cpl_act_open_req6 *req =
@@ -303,7 +304,7 @@ static void send_act_open_req6(struct cxgbi_sock *csk, struct sk_buff *skb,
 
 		req->opt0 = cpu_to_be64(opt0);
 
-		opt2 |= RX_FC_VALID;
+		opt2 |= RX_FC_VALID_F;
 		req->opt2 = cpu_to_be32(opt2);
 
 		req->params = cpu_to_be32(cxgb4_select_ntuple(
@@ -326,10 +327,10 @@ static void send_act_open_req6(struct cxgbi_sock *csk, struct sk_buff *skb,
 									8);
 		req->opt0 = cpu_to_be64(opt0);
 
-		opt2 |= T5_OPT_2_VALID;
+		opt2 |= T5_OPT_2_VALID_F;
 		req->opt2 = cpu_to_be32(opt2);
 
-		req->params = cpu_to_be64(V_FILTER_TUPLE(cxgb4_select_ntuple(
+		req->params = cpu_to_be64(FILTER_TUPLE_V(cxgb4_select_ntuple(
 					  csk->cdev->ports[csk->port_id],
 					  csk->l2t)));
 	}
@@ -344,6 +345,7 @@ static void send_act_open_req6(struct cxgbi_sock *csk, struct sk_buff *skb,
 
 	cxgb4_l2t_send(csk->cdev->ports[csk->port_id], skb, csk->l2t);
 }
+#endif
 
 static void send_close_req(struct cxgbi_sock *csk)
 {
@@ -449,7 +451,8 @@ static u32 send_rx_credits(struct cxgbi_sock *csk, u32 credits)
 	INIT_TP_WR(req, csk->tid);
 	OPCODE_TID(req) = cpu_to_be32(MK_OPCODE_TID(CPL_RX_DATA_ACK,
 				      csk->tid));
-	req->credit_dack = cpu_to_be32(RX_CREDITS(credits) | RX_FORCE_ACK(1));
+	req->credit_dack = cpu_to_be32(RX_CREDITS_V(credits)
+				       | RX_FORCE_ACK_F);
 	cxgb4_ofld_send(csk->cdev->ports[csk->port_id], skb);
 	return credits;
 }
@@ -497,10 +500,10 @@ static inline void send_tx_flowc_wr(struct cxgbi_sock *csk)
 	skb = alloc_wr(flowclen, 0, GFP_ATOMIC);
 	flowc = (struct fw_flowc_wr *)skb->head;
 	flowc->op_to_nparams =
-		htonl(FW_WR_OP(FW_FLOWC_WR) | FW_FLOWC_WR_NPARAMS(8));
+		htonl(FW_WR_OP_V(FW_FLOWC_WR) | FW_FLOWC_WR_NPARAMS_V(8));
 	flowc->flowid_len16 =
-		htonl(FW_WR_LEN16(DIV_ROUND_UP(72, 16)) |
-				FW_WR_FLOWID(csk->tid));
+		htonl(FW_WR_LEN16_V(DIV_ROUND_UP(72, 16)) |
+				FW_WR_FLOWID_V(csk->tid));
 	flowc->mnemval[0].mnemonic = FW_FLOWC_MNEM_PFNVFN;
 	flowc->mnemval[0].val = htonl(csk->cdev->pfvf);
 	flowc->mnemval[1].mnemonic = FW_FLOWC_MNEM_CH;
@@ -540,30 +543,31 @@ static inline void make_tx_data_wr(struct cxgbi_sock *csk, struct sk_buff *skb,
 {
 	struct fw_ofld_tx_data_wr *req;
 	unsigned int submode = cxgbi_skcb_ulp_mode(skb) & 3;
-	unsigned int wr_ulp_mode = 0;
+	unsigned int wr_ulp_mode = 0, val;
 
 	req = (struct fw_ofld_tx_data_wr *)__skb_push(skb, sizeof(*req));
 
 	if (is_ofld_imm(skb)) {
-		req->op_to_immdlen = htonl(FW_WR_OP(FW_OFLD_TX_DATA_WR) |
-					FW_WR_COMPL(1) |
-					FW_WR_IMMDLEN(dlen));
-		req->flowid_len16 = htonl(FW_WR_FLOWID(csk->tid) |
-						FW_WR_LEN16(credits));
+		req->op_to_immdlen = htonl(FW_WR_OP_V(FW_OFLD_TX_DATA_WR) |
+					FW_WR_COMPL_F |
+					FW_WR_IMMDLEN_V(dlen));
+		req->flowid_len16 = htonl(FW_WR_FLOWID_V(csk->tid) |
+						FW_WR_LEN16_V(credits));
 	} else {
 		req->op_to_immdlen =
-			cpu_to_be32(FW_WR_OP(FW_OFLD_TX_DATA_WR) |
-					FW_WR_COMPL(1) |
-					FW_WR_IMMDLEN(0));
+			cpu_to_be32(FW_WR_OP_V(FW_OFLD_TX_DATA_WR) |
+					FW_WR_COMPL_F |
+					FW_WR_IMMDLEN_V(0));
 		req->flowid_len16 =
-			cpu_to_be32(FW_WR_FLOWID(csk->tid) |
-					FW_WR_LEN16(credits));
+			cpu_to_be32(FW_WR_FLOWID_V(csk->tid) |
+					FW_WR_LEN16_V(credits));
 	}
 	if (submode)
-		wr_ulp_mode = FW_OFLD_TX_DATA_WR_ULPMODE(ULP2_MODE_ISCSI) |
-				FW_OFLD_TX_DATA_WR_ULPSUBMODE(submode);
+		wr_ulp_mode = FW_OFLD_TX_DATA_WR_ULPMODE_V(ULP2_MODE_ISCSI) |
+				FW_OFLD_TX_DATA_WR_ULPSUBMODE_V(submode);
+	val = skb_peek(&csk->write_queue) ? 0 : 1;
 	req->tunnel_to_proxy = htonl(wr_ulp_mode |
-		 FW_OFLD_TX_DATA_WR_SHOVE(skb_peek(&csk->write_queue) ? 0 : 1));
+				     FW_OFLD_TX_DATA_WR_SHOVE_V(val));
 	req->plen = htonl(len);
 	if (!cxgbi_sock_flag(csk, CTPF_TX_DATA_SENT))
 		cxgbi_sock_set_flag(csk, CTPF_TX_DATA_SENT);
@@ -756,7 +760,7 @@ static int act_open_rpl_status_to_errno(int status)
 
 static void csk_act_open_retry_timer(unsigned long data)
 {
-	struct sk_buff *skb;
+	struct sk_buff *skb = NULL;
 	struct cxgbi_sock *csk = (struct cxgbi_sock *)data;
 	struct cxgb4_lld_info *lldi = cxgbi_cdev_priv(csk->cdev);
 	void (*send_act_open_func)(struct cxgbi_sock *, struct sk_buff *,
@@ -781,9 +785,11 @@ static void csk_act_open_retry_timer(unsigned long data)
 	if (csk->csk_family == AF_INET) {
 		send_act_open_func = send_act_open_req;
 		skb = alloc_wr(size, 0, GFP_ATOMIC);
+#if IS_ENABLED(CONFIG_IPV6)
 	} else {
 		send_act_open_func = send_act_open_req6;
 		skb = alloc_wr(size6, 0, GFP_ATOMIC);
+#endif
 	}
 
 	if (!skb)
@@ -823,6 +829,8 @@ static void do_act_open_rpl(struct cxgbi_device *cdev, struct sk_buff *skb)
 
 	if (status == CPL_ERR_RTX_NEG_ADVICE)
 		goto rel_skb;
+
+	module_put(THIS_MODULE);
 
 	if (status && status != CPL_ERR_TCAM_FULL &&
 	    status != CPL_ERR_CONN_EXIST &&
@@ -932,20 +940,23 @@ static void do_abort_req_rss(struct cxgbi_device *cdev, struct sk_buff *skb)
 	cxgbi_sock_get(csk);
 	spin_lock_bh(&csk->lock);
 
-	if (!cxgbi_sock_flag(csk, CTPF_ABORT_REQ_RCVD)) {
-		cxgbi_sock_set_flag(csk, CTPF_ABORT_REQ_RCVD);
-		cxgbi_sock_set_state(csk, CTP_ABORTING);
-		goto done;
+	cxgbi_sock_clear_flag(csk, CTPF_ABORT_REQ_RCVD);
+
+	if (!cxgbi_sock_flag(csk, CTPF_TX_DATA_SENT)) {
+		send_tx_flowc_wr(csk);
+		cxgbi_sock_set_flag(csk, CTPF_TX_DATA_SENT);
 	}
 
-	cxgbi_sock_clear_flag(csk, CTPF_ABORT_REQ_RCVD);
+	cxgbi_sock_set_flag(csk, CTPF_ABORT_REQ_RCVD);
+	cxgbi_sock_set_state(csk, CTP_ABORTING);
+
 	send_abort_rpl(csk, rst_status);
 
 	if (!cxgbi_sock_flag(csk, CTPF_ABORT_RPL_PENDING)) {
 		csk->err = abort_status_to_errno(csk, req->status, &rst_status);
 		cxgbi_sock_closed(csk);
 	}
-done:
+
 	spin_unlock_bh(&csk->lock);
 	cxgbi_sock_put(csk);
 rel_skb:
@@ -1313,11 +1324,6 @@ static int init_act_open(struct cxgbi_sock *csk)
 	cxgbi_sock_set_flag(csk, CTPF_HAS_ATID);
 	cxgbi_sock_get(csk);
 
-	n = dst_neigh_lookup(csk->dst, &csk->daddr.sin_addr.s_addr);
-	if (!n) {
-		pr_err("%s, can't get neighbour of csk->dst.\n", ndev->name);
-		goto rel_resource;
-	}
 	csk->l2t = cxgb4_l2t_get(lldi->l2t, n, ndev, 0);
 	if (!csk->l2t) {
 		pr_err("%s, cannot alloc l2t.\n", ndev->name);
@@ -1335,8 +1341,10 @@ static int init_act_open(struct cxgbi_sock *csk)
 
 	if (csk->csk_family == AF_INET)
 		skb = alloc_wr(size, 0, GFP_NOIO);
+#if IS_ENABLED(CONFIG_IPV6)
 	else
 		skb = alloc_wr(size6, 0, GFP_NOIO);
+#endif
 
 	if (!skb)
 		goto rel_resource;
@@ -1370,8 +1378,10 @@ static int init_act_open(struct cxgbi_sock *csk)
 	cxgbi_sock_set_state(csk, CTP_ACTIVE_OPEN);
 	if (csk->csk_family == AF_INET)
 		send_act_open_req(csk, skb, csk->l2t);
+#if IS_ENABLED(CONFIG_IPV6)
 	else
 		send_act_open_req6(csk, skb, csk->l2t);
+#endif
 	neigh_release(n);
 
 	return 0;
@@ -1436,16 +1446,16 @@ static inline void ulp_mem_io_set_hdr(struct cxgb4_lld_info *lldi,
 
 	INIT_ULPTX_WR(req, wr_len, 0, 0);
 	if (is_t4(lldi->adapter_type))
-		req->cmd = htonl(ULPTX_CMD(ULP_TX_MEM_WRITE) |
-					(ULP_MEMIO_ORDER(1)));
+		req->cmd = htonl(ULPTX_CMD_V(ULP_TX_MEM_WRITE) |
+					(ULP_MEMIO_ORDER_F));
 	else
-		req->cmd = htonl(ULPTX_CMD(ULP_TX_MEM_WRITE) |
-					(V_T5_ULP_MEMIO_IMM(1)));
-	req->dlen = htonl(ULP_MEMIO_DATA_LEN(dlen >> 5));
-	req->lock_addr = htonl(ULP_MEMIO_ADDR(pm_addr >> 5));
+		req->cmd = htonl(ULPTX_CMD_V(ULP_TX_MEM_WRITE) |
+					(T5_ULP_MEMIO_IMM_F));
+	req->dlen = htonl(ULP_MEMIO_DATA_LEN_V(dlen >> 5));
+	req->lock_addr = htonl(ULP_MEMIO_ADDR_V(pm_addr >> 5));
 	req->len16 = htonl(DIV_ROUND_UP(wr_len - sizeof(req->wr), 16));
 
-	idata->cmd_more = htonl(ULPTX_CMD(ULP_TX_SC_IMM));
+	idata->cmd_more = htonl(ULPTX_CMD_V(ULP_TX_SC_IMM));
 	idata->len = htonl(dlen);
 }
 
@@ -1635,129 +1645,6 @@ static int cxgb4i_ddp_init(struct cxgbi_device *cdev)
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_IPV6)
-static int cxgbi_inet6addr_handler(struct notifier_block *this,
-				   unsigned long event, void *data)
-{
-	struct inet6_ifaddr *ifa = data;
-	struct net_device *event_dev = ifa->idev->dev;
-	struct cxgbi_device *cdev;
-	int ret = NOTIFY_DONE;
-
-	if (event_dev->priv_flags & IFF_802_1Q_VLAN)
-		event_dev = vlan_dev_real_dev(event_dev);
-
-	cdev = cxgbi_device_find_by_netdev(event_dev, NULL);
-
-	if (!cdev)
-		return ret;
-
-	switch (event) {
-	case NETDEV_UP:
-		ret = cxgb4_clip_get(event_dev,
-				     (const struct in6_addr *)
-				     ((ifa)->addr.s6_addr));
-		if (ret < 0)
-			return ret;
-
-		ret = NOTIFY_OK;
-		break;
-
-	case NETDEV_DOWN:
-		cxgb4_clip_release(event_dev,
-				   (const struct in6_addr *)
-				   ((ifa)->addr.s6_addr));
-		ret = NOTIFY_OK;
-		break;
-
-	default:
-		break;
-	}
-
-	return ret;
-}
-
-static struct notifier_block cxgbi_inet6addr_notifier = {
-	.notifier_call = cxgbi_inet6addr_handler
-};
-
-/* Retrieve IPv6 addresses from a root device (bond, vlan) associated with
- * a physical device.
- * The physical device reference is needed to send the actual CLIP command.
- */
-static int update_dev_clip(struct net_device *root_dev, struct net_device *dev)
-{
-	struct inet6_dev *idev = NULL;
-	struct inet6_ifaddr *ifa;
-	int ret = 0;
-
-	idev = __in6_dev_get(root_dev);
-	if (!idev)
-		return ret;
-
-	read_lock_bh(&idev->lock);
-	list_for_each_entry(ifa, &idev->addr_list, if_list) {
-		pr_info("updating the clip for addr %pI6\n",
-			ifa->addr.s6_addr);
-		ret = cxgb4_clip_get(dev, (const struct in6_addr *)
-				     ifa->addr.s6_addr);
-		if (ret < 0)
-			break;
-	}
-
-	read_unlock_bh(&idev->lock);
-	return ret;
-}
-
-static int update_root_dev_clip(struct net_device *dev)
-{
-	struct net_device *root_dev = NULL;
-	int i, ret = 0;
-
-	/* First populate the real net device's IPv6 address */
-	ret = update_dev_clip(dev, dev);
-	if (ret)
-		return ret;
-
-	/* Parse all bond and vlan devices layered on top of the physical dev */
-	root_dev = netdev_master_upper_dev_get(dev);
-	if (root_dev) {
-		ret = update_dev_clip(root_dev, dev);
-		if (ret)
-			return ret;
-	}
-
-	for (i = 0; i < VLAN_N_VID; i++) {
-		root_dev = __vlan_find_dev_deep_rcu(dev, htons(ETH_P_8021Q), i);
-		if (!root_dev)
-			continue;
-
-		ret = update_dev_clip(root_dev, dev);
-		if (ret)
-			break;
-	}
-	return ret;
-}
-
-static void cxgbi_update_clip(struct cxgbi_device *cdev)
-{
-	int i;
-
-	rcu_read_lock();
-
-	for (i = 0; i < cdev->nports; i++) {
-		struct net_device *dev = cdev->ports[i];
-		int ret = 0;
-
-		if (dev)
-			ret = update_root_dev_clip(dev);
-		if (ret < 0)
-			break;
-	}
-	rcu_read_unlock();
-}
-#endif /* IS_ENABLED(CONFIG_IPV6) */
-
 static void *t4_uld_add(const struct cxgb4_lld_info *lldi)
 {
 	struct cxgbi_device *cdev;
@@ -1792,7 +1679,8 @@ static void *t4_uld_add(const struct cxgb4_lld_info *lldi)
 	cdev->skb_rx_extra = sizeof(struct cpl_iscsi_hdr);
 	cdev->itp = &cxgb4i_iscsi_transport;
 
-	cdev->pfvf = FW_VIID_PFN_GET(cxgb4_port_viid(lldi->ports[0])) << 8;
+	cdev->pfvf = FW_VIID_PFN_G(cxgb4_port_viid(lldi->ports[0]))
+			<< FW_VIID_PFN_S;
 	pr_info("cdev 0x%p,%s, pfvf %u.\n",
 		cdev, lldi->ports[0]->name, cdev->pfvf);
 
@@ -1876,10 +1764,6 @@ static int t4_uld_state_change(void *handle, enum cxgb4_state state)
 	switch (state) {
 	case CXGB4_STATE_UP:
 		pr_info("cdev 0x%p, UP.\n", cdev);
-#if IS_ENABLED(CONFIG_IPV6)
-		cxgbi_update_clip(cdev);
-#endif
-		/* re-initialize */
 		break;
 	case CXGB4_STATE_START_RECOVERY:
 		pr_info("cdev 0x%p, RECOVERY.\n", cdev);
@@ -1910,17 +1794,11 @@ static int __init cxgb4i_init_module(void)
 		return rc;
 	cxgb4_register_uld(CXGB4_ULD_ISCSI, &cxgb4i_uld_info);
 
-#if IS_ENABLED(CONFIG_IPV6)
-	register_inet6addr_notifier(&cxgbi_inet6addr_notifier);
-#endif
 	return 0;
 }
 
 static void __exit cxgb4i_exit_module(void)
 {
-#if IS_ENABLED(CONFIG_IPV6)
-	unregister_inet6addr_notifier(&cxgbi_inet6addr_notifier);
-#endif
 	cxgb4_unregister_uld(CXGB4_ULD_ISCSI);
 	cxgbi_device_unregister_all(CXGBI_FLAG_DEV_T4);
 	cxgbi_iscsi_cleanup(&cxgb4i_iscsi_transport, &cxgb4i_stt);

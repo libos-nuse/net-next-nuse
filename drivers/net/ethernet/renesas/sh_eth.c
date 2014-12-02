@@ -1,5 +1,6 @@
 /*  SuperH Ethernet device driver
  *
+ *  Copyright (C) 2014  Renesas Electronics Corporation
  *  Copyright (C) 2006-2012 Nobuhiro Iwamatsu
  *  Copyright (C) 2008-2014 Renesas Solutions Corp.
  *  Copyright (C) 2013-2014 Cogent Embedded, Inc.
@@ -2746,6 +2747,7 @@ static const struct of_device_id sh_eth_match_table[] = {
 	{ .compatible = "renesas,ether-r8a7779", .data = &r8a777x_data },
 	{ .compatible = "renesas,ether-r8a7790", .data = &r8a779x_data },
 	{ .compatible = "renesas,ether-r8a7791", .data = &r8a779x_data },
+	{ .compatible = "renesas,ether-r8a7793", .data = &r8a779x_data },
 	{ .compatible = "renesas,ether-r8a7794", .data = &r8a779x_data },
 	{ .compatible = "renesas,ether-r7s72100", .data = &r7s72100_data },
 	{ }
@@ -2769,10 +2771,6 @@ static int sh_eth_drv_probe(struct platform_device *pdev)
 
 	/* get base addr */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (unlikely(res == NULL)) {
-		dev_err(&pdev->dev, "invalid resource\n");
-		return -EINVAL;
-	}
 
 	ndev = alloc_etherdev(sizeof(struct sh_eth_private));
 	if (!ndev)
@@ -2781,8 +2779,6 @@ static int sh_eth_drv_probe(struct platform_device *pdev)
 	pm_runtime_enable(&pdev->dev);
 	pm_runtime_get_sync(&pdev->dev);
 
-	/* The sh Ether-specific entries in the device structure. */
-	ndev->base_addr = res->start;
 	devno = pdev->id;
 	if (devno < 0)
 		devno = 0;
@@ -2805,6 +2801,8 @@ static int sh_eth_drv_probe(struct platform_device *pdev)
 		ret = PTR_ERR(mdp->addr);
 		goto out_release;
 	}
+
+	ndev->base_addr = res->start;
 
 	spin_lock_init(&mdp->lock);
 	mdp->pdev = pdev;
@@ -2886,6 +2884,9 @@ static int sh_eth_drv_probe(struct platform_device *pdev)
 			sh_eth_tsu_init(mdp);
 		}
 	}
+
+	if (mdp->cd->rmiimode)
+		sh_eth_write(ndev, 0x1, RMIIMODE);
 
 	/* MDIO bus init */
 	ret = sh_mdio_init(mdp, pd);
@@ -2973,6 +2974,7 @@ static struct platform_device_id sh_eth_id_table[] = {
 	{ "r8a777x-ether", (kernel_ulong_t)&r8a777x_data },
 	{ "r8a7790-ether", (kernel_ulong_t)&r8a779x_data },
 	{ "r8a7791-ether", (kernel_ulong_t)&r8a779x_data },
+	{ "r8a7793-ether", (kernel_ulong_t)&r8a779x_data },
 	{ "r8a7794-ether", (kernel_ulong_t)&r8a779x_data },
 	{ }
 };

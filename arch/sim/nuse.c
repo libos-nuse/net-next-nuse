@@ -25,8 +25,6 @@
 #include "nuse-libc.h"
 
 
-int kptr_restrict __read_mostly;
-
 struct SimTask;
 enum system_states system_state = SYSTEM_BOOTING;
 
@@ -201,7 +199,7 @@ void sim_task_wait(void)
 	struct SimTask *task;
 
 	/* FIXME */
-	rcu_sched_qs(0);
+	rcu_sched_qs();
 	task = sim_task_current();
 	sim_assert(task != NULL);
 	nuse_fiber_wait(task->private);

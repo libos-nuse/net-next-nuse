@@ -19,7 +19,6 @@
 
 
 #include <linux/skbuff.h>
-#include <linux/dmaengine.h>
 #include <net/sock.h>
 #include <net/inet_connection_sock.h>
 #include <net/inet_timewait_sock.h>
@@ -166,13 +165,6 @@ struct tcp_sock {
 		struct iovec		*iov;
 		int			memory;
 		int			len;
-#ifdef CONFIG_NET_DMA
-		/* members for async copy */
-		struct dma_chan		*dma_chan;
-		int			wakeup;
-		struct dma_pinned_list	*pinned_list;
-		dma_cookie_t		dma_cookie;
-#endif
 	} ucopy;
 
 	u32	snd_wl1;	/* Sequence for window update		*/
@@ -212,10 +204,10 @@ struct tcp_sock {
 
 	u16	urg_data;	/* Saved octet of OOB data and control flags */
 	u8	ecn_flags;	/* ECN status bits.			*/
-	u8	reordering;	/* Packet reordering metric.		*/
+	u8	keepalive_probes; /* num of allowed keep alive probes	*/
+	u32	reordering;	/* Packet reordering metric.		*/
 	u32	snd_up;		/* Urgent pointer		*/
 
-	u8	keepalive_probes; /* num of allowed keep alive probes	*/
 /*
  *      Options received (usually on last packet, some only on SYN packets).
  */

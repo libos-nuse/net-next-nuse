@@ -17,7 +17,7 @@
 #include <linux/if_ether.h>
 #include <net/netlink.h>
 #include <net/rtnetlink.h>
-#include "bonding.h"
+#include <net/bonding.h>
 
 static size_t bond_get_slave_size(const struct net_device *bond_dev,
 				  const struct net_device *slave_dev)
@@ -94,6 +94,10 @@ static const struct nla_policy bond_policy[IFLA_BOND_MAX + 1] = {
 	[IFLA_BOND_AD_LACP_RATE]	= { .type = NLA_U8 },
 	[IFLA_BOND_AD_SELECT]		= { .type = NLA_U8 },
 	[IFLA_BOND_AD_INFO]		= { .type = NLA_NESTED },
+};
+
+static const struct nla_policy bond_slave_policy[IFLA_BOND_SLAVE_MAX + 1] = {
+	[IFLA_BOND_SLAVE_QUEUE_ID]	= { .type = NLA_U16 },
 };
 
 static int bond_validate(struct nlattr *tb[], struct nlattr *data[])
@@ -439,6 +443,7 @@ static int bond_fill_info(struct sk_buff *skb,
 	unsigned int packets_per_slave;
 	int ifindex, i, targets_added;
 	struct nlattr *targets;
+	struct slave *primary;
 
 	if (nla_put_u8(skb, IFLA_BOND_MODE, BOND_MODE(bond)))
 		goto nla_put_failure;
@@ -488,9 +493,9 @@ static int bond_fill_info(struct sk_buff *skb,
 			bond->params.arp_all_targets))
 		goto nla_put_failure;
 
-	if (bond->primary_slave &&
-	    nla_put_u32(skb, IFLA_BOND_PRIMARY,
-			bond->primary_slave->dev->ifindex))
+	primary = rtnl_dereference(bond->primary_slave);
+	if (primary &&
+	    nla_put_u32(skb, IFLA_BOND_PRIMARY, primary->dev->ifindex))
 		goto nla_put_failure;
 
 	if (nla_put_u8(skb, IFLA_BOND_PRIMARY_RESELECT,
@@ -580,17 +585,18 @@ struct rtnl_link_ops bond_link_ops __read_mostly = {
 	.priv_size		= sizeof(struct bonding),
 	.setup			= bond_setup,
 	.maxtype		= IFLA_BOND_MAX,
-	.slave_maxtype		= IFLA_BOND_SLAVE_MAX,
 	.policy			= bond_policy,
 	.validate		= bond_validate,
 	.newlink		= bond_newlink,
 	.changelink		= bond_changelink,
-	.slave_changelink	= bond_slave_changelink,
 	.get_size		= bond_get_size,
 	.fill_info		= bond_fill_info,
 	.get_num_tx_queues	= bond_get_num_tx_queues,
 	.get_num_rx_queues	= bond_get_num_tx_queues, /* Use the same number
 							     as for TX queues */
+	.slave_maxtype		= IFLA_BOND_SLAVE_MAX,
+	.slave_policy		= bond_slave_policy,
+	.slave_changelink	= bond_slave_changelink,
 	.get_slave_size		= bond_get_slave_size,
 	.fill_slave_info	= bond_fill_slave_info,
 };

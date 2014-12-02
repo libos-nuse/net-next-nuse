@@ -23,7 +23,9 @@
 #include <linux/regmap.h>
 #include <linux/reset.h>
 #include <linux/stmmac.h>
+
 #include "stmmac.h"
+#include "stmmac_platform.h"
 
 #define SYSMGR_EMACGRP_CTRL_PHYSEL_ENUM_GMII_MII 0x0
 #define SYSMGR_EMACGRP_CTRL_PHYSEL_ENUM_RGMII 0x1
@@ -120,9 +122,9 @@ static int socfpga_dwmac_parse_data(struct socfpga_dwmac *dwmac, struct device *
 		}
 
 		dwmac->splitter_base = devm_ioremap_resource(dev, &res_splitter);
-		if (!dwmac->splitter_base) {
+		if (IS_ERR(dwmac->splitter_base)) {
 			dev_info(dev, "Failed to mapping emac splitter\n");
-			return -EINVAL;
+			return PTR_ERR(dwmac->splitter_base);
 		}
 	}
 

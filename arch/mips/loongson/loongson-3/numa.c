@@ -24,8 +24,6 @@
 #include <asm/page.h>
 #include <asm/pgalloc.h>
 #include <asm/sections.h>
-#include <linux/bootmem.h>
-#include <linux/init.h>
 #include <linux/irq.h>
 #include <asm/bootinfo.h>
 #include <asm/mc146818-time.h>
@@ -35,6 +33,7 @@
 
 static struct node_data prealloc__node_data[MAX_NUMNODES];
 unsigned char __node_distances[MAX_NUMNODES][MAX_NUMNODES];
+EXPORT_SYMBOL(__node_distances);
 struct node_data *__node_data[MAX_NUMNODES];
 EXPORT_SYMBOL(__node_data);
 

@@ -191,8 +191,9 @@ enum dma_reg {
 	DMA_STATUS,
 	DMA_SCB_BURST_SIZE,
 	DMA_ARB_CTRL,
-	DMA_PRIORITY,
-	DMA_RING_PRIORITY,
+	DMA_PRIORITY_0,
+	DMA_PRIORITY_1,
+	DMA_PRIORITY_2,
 };
 
 static const u8 bcmgenet_dma_regs_v3plus[] = {
@@ -201,8 +202,9 @@ static const u8 bcmgenet_dma_regs_v3plus[] = {
 	[DMA_STATUS]		= 0x08,
 	[DMA_SCB_BURST_SIZE]	= 0x0C,
 	[DMA_ARB_CTRL]		= 0x2C,
-	[DMA_PRIORITY]		= 0x30,
-	[DMA_RING_PRIORITY]	= 0x38,
+	[DMA_PRIORITY_0]	= 0x30,
+	[DMA_PRIORITY_1]	= 0x34,
+	[DMA_PRIORITY_2]	= 0x38,
 };
 
 static const u8 bcmgenet_dma_regs_v2[] = {
@@ -211,8 +213,9 @@ static const u8 bcmgenet_dma_regs_v2[] = {
 	[DMA_STATUS]		= 0x08,
 	[DMA_SCB_BURST_SIZE]	= 0x0C,
 	[DMA_ARB_CTRL]		= 0x30,
-	[DMA_PRIORITY]		= 0x34,
-	[DMA_RING_PRIORITY]	= 0x3C,
+	[DMA_PRIORITY_0]	= 0x34,
+	[DMA_PRIORITY_1]	= 0x38,
+	[DMA_PRIORITY_2]	= 0x3C,
 };
 
 static const u8 bcmgenet_dma_regs_v1[] = {
@@ -220,8 +223,9 @@ static const u8 bcmgenet_dma_regs_v1[] = {
 	[DMA_STATUS]		= 0x04,
 	[DMA_SCB_BURST_SIZE]	= 0x0C,
 	[DMA_ARB_CTRL]		= 0x30,
-	[DMA_PRIORITY]		= 0x34,
-	[DMA_RING_PRIORITY]	= 0x3C,
+	[DMA_PRIORITY_0]	= 0x34,
+	[DMA_PRIORITY_1]	= 0x38,
+	[DMA_PRIORITY_2]	= 0x3C,
 };
 
 /* Set at runtime once bcmgenet version is known */
@@ -609,6 +613,9 @@ static const struct bcmgenet_stats bcmgenet_gstrings_stats[] = {
 			UMAC_RBUF_OVFL_CNT),
 	STAT_GENET_MISC("rbuf_err_cnt", mib.rbuf_err_cnt, UMAC_RBUF_ERR_CNT),
 	STAT_GENET_MISC("mdf_err_cnt", mib.mdf_err_cnt, UMAC_MDF_ERR_CNT),
+	STAT_GENET_MIB_RX("alloc_rx_buff_failed", mib.alloc_rx_buff_failed),
+	STAT_GENET_MIB_RX("rx_dma_failed", mib.rx_dma_failed),
+	STAT_GENET_MIB_TX("tx_dma_failed", mib.tx_dma_failed),
 };
 
 #define BCMGENET_STATS_LEN	ARRAY_SIZE(bcmgenet_gstrings_stats)
@@ -707,6 +714,98 @@ static void bcmgenet_get_ethtool_stats(struct net_device *dev,
 	}
 }
 
+static void bcmgenet_eee_enable_set(struct net_device *dev, bool enable)
+{
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+	u32 off = priv->hw_params->tbuf_offset + TBUF_ENERGY_CTRL;
+	u32 reg;
+
+	if (enable && !priv->clk_eee_enabled) {
+		clk_prepare_enable(priv->clk_eee);
+		priv->clk_eee_enabled = true;
+	}
+
+	reg = bcmgenet_umac_readl(priv, UMAC_EEE_CTRL);
+	if (enable)
+		reg |= EEE_EN;
+	else
+		reg &= ~EEE_EN;
+	bcmgenet_umac_writel(priv, reg, UMAC_EEE_CTRL);
+
+	/* Enable EEE and switch to a 27Mhz clock automatically */
+	reg = __raw_readl(priv->base + off);
+	if (enable)
+		reg |= TBUF_EEE_EN | TBUF_PM_EN;
+	else
+		reg &= ~(TBUF_EEE_EN | TBUF_PM_EN);
+	__raw_writel(reg, priv->base + off);
+
+	/* Do the same for thing for RBUF */
+	reg = bcmgenet_rbuf_readl(priv, RBUF_ENERGY_CTRL);
+	if (enable)
+		reg |= RBUF_EEE_EN | RBUF_PM_EN;
+	else
+		reg &= ~(RBUF_EEE_EN | RBUF_PM_EN);
+	bcmgenet_rbuf_writel(priv, reg, RBUF_ENERGY_CTRL);
+
+	if (!enable && priv->clk_eee_enabled) {
+		clk_disable_unprepare(priv->clk_eee);
+		priv->clk_eee_enabled = false;
+	}
+
+	priv->eee.eee_enabled = enable;
+	priv->eee.eee_active = enable;
+}
+
+static int bcmgenet_get_eee(struct net_device *dev, struct ethtool_eee *e)
+{
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+	struct ethtool_eee *p = &priv->eee;
+
+	if (GENET_IS_V1(priv))
+		return -EOPNOTSUPP;
+
+	e->eee_enabled = p->eee_enabled;
+	e->eee_active = p->eee_active;
+	e->tx_lpi_timer = bcmgenet_umac_readl(priv, UMAC_EEE_LPI_TIMER);
+
+	return phy_ethtool_get_eee(priv->phydev, e);
+}
+
+static int bcmgenet_set_eee(struct net_device *dev, struct ethtool_eee *e)
+{
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+	struct ethtool_eee *p = &priv->eee;
+	int ret = 0;
+
+	if (GENET_IS_V1(priv))
+		return -EOPNOTSUPP;
+
+	p->eee_enabled = e->eee_enabled;
+
+	if (!p->eee_enabled) {
+		bcmgenet_eee_enable_set(dev, false);
+	} else {
+		ret = phy_init_eee(priv->phydev, 0);
+		if (ret) {
+			netif_err(priv, hw, dev, "EEE initialization failed\n");
+			return ret;
+		}
+
+		bcmgenet_umac_writel(priv, e->tx_lpi_timer, UMAC_EEE_LPI_TIMER);
+		bcmgenet_eee_enable_set(dev, true);
+	}
+
+	return phy_ethtool_set_eee(priv->phydev, e);
+}
+
+static int bcmgenet_nway_reset(struct net_device *dev)
+{
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+
+	return genphy_restart_aneg(priv->phydev);
+}
+
 /* standard ethtool support functions. */
 static struct ethtool_ops bcmgenet_ethtool_ops = {
 	.get_strings		= bcmgenet_get_strings,
@@ -720,6 +819,9 @@ static struct ethtool_ops bcmgenet_ethtool_ops = {
 	.set_msglevel		= bcmgenet_set_msglevel,
 	.get_wol		= bcmgenet_get_wol,
 	.set_wol		= bcmgenet_set_wol,
+	.get_eee		= bcmgenet_get_eee,
+	.set_eee		= bcmgenet_set_eee,
+	.nway_reset		= bcmgenet_nway_reset,
 };
 
 /* Power down the unimac, based on mode. */
@@ -875,6 +977,7 @@ static void __bcmgenet_tx_reclaim(struct net_device *dev,
 	int last_tx_cn, last_c_index, num_tx_bds;
 	struct enet_cb *tx_cb_ptr;
 	struct netdev_queue *txq;
+	unsigned int bds_compl;
 	unsigned int c_index;
 
 	/* Compute how many buffers are transmitted since last xmit call */
@@ -899,7 +1002,9 @@ static void __bcmgenet_tx_reclaim(struct net_device *dev,
 	/* Reclaim transmitted buffers */
 	while (last_tx_cn-- > 0) {
 		tx_cb_ptr = ring->cbs + last_c_index;
+		bds_compl = 0;
 		if (tx_cb_ptr->skb) {
+			bds_compl = skb_shinfo(tx_cb_ptr->skb)->nr_frags + 1;
 			dev->stats.tx_bytes += tx_cb_ptr->skb->len;
 			dma_unmap_single(&dev->dev,
 					 dma_unmap_addr(tx_cb_ptr, dma_addr),
@@ -916,7 +1021,7 @@ static void __bcmgenet_tx_reclaim(struct net_device *dev,
 			dma_unmap_addr_set(tx_cb_ptr, dma_addr, 0);
 		}
 		dev->stats.tx_packets++;
-		ring->free_bds += 1;
+		ring->free_bds += bds_compl;
 
 		last_c_index++;
 		last_c_index &= (num_tx_bds - 1);
@@ -982,6 +1087,7 @@ static int bcmgenet_xmit_single(struct net_device *dev,
 	mapping = dma_map_single(kdev, skb->data, skb_len, DMA_TO_DEVICE);
 	ret = dma_mapping_error(kdev, mapping);
 	if (ret) {
+		priv->mib.tx_dma_failed++;
 		netif_err(priv, tx_err, dev, "Tx DMA map failed\n");
 		dev_kfree_skb(skb);
 		return ret;
@@ -1028,6 +1134,7 @@ static int bcmgenet_xmit_frag(struct net_device *dev,
 				   skb_frag_size(frag), DMA_TO_DEVICE);
 	ret = dma_mapping_error(kdev, mapping);
 	if (ret) {
+		priv->mib.tx_dma_failed++;
 		netif_err(priv, tx_err, dev, "%s: Tx DMA map failed\n",
 			  __func__);
 		return ret;
@@ -1051,7 +1158,8 @@ static int bcmgenet_xmit_frag(struct net_device *dev,
 /* Reallocate the SKB to put enough headroom in front of it and insert
  * the transmit checksum offsets in the descriptors
  */
-static int bcmgenet_put_tx_csum(struct net_device *dev, struct sk_buff *skb)
+static struct sk_buff *bcmgenet_put_tx_csum(struct net_device *dev,
+					    struct sk_buff *skb)
 {
 	struct status_64 *status = NULL;
 	struct sk_buff *new_skb;
@@ -1069,7 +1177,7 @@ static int bcmgenet_put_tx_csum(struct net_device *dev, struct sk_buff *skb)
 		if (!new_skb) {
 			dev->stats.tx_errors++;
 			dev->stats.tx_dropped++;
-			return -ENOMEM;
+			return NULL;
 		}
 		skb = new_skb;
 	}
@@ -1087,7 +1195,7 @@ static int bcmgenet_put_tx_csum(struct net_device *dev, struct sk_buff *skb)
 			ip_proto = ipv6_hdr(skb)->nexthdr;
 			break;
 		default:
-			return 0;
+			return skb;
 		}
 
 		offset = skb_checksum_start_offset(skb) - sizeof(*status);
@@ -1108,7 +1216,7 @@ static int bcmgenet_put_tx_csum(struct net_device *dev, struct sk_buff *skb)
 		status->tx_csum_info = tx_csum_info;
 	}
 
-	return 0;
+	return skb;
 }
 
 static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
@@ -1155,8 +1263,8 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	/* set the SKB transmit checksum */
 	if (priv->desc_64b_en) {
-		ret = bcmgenet_put_tx_csum(dev, skb);
-		if (ret) {
+		skb = bcmgenet_put_tx_csum(dev, skb);
+		if (!skb) {
 			ret = NETDEV_TX_OK;
 			goto out;
 		}
@@ -1223,6 +1331,7 @@ static int bcmgenet_rx_refill(struct bcmgenet_priv *priv, struct enet_cb *cb)
 				 priv->rx_buf_len, DMA_FROM_DEVICE);
 	ret = dma_mapping_error(kdev, mapping);
 	if (ret) {
+		priv->mib.rx_dma_failed++;
 		bcmgenet_free_cb(cb);
 		netif_err(priv, rx_err, priv->dev,
 			  "%s DMA map failed\n", __func__);
@@ -1274,12 +1383,24 @@ static unsigned int bcmgenet_desc_rx(struct bcmgenet_priv *priv,
 
 	while ((rxpktprocessed < rxpkttoprocess) &&
 	       (rxpktprocessed < budget)) {
+		cb = &priv->rx_cbs[priv->rx_read_ptr];
+		skb = cb->skb;
+
+		/* We do not have a backing SKB, so we do not have a
+		 * corresponding DMA mapping for this incoming packet since
+		 * bcmgenet_rx_refill always either has both skb and mapping or
+		 * none.
+		 */
+		if (unlikely(!skb)) {
+			dev->stats.rx_dropped++;
+			dev->stats.rx_errors++;
+			goto refill;
+		}
+
 		/* Unmap the packet contents such that we can use the
 		 * RSV from the 64 bytes descriptor when enabled and save
 		 * a 32-bits register read
 		 */
-		cb = &priv->rx_cbs[priv->rx_read_ptr];
-		skb = cb->skb;
 		dma_unmap_single(&dev->dev, dma_unmap_addr(cb, dma_addr),
 				 priv->rx_buf_len, DMA_FROM_DEVICE);
 
@@ -1306,18 +1427,6 @@ static unsigned int bcmgenet_desc_rx(struct bcmgenet_priv *priv,
 			  "%s:p_ind=%d c_ind=%d read_ptr=%d len_stat=0x%08x\n",
 			  __func__, p_index, priv->rx_c_index,
 			  priv->rx_read_ptr, dma_length_status);
-
-		rxpktprocessed++;
-
-		priv->rx_read_ptr++;
-		priv->rx_read_ptr &= (priv->num_rx_bds - 1);
-
-		/* out of memory, just drop packets at the hardware level */
-		if (unlikely(!skb)) {
-			dev->stats.rx_dropped++;
-			dev->stats.rx_errors++;
-			goto refill;
-		}
 
 		if (unlikely(!(dma_flag & DMA_EOP) || !(dma_flag & DMA_SOP))) {
 			netif_err(priv, rx_status, dev,
@@ -1389,8 +1498,14 @@ static unsigned int bcmgenet_desc_rx(struct bcmgenet_priv *priv,
 		/* refill RX path on the current control block */
 refill:
 		err = bcmgenet_rx_refill(priv, cb);
-		if (err)
+		if (err) {
+			priv->mib.alloc_rx_buff_failed++;
 			netif_err(priv, rx_err, dev, "Rx refill failed\n");
+		}
+
+		rxpktprocessed++;
+		priv->rx_read_ptr++;
+		priv->rx_read_ptr &= (priv->num_rx_bds - 1);
 	}
 
 	return rxpktprocessed;
@@ -1687,7 +1802,8 @@ static void bcmgenet_init_multiq(struct net_device *dev)
 {
 	struct bcmgenet_priv *priv = netdev_priv(dev);
 	unsigned int i, dma_enable;
-	u32 reg, dma_ctrl, ring_cfg = 0, dma_priority = 0;
+	u32 reg, dma_ctrl, ring_cfg = 0;
+	u32 dma_priority[3] = {0, 0, 0};
 
 	if (!netif_is_multiqueue(dev)) {
 		netdev_warn(dev, "called with non multi queue aware HW\n");
@@ -1712,21 +1828,24 @@ static void bcmgenet_init_multiq(struct net_device *dev)
 
 		/* Configure ring as descriptor ring and setup priority */
 		ring_cfg |= 1 << i;
-		dma_priority |= ((GENET_Q0_PRIORITY + i) <<
-				(GENET_MAX_MQ_CNT + 1) * i);
 		dma_ctrl |= 1 << (i + DMA_RING_BUF_EN_SHIFT);
+
+		dma_priority[DMA_PRIO_REG_INDEX(i)] |=
+			((GENET_Q0_PRIORITY + i) << DMA_PRIO_REG_SHIFT(i));
 	}
+
+	/* Set ring 16 priority and program the hardware registers */
+	dma_priority[DMA_PRIO_REG_INDEX(DESC_INDEX)] |=
+		((GENET_Q0_PRIORITY + priv->hw_params->tx_queues) <<
+		 DMA_PRIO_REG_SHIFT(DESC_INDEX));
+	bcmgenet_tdma_writel(priv, dma_priority[0], DMA_PRIORITY_0);
+	bcmgenet_tdma_writel(priv, dma_priority[1], DMA_PRIORITY_1);
+	bcmgenet_tdma_writel(priv, dma_priority[2], DMA_PRIORITY_2);
 
 	/* Enable rings */
 	reg = bcmgenet_tdma_readl(priv, DMA_RING_CFG);
 	reg |= ring_cfg;
 	bcmgenet_tdma_writel(priv, reg, DMA_RING_CFG);
-
-	/* Use configured rings priority and set ring #16 priority */
-	reg = bcmgenet_tdma_readl(priv, DMA_RING_PRIORITY);
-	reg |= ((GENET_Q0_PRIORITY + priv->hw_params->tx_queues) << 20);
-	reg |= dma_priority;
-	bcmgenet_tdma_writel(priv, reg, DMA_PRIORITY);
 
 	/* Configure ring as descriptor ring and re-enable DMA if enabled */
 	reg = bcmgenet_tdma_readl(priv, DMA_CTRL);
@@ -1736,13 +1855,63 @@ static void bcmgenet_init_multiq(struct net_device *dev)
 	bcmgenet_tdma_writel(priv, reg, DMA_CTRL);
 }
 
+static int bcmgenet_dma_teardown(struct bcmgenet_priv *priv)
+{
+	int ret = 0;
+	int timeout = 0;
+	u32 reg;
+
+	/* Disable TDMA to stop add more frames in TX DMA */
+	reg = bcmgenet_tdma_readl(priv, DMA_CTRL);
+	reg &= ~DMA_EN;
+	bcmgenet_tdma_writel(priv, reg, DMA_CTRL);
+
+	/* Check TDMA status register to confirm TDMA is disabled */
+	while (timeout++ < DMA_TIMEOUT_VAL) {
+		reg = bcmgenet_tdma_readl(priv, DMA_STATUS);
+		if (reg & DMA_DISABLED)
+			break;
+
+		udelay(1);
+	}
+
+	if (timeout == DMA_TIMEOUT_VAL) {
+		netdev_warn(priv->dev, "Timed out while disabling TX DMA\n");
+		ret = -ETIMEDOUT;
+	}
+
+	/* Wait 10ms for packet drain in both tx and rx dma */
+	usleep_range(10000, 20000);
+
+	/* Disable RDMA */
+	reg = bcmgenet_rdma_readl(priv, DMA_CTRL);
+	reg &= ~DMA_EN;
+	bcmgenet_rdma_writel(priv, reg, DMA_CTRL);
+
+	timeout = 0;
+	/* Check RDMA status register to confirm RDMA is disabled */
+	while (timeout++ < DMA_TIMEOUT_VAL) {
+		reg = bcmgenet_rdma_readl(priv, DMA_STATUS);
+		if (reg & DMA_DISABLED)
+			break;
+
+		udelay(1);
+	}
+
+	if (timeout == DMA_TIMEOUT_VAL) {
+		netdev_warn(priv->dev, "Timed out while disabling RX DMA\n");
+		ret = -ETIMEDOUT;
+	}
+
+	return ret;
+}
+
 static void bcmgenet_fini_dma(struct bcmgenet_priv *priv)
 {
 	int i;
 
 	/* disable DMA */
-	bcmgenet_rdma_writel(priv, 0, DMA_CTRL);
-	bcmgenet_tdma_writel(priv, 0, DMA_CTRL);
+	bcmgenet_dma_teardown(priv);
 
 	for (i = 0; i < priv->num_tx_bds; i++) {
 		if (priv->tx_cbs[i].skb != NULL) {
@@ -1959,19 +2128,6 @@ static void bcmgenet_set_hw_addr(struct bcmgenet_priv *priv,
 	bcmgenet_umac_writel(priv, (addr[4] << 8) | addr[5], UMAC_MAC1);
 }
 
-static int bcmgenet_wol_resume(struct bcmgenet_priv *priv)
-{
-	/* From WOL-enabled suspend, switch to regular clock */
-	if (priv->wolopts)
-		clk_disable_unprepare(priv->clk_wol);
-
-	phy_init_hw(priv->phydev);
-	/* Speed settings must be restored */
-	bcmgenet_mii_config(priv->dev);
-
-	return 0;
-}
-
 /* Returns a reusable dma control register value */
 static u32 bcmgenet_dma_disable(struct bcmgenet_priv *priv)
 {
@@ -2087,6 +2243,12 @@ static int bcmgenet_open(struct net_device *dev)
 		goto err_irq0;
 	}
 
+	/* Re-configure the port multiplexer towards the PHY device */
+	bcmgenet_mii_config(priv->dev, false);
+
+	phy_connect_direct(dev, priv->phydev, bcmgenet_mii_setup,
+			   priv->phy_interface);
+
 	bcmgenet_netif_start(dev);
 
 	return 0;
@@ -2098,57 +2260,6 @@ err_fini_dma:
 err_clk_disable:
 	if (!IS_ERR(priv->clk))
 		clk_disable_unprepare(priv->clk);
-	return ret;
-}
-
-static int bcmgenet_dma_teardown(struct bcmgenet_priv *priv)
-{
-	int ret = 0;
-	int timeout = 0;
-	u32 reg;
-
-	/* Disable TDMA to stop add more frames in TX DMA */
-	reg = bcmgenet_tdma_readl(priv, DMA_CTRL);
-	reg &= ~DMA_EN;
-	bcmgenet_tdma_writel(priv, reg, DMA_CTRL);
-
-	/* Check TDMA status register to confirm TDMA is disabled */
-	while (timeout++ < DMA_TIMEOUT_VAL) {
-		reg = bcmgenet_tdma_readl(priv, DMA_STATUS);
-		if (reg & DMA_DISABLED)
-			break;
-
-		udelay(1);
-	}
-
-	if (timeout == DMA_TIMEOUT_VAL) {
-		netdev_warn(priv->dev, "Timed out while disabling TX DMA\n");
-		ret = -ETIMEDOUT;
-	}
-
-	/* Wait 10ms for packet drain in both tx and rx dma */
-	usleep_range(10000, 20000);
-
-	/* Disable RDMA */
-	reg = bcmgenet_rdma_readl(priv, DMA_CTRL);
-	reg &= ~DMA_EN;
-	bcmgenet_rdma_writel(priv, reg, DMA_CTRL);
-
-	timeout = 0;
-	/* Check RDMA status register to confirm RDMA is disabled */
-	while (timeout++ < DMA_TIMEOUT_VAL) {
-		reg = bcmgenet_rdma_readl(priv, DMA_STATUS);
-		if (reg & DMA_DISABLED)
-			break;
-
-		udelay(1);
-	}
-
-	if (timeout == DMA_TIMEOUT_VAL) {
-		netdev_warn(priv->dev, "Timed out while disabling RX DMA\n");
-		ret = -ETIMEDOUT;
-	}
-
 	return ret;
 }
 
@@ -2167,9 +2278,10 @@ static void bcmgenet_netif_stop(struct net_device *dev)
 	 */
 	cancel_work_sync(&priv->bcmgenet_irq_work);
 
-	priv->old_pause = -1;
 	priv->old_link = -1;
+	priv->old_speed = -1;
 	priv->old_duplex = -1;
+	priv->old_pause = -1;
 }
 
 static int bcmgenet_close(struct net_device *dev)
@@ -2180,6 +2292,9 @@ static int bcmgenet_close(struct net_device *dev)
 	netif_dbg(priv, ifdown, dev, "bcmgenet_close\n");
 
 	bcmgenet_netif_stop(dev);
+
+	/* Really kill the PHY state machine and disconnect from it */
+	phy_disconnect(priv->phydev);
 
 	/* Disable MAC receive */
 	umac_enable_set(priv, CMD_RX_EN, false);
@@ -2432,6 +2547,13 @@ static void bcmgenet_set_hw_params(struct bcmgenet_priv *priv)
 	dev_info(&priv->pdev->dev, "GENET " GENET_VER_FMT,
 		 major, (reg >> 16) & 0x0f, reg & 0xffff);
 
+	/* Store the integrated PHY revision for the MDIO probing function
+	 * to pass this information to the PHY driver. The PHY driver expects
+	 * to find the PHY major revision in bits 15:8 while the GENET register
+	 * stores that information in bits 7:0, account for that.
+	 */
+	priv->gphy_rev = (reg & 0xffff) << 8;
+
 #ifdef CONFIG_PHYS_ADDR_T_64BIT
 	if (!(params->flags & GENET_HAS_40BITS))
 		pr_warn("GENET does not support 40-bits PA\n");
@@ -2558,6 +2680,12 @@ static int bcmgenet_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->clk_wol))
 		dev_warn(&priv->pdev->dev, "failed to get enet-wol clock\n");
 
+	priv->clk_eee = devm_clk_get(&priv->pdev->dev, "enet-eee");
+	if (IS_ERR(priv->clk_eee)) {
+		dev_warn(&priv->pdev->dev, "failed to get enet-eee clock\n");
+		priv->clk_eee = NULL;
+	}
+
 	err = reset_umac(priv);
 	if (err)
 		goto err_clk_disable;
@@ -2669,9 +2797,13 @@ static int bcmgenet_resume(struct device *d)
 	if (ret)
 		goto out_clk_disable;
 
-	ret = bcmgenet_wol_resume(priv);
-	if (ret)
-		goto out_clk_disable;
+	/* From WOL-enabled suspend, switch to regular clock */
+	if (priv->wolopts)
+		clk_disable_unprepare(priv->clk_wol);
+
+	phy_init_hw(priv->phydev);
+	/* Speed settings must be restored */
+	bcmgenet_mii_config(priv->dev, false);
 
 	/* disable ethernet MAC while updating its registers */
 	umac_enable_set(priv, CMD_TX_EN | CMD_RX_EN, false);
@@ -2703,6 +2835,9 @@ static int bcmgenet_resume(struct device *d)
 	netif_device_attach(dev);
 
 	phy_resume(priv->phydev);
+
+	if (priv->eee.eee_enabled)
+		bcmgenet_eee_enable_set(dev, true);
 
 	bcmgenet_netif_start(dev);
 

@@ -265,7 +265,6 @@ enum htt_mgmt_tx_status {
 
 /*=== target -> host messages ===============================================*/
 
-
 enum htt_t2h_msg_type {
 	HTT_T2H_MSG_TYPE_VERSION_CONF		= 0x0,
 	HTT_T2H_MSG_TYPE_RX_IND			= 0x1,
@@ -726,7 +725,7 @@ static inline u8 *htt_rx_test_get_chars(struct htt_rx_test *rx_test)
  */
 struct htt_pktlog_msg {
 	u8 pad[3];
-	__le32 payload[1 /* or more */];
+	u8 payload[0];
 } __packed;
 
 struct htt_dbg_stats_rx_reorder_stats {
@@ -1032,6 +1031,7 @@ static inline struct htt_stats_conf_item *htt_stats_conf_next_item(
 {
 	return (void *)item + sizeof(*item) + roundup(item->length, 4);
 }
+
 /*
  * host -> target FRAG DESCRIPTOR/MSDU_EXT DESC bank
  *
@@ -1147,7 +1147,6 @@ struct htt_resp {
 		struct htt_stats_conf stats_conf;
 	};
 } __packed;
-
 
 /*** host side structures follow ***/
 

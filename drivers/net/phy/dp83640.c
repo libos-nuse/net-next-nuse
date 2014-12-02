@@ -791,7 +791,7 @@ static int match(struct sk_buff *skb, unsigned int type, struct rxts *rxts)
 
 	switch (type & PTP_CLASS_PMASK) {
 	case PTP_CLASS_IPV4:
-		offset += ETH_HLEN + IPV4_HLEN(data) + UDP_HLEN;
+		offset += ETH_HLEN + IPV4_HLEN(data + offset) + UDP_HLEN;
 		break;
 	case PTP_CLASS_IPV6:
 		offset += ETH_HLEN + IP6_HLEN + UDP_HLEN;
@@ -934,7 +934,7 @@ static int is_sync(struct sk_buff *skb, int type)
 
 	switch (type & PTP_CLASS_PMASK) {
 	case PTP_CLASS_IPV4:
-		offset += ETH_HLEN + IPV4_HLEN(data) + UDP_HLEN;
+		offset += ETH_HLEN + IPV4_HLEN(data + offset) + UDP_HLEN;
 		break;
 	case PTP_CLASS_IPV6:
 		offset += ETH_HLEN + IP6_HLEN + UDP_HLEN;
@@ -1136,7 +1136,6 @@ static void dp83640_remove(struct phy_device *phydev)
 	struct dp83640_clock *clock;
 	struct list_head *this, *next;
 	struct dp83640_private *tmp, *dp83640 = phydev->priv;
-	struct sk_buff *skb;
 
 	if (phydev->addr == BROADCAST_ADDR)
 		return;
@@ -1144,11 +1143,8 @@ static void dp83640_remove(struct phy_device *phydev)
 	enable_status_frames(phydev, false);
 	cancel_work_sync(&dp83640->ts_work);
 
-	while ((skb = skb_dequeue(&dp83640->rx_queue)) != NULL)
-		kfree_skb(skb);
-
-	while ((skb = skb_dequeue(&dp83640->tx_queue)) != NULL)
-		skb_complete_tx_timestamp(skb, NULL);
+	skb_queue_purge(&dp83640->rx_queue);
+	skb_queue_purge(&dp83640->tx_queue);
 
 	clock = dp83640_clock_get(dp83640->clock);
 
@@ -1405,7 +1401,7 @@ static void dp83640_txtstamp(struct phy_device *phydev,
 
 	case HWTSTAMP_TX_ONESTEP_SYNC:
 		if (is_sync(skb, type)) {
-			skb_complete_tx_timestamp(skb, NULL);
+			kfree_skb(skb);
 			return;
 		}
 		/* fall through */
@@ -1416,7 +1412,7 @@ static void dp83640_txtstamp(struct phy_device *phydev,
 
 	case HWTSTAMP_TX_OFF:
 	default:
-		skb_complete_tx_timestamp(skb, NULL);
+		kfree_skb(skb);
 		break;
 	}
 }

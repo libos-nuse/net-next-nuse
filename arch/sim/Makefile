@@ -121,17 +121,17 @@ kernel/time/_to_keep=time.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
-mm/_to_keep=util.o list_lru.o
+mm/_to_keep=util.o list_lru.o iov_iter.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
 drivers/net/_to_keep=loopback.o
 lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
 find_last_bit.o find_next_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
-ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o  \
+ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
-rhashtable.o hash.o
+rhashtable.o
 fs/_to_keep=read_write.o libfs.o namei.o
 fs/proc/_to_keep=proc_sysctl.o
 
@@ -151,21 +151,29 @@ $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/M
 
 -include $(srctree)/.config
 
+quiet_cmd_autoconf = GEN     $@
+      cmd_autoconf = $(ARCH_DIR)/generate-autoconf.py $(srctree)/.config > $@
 $(AUTOCONF): $(ARCH_DIR)/generate-autoconf.py $(srctree)/.config $(ARCH_DIR)/timeconst.h
-	$(ARCH_DIR)/generate-autoconf.py $(srctree)/.config > $@
+	$(call if_changed,autoconf)
+quiet_cmd_timeconst = GEN     $@
+      cmd_timeconst = echo "hz=$(CONFIG_HZ)" > $(srctree)/arch/sim/hz.bc ; \
+                      bc $(srctree)/arch/sim/hz.bc kernel/time/timeconst.bc > $@
 $(ARCH_DIR)/timeconst.h: $(srctree)/.config
-	echo "hz=$(CONFIG_HZ)" > $(srctree)/arch/sim/hz.bc
-	bc $(srctree)/arch/sim/hz.bc kernel/time/timeconst.bc > $@
+	$(call if_changed,timeconst)
+quiet_cmd_linker = GEN     $@
+      cmd_linker = ld -shared --verbose | ./$^ > $@
 $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
-	ld -shared --verbose | ./$^ > $@
+	$(call if_changed,linker)
 
 # from lib/Makefile
 CRC32TABLE = $(ARCH_DIR)/crc32table.h
 hostprogs-y	:= $(srctree)/lib/gen_crc32table
 clean-files	:= crc32table.h
 
+quiet_cmd_crc32src = GEN     $@
+      cmd_crc32src = cc $^ -o $@
 $(srctree)/lib/gen_crc32table: $(srctree)/lib/gen_crc32table.c
-	cc $^ -o $@
+	$(call if_changed,crc32src)
 
 quiet_cmd_crc32 = GEN     $@
       cmd_crc32 = $< > $@

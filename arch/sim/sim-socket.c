@@ -296,7 +296,7 @@ static int sim_pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
 	if (key && !((unsigned long)key & entry->eventMask))
 		return 0;
 
-	sim_poll_event((int)key, entry->opaque);
+	sim_poll_event((unsigned long)key, entry->opaque);
 	return 1;
 }
 

@@ -1,7 +1,7 @@
 /*
  * net/tipc/name_table.h: Include file for TIPC name table code
  *
- * Copyright (c) 2000-2006, Ericsson AB
+ * Copyright (c) 2000-2006, 2014, Ericsson AB
  * Copyright (c) 2004-2005, 2010-2011, Wind River Systems
  * All rights reserved.
  *
@@ -37,8 +37,6 @@
 #ifndef _TIPC_NAME_TABLE_H
 #define _TIPC_NAME_TABLE_H
 
-#include "node_subscr.h"
-
 struct tipc_subscription;
 struct tipc_port_list;
 
@@ -56,7 +54,7 @@ struct tipc_port_list;
  * @node: network address of publishing port's node
  * @ref: publishing port
  * @key: publication key
- * @subscr: subscription to "node down" event (for off-node publications only)
+ * @nodesub_list: subscription to "node down" event (off-node publication only)
  * @local_list: adjacent entries in list of publications made by this node
  * @pport_list: adjacent entries in list of publications made by this port
  * @node_list: adjacent matching name seq publications with >= node scope
@@ -73,7 +71,7 @@ struct publication {
 	u32 node;
 	u32 ref;
 	u32 key;
-	struct tipc_node_subscr subscr;
+	struct list_head nodesub_list;
 	struct list_head local_list;
 	struct list_head pport_list;
 	struct list_head node_list;
@@ -83,6 +81,8 @@ struct publication {
 
 
 extern rwlock_t tipc_nametbl_lock;
+
+int tipc_nl_name_table_dump(struct sk_buff *skb, struct netlink_callback *cb);
 
 struct sk_buff *tipc_nametbl_get(const void *req_tlv_area, int req_tlv_space);
 u32 tipc_nametbl_translate(u32 type, u32 instance, u32 *node);

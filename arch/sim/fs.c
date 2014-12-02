@@ -151,10 +151,10 @@ pid_t f_getown(struct file *filp)
 	sim_assert(false);
 	return 0;
 }
-int f_setown(struct file *filp, unsigned long arg, int force)
+void f_setown(struct file *filp, unsigned long arg, int force)
 {
 	sim_assert(false);
-	return 0;
+	return;
 }
 
 
