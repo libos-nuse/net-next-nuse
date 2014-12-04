@@ -72,7 +72,7 @@ proc.c seq.c socket.c tasklet-hrtimer.c \
 cred.c pid.c modules.c filemap.c splice.c vmscan.c \
 dcache.c super.c inode.c
 
-DEPENDS=$(addprefix $(ARCH_DIR)/,\
+DEPENDS=$(addprefix $(ARCH_DIR)/.,\
 	$(addsuffix .d,$(basename $(NUSE_SRC)))\
 	$(addsuffix .d,$(basename $(SIM_SRC)))\
 	$(addsuffix .d,$(basename $(LIB_SRC)))\
@@ -277,8 +277,10 @@ test:
 
 .PHONY : clean depend
 
-%.d:%.c
-	@set -e; $(CC) -MM -MT $(<:.c=.o) $(CFLAGS) $< > $@
+quiet_cmd_deps = DEPS  $@
+      cmd_deps = set -e; $(CC) -MM -MT $(<:.c=.o) $(CFLAGS) $< > $@
+%.d:%.c $(srctree)/.config
+	$(call if_changed,deps)
 
 KBUILD_KCONFIG := arch/$(ARCH)/Kconfig
 CLEAN_FILES := $(ARCH_DIR)/test/buildtop/source/quagga/lib/*.lo
