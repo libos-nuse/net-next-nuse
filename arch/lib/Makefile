@@ -279,7 +279,7 @@ test:
 
 quiet_cmd_deps = DEPS  $@
       cmd_deps = set -e; $(CC) -MM -MT $(<:.c=.o) $(CFLAGS) $< > $@
-%.d:%.c $(srctree)/.config
+.%.d:%.c $(srctree)/.config
 	$(call if_changed,deps)
 
 KBUILD_KCONFIG := arch/$(ARCH)/Kconfig
