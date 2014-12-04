@@ -5,5 +5,5 @@ install:
 compiler:
   - gcc
 script:
-  - make defconfig ARCH=sim && make clean ARCH=sim && make library ARCH=sim
-  - ./arch/sim/test/nuse/nuse-test.sh
+  - make defconfig ARCH=lib && make clean ARCH=lib && make library ARCH=lib
+  - ./arch/lib/test/nuse/nuse-test.sh
