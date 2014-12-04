@@ -5,5 +5,5 @@ install:
 compiler:
   - gcc
 script:
-  - make defconfig ARCH=lib && make clean ARCH=lib && make library ARCH=lib
+  - make defconfig ARCH=lib V=1 && make clean ARCH=lib V=1 && make library ARCH=lib V=1
   - ./arch/lib/test/nuse/nuse-test.sh
