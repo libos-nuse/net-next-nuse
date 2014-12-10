@@ -6,14 +6,14 @@ NUSE (Network Stack in Userspace) [![Build Status](https://travis-ci.org/libos-n
 ## Build
 
 ```
- make defconfig ARCH=sim
- make library ARCH=sim OPT=no
+ make defconfig ARCH=lib
+ make library ARCH=lib OPT=no
 ```
 
 for a build with netmap,
 
 ```
-make library ARCH=sim OPT=no NETMAP=yes
+make library ARCH=lib OPT=no NETMAP=yes
 ```
 
 you should see libnuse-linux.so.
@@ -23,14 +23,14 @@ you should see libnuse-linux.so.
 You need to build dpdk sdk first.
 
 ```
-make dpdk-sdk ARCH=sim DPDK=yes
+make dpdk-sdk ARCH=lib DPDK=yes
 ```
 
 then build with the SDK for DPDK channel of NUSE.
 
 ```
- make defconfig ARCH=sim
- make library ARCH=sim OPT=no DPDK=yes
+ make defconfig ARCH=lib
+ make library ARCH=lib OPT=no DPDK=yes
 ```
 
 Additional DPDK configuration is needed, hugepage setup, make an interface DPDK mode.
