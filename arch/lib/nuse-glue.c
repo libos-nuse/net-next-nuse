@@ -102,14 +102,23 @@ struct epoll_fd {
 
 
 extern int lib_sock_socket(int, int, int, struct socket **);
-int socket(int v0, int v1, int v2)
+int nuse_socket(int domain, int type, int protocol)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = malloc(sizeof(struct socket));
 	int ret, real_fd;
 
+	if (domain == AF_UNIX) {
+		real_fd = host_socket (domain, type, protocol);
+		if (real_fd == -1)
+			return real_fd;
+		nuse_fd_table[real_fd].real_fd = real_fd;
+		nuse_fd_table[real_fd].nuse_sock = NULL;
+		return real_fd;
+	}
+
 	memset(kernel_socket, 0, sizeof(struct socket));
-	ret = lib_sock_socket(v0, v1, v2, &kernel_socket);
+	ret = lib_sock_socket(domain, type, protocol, &kernel_socket);
 	if (ret < 0)
 		errno = -ret;
 	real_fd = host_open("/", O_RDONLY, 0);
@@ -123,9 +132,10 @@ int socket(int v0, int v1, int v2)
 	lib_softirq_wakeup();
 	return real_fd;
 }
+weak_alias(nuse_socket, socket);
 
 extern int lib_sock_close(struct socket *);
-int close(int fd)
+int nuse_close(int fd)
 {
 	int ret = 0;
 
@@ -155,9 +165,10 @@ end:
 	lib_softirq_wakeup();
 	return ret;
 }
+weak_alias(nuse_close, close);
 
 extern ssize_t lib_sock_recvmsg(struct socket *, const struct user_msghdr *, int);
-ssize_t recvmsg(int fd, const struct user_msghdr *msghdr, int flags)
+ssize_t nuse_recvmsg(int fd, const struct user_msghdr *msghdr, int flags)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -171,9 +182,10 @@ ssize_t recvmsg(int fd, const struct user_msghdr *msghdr, int flags)
 	lib_softirq_wakeup();
 	return ret;
 }
+weak_alias(nuse_recvmsg, recvmsg);
 
 extern ssize_t lib_sock_sendmsg(struct socket *, const struct user_msghdr *, int);
-ssize_t sendmsg(int fd, const struct user_msghdr *msghdr, int flags)
+ssize_t nuse_sendmsg(int fd, const struct user_msghdr *msghdr, int flags)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -187,8 +199,9 @@ ssize_t sendmsg(int fd, const struct user_msghdr *msghdr, int flags)
 	lib_softirq_wakeup();
 	return ret;
 }
+weak_alias(nuse_sendmsg, sendmsg);
 
-int __sendmmsg(int fd, struct mmsghdr *msgvec, unsigned int vlen,
+int nuse_sendmmsg(int fd, struct mmsghdr *msgvec, unsigned int vlen,
 	unsigned int flags)
 {
 	int err, datagrams;
@@ -213,7 +226,7 @@ int __sendmmsg(int fd, struct mmsghdr *msgvec, unsigned int vlen,
 			++compat_entry;
 #endif
 		} else {
-			err = sendmsg(fd,
+			err = nuse_sendmsg(fd,
 				(struct user_msghdr __user *)entry,
 				flags);
 			if (err < 0)
@@ -232,10 +245,12 @@ int __sendmmsg(int fd, struct mmsghdr *msgvec, unsigned int vlen,
 	return err;
 
 }
+weak_alias(nuse_sendmmsg, sendmmsg);
+weak_alias(nuse_sendmmsg, __sendmmsg);
 
 extern int lib_sock_getsockname(struct socket *, struct sockaddr *name,
 				int *namelen);
-int getsockname(int fd, struct sockaddr *name, int *namelen)
+int nuse_getsockname(int fd, struct sockaddr *name, int *namelen)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -245,10 +260,11 @@ int getsockname(int fd, struct sockaddr *name, int *namelen)
 	lib_softirq_wakeup();
 	return ret;
 }
+weak_alias(nuse_getsockname, getsockname);
 
 extern int lib_sock_getpeername(struct socket *, struct sockaddr *name,
 				int *namelen);
-int getpeername(int fd, struct sockaddr *name, int *namelen)
+int nuse_getpeername(int fd, struct sockaddr *name, int *namelen)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -258,10 +274,11 @@ int getpeername(int fd, struct sockaddr *name, int *namelen)
 	lib_softirq_wakeup();
 	return ret;
 }
+weak_alias(nuse_getpeername, getpeername);
 
 extern int lib_sock_bind(struct socket *, const struct sockaddr *name,
 			 int namelen);
-int bind(int fd, struct sockaddr *name, int namelen)
+int nuse_bind(int fd, struct sockaddr *name, int namelen)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -271,9 +288,10 @@ int bind(int fd, struct sockaddr *name, int namelen)
 	lib_softirq_wakeup();
 	return ret;
 }
+weak_alias(nuse_bind, bind);
 
-extern int lib_sock_connect(struct socket *, struct sockaddr *, int, int);
-int connect(int fd, struct sockaddr *v1, int v2)
+extern int lib_sock_connect(struct socket *, const struct sockaddr *, int, int);
+int nuse_connect(int fd, const struct sockaddr *v1, int v2)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -284,9 +302,10 @@ int connect(int fd, struct sockaddr *v1, int v2)
 	lib_softirq_wakeup();
 	return ret;
 }
+weak_alias(nuse_connect, connect);
 
 extern int lib_sock_listen(struct socket *socket, int backlog);
-int listen(int fd, int v1)
+int nuse_listen(int fd, int v1)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -296,6 +315,8 @@ int listen(int fd, int v1)
 	lib_softirq_wakeup();
 	return retval;
 }
+weak_alias(nuse_listen, listen);
+
 #if 0
 int lib_sock_shutdown(struct SimSocket *socket, int how)
 {
@@ -308,7 +329,7 @@ int lib_sock_shutdown(struct SimSocket *socket, int how)
 
 extern int lib_sock_accept(struct socket *socket, struct socket **new_socket,
 			   int flags);
-int accept4(int fd, struct sockaddr *addr, int *addrlen, int flags)
+int nuse_accept4(int fd, struct sockaddr *addr, int *addrlen, int flags)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -342,12 +363,13 @@ int accept4(int fd, struct sockaddr *addr, int *addrlen, int flags)
 	lib_softirq_wakeup();
 	return real_fd;
 }
-int accept(int fd, struct sockaddr *addr, int *addrlen, int flags)
+int nuse_accept(int fd, struct sockaddr *addr, int *addrlen)
 {
-	return accept4(fd, addr, addrlen, nuse_fd_table[fd].nuse_sock->flags);
+	return nuse_accept4(fd, addr, addrlen, nuse_fd_table[fd].nuse_sock->flags);
 }
+weak_alias(nuse_accept, accept);
 
-ssize_t write(int fd, const void *buf, size_t count)
+ssize_t nuse_write(int fd, const void *buf, size_t count)
 {
 	if (!nuse_fd_table[fd].nuse_sock)
 		return host_write(nuse_fd_table[fd].real_fd, buf, count);
@@ -363,10 +385,11 @@ ssize_t write(int fd, const void *buf, size_t count)
 	iov.iov_base = (void *)buf;
 	msg.msg_name = 0;
 	msg.msg_namelen = 0;
-	return sendmsg(fd, &msg, 0);
+	return nuse_sendmsg(fd, &msg, 0);
 }
+weak_alias(nuse_write, write);
 
-ssize_t writev(int fd, const struct iovec *iov, size_t count)
+ssize_t nuse_writev(int fd, const struct iovec *iov, size_t count)
 {
 	if (!nuse_fd_table[fd].nuse_sock)
 		return host_writev(nuse_fd_table[fd].real_fd, iov, count);
@@ -379,11 +402,12 @@ ssize_t writev(int fd, const struct iovec *iov, size_t count)
 	msg.msg_iov = (struct iovec *)iov;
 	msg.msg_name = 0;
 	msg.msg_namelen = 0;
-	return sendmsg(fd, &msg, 0);
+	return nuse_sendmsg(fd, &msg, 0);
 }
+weak_alias(nuse_writev, writev);
 
-ssize_t sendto(int fd, const void *buf, size_t len, int flags,
-	       const struct sockaddr *dest_addr, socklen_t addrlen)
+ssize_t nuse_sendto(int fd, const void *buf, size_t len, int flags,
+			const struct sockaddr *dest_addr, socklen_t addrlen)
 {
 	struct user_msghdr msg;
 	struct iovec iov;
@@ -398,16 +422,18 @@ ssize_t sendto(int fd, const void *buf, size_t len, int flags,
 	iov.iov_base = (void *)buf;
 	msg.msg_name = (void *)dest_addr;
 	msg.msg_namelen = addrlen;
-	retval = sendmsg(fd, &msg, flags);
+	retval = nuse_sendmsg(fd, &msg, flags);
 	return retval;
 }
+weak_alias(nuse_sendto, sendto);
 
-ssize_t send(int fd, const void *buf, size_t len, int flags)
+ssize_t nuse_send(int fd, const void *buf, size_t len, int flags)
 {
-	return sendto(fd, buf, len, flags, 0, 0);
+	return nuse_sendto(fd, buf, len, flags, 0, 0);
 }
+weak_alias(nuse_send, send);
 
-ssize_t read(int fd, void *buf, size_t count)
+ssize_t nuse_read(int fd, void *buf, size_t count)
 {
 	if (!nuse_fd_table[fd].nuse_sock)
 		return host_read(nuse_fd_table[fd].real_fd, buf, count);
@@ -424,17 +450,18 @@ ssize_t read(int fd, void *buf, size_t count)
 	iov.iov_base = buf;
 	msg.msg_name = 0;
 	msg.msg_namelen = 0;
-	retval = recvmsg(fd, &msg, 0);
+	retval = nuse_recvmsg(fd, &msg, 0);
 	return retval;
 }
+weak_alias(nuse_read, read);
 
 #ifdef _K_SS_MAXSIZE
 #define SOCK_MAX_ADDRESS_SIZE _K_SS_MAXSIZE
 #else
 #define SOCK_MAX_ADDRESS_SIZE 128
 #endif
-ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
-		 struct sockaddr *from, int *fromlen)
+ssize_t nuse_recvfrom(int fd, void *buf, size_t len, int flags,
+				struct sockaddr *from, int *fromlen)
 {
 	uint8_t address[SOCK_MAX_ADDRESS_SIZE];
 	struct user_msghdr msg;
@@ -449,7 +476,7 @@ ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
 	iov.iov_base = buf;
 	msg.msg_name = address;
 	msg.msg_namelen = SOCK_MAX_ADDRESS_SIZE;
-	retval = recvmsg(fd, &msg, flags);
+	retval = nuse_recvmsg(fd, &msg, flags);
 	if (retval != -1 && from != 0) {
 		if (*fromlen < msg.msg_namelen) {
 			errno = EINVAL;
@@ -461,15 +488,18 @@ ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
 	}
 	return retval;
 }
-int recv(int fd, void *buf, size_t count, int flags)
+weak_alias(nuse_recvfrom, recvfrom);
+
+int nuse_recv(int fd, void *buf, size_t count, int flags)
 {
-	return recvfrom(fd, buf, count, flags, 0, 0);
+	return nuse_recvfrom(fd, buf, count, flags, 0, 0);
 }
+weak_alias(nuse_recv, recv);
 
 extern int lib_sock_setsockopt(struct socket *socket, int level, int optname,
 			       const void *optval, int optlen);
-int setsockopt(int fd, int level, int optname,
-	       const void *optval, int optlen)
+int nuse_setsockopt(int fd, int level, int optname,
+			const void *optval, int optlen)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -483,11 +513,12 @@ int setsockopt(int fd, int level, int optname,
 	lib_softirq_wakeup();
 	return retval;
 }
+weak_alias(nuse_setsockopt, setsockopt);
 
 extern int lib_sock_getsockopt(struct socket *socket, int level, int optname,
 			       void *optval, int *optlen);
-int getsockopt(int fd, int level, int optname,
-	       void *optval, int *optlen)
+int nuse_getsockopt(int fd, int level, int optname,
+			void *optval, int *optlen)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -501,6 +532,24 @@ int getsockopt(int fd, int level, int optname,
 	lib_softirq_wakeup();
 	return retval;
 }
+weak_alias(nuse_getsockopt, getsockopt);
+
+extern int lib_sock_ioctl(struct socket *socket, int request, char *argp);
+int nuse_ioctl(int fd, int request, ...)
+{
+	va_list vl;
+	char *argp;
+
+	va_start(vl, request);
+	argp = va_arg(vl, char *);
+	va_end(vl);
+
+	if (!nuse_fd_table[fd].nuse_sock)
+		return host_ioctl(nuse_fd_table[fd].real_fd, request, argp);
+
+	return lib_sock_ioctl(nuse_fd_table[fd].nuse_sock->kern_sock, request, argp);
+}
+weak_alias(nuse_ioctl, ioctl);
 
 int fcntl(int fd, int cmd, ... /* arg */ )
 {
@@ -566,24 +615,7 @@ int open64(const char *pathname, int flags, mode_t mode)
 	return real_fd;
 }
 
-extern int lib_sock_ioctl(struct socket *socket, int request, char *argp);
-int ioctl(int fd, int request, ...)
-{
-	va_list vl;
-	char *argp;
-
-	va_start(vl, request);
-	argp = va_arg(vl, char *);
-	va_end(vl);
-
-	if (!nuse_fd_table[fd].nuse_sock)
-		return host_ioctl(nuse_fd_table[fd].real_fd, request, argp);
-
-	return lib_sock_ioctl(nuse_fd_table[fd].nuse_sock->kern_sock, request, argp);
-}
-
-int
-pipe(int pipefd[2])
+int pipe(int pipefd[2])
 {
 	int ret = host_pipe(pipefd);
 
@@ -851,8 +883,8 @@ poll(struct pollfd *fds, nfds_t nfds, int timeout)
 weak_alias (poll, __poll);
 
 int
-select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
-	struct timeval *timeout)
+select(int nfds, fd_set *readfds, fd_set *writefds,
+	fd_set *exceptfds, struct timeval *timeout)
 {
 	struct pollfd pollFd[nfds];
 	int fd;
@@ -1022,7 +1054,7 @@ epoll_ctl(int epollfd, int op, int fd, struct epoll_event *event)
 
 int
 epoll_wait(int epollfd, struct epoll_event *events,
-	   int maxevents, int timeout)
+		int maxevents, int timeout)
 {
 	struct epoll_fd *cur, *epfd = nuse_fd_table[epollfd].epoll_fd;
 

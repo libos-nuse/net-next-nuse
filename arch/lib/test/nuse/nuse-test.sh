@@ -28,6 +28,20 @@ ENDCONF
 
 sudo NUSECONF=${NUSE_CONF} ./nuse ping 127.0.0.1 -c 2
 
+# rump test
+sudo NUSECONF=${NUSE_CONF} ./nuse sleep 5 &
+
+sleep 2
+PID_SLEEP=`/bin/ls -ltr /tmp/rump-server-nuse.* | tail -1 | awk '{print $9}' | sed -e "s/.*rump-server-nuse\.//g" | sed "s/=//"`
+RUMP_URL=unix:///tmp/rump-server-nuse.$PID_SLEEP
+# ls -ltr /tmp/*
+
+sudo chmod 777 /tmp/rump-server-nuse.$PID_SLEEP
+LD_PRELOAD=./arch/lib/libnuse-hijack.so  RUMPHIJACK=socket=all \
+    RUMP_SERVER=$RUMP_URL ip addr show
+
+wait %1
+
 if [ "$1" == "--extended" ] ; then
 sudo NUSECONF=${NUSE_CONF} ./nuse ping ${GW} -c 2
 sudo NUSECONF=${NUSE_CONF} ./nuse iperf -c ${GW} -p 2000 -t 3

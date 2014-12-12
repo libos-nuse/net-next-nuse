@@ -1,0 +1,9 @@
+arch/lib/rump:sys/rump/librump/rumpkern
+arch/lib/rump:lib/librumpclient
+arch/lib/rump:lib/librumphijack
+arch/lib/rump:lib/librumpuser
+arch/lib/rump:sys/rump/include/rump
+arch/lib/rump:sys/sys/syscall.h
+arch/lib/rump:sys/sys/syscallargs.h
+arch/lib/rump:sys/srcsys
+arch/lib/rump:.gitignore

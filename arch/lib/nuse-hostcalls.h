@@ -13,6 +13,8 @@ extern int (*host_socket)(int fd, int type, int proto);
 extern int (*host_close)(int fd);
 extern int (*host_bind)(int, const struct sockaddr *, int);
 extern ssize_t (*host_read)(int fd, void *buf, size_t count);
+extern ssize_t (*host_send)(int sockfd, const void *buf, size_t len, int flags);
+extern ssize_t (*host_sendmsg)(int sockfd, const struct msghdr *msg, int flags);
 extern ssize_t (*host_write)(int fd, const void *buf, size_t count);
 extern ssize_t (*host_writev)(int fd, const struct iovec *iovec, size_t count);
 extern int (*host_open)(const char *pathname, int flags,...);
@@ -30,5 +32,13 @@ extern int (*host_fclose)(FILE *fp);
 extern size_t (*host_fwrite)(const void *ptr, size_t size, size_t nmemb,
                         FILE *stream);
 extern int (*host_access)(const char *pathname, int mode);
+extern int (*host_listen)(int sockfd, int backlog);
+extern int (*host_accept)(int sockfd, struct sockaddr *addr,
+			int *addrlen);
+extern int (*host_getsockopt)(int sockfd, int level, int optname,
+			void *optval, int *optlen);
+extern int (*host_setsockopt)(int sockfd, int level, int optname,
+			const void *optval, int optlen);
+extern pid_t (*host_getpid)(void);
 
 #endif /* NUSE_HOSTCALLS_H */

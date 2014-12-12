@@ -49,8 +49,8 @@ endif
 dpdk-sdk:
 	git submodule init; \
 	git submodule update; \
-	cd $(srctree)/dpdk ; make CONFIG_RTE_LIBRTE_ETHDEV_DEBUG=y T=$(shell expr `uname -m`)-native-linuxapp-gcc config && \
-           make SRCARCH=x86 CONFIG_RTE_BUILD_COMBINE_LIBS=y EXTRA_CFLAGS="-fPIC -g" ;\
+	cd $(srctree)/dpdk ; make CONFIG_RTE_LIBRTE_ETHDEV_DEBUG=y T=$(shell expr `uname -m`)-native-linuxapp-gcc config
+	cd $(srctree)/dpdk ; make SRCARCH=x86 CONFIG_RTE_BUILD_COMBINE_LIBS=y EXTRA_CFLAGS="-fPIC -g"
 
 
 
@@ -58,8 +58,76 @@ NUSE_USPACE_SRC=\
 nuse-fiber.c nuse-vif.c nuse-hostcalls.c nuse-config.c \
 nuse-vif-rawsock.c nuse-vif-tap.c nuse-vif-pipe.c $(netmap_$(NETMAP))
 
-NUSE_SRC=$(NUSE_USPACE_SRC)\
+NUSE_SRC=$(NUSE_USPACE_SRC) $(RUMP_SRC) \
 nuse.c nuse-poll.c nuse-glue.c
+
+RUMP_TOP=rump
+# RUMP_DEBUG=-DDEBUG -DDEBUGJACK
+RUMPUSER_CONF_H=$(ARCH_DIR)/$(RUMP_TOP)/lib/librumpuser/rumpuser_config.h
+
+RUMP_SRC= \
+nuse-syscalls.c \
+$(RUMP_TOP)/lib/librumpuser/rumpuser_sp.c \
+$(RUMP_TOP)/lib/librumpuser/rumpuser.c \
+$(RUMP_TOP)/lib/librumpuser/rumpuser_errtrans.c \
+$(RUMP_TOP)/lib/librumpuser/rumpuser_random.c \
+$(RUMP_TOP)/lib/librumpuser/rumpuser_pth_dummy.c
+
+RUMP_HIJACK_SRC= \
+$(RUMP_TOP)/lib/librumphijack/hijack.c
+
+RUMP_CLIENT_SRC= \
+$(RUMP_TOP)/lib/librumpclient/rumpclient.c \
+$(RUMP_TOP)/sys/rump/librump/rumpkern/rump_syscalls.c
+
+RUMP_CLIENT_SRC_PATH=$(addprefix $(ARCH_DIR)/,$(RUMP_CLIENT_SRC))
+
+rump-git-sparse:
+	@rm -f git-sparse
+	@wget --no-check-certificate -q \
+	 https://raw.githubusercontent.com/icoxfog417/git-sparse/master/git-sparse
+	@sed -i "s/\/bin\/sh/\/bin\/bash/" git-sparse
+	@chmod +x git-sparse
+	PATH=${PATH}:./ git sparse
+
+RUMP_CFLAGS=-I$(ARCH_DIR)/$(RUMP_TOP)/lib/librumpuser \
+	-I$(ARCH_DIR)/$(RUMP_TOP)/sys/rump/include \
+	-I$(ARCH_DIR)/$(RUMP_TOP)/sys \
+	-I$(ARCH_DIR)/$(RUMP_TOP)/lib/librumpuser \
+	-I$(ARCH_DIR)/$(RUMP_TOP)/lib/librumpclient \
+	$(CFLAGS_USPACE) -DRUMPUSER_CONFIG -DLIBRUMPUSER -I$(ARCH_DIR) \
+	-DRUMP_CLIENT \
+	$(RUMP_DEBUG)
+
+RUMP_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_SRC))))
+RUMP_CLIENT_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_CLIENT_SRC))))
+RUMP_HIJACK_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_HIJACK_SRC))))
+
+$(RUMPUSER_CONF_H):
+	cd $(ARCH_DIR)/$(RUMP_TOP)/lib/librumpuser/ && LDFLAGS= CFLAGS= ./configure
+
+quiet_cmd_rumps = RUMPS		$@
+      cmd_rumps = $(CC) $(CFLAGS) $(RUMP_CFLAGS) -DHOSTOPS -c $< -o $@
+$(RUMP_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile
+	$(call if_changed,rumps)
+
+quiet_cmd_rclient = RUMPHJ	$@
+      cmd_rclient = $(CC) -shared $(RUMP_CLIENT_OBJ) -o $@
+$(ARCH_DIR)/librumpclient.so: $(RUMP_CLIENT_OBJ) $(ARCH_DIR)/Makefile
+	$(call if_changed,rclient)
+
+quiet_cmd_rumpc = RUMPC		$@
+      cmd_rumpc = $(CC) $(RUMP_CFLAGS) -U_FORTIFY_SOURCE -c $< -o $@
+$(RUMP_CLIENT_OBJ): %.o : %.c $(ARCH_DIR)/Makefile
+	$(call if_changed,rumpc)
+$(RUMP_HIJACK_OBJ): %.o : %.c $(ARCH_DIR)/Makefile
+	$(call if_changed,rumpc)
+
+quiet_cmd_hijack = RUMPHJ	$@
+      cmd_hijack = $(CC) -shared $(RUMP_HIJACK_OBJ) -lpthread -ldl \
+	-Wl,-rpath=$(ARCH_DIR) -L$(ARCH_DIR) -lrumpclient -o $@
+$(ARCH_DIR)/libnuse-hijack.so: $(RUMP_HIJACK_OBJ) $(ARCH_DIR)/librumpclient.so $(ARCH_DIR)/Makefile
+	$(call if_changed,hijack)
 
 SIM_SRC=\
 sim.c
@@ -245,7 +313,7 @@ $(NUSE_USPACE_OBJ): %.o : %.c
 %.o:%.c
 	$(call if_changed,cc)
 
-library: $(KERNEL_LIB)
+library: $(KERNEL_LIB) $(ARCH_DIR)/libnuse-hijack.so
 modules: $(modules)
 
 quiet_cmd_nusetest = BUILDTEST   $@
@@ -266,7 +334,8 @@ quiet_cmd_clean = CLEAN   $@
 		  $(MAKE) -C $(ARCH_DIR)/test clean ;\
 		  $(MAKE) -C $(ARCH_DIR)/test/nuse clean
 
-ALL_OBJS=$(NUSE_OBJ) $(SIM_OBJ) $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
+ALL_OBJS=$(NUSE_OBJ) $(SIM_OBJ) $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean) \
+	$(ARCH_DIR)/libnuse-hijack.so $(ARCH_DIR)/librumpclient.so
 archclean:
 	$(call if_changed,clean)
 
@@ -279,7 +348,7 @@ quiet_cmd_linksim = LIBSIM	$@
       cmd_linksim = $(CC) -Wl,--whole-archive $(OBJS) $(SIM_OBJ) $(LDFLAGS) $(LDFLAGS_SIM) -o $@; \
 		    ln -s -f $(SIM_LIB) liblinux.so
 
-$(NUSE_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(COMPILE_H) $(DPDK_OBJ) $(NUSE_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
+$(NUSE_LIB):rump-git-sparse $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(COMPILE_H) $(DPDK_OBJ) $(NUSE_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linknuse)
 
 $(SIM_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(COMPILE_H) $(SIM_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
@@ -288,7 +357,7 @@ $(SIM_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(COMPILE_H) $(SIM_OBJ
 test:
 	$(MAKE) -C $(ARCH_DIR)/test
 
-.PHONY : clean depend
+.PHONY : clean depend git-sparse
 
 quiet_cmd_deps = DEPS  $@
       cmd_deps = set -e; $(CC) -MM -MT $(<:.c=.o) $(CFLAGS) $< > $@

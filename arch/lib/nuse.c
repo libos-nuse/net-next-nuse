@@ -490,4 +490,14 @@ nuse_init(void)
 		for (n = 0; n < cf.route_cnt; n++)
 			nuse_route_install(cf.routes[n]);
 	}
+
+	/* now it's ready to accept IPC */
+	nuse_syscall_proxy_init();
+}
+
+void __attribute__((destructor))
+nuse_exit(void)
+{
+	printf("finishing NUSE\n");
+	nuse_syscall_proxy_exit();
 }

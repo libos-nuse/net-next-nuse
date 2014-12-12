@@ -39,4 +39,8 @@ void nuse_set_affinity(void);
 int nuse_poll(struct pollfd *fds, unsigned int nfds,
 	struct timespec *end_time);
 
+/* nuse-syscalls.c */
+void nuse_syscall_proxy_init(void);
+void nuse_syscall_proxy_exit(void);
+
 #endif /* NUSE_H */
