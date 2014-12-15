@@ -29,19 +29,6 @@ struct page *mem_map = 0;                       /* defined in linux/mmzone.h mm/
 struct tvec_base boot_tvec_bases;               /* used during boot. */
 int nr_threads = 0;                             /* used by sysinfo in kernel/timer.c */
 atomic_long_t vm_stat[NR_VM_ZONE_STAT_ITEMS];   /* not very useful in mm/vmstat.c */
-struct uts_namespace init_uts_ns = {
-	.kref			= {
-		.refcount	= ATOMIC_INIT(2),
-	},
-	.name			= {
-		.sysname	= "",
-		.nodename	= "",
-		.release	= "",
-		.version	= "",
-		.machine	= "",
-		.domainname	= "",
-	},
-};
 
 /* XXX: used in network stack ! */
 unsigned long num_physpages = 0;

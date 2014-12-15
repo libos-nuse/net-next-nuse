@@ -113,7 +113,8 @@ CFLAGS+= \
  -DEXPORT_SYMTAB -include $(srctree)/include/linux/kconfig.h \
  -U__FreeBSD__ -D__linux__=1 -Dlinux=1 -D__linux=1 \
  -I$(ARCH_DIR)/include -I$(srctree)/include \
- -I$(ARCH_DIR) -I$(srctree) -I$(srctree) -I$(srctree)/include/uapi
+ -I$(ARCH_DIR) -I$(srctree) -I$(srctree) -I$(srctree)/include/uapi \
+ -DCONFIG_DEFAULT_HOSTNAME=\"lib\"
 
 include $(ARCH_DIR)/processor.mk
 
@@ -134,7 +135,7 @@ all: library modules
 
 AUTOCONF=$(ARCH_DIR)/autoconf.h
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ kernel/time/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/
+dirs=kernel/ kernel/time/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/ init/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
@@ -158,6 +159,7 @@ div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
 rhashtable.o
 fs/_to_keep=read_write.o libfs.o namei.o
 fs/proc/_to_keep=proc_sysctl.o
+init/_to_keep=version.o
 
 
 quiet_cmd_objsmk = OBJS-MK   $@

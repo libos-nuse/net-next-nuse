@@ -158,6 +158,8 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	exported->sys_file_write = lib_sys_file_write_forwarder;
 	exported->sys_file_read = lib_sys_file_read_forwarder;
 
+	pr_notice("%s", linux_banner);
+
 	rcu_init();
 
 	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
