@@ -134,6 +134,7 @@ all: library modules
 -include $(ARCH_DIR)/objs.mk
 
 AUTOCONF=$(ARCH_DIR)/autoconf.h
+COMPILE_H=$(srctree)/include/generated/compile.h
 # note: the directory order below matters to ensure that we match the kernel order
 dirs=kernel/ kernel/time/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/ init/
 empty:=
@@ -207,8 +208,17 @@ quiet_cmd_crc32 = GEN     $@
 $(CRC32TABLE): $(srctree)/lib/gen_crc32table
 	$(call if_changed,crc32)
 
+# copy from init/Makefile
+       chk_compile.h = :
+ quiet_chk_compile.h = echo '  CHK     $@'
+silent_chk_compile.h = :
+$(COMPILE_H): FORCE
+	@$($(quiet)chk_compile.h)
+	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkcompile_h $@ \
+	"$(UTS_MACHINE)" "$(CONFIG_SMP)" "$(CONFIG_PREEMPT)" "$(CC) $(KBUILD_CFLAGS)"
+
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
-OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
+OBJS=$(COMPILE_H) $(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
 quiet_cmd_cc = CC   $@
       cmd_cc = 	mkdir -p $(dir $@);	\
 		$(CC) $(CFLAGS) -c $< -o $@
