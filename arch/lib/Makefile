@@ -212,7 +212,7 @@ $(CRC32TABLE): $(srctree)/lib/gen_crc32table
        chk_compile.h = :
  quiet_chk_compile.h = echo '  CHK     $@'
 silent_chk_compile.h = :
-$(COMPILE_H): FORCE
+$(COMPILE_H): include/generated/utsrelease.h
 	@$($(quiet)chk_compile.h)
 	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkcompile_h $@ \
 	"$(UTS_MACHINE)" "$(CONFIG_SMP)" "$(CONFIG_PREEMPT)" "$(CC) $(KBUILD_CFLAGS)"
