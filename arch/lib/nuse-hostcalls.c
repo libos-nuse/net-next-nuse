@@ -25,6 +25,9 @@ int (*host_ioctl)(int d, int request, ...) = NULL;
 char *(*host_getenv)(const char *name) = NULL;
 int (*host_fclose)(FILE *fp) = NULL;
 FILE *(*host_fdopen)(int fd, const char *mode) = NULL;
+size_t (*host_fwrite)(const void *ptr, size_t size, size_t nmemb,
+		FILE *stream) = NULL;
+int (*host_access)(const char *pathname, int mode) = NULL;
 
 static void *
 nuse_hostcall_resolve_sym(const char *sym)
@@ -56,6 +59,7 @@ void nuse_hostcall_init(void)
 	host_getenv = nuse_hostcall_resolve_sym("getenv");
 	host_fdopen = nuse_hostcall_resolve_sym("fdopen");
 	host_fclose = nuse_hostcall_resolve_sym("fclose");
-
+	host_fwrite = nuse_hostcall_resolve_sym("fwrite");
+	host_access = nuse_hostcall_resolve_sym("access");
 }
 

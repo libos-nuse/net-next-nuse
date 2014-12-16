@@ -23,5 +23,8 @@ extern int (*host_pthread_create)(struct pthread *, const struct pthread_attr *,
 extern char *(*host_getenv)(const char *name);
 extern FILE *(*host_fdopen)(int fd, const char *mode);
 extern int (*host_fclose)(FILE *fp);
+extern size_t (*host_fwrite)(const void *ptr, size_t size, size_t nmemb,
+                        FILE *stream);
+extern int (*host_access)(const char *pathname, int mode);
 
 #endif /* NUSE_HOSTCALLS_H */

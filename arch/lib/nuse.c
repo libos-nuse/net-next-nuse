@@ -72,6 +72,15 @@ int nuse_fclose(struct SimKernel *kernel, FILE *fp)
 {
 	return host_fclose(fp);
 }
+size_t nuse_fwrite(struct SimKernel *kernel, const void *ptr,
+		size_t size, size_t nmemb, FILE *stream)
+{
+	return host_fwrite(ptr, size, nmemb, stream);
+}
+int nuse_access(struct SimKernel *kernel, const char *pathname, int mode)
+{
+	return host_access(pathname, mode);
+}
 
 static struct SimTask *g_nuse_main_ctx = NULL;
 struct list_head g_task_lists = LIST_HEAD_INIT(g_task_lists);
@@ -430,7 +439,7 @@ nuse_init(void)
 	imported->memcpy = nuse_memcpy;
 	imported->memset = nuse_memset;
 	imported->atexit = NULL; /* not implemented */
-	imported->access = NULL; /* not implemented */
+	imported->access = nuse_access;
 	imported->getenv = nuse_getenv;
 	imported->mkdir = NULL; /* not implemented */
 	/* it's not hypercall, but just a POSIX glue ? */
@@ -441,7 +450,7 @@ nuse_init(void)
 	imported->ftell = NULL; /* not implemented */
 	imported->fdopen = NULL; /* not implemented */
 	imported->fread = NULL; /* not implemented */
-	imported->fwrite = NULL; /* not implemented */
+	imported->fwrite = nuse_fwrite;
 	imported->fclose = nuse_fclose;
 	imported->random = nuse_random;
 	imported->event_schedule_ns = nuse_event_schedule_ns;
