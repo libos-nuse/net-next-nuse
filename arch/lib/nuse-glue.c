@@ -124,7 +124,7 @@ int socket(int v0, int v1, int v2)
 extern int lib_sock_close(struct socket *);
 int close(int fd)
 {
-	int ret;
+	int ret = 0;
 
 	if (!nuse_fd_table[fd].nuse_sock) {
 		if (nuse_fd_table[fd].epoll_fd > 0) {
@@ -484,7 +484,7 @@ int fcntl(int fd, int cmd, ... /* arg */ )
 		return nuse_fd_table[fd].nuse_sock->flags;
 		break;
 	case F_SETFL:
-		nuse_fd_table[fd].nuse_sock->flags = (int)argp;
+		nuse_fd_table[fd].nuse_sock->flags = (intptr_t)argp;
 		return 0;
 		break;
 	default:
@@ -570,7 +570,7 @@ hostpoll(void *arg)
 	rv = host_poll(parg->pfds, parg->nfds, to);
 	if (rv == -1)
 		parg->errnum = errno;
-	write(parg->pipefd, &rv, sizeof(rv));
+	lib_assert(write(parg->pipefd, &rv, sizeof(rv)) > 0);
 
 	return (void *)rv;
 }
@@ -682,7 +682,7 @@ do_host_nuse_poll(struct pollfd *fds, nfds_t nfds, struct timespec *ts)
 
 	rv_rump = nuse_poll(pfd_rump, nfds+1, ts);
 	errno_rump = errno;
-	write(hpipe[1], &rv, sizeof(rv));
+	lib_assert(write(hpipe[1], &rv, sizeof(rv)) > 0);
 	host_pthread_join(pt, &trv_val);
 	rv_host = (int)(intptr_t)trv_val;
 	errno_host = parg.errnum;
