@@ -1,3 +1,4 @@
+//#include <pthread.h>
 #include <net/net_namespace.h>
 #include <errno.h>
 #include <poll.h>
@@ -86,6 +87,7 @@ enum EPOLL_EVENTS {
 		#define EPOLLET EPOLLET
 };
 
+/* FIXME: need to be configurable */
 struct nuse_fd nuse_fd_table[1024];
 
 /* epoll relates */
@@ -108,8 +110,13 @@ int socket(int v0, int v1, int v2)
 	if (ret < 0)
 		errno = -ret;
 	real_fd = host_open("/", O_RDONLY, 0);
-	nuse_fd_table[real_fd].kern_sock = kernel_socket;
+	nuse_fd_table[real_fd].nuse_sock = malloc(sizeof(struct nuse_socket));
+	memset(nuse_fd_table[real_fd].nuse_sock, 0, sizeof(struct nuse_socket));
+
+	nuse_fd_table[real_fd].nuse_sock->kern_sock = kernel_socket;
+	nuse_fd_table[real_fd].nuse_sock->refcnt++;
 	nuse_fd_table[real_fd].real_fd = real_fd;
+
 	lib_softirq_wakeup();
 	return real_fd;
 }
@@ -119,7 +126,7 @@ int close(int fd)
 {
 	int ret;
 
-	if (!nuse_fd_table[fd].kern_sock) {
+	if (!nuse_fd_table[fd].nuse_sock) {
 		if (nuse_fd_table[fd].epoll_fd > 0) {
 			free(nuse_fd_table[fd].epoll_fd);
 			nuse_fd_table[fd].epoll_fd = NULL;
@@ -131,23 +138,31 @@ int close(int fd)
 	}
 
 	lib_update_jiffies();
-	ret = lib_sock_close(nuse_fd_table[fd].kern_sock);
+	if (--nuse_fd_table[fd].nuse_sock->refcnt > 0) {
+		goto end;
+	}
+
+	ret = lib_sock_close(nuse_fd_table[fd].nuse_sock->kern_sock);
 	if (ret < 0)
 		errno = -ret;
-	nuse_fd_table[fd].kern_sock = 0;
+
+end:
+	nuse_fd_table[fd].nuse_sock = 0;
 	host_close(nuse_fd_table[fd].real_fd);
 	lib_softirq_wakeup();
 	return ret;
 }
 
 extern ssize_t lib_sock_recvmsg(struct socket *, const struct msghdr *, int);
-ssize_t recvmsg(int fd, const struct msghdr *v1, int v2)
+ssize_t recvmsg(int fd, const struct msghdr *msghdr, int flags)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	ssize_t ret;
 
-	ret = lib_sock_recvmsg(kernel_socket, v1, v2);
+	if (nuse_fd_table[fd].nuse_sock->flags & O_NONBLOCK)
+		flags |= MSG_DONTWAIT;
+	ret = lib_sock_recvmsg(kernel_socket, msghdr, flags);
 	if (ret < 0)
 		errno = -ret;
 	lib_softirq_wakeup();
@@ -155,13 +170,15 @@ ssize_t recvmsg(int fd, const struct msghdr *v1, int v2)
 }
 
 extern ssize_t lib_sock_sendmsg(struct socket *, const struct msghdr *, int);
-ssize_t sendmsg(int fd, const struct msghdr *v1, int v2)
+ssize_t sendmsg(int fd, const struct msghdr *msghdr, int flags)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	ssize_t ret;
 
-	ret = lib_sock_sendmsg(kernel_socket, v1, v2);
+	if (nuse_fd_table[fd].nuse_sock->flags & O_NONBLOCK)
+		flags |= MSG_DONTWAIT;
+	ret = lib_sock_sendmsg(kernel_socket, msghdr, flags);
 	if (ret < 0)
 		errno = -ret;
 	lib_softirq_wakeup();
@@ -173,7 +190,7 @@ extern int lib_sock_getsockname(struct socket *, struct sockaddr *name,
 int getsockname(int fd, struct sockaddr *name, int *namelen)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	int ret;
 
 	ret = lib_sock_getsockname(kernel_socket, name, namelen);
@@ -186,7 +203,7 @@ extern int lib_sock_getpeername(struct socket *, struct sockaddr *name,
 int getpeername(int fd, struct sockaddr *name, int *namelen)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	int ret;
 
 	ret = lib_sock_getsockname(kernel_socket, name, namelen);
@@ -199,7 +216,7 @@ extern int lib_sock_bind(struct socket *, const struct sockaddr *name,
 int bind(int fd, struct sockaddr *name, int namelen)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	int ret;
 
 	ret = lib_sock_bind(kernel_socket, name, namelen);
@@ -211,10 +228,11 @@ extern int lib_sock_connect(struct socket *, struct sockaddr *, int, int);
 int connect(int fd, struct sockaddr *v1, int v2)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	int ret;
 
-	ret = lib_sock_connect(kernel_socket, v1, v2, 0);
+	ret = lib_sock_connect(kernel_socket, v1, v2,
+			nuse_fd_table[fd].nuse_sock->flags);
 	lib_softirq_wakeup();
 	return ret;
 }
@@ -223,7 +241,7 @@ extern int lib_sock_listen(struct socket *socket, int backlog);
 int listen(int fd, int v1)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	int retval;
 
 	retval = lib_sock_listen(kernel_socket, v1);
@@ -245,7 +263,7 @@ extern int lib_sock_accept(struct socket *socket, struct socket **new_socket,
 int accept4(int fd, struct sockaddr *addr, int *addrlen, int flags)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	struct socket *new_socket = malloc(sizeof(struct socket));
 	int retval, real_fd;
 
@@ -267,19 +285,23 @@ int accept4(int fd, struct sockaddr *addr, int *addrlen, int flags)
 	}
 
 	real_fd = host_open("/", O_RDONLY, 0);
-	nuse_fd_table[real_fd].kern_sock = new_socket;
+	nuse_fd_table[real_fd].nuse_sock = malloc(sizeof(struct nuse_socket));
+	memset(nuse_fd_table[real_fd].nuse_sock, 0, sizeof(struct nuse_socket));
+
+	nuse_fd_table[real_fd].nuse_sock->kern_sock = new_socket;
+	nuse_fd_table[real_fd].nuse_sock->refcnt++;
 	nuse_fd_table[real_fd].real_fd = real_fd;
 	lib_softirq_wakeup();
 	return real_fd;
 }
 int accept(int fd, struct sockaddr *addr, int *addrlen, int flags)
 {
-	return accept4(fd, addr, addrlen, 0);
+	return accept4(fd, addr, addrlen, nuse_fd_table[fd].nuse_sock->flags);
 }
 
 ssize_t write(int fd, const void *buf, size_t count)
 {
-	if (!nuse_fd_table[fd].kern_sock)
+	if (!nuse_fd_table[fd].nuse_sock)
 		return host_write(nuse_fd_table[fd].real_fd, buf, count);
 
 	struct msghdr msg;
@@ -298,7 +320,7 @@ ssize_t write(int fd, const void *buf, size_t count)
 
 ssize_t writev(int fd, const struct iovec *iov, size_t count)
 {
-	if (!nuse_fd_table[fd].kern_sock)
+	if (!nuse_fd_table[fd].nuse_sock)
 		return host_writev(nuse_fd_table[fd].real_fd, iov, count);
 
 	struct msghdr msg;
@@ -339,7 +361,7 @@ ssize_t send(int fd, const void *buf, size_t len, int flags)
 
 ssize_t read(int fd, void *buf, size_t count)
 {
-	if (!nuse_fd_table[fd].kern_sock)
+	if (!nuse_fd_table[fd].nuse_sock)
 		return host_read(nuse_fd_table[fd].real_fd, buf, count);
 
 	struct msghdr msg;
@@ -402,7 +424,7 @@ int setsockopt(int fd, int level, int optname,
 	       const void *optval, int optlen)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	int retval = lib_sock_setsockopt(kernel_socket, level, optname, optval,
 					 optlen);
 	if (retval < 0) {
@@ -420,7 +442,7 @@ int getsockopt(int fd, int level, int optname,
 	       void *optval, int *optlen)
 {
 	lib_update_jiffies();
-	struct socket *kernel_socket = nuse_fd_table[fd].kern_sock;
+	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
 	int retval = lib_sock_getsockopt(kernel_socket, level, optname, optval,
 					 optlen);
 	if (retval < 0) {
@@ -432,12 +454,51 @@ int getsockopt(int fd, int level, int optname,
 	return retval;
 }
 
+int fcntl(int fd, int cmd, ... /* arg */ )
+{
+	va_list vl;
+	int *argp;
+	long err = -EINVAL;
+
+	va_start(vl, cmd);
+	argp = va_arg(vl, int *);
+	va_end(vl);
+
+	if (!nuse_fd_table[fd].nuse_sock)
+		return host_fcntl(nuse_fd_table[fd].real_fd, cmd, argp);
+
+	/* nuse routine */
+	switch (cmd) {
+	case F_DUPFD:
+		err = host_fcntl(nuse_fd_table[fd].real_fd, cmd, argp);
+		if (err == -1) {
+			return err;
+		}
+		nuse_fd_table[err].real_fd = err;
+		nuse_fd_table[err].nuse_sock = nuse_fd_table[fd].nuse_sock;
+		nuse_fd_table[err].epoll_fd = nuse_fd_table[fd].epoll_fd;
+		nuse_fd_table[err].nuse_sock->refcnt++;
+
+		break;
+	case F_GETFL:
+		return nuse_fd_table[fd].nuse_sock->flags;
+		break;
+	case F_SETFL:
+		nuse_fd_table[fd].nuse_sock->flags = (int)argp;
+		return 0;
+		break;
+	default:
+		break;
+	}
+	return err;
+}
+
 int nuse_open(struct SimKernel *kernel, const char *pathname,
 	int flags, mode_t mode)
 {
 	int real_fd = host_open(pathname, flags, mode);
 
-	if (nuse_fd_table[real_fd].real_fd < 0) {
+	if (real_fd < 0) {
 		printf("open error %d\n", errno);
 		return -1;
 	}
@@ -450,7 +511,7 @@ int open64(const char *pathname, int flags, mode_t mode)
 	int real_fd = host_open64(pathname, flags, mode);
 
 	/*  printf ("%d, %llu %s %s\n", nuse_fd_table[curfd].real_fd, curfd, pathname, __FUNCTION__); */
-	if (nuse_fd_table[real_fd].real_fd < 0) {
+	if (real_fd < 0) {
 		printf("open error %d\n", errno);
 		return -1;
 	}
@@ -468,17 +529,251 @@ int ioctl(int fd, int request, ...)
 	argp = va_arg(vl, char *);
 	va_end(vl);
 
-	if (!nuse_fd_table[fd].kern_sock)
+	if (!nuse_fd_table[fd].nuse_sock)
 		return host_ioctl(nuse_fd_table[fd].real_fd, request, argp);
 
-	return lib_sock_ioctl(nuse_fd_table[fd].kern_sock, request, argp);
+	return lib_sock_ioctl(nuse_fd_table[fd].nuse_sock->kern_sock, request, argp);
 }
 
+int
+pipe(int pipefd[2])
+{
+	int ret = host_pipe(pipefd);
+
+	if (ret == -1)
+		return ret;
+
+	nuse_fd_table[pipefd[0]].real_fd = pipefd[0];
+	nuse_fd_table[pipefd[1]].real_fd = pipefd[1];
+	return ret;
+}
+
+
+/* From librumphijack/hijack.c */
+struct pollarg {
+	struct pollfd *pfds;
+	nfds_t nfds;
+	const struct timespec *ts;
+	const sigset_t *sigmask;
+	int pipefd;
+	int errnum;
+};
+
+static void *
+hostpoll(void *arg)
+{
+	struct pollarg *parg = arg;
+	intptr_t rv;
+	int to;
+
+	to = parg->ts ? timespec_to_ns(parg->ts) / NSEC_PER_MSEC : -1;
+	rv = host_poll(parg->pfds, parg->nfds, to);
+	if (rv == -1)
+		parg->errnum = errno;
+	write(parg->pipefd, &rv, sizeof(rv));
+
+	return (void *)rv;
+}
+
+/*
+ * poll is easy as long as the call comes in the fds only in one
+ * kernel.  otherwise its quite tricky...
+ */
+
+static int
+do_host_nuse_poll(struct pollfd *fds, nfds_t nfds, struct timespec *ts)
+{
+	/* copied from librumphijack/hijack.c */
+	struct pollfd *pfd_host = NULL, *pfd_rump = NULL;
+	int rpipe[2] = {-1,-1}, hpipe[2] = {-1,-1};
+	struct pollarg parg;
+	void *trv_val;
+	int sverrno = 0, rv_rump, rv_host, errno_rump, errno_host;
+	pthread_t pt;
+	nfds_t i;
+	int rv;
+
+	/*
+	 * ok, this is where it gets tricky.  We must support
+	 * this since it's a very common operation in certain
+	 * types of software (telnet, netcat, etc).  We allocate
+	 * two vectors and run two poll commands in separate
+	 * threads.  Whichever returns first "wins" and the
+	 * other kernel's fds won't show activity.
+	 */
+	rv = -1;
+
+	/* allocate full vector for O(n) joining after call */
+	pfd_host = malloc(sizeof(*pfd_host)*(nfds+1));
+	if (!pfd_host)
+		goto out;
+	pfd_rump = malloc(sizeof(*pfd_rump)*(nfds+1));
+	if (!pfd_rump) {
+		goto out;
+	}
+
+	/*
+	 * then, open two pipes, one for notifications
+	 * to each kernel.
+	 *
+	 * At least the rump pipe should probably be
+	 * cached, along with the helper threads.  This
+	 * should give a microbenchmark improvement (haven't
+	 * experienced a macro-level problem yet, though).
+	 */
+	if ((rv = pipe(rpipe)) == -1) {
+		sverrno = errno;
+	}
+	if (rv == 0 && (rv = pipe(hpipe)) == -1) {
+		sverrno = errno;
+	}
+
+	/* split vectors (or signal errors) */
+	for (i = 0; i < nfds; i++) {
+		int fd;
+
+		fds[i].revents = 0;
+		if (fds[i].fd == -1) {
+			pfd_host[i].fd = -1;
+			pfd_rump[i].fd = -1;
+		} else if (nuse_fd_table[fds[i].fd].nuse_sock) {
+			pfd_host[i].fd = -1;
+			fd = fds[i].fd;
+			if (fd == rpipe[0] || fd == rpipe[1]) {
+				fds[i].revents = POLLNVAL;
+				if (rv != -1)
+					rv++;
+			}
+			pfd_rump[i].fd = fd;
+			pfd_rump[i].events = fds[i].events;
+		} else {
+			pfd_rump[i].fd = -1;
+			fd = fds[i].fd;
+			if (fd == hpipe[0] || fd == hpipe[1]) {
+				fds[i].revents = POLLNVAL;
+				if (rv != -1)
+					rv++;
+			}
+			pfd_host[i].fd = fd;
+			pfd_host[i].events = fds[i].events;
+		}
+		pfd_rump[i].revents = pfd_host[i].revents = 0;
+	}
+	if (rv) {
+		goto out;
+	}
+
+	pfd_host[nfds].fd = hpipe[0];
+	pfd_host[nfds].events = POLLIN;
+	pfd_rump[nfds].fd = rpipe[0];
+	pfd_rump[nfds].events = POLLIN;
+
+	/*
+	 * then, create a thread to do host part and meanwhile
+	 * do rump kernel part right here
+	 */
+
+	parg.pfds = pfd_host;
+	parg.nfds = nfds+1;
+	parg.ts = ts;
+	/* parg.sigmask = sigmask; */
+	parg.pipefd = rpipe[1];
+	host_pthread_create(&pt, NULL, hostpoll, &parg);
+
+	rv_rump = nuse_poll(pfd_rump, nfds+1, ts);
+	errno_rump = errno;
+	write(hpipe[1], &rv, sizeof(rv));
+	host_pthread_join(pt, &trv_val);
+	rv_host = (int)(intptr_t)trv_val;
+	errno_host = parg.errnum;
+
+	/* strip cross-thread notification from real results */
+	if (rv_host > 0 && pfd_host[nfds].revents & POLLIN) {
+		rv_host--;
+	}
+	if (rv_rump > 0 && pfd_rump[nfds].revents & POLLIN) {
+		rv_rump--;
+	}
+
+	/* then merge the results into what's reported to the caller */
+	if (rv_rump > 0 || rv_host > 0) {
+		/* SUCCESS */
+
+		rv = 0;
+		if (rv_rump > 0) {
+			for (i = 0; i < nfds; i++) {
+				if (pfd_rump[i].fd != -1)
+					fds[i].revents
+						= pfd_rump[i].revents;
+			}
+			rv += rv_rump;
+		}
+		if (rv_host > 0) {
+			for (i = 0; i < nfds; i++) {
+				if (pfd_host[i].fd != -1)
+					fds[i].revents
+						= pfd_host[i].revents;
+			}
+			rv += rv_host;
+		}
+		lib_assert(rv > 0);
+		sverrno = 0;
+	} else if (rv_rump == -1 || rv_host == -1) {
+		/* ERROR */
+
+		/* just pick one kernel at "random" */
+		rv = -1;
+		if (rv_host == -1) {
+			sverrno = errno_host;
+		} else if (rv_rump == -1) {
+			sverrno = errno_rump;
+		}
+	} else {
+		/* TIMEOUT */
+
+		rv = 0;
+		lib_assert(rv_rump == 0 && rv_host == 0);
+	}
+
+out:
+	if (rpipe[0] != -1)
+		host_close(rpipe[0]);
+	if (rpipe[1] != -1)
+		host_close(rpipe[1]);
+	if (hpipe[0] != -1)
+		host_close(hpipe[0]);
+	if (hpipe[1] != -1)
+		host_close(hpipe[1]);
+	free(pfd_host);
+	free(pfd_rump);
+	errno = sverrno;
+
+	return rv;
+}
+
+/* copied from librumphijack/hijack.c */
+static void
+checkpoll(struct pollfd *fds, nfds_t nfds, int *hostcall, int *rumpcall)
+{
+	nfds_t i;
+
+	for (i = 0; i < nfds; i++) {
+		if (fds[i].fd == -1)
+			continue;
+
+		if (nuse_fd_table[fds[i].fd].nuse_sock)
+			(*rumpcall)++;
+		else
+			(*hostcall)++;
+	}
+}
 
 int
 poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {
 	struct timespec *to = NULL, end_time;
+	int hostcall = 0, rumpcall = 0;
+	int count;
 
 	lib_update_jiffies();
 
@@ -489,7 +784,23 @@ poll(struct pollfd *fds, nfds_t nfds, int timeout)
 		to = &end_time;
 	}
 
-	return nuse_poll(fds, nfds, to);
+	checkpoll(fds, nfds, &hostcall, &rumpcall);
+	if (hostcall && rumpcall) {
+		/* this is the case to write carefully between host and nuse */
+		/* see rump/hijack.c for more detail  */
+		count = do_host_nuse_poll(fds, nfds, to);
+	}
+	else {
+		if (hostcall) {
+			count = host_poll(fds, nfds, timeout);
+		}
+		else {
+			count = nuse_poll(fds, nfds, to);
+		}
+	}
+
+
+	return count;
 }
 
 int
@@ -531,7 +842,7 @@ select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 		pollFd[fd].fd = fd;
 
 		if (event) {
-			if (!nuse_fd_table[fd].kern_sock) {
+			if (!nuse_fd_table[fd].nuse_sock) {
 				errno = EBADF;
 				return -1;
 			}
@@ -638,14 +949,19 @@ epoll_ctl(int epollfd, int op, int fd, struct epoll_event *event)
 			prev = epfd;
 			epfd = epfd->next;
 		}
-		if (!prev) {
+		if (!epfd) {
 			pr_err("NUSE: no fd found for EPOLL_CTL_DEL (fd=%d)\n", fd);
+			errno = ENOENT;
+			return -1;
+		}
+		ev = epfd->ev;
+		epfd->fd = -1;
+		free(ev);
+		if (prev) {
+			prev->next = epfd->next;
+			epfd = prev;
 		}
 
-		prev->next = epfd->next;
-		ev = epfd->ev;
-		free(ev);
-		free(epfd);
 		break;
 	default:
 		break;
@@ -668,6 +984,10 @@ epoll_wait(int epollfd, struct epoll_event *events,
 	int j = 0;
 
 	memset(pollFd, 0, sizeof(struct pollfd) * maxevents);
+	for (j = 0; j < maxevents; j++) {
+		pollFd[j].fd = -1;
+	}
+	j = 0;
 
 	for (cur = epfd; cur && cur->ev; cur = cur->next) {
 		struct epoll_event *ev = cur->ev;

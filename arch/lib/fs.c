@@ -279,3 +279,8 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
 	return 0;
 }
+
+unsigned long get_max_files(void)
+{
+	return NR_FILE;
+}

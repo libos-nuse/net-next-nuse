@@ -5,10 +5,16 @@ struct pollfd;
 struct SimDevice;
 
 /* nuse.c */
+struct nuse_socket {
+	struct socket *kern_sock;
+	int refcnt;
+	int flags;
+};
+
 struct nuse_fd {
 	int real_fd;
 	struct epoll_fd *epoll_fd;
-	struct socket *kern_sock;
+	struct nuse_socket *nuse_sock;
 };
 extern struct nuse_fd nuse_fd_table[1024];
 void nuse_dev_rx(struct SimDevice *dev, char *buf, int size);

@@ -10,8 +10,9 @@
 #include "nuse-hostcalls.h"
 
 /* nuse-hostcalls.c */
-int (*host_pthread_create)(struct pthread *, const struct pthread_attr *,
+int (*host_pthread_create)(pthread_t *, const struct pthread_attr *,
 			   void *(*)(void *), void *) = NULL;
+int (*host_pthread_join)(pthread_t thread, void **retval) = NULL;
 int (*host_poll)(struct pollfd *, int, int) = NULL;
 int (*host_socket)(int fd, int type, int proto) = NULL;
 int (*host_close)(int fd) = NULL;
@@ -25,9 +26,11 @@ int (*host_ioctl)(int d, int request, ...) = NULL;
 char *(*host_getenv)(const char *name) = NULL;
 int (*host_fclose)(FILE *fp) = NULL;
 FILE *(*host_fdopen)(int fd, const char *mode) = NULL;
+int (*host_fcntl)(int fd, int cmd, ... /* arg */ ) = NULL;
 size_t (*host_fwrite)(const void *ptr, size_t size, size_t nmemb,
 		FILE *stream) = NULL;
 int (*host_access)(const char *pathname, int mode) = NULL;
+int (*host_pipe)(int pipefd[2]) = NULL;
 
 static void *
 nuse_hostcall_resolve_sym(const char *sym)
@@ -52,12 +55,15 @@ void nuse_hostcall_init(void)
 	host_close = nuse_hostcall_resolve_sym("close");
 	host_bind = nuse_hostcall_resolve_sym("bind");
 	host_pthread_create = nuse_hostcall_resolve_sym("pthread_create");
+	host_pthread_join = nuse_hostcall_resolve_sym("pthread_join");
 	host_poll = nuse_hostcall_resolve_sym("poll");
 	host_open = nuse_hostcall_resolve_sym("open");
 	host_open64 = nuse_hostcall_resolve_sym("open64");
 	host_ioctl = nuse_hostcall_resolve_sym("ioctl");
+	host_pipe = nuse_hostcall_resolve_sym("pipe");
 	host_getenv = nuse_hostcall_resolve_sym("getenv");
 	host_fdopen = nuse_hostcall_resolve_sym("fdopen");
+	host_fcntl = nuse_hostcall_resolve_sym("fcntl");
 	host_fclose = nuse_hostcall_resolve_sym("fclose");
 	host_fwrite = nuse_hostcall_resolve_sym("fwrite");
 	host_access = nuse_hostcall_resolve_sym("access");

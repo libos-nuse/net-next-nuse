@@ -152,12 +152,15 @@ do_poll(struct pollfd *fds, unsigned int nfds,
 
 	/* call (sim) kernel side */
 	for (i = 0; i < nfds; ++i) {
-		struct socket *sock =
-			(struct socket *)nuse_fd_table[fds[i].fd].kern_sock;
+		struct socket *sock;
 		struct file zero;
 
-		if (!sock)
+		/* host's fd */
+		if (!nuse_fd_table[fds[i].fd].nuse_sock)
 			continue;
+		/* nuse's fd */
+		sock = (struct socket *)
+			nuse_fd_table[fds[i].fd].nuse_sock->kern_sock;
 
 		pt->_key = fds[i].events | POLLERR | POLLHUP;
 		mask = sock->ops->poll(&zero, sock, pt);
