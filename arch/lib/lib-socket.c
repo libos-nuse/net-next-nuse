@@ -47,7 +47,7 @@ int lib_sock_close(struct SimSocket *socket)
 	sock_release(kernel_socket);
 	return 0;
 }
-static size_t iov_size(const struct msghdr *msg)
+static size_t iov_size(const struct user_msghdr *msg)
 {
 	size_t i;
 	size_t size = 0;
@@ -56,36 +56,51 @@ static size_t iov_size(const struct msghdr *msg)
 		size += msg->msg_iov[i].iov_len;
 	return size;
 }
-ssize_t lib_sock_recvmsg(struct SimSocket *socket, struct msghdr *msg,
-			 int flags)
+ssize_t lib_sock_recvmsg(struct SimSocket *socket,
+			struct user_msghdr *msg,
+			int flags)
 {
 	struct socket *kernel_socket = (struct socket *)socket;
-	struct iovec *kernel_iov = copy_iovec(msg->msg_iov, msg->msg_iovlen);
-	struct iovec *user_iov = msg->msg_iov;
-	struct cmsghdr *user_cmsgh = msg->msg_control;
+	struct msghdr msg_sys;
+	struct cmsghdr *user_cmsgh = msg_sys.msg_control;
 	size_t user_cmsghlen = msg->msg_controllen;
 	int retval;
 
-	msg->msg_iov = kernel_iov;
-	retval = sock_recvmsg(kernel_socket, msg, iov_size(msg), flags);
-	msg->msg_iov = user_iov;
+	msg_sys.msg_name = msg->msg_name;
+	msg_sys.msg_namelen = msg->msg_namelen;
+	msg_sys.msg_control = msg->msg_control;
+	msg_sys.msg_controllen = msg->msg_controllen;
+	msg_sys.msg_flags = flags;
+
+	iov_iter_init(&msg_sys.msg_iter, READ,
+		msg->msg_iov, msg->msg_iovlen, iov_size(msg));
+
+	retval = sock_recvmsg(kernel_socket, &msg_sys, iov_size(msg), flags);
+
+	msg->msg_name = msg_sys.msg_name;
+	msg->msg_namelen = msg_sys.msg_namelen;
 	msg->msg_control = user_cmsgh;
-	msg->msg_controllen = user_cmsghlen - msg->msg_controllen;
-	lib_free(kernel_iov);
+	msg->msg_controllen = user_cmsghlen - msg_sys.msg_controllen;
 	return retval;
 }
-ssize_t lib_sock_sendmsg(struct SimSocket *socket, const struct msghdr *msg,
-			 int flags)
+ssize_t lib_sock_sendmsg(struct SimSocket *socket,
+			const struct user_msghdr *msg,
+			int flags)
 {
 	struct socket *kernel_socket = (struct socket *)socket;
-	struct iovec *kernel_iov = copy_iovec(msg->msg_iov, msg->msg_iovlen);
-	struct msghdr kernel_msg = *msg;
+	struct msghdr msg_sys;
 	int retval;
 
-	kernel_msg.msg_flags = flags;
-	kernel_msg.msg_iov = kernel_iov;
-	retval = sock_sendmsg(kernel_socket, &kernel_msg, iov_size(msg));
-	lib_free(kernel_iov);
+	msg_sys.msg_name = msg->msg_name;
+	msg_sys.msg_namelen = msg->msg_namelen;
+	msg_sys.msg_control = msg->msg_control;
+	msg_sys.msg_controllen = msg->msg_controllen;
+	msg_sys.msg_flags = flags;
+
+	iov_iter_init(&msg_sys.msg_iter, WRITE,
+		msg->msg_iov, msg->msg_iovlen, iov_size(msg));
+
+	retval = sock_sendmsg(kernel_socket, &msg_sys, iov_size(msg));
 	return retval;
 }
 int lib_sock_getsockname(struct SimSocket *socket, struct sockaddr *name,

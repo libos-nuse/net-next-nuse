@@ -111,6 +111,7 @@ int percpu_pagelist_fraction = 0;
 int panic_timeout = 0;
 int panic_on_oops = 0;
 int printk_delay_msec = 0;
+int panic_on_warn = 0;
 DEFINE_RATELIMIT_STATE(printk_ratelimit_state, 5 * HZ, 10);
 
 #define RESERVED_PIDS 300

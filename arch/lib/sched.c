@@ -163,6 +163,12 @@ int autoremove_wake_function(wait_queue_t *wait, unsigned mode, int sync,
 	return ret;
 }
 
+int woken_wake_function(wait_queue_t *wait, unsigned mode, int sync, void *key)
+{
+	wait->flags |= WQ_FLAG_WOKEN;
+	return default_wake_function(wait, mode, sync, key);
+}
+
 void __init_waitqueue_head(wait_queue_head_t *q, const char *name,
 			   struct lock_class_key *k)
 {

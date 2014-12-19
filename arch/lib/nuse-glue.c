@@ -153,8 +153,8 @@ end:
 	return ret;
 }
 
-extern ssize_t lib_sock_recvmsg(struct socket *, const struct msghdr *, int);
-ssize_t recvmsg(int fd, const struct msghdr *msghdr, int flags)
+extern ssize_t lib_sock_recvmsg(struct socket *, const struct user_msghdr *, int);
+ssize_t recvmsg(int fd, const struct user_msghdr *msghdr, int flags)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -169,8 +169,8 @@ ssize_t recvmsg(int fd, const struct msghdr *msghdr, int flags)
 	return ret;
 }
 
-extern ssize_t lib_sock_sendmsg(struct socket *, const struct msghdr *, int);
-ssize_t sendmsg(int fd, const struct msghdr *msghdr, int flags)
+extern ssize_t lib_sock_sendmsg(struct socket *, const struct user_msghdr *, int);
+ssize_t sendmsg(int fd, const struct user_msghdr *msghdr, int flags)
 {
 	lib_update_jiffies();
 	struct socket *kernel_socket = nuse_fd_table[fd].nuse_sock->kern_sock;
@@ -304,7 +304,7 @@ ssize_t write(int fd, const void *buf, size_t count)
 	if (!nuse_fd_table[fd].nuse_sock)
 		return host_write(nuse_fd_table[fd].real_fd, buf, count);
 
-	struct msghdr msg;
+	struct user_msghdr msg;
 	struct iovec iov;
 
 	msg.msg_control = 0;
@@ -323,7 +323,7 @@ ssize_t writev(int fd, const struct iovec *iov, size_t count)
 	if (!nuse_fd_table[fd].nuse_sock)
 		return host_writev(nuse_fd_table[fd].real_fd, iov, count);
 
-	struct msghdr msg;
+	struct user_msghdr msg;
 
 	msg.msg_control = 0;
 	msg.msg_controllen = 0;
@@ -337,11 +337,11 @@ ssize_t writev(int fd, const struct iovec *iov, size_t count)
 ssize_t sendto(int fd, const void *buf, size_t len, int flags,
 	       const struct sockaddr *dest_addr, socklen_t addrlen)
 {
-	struct msghdr msg;
+	struct user_msghdr msg;
 	struct iovec iov;
 	ssize_t retval;
 
-	memset(&msg, 0, sizeof(struct msghdr));
+	memset(&msg, 0, sizeof(struct user_msghdr));
 	msg.msg_control = 0;
 	msg.msg_controllen = 0;
 	msg.msg_iovlen = 1;
@@ -364,7 +364,7 @@ ssize_t read(int fd, void *buf, size_t count)
 	if (!nuse_fd_table[fd].nuse_sock)
 		return host_read(nuse_fd_table[fd].real_fd, buf, count);
 
-	struct msghdr msg;
+	struct user_msghdr msg;
 	struct iovec iov;
 	ssize_t retval;
 
@@ -389,7 +389,7 @@ ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
 		 struct sockaddr *from, int *fromlen)
 {
 	uint8_t address[SOCK_MAX_ADDRESS_SIZE];
-	struct msghdr msg;
+	struct user_msghdr msg;
 	struct iovec iov;
 	ssize_t retval;
 
