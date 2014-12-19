@@ -2325,7 +2325,7 @@ static int identify_port(struct net_device *dev,
 	return t4_identify_port(adap, adap->fn, netdev2pinfo(dev)->viid, val);
 }
 
-static unsigned int from_fw_linkcaps(unsigned int type, unsigned int caps)
+static unsigned int from_fw_linkcaps(enum fw_port_type type, unsigned int caps)
 {
 	unsigned int v = 0;
 
@@ -2354,10 +2354,20 @@ static unsigned int from_fw_linkcaps(unsigned int type, unsigned int caps)
 		     SUPPORTED_10000baseKR_Full | SUPPORTED_1000baseKX_Full |
 		     SUPPORTED_10000baseKX4_Full;
 	else if (type == FW_PORT_TYPE_FIBER_XFI ||
-		 type == FW_PORT_TYPE_FIBER_XAUI || type == FW_PORT_TYPE_SFP)
+		 type == FW_PORT_TYPE_FIBER_XAUI ||
+		 type == FW_PORT_TYPE_SFP ||
+		 type == FW_PORT_TYPE_QSFP_10G ||
+		 type == FW_PORT_TYPE_QSA) {
 		v |= SUPPORTED_FIBRE;
-	else if (type == FW_PORT_TYPE_BP40_BA)
+		if (caps & FW_PORT_CAP_SPEED_1G)
+			v |= SUPPORTED_1000baseT_Full;
+		if (caps & FW_PORT_CAP_SPEED_10G)
+			v |= SUPPORTED_10000baseT_Full;
+	} else if (type == FW_PORT_TYPE_BP40_BA ||
+		   type == FW_PORT_TYPE_QSFP) {
 		v |= SUPPORTED_40000baseSR4_Full;
+		v |= SUPPORTED_FIBRE;
+	}
 
 	if (caps & FW_PORT_CAP_ANEG)
 		v |= SUPPORTED_Autoneg;
@@ -2392,6 +2402,7 @@ static int get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 		cmd->port = PORT_FIBRE;
 	else if (p->port_type == FW_PORT_TYPE_SFP ||
 		 p->port_type == FW_PORT_TYPE_QSFP_10G ||
+		 p->port_type == FW_PORT_TYPE_QSA ||
 		 p->port_type == FW_PORT_TYPE_QSFP) {
 		if (p->mod_type == FW_PORT_MOD_TYPE_LR ||
 		    p->mod_type == FW_PORT_MOD_TYPE_SR ||
@@ -2923,20 +2934,34 @@ static u32 get_rss_table_size(struct net_device *dev)
 	return pi->rss_size;
 }
 
-static int get_rss_table(struct net_device *dev, u32 *p, u8 *key)
+static int get_rss_table(struct net_device *dev, u32 *p, u8 *key, u8 *hfunc)
 {
 	const struct port_info *pi = netdev_priv(dev);
 	unsigned int n = pi->rss_size;
 
+	if (hfunc)
+		*hfunc = ETH_RSS_HASH_TOP;
+	if (!p)
+		return 0;
 	while (n--)
 		p[n] = pi->rss[n];
 	return 0;
 }
 
-static int set_rss_table(struct net_device *dev, const u32 *p, const u8 *key)
+static int set_rss_table(struct net_device *dev, const u32 *p, const u8 *key,
+			 const u8 hfunc)
 {
 	unsigned int i;
 	struct port_info *pi = netdev_priv(dev);
+
+	/* We require at least one supported parameter to be changed and no
+	 * change in any of the unsupported parameters
+	 */
+	if (key ||
+	    (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP))
+		return -EOPNOTSUPP;
+	if (!p)
+		return 0;
 
 	for (i = 0; i < pi->rss_size; i++)
 		pi->rss[i] = p[i];
@@ -3791,6 +3816,22 @@ u64 cxgb4_read_sge_timestamp(struct net_device *dev)
 }
 EXPORT_SYMBOL(cxgb4_read_sge_timestamp);
 
+int cxgb4_bar2_sge_qregs(struct net_device *dev,
+			 unsigned int qid,
+			 enum cxgb4_bar2_qtype qtype,
+			 u64 *pbar2_qoffset,
+			 unsigned int *pbar2_qid)
+{
+	return cxgb4_t4_bar2_sge_qregs(netdev2adap(dev),
+				 qid,
+				 (qtype == CXGB4_BAR2_QTYPE_EGRESS
+				  ? T4_BAR2_QTYPE_EGRESS
+				  : T4_BAR2_QTYPE_INGRESS),
+				 pbar2_qoffset,
+				 pbar2_qid);
+}
+EXPORT_SYMBOL(cxgb4_bar2_sge_qregs);
+
 static struct pci_driver cxgb4_driver;
 
 static void check_neigh_update(struct neighbour *neigh)
@@ -3973,31 +4014,18 @@ static void process_db_drop(struct work_struct *work)
 		u32 dropped_db = t4_read_reg(adap, 0x010ac);
 		u16 qid = (dropped_db >> 15) & 0x1ffff;
 		u16 pidx_inc = dropped_db & 0x1fff;
-		unsigned int s_qpp;
-		unsigned short udb_density;
-		unsigned long qpshift;
-		int page;
-		u32 udb;
+		u64 bar2_qoffset;
+		unsigned int bar2_qid;
+		int ret;
 
-		dev_warn(adap->pdev_dev,
-			 "Dropped DB 0x%x qid %d bar2 %d coalesce %d pidx %d\n",
-			 dropped_db, qid,
-			 (dropped_db >> 14) & 1,
-			 (dropped_db >> 13) & 1,
-			 pidx_inc);
-
-		drain_db_fifo(adap, 1);
-
-		s_qpp = QUEUESPERPAGEPF1 * adap->fn;
-		udb_density = 1 << QUEUESPERPAGEPF0_GET(t4_read_reg(adap,
-				SGE_EGRESS_QUEUES_PER_PAGE_PF) >> s_qpp);
-		qpshift = PAGE_SHIFT - ilog2(udb_density);
-		udb = qid << qpshift;
-		udb &= PAGE_MASK;
-		page = udb / PAGE_SIZE;
-		udb += (qid - (page * udb_density)) * 128;
-
-		writel(PIDX(pidx_inc),  adap->bar2 + udb + 8);
+		ret = cxgb4_t4_bar2_sge_qregs(adap, qid, T4_BAR2_QTYPE_EGRESS,
+					&bar2_qoffset, &bar2_qid);
+		if (ret)
+			dev_err(adap->pdev_dev, "doorbell drop recovery: "
+				"qid=%d, pidx_inc=%d\n", qid, pidx_inc);
+		else
+			writel(PIDX_T5(pidx_inc) | QID(bar2_qid),
+			       adap->bar2 + bar2_qoffset + SGE_UDB_KDOORBELL);
 
 		/* Re-enable BAR2 WC */
 		t4_set_reg_field(adap, 0x10b0, 1<<15, 1<<15);
@@ -4055,12 +4083,8 @@ static void uld_attach(struct adapter *adap, unsigned int uld)
 	lli.adapter_type = adap->params.chip;
 	lli.iscsi_iolen = MAXRXDATA_GET(t4_read_reg(adap, TP_PARA_REG2));
 	lli.cclk_ps = 1000000000 / adap->params.vpd.cclk;
-	lli.udb_density = 1 << QUEUESPERPAGEPF0_GET(
-			t4_read_reg(adap, SGE_EGRESS_QUEUES_PER_PAGE_PF) >>
-			(adap->fn * 4));
-	lli.ucq_density = 1 << QUEUESPERPAGEPF0_GET(
-			t4_read_reg(adap, SGE_INGRESS_QUEUES_PER_PAGE_PF) >>
-			(adap->fn * 4));
+	lli.udb_density = 1 << adap->params.sge.eq_qpp;
+	lli.ucq_density = 1 << adap->params.sge.iq_qpp;
 	lli.filt_mode = adap->params.tp.vlan_pri_map;
 	/* MODQ_REQ_MAP sets queues 0-3 to chan 0-3 */
 	for (i = 0; i < NCHAN; i++)
@@ -5507,14 +5531,8 @@ static int adap_init0(struct adapter *adap)
 	struct fw_caps_config_cmd caps_cmd;
 	int reset = 1;
 
-	/*
-	 * Contact FW, advertising Master capability (and potentially forcing
-	 * ourselves as the Master PF if our module parameter force_init is
-	 * set).
-	 */
-	ret = t4_fw_hello(adap, adap->mbox, adap->fn,
-			  force_init ? MASTER_MUST : MASTER_MAY,
-			  &state);
+	/* Contact FW, advertising Master capability */
+	ret = t4_fw_hello(adap, adap->mbox, adap->mbox, MASTER_MAY, &state);
 	if (ret < 0) {
 		dev_err(adap->pdev_dev, "could not connect to FW, error %d\n",
 			ret);
@@ -5522,8 +5540,6 @@ static int adap_init0(struct adapter *adap)
 	}
 	if (ret == adap->mbox)
 		adap->flags |= MASTER_PF;
-	if (force_init && state == DEV_STATE_INIT)
-		state = DEV_STATE_UNINIT;
 
 	/*
 	 * If we're the Master PF Driver and the device is uninitialized,
@@ -5912,6 +5928,7 @@ static int adap_init0(struct adapter *adap)
 		t4_load_mtus(adap, adap->params.mtus, adap->params.a_wnd,
 			     adap->params.b_wnd);
 	}
+	t4_init_sge_params(adap);
 	t4_init_tp_params(adap);
 	adap->flags |= FW_OK;
 	return 0;

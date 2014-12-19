@@ -1609,9 +1609,6 @@ static int sctp_sendmsg(struct kiocb *iocb, struct sock *sk,
 	__u16 sinfo_flags = 0;
 	long timeo;
 	int err;
-	struct iov_iter from;
-
-	iov_iter_init(&from, WRITE, msg->msg_iov, msg->msg_iovlen, msg_len);
 
 	err = 0;
 	sp = sctp_sk(sk);
@@ -1950,7 +1947,7 @@ static int sctp_sendmsg(struct kiocb *iocb, struct sock *sk,
 	}
 
 	/* Break the message into multiple chunks of maximum size. */
-	datamsg = sctp_datamsg_from_user(asoc, sinfo, &from);
+	datamsg = sctp_datamsg_from_user(asoc, sinfo, &msg->msg_iter);
 	if (IS_ERR(datamsg)) {
 		err = PTR_ERR(datamsg);
 		goto out_free;
@@ -6595,8 +6592,7 @@ static int sctp_msghdr_parse(const struct msghdr *msg, sctp_cmsgs_t *cmsgs)
 	struct cmsghdr *cmsg;
 	struct msghdr *my_msg = (struct msghdr *)msg;
 
-	for (cmsg = CMSG_FIRSTHDR(msg); cmsg != NULL;
-	     cmsg = CMSG_NXTHDR(my_msg, cmsg)) {
+	for_each_cmsghdr(cmsg, my_msg) {
 		if (!CMSG_OK(my_msg, cmsg))
 			return -EINVAL;
 

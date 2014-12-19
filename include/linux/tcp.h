@@ -130,7 +130,7 @@ struct tcp_sock {
 	/* inet_connection_sock has to be the first member of tcp_sock */
 	struct inet_connection_sock	inet_conn;
 	u16	tcp_header_len;	/* Bytes of tcp header to send		*/
-	u16	xmit_size_goal_segs; /* Goal for segmenting output packets */
+	u16	gso_segs;	/* Max number of segs per GSO packet	*/
 
 /*
  *	Header prediction flags
@@ -162,7 +162,7 @@ struct tcp_sock {
 	struct {
 		struct sk_buff_head	prequeue;
 		struct task_struct	*task;
-		struct iovec		*iov;
+		struct msghdr		*msg;
 		int			memory;
 		int			len;
 	} ucopy;

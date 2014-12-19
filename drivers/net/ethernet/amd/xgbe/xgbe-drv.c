@@ -396,7 +396,7 @@ static irqreturn_t xgbe_dma_isr(int irq, void *data)
 	 */
 	if (napi_schedule_prep(&channel->napi)) {
 		/* Disable Tx and Rx interrupts */
-		disable_irq(channel->dma_irq);
+		disable_irq_nosync(channel->dma_irq);
 
 		/* Turn on polling */
 		__napi_schedule(&channel->napi);
@@ -1285,7 +1285,6 @@ static int xgbe_open(struct net_device *netdev)
 	struct xgbe_hw_if *hw_if = &pdata->hw_if;
 	struct xgbe_desc_if *desc_if = &pdata->desc_if;
 	struct xgbe_channel *channel = NULL;
-	char dma_irq_name[IFNAMSIZ + 32];
 	unsigned int i = 0;
 	int ret;
 
@@ -1341,13 +1340,14 @@ static int xgbe_open(struct net_device *netdev)
 	if (pdata->per_channel_irq) {
 		channel = pdata->channel;
 		for (i = 0; i < pdata->channel_count; i++, channel++) {
-			snprintf(dma_irq_name, sizeof(dma_irq_name) - 1,
+			snprintf(channel->dma_irq_name,
+				 sizeof(channel->dma_irq_name) - 1,
 				 "%s-TxRx-%u", netdev_name(netdev),
 				 channel->queue_index);
 
 			ret = devm_request_irq(pdata->dev, channel->dma_irq,
-					       xgbe_dma_isr, 0, dma_irq_name,
-					       channel);
+					       xgbe_dma_isr, 0,
+					       channel->dma_irq_name, channel);
 			if (ret) {
 				netdev_alert(netdev,
 					     "error requesting irq %d\n",
@@ -1839,7 +1839,7 @@ static int xgbe_tx_poll(struct xgbe_channel *channel)
 	spin_lock_irqsave(&ring->lock, flags);
 
 	while ((processed < XGBE_TX_DESC_MAX_PROC) &&
-	       (ring->dirty < ring->cur)) {
+	       (ring->dirty != ring->cur)) {
 		rdata = XGBE_GET_DESC_DATA(ring, ring->dirty);
 		rdesc = rdata->rdesc;
 
