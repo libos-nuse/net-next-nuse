@@ -20,6 +20,7 @@
 #include "sim-init.h"
 #include "sim-assert.h"
 #include "sim.h"
+#include "lib.h"
 #include "nuse.h"
 #include "nuse-hostcalls.h"
 #include "nuse-vif.h"
@@ -407,10 +408,6 @@ nuse_route_install(struct nuse_route_config *rtcf)
 			   rtcf->network, rtcf->gateway, err);
 }
 
-/* XXX */
-int nuse_open(struct SimKernel *kernel, const char *pathname,
-	int flags, ...);
-
 extern void lib_init(struct SimExported *exported,
 		const struct SimImported *imported,
 		struct SimKernel *kernel);
@@ -443,7 +440,7 @@ nuse_init(void)
 	imported->getenv = nuse_getenv;
 	imported->mkdir = NULL; /* not implemented */
 	/* it's not hypercall, but just a POSIX glue ? */
-	imported->open = nuse_open;
+	imported->open = NULL;	   /* not used */
 	imported->__fxstat = NULL; /* not implemented */
 	imported->fseek = NULL; /* not implemented */
 	imported->setbuf = NULL; /* not implemented */

@@ -3,6 +3,7 @@
 #include <linux/sched.h>
 #include <linux/nsproxy.h>
 #include <net/net_namespace.h>
+#include "lib.h"
 #include "sim.h"
 #include "sim-assert.h"
 

@@ -8,9 +8,10 @@
 #include <linux/binfmts.h>
 #include <linux/init_task.h>
 #include <linux/sched/rt.h>
+#include <stdarg.h>
 #include "sim-assert.h"
 #include "sim.h"
-#include <stdarg.h>
+#include "lib.h"
 
 
 struct pipe_buffer;

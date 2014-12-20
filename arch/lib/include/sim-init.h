@@ -79,7 +79,7 @@ struct SimImported {
 	char *(*getenv)(struct SimKernel *kernel, const char *name);
 	int (*mkdir)(struct SimKernel *kernel, const char *pathname,
 		mode_t mode);
-	int (*open)(struct SimKernel *kernel, const char *pathname, int flags, ...);
+	int (*open)(struct SimKernel *kernel, const char *pathname, int flags);
 	int (*__fxstat)(struct SimKernel *kernel, int ver, int fd, void *buf);
 	int (*fseek)(struct SimKernel *kernel, FILE *stream, long offset,
 		int whence);

@@ -3,15 +3,8 @@
 
 #include <stdarg.h>
 #include <linux/types.h>
-#include <linux/sched.h>
 
 #include "sim-types.h"
-
-struct SimTask {
-	struct list_head head;
-	struct task_struct kernel_task;
-	void *private;
-};
 
 /* API called from within linux kernel. Forwards to SimImported. */
 int lib_vprintf(const char *str, va_list args);
@@ -31,7 +24,7 @@ void lib_task_yield(void);
 struct SimTask *lib_task_current(void);
 /* returns 1 if task was woken up, 0 if it was already running. */
 int lib_task_wakeup(struct SimTask *task);
-struct SimTask *lib_task_create(void *private, unsigned long pid);
+struct SimTask *lib_task_create(void *priv, unsigned long pid);
 void lib_task_destroy(struct SimTask *task);
 void *lib_task_get_private(struct SimTask *task);
 

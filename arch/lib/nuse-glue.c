@@ -493,8 +493,7 @@ int fcntl(int fd, int cmd, ... /* arg */ )
 	return err;
 }
 
-int nuse_open(struct SimKernel *kernel, const char *pathname,
-	int flags, mode_t mode)
+int open(const char *pathname, int flags, mode_t mode)
 {
 	int real_fd = host_open(pathname, flags, mode);
 
