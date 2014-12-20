@@ -62,7 +62,7 @@ ssize_t lib_sock_recvmsg(struct SimSocket *socket,
 {
 	struct socket *kernel_socket = (struct socket *)socket;
 	struct msghdr msg_sys;
-	struct cmsghdr *user_cmsgh = msg_sys.msg_control;
+	struct cmsghdr *user_cmsgh = msg->msg_control;
 	size_t user_cmsghlen = msg->msg_controllen;
 	int retval;
 
