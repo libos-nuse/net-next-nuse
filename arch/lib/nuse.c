@@ -465,9 +465,6 @@ nuse_init(void)
 	struct SimExported *exported = malloc(sizeof(struct SimExported));
 	lib_init (exported, imported, NULL);
 
-	/* XXX: trick, reopen stderr */
-	stderr = host_fdopen (2, "rw");
-
 	/* loopback IFF_UP * / */
 	nuse_netdev_lo_up();
 
