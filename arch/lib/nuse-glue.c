@@ -185,6 +185,51 @@ ssize_t sendmsg(int fd, const struct user_msghdr *msghdr, int flags)
 	return ret;
 }
 
+int __sendmmsg(int fd, struct mmsghdr *msgvec, unsigned int vlen,
+	unsigned int flags)
+{
+	int err, datagrams;
+	struct mmsghdr __user *entry;
+	struct compat_mmsghdr *compat_entry;
+	struct msghdr msg_sys;
+
+	datagrams = 0;
+	entry = msgvec;
+	compat_entry = (struct compat_mmsghdr __user *)msgvec;
+	err = 0;
+
+	while (datagrams < vlen) {
+		if (MSG_CMSG_COMPAT & flags) {
+#if 0
+			err = sendmsg(fd,
+				(struct user_msghdr __user *)compat_entry,
+				flags);
+			if (err < 0)
+				break;
+			compat_entry->msg_len = err;
+			++compat_entry;
+#endif
+		} else {
+			err = sendmsg(fd,
+				(struct user_msghdr __user *)entry,
+				flags);
+			if (err < 0)
+				break;
+			entry->msg_len = err;
+			++entry;
+		}
+
+		++datagrams;
+	}
+
+	/* We only return an error if no datagrams were able to be sent */
+	if (datagrams != 0)
+		return datagrams;
+
+	return err;
+
+}
+
 extern int lib_sock_getsockname(struct socket *, struct sockaddr *name,
 				int *namelen);
 int getsockname(int fd, struct sockaddr *name, int *namelen)
