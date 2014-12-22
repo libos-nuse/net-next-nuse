@@ -151,34 +151,37 @@ do_poll(struct pollfd *fds, unsigned int nfds,
 
 
 	/* call (sim) kernel side */
-	for (i = 0; i < nfds; ++i) {
-		struct socket *sock;
-		struct file zero;
+	for (;;) {
+		for (i = 0; i < nfds; ++i) {
+			struct socket *sock;
+			struct file zero;
 
-		/* host's fd */
-		if (!nuse_fd_table[fds[i].fd].nuse_sock)
-			continue;
-		/* nuse's fd */
-		sock = (struct socket *)
-			nuse_fd_table[fds[i].fd].nuse_sock->kern_sock;
+			/* host's fd */
+			if (!nuse_fd_table[fds[i].fd].nuse_sock)
+				continue;
+			/* nuse's fd */
+			sock = (struct socket *)
+				nuse_fd_table[fds[i].fd].nuse_sock->kern_sock;
 
-		pt->_key = fds[i].events | POLLERR | POLLHUP;
-		mask = sock->ops->poll(&zero, sock, pt);
-		mask &= (fds[i].events | POLLERR | POLLHUP);
-		fds[i].revents = mask;
-		if (mask) {
-			count++;
-			pt->_qproc = NULL;
+			pt->_key = fds[i].events | POLLERR | POLLHUP;
+			mask = sock->ops->poll(&zero, sock, pt);
+			mask &= (fds[i].events | POLLERR | POLLHUP);
+			fds[i].revents = mask;
+			if (mask) {
+				count++;
+				pt->_qproc = NULL;
+			}
 		}
+
+		if (count || timed_out)
+			goto end;
+
+		/* FIXME: should not wait, needs to be interrupt-able..  */
+		if (!schedule_timeout(end_time ?
+					(timespec_to_jiffies(end_time) -
+						jiffies) : MAX_SCHEDULE_TIMEOUT))
+			timed_out = 1;
 	}
-
-	if (count || timed_out)
-		goto end;
-
-	if (!schedule_timeout(end_time ?
-			      (timespec_to_jiffies(end_time) -
-			       jiffies) : MAX_SCHEDULE_TIMEOUT))
-		timed_out = 1;
 
 end:
 	return count;

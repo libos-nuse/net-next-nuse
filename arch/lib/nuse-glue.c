@@ -11,6 +11,9 @@
 #include "nuse-libc.h"
 #include "sim.h"
 
+#define weak_alias(name, aliasname)					\
+	extern __typeof (name) aliasname __attribute__ ((weak, alias (# name)))
+
 /* #include <sys/select.h> */
 typedef long int __fd_mask;
 # define __FDS_BITS(set) ((set)->fds_bits)
@@ -846,6 +849,7 @@ poll(struct pollfd *fds, nfds_t nfds, int timeout)
 
 	return count;
 }
+weak_alias (poll, __poll);
 
 int
 select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
