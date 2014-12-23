@@ -9,8 +9,8 @@ CONFIG_LIB gives you two features.
 - network stack in userspace (NUSE)
 - network simulator integration, which is called Direct Code Execution
   (DCE)
-(- more abstracted rump hypercall implementation will be a future
-   direction)
+(- more abstracted implementation of underlying platform will be a future
+   direction (e.g., rump hypercall))
 
 In both features, Linux kernel network stack is running on top of
 userspace application with a linked or dynamically loaded library.
