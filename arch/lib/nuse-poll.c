@@ -178,9 +178,10 @@ do_poll(struct pollfd *fds, unsigned int nfds,
 
 		/* FIXME: should not wait, needs to be interrupt-able..  */
 		if (!schedule_timeout(end_time ?
-					(timespec_to_jiffies(end_time) -
-						jiffies) : MAX_SCHEDULE_TIMEOUT))
+					timespec_to_jiffies(end_time)
+					: MAX_SCHEDULE_TIMEOUT)) {
 			timed_out = 1;
+		}
 	}
 
 end:

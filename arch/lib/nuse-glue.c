@@ -546,7 +546,7 @@ int open(const char *pathname, int flags, mode_t mode)
 	int real_fd = host_open(pathname, flags, mode);
 
 	if (real_fd < 0) {
-		printf("open error %d\n", errno);
+		printf("open error %s (errno=%d)\n", pathname, errno);
 		return -1;
 	}
 	nuse_fd_table[real_fd].real_fd = real_fd;
@@ -559,7 +559,7 @@ int open64(const char *pathname, int flags, mode_t mode)
 
 	/*  printf ("%d, %llu %s %s\n", nuse_fd_table[curfd].real_fd, curfd, pathname, __FUNCTION__); */
 	if (real_fd < 0) {
-		printf("open error %d\n", errno);
+		printf("open error %s (errno=%d)\n", pathname, errno);
 		return -1;
 	}
 	nuse_fd_table[real_fd].real_fd = real_fd;
@@ -825,9 +825,8 @@ poll(struct pollfd *fds, nfds_t nfds, int timeout)
 	lib_update_jiffies();
 
 	if (timeout >= 0) {
-		clock_gettime(CLOCK_MONOTONIC, &end_time);
-		end_time.tv_sec += timeout / MSEC_PER_SEC;
-		end_time.tv_nsec += NSEC_PER_MSEC * (timeout % MSEC_PER_SEC);
+		end_time.tv_sec = timeout / MSEC_PER_SEC;
+		end_time.tv_nsec = NSEC_PER_MSEC * (timeout % MSEC_PER_SEC);
 		to = &end_time;
 	}
 
