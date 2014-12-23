@@ -35,4 +35,6 @@ sudo NUSECONF=${NUSE_CONF} ./nuse iperf -c 192.168.209.1 -p 8 -u -t 3
 sudo NUSECONF=${NUSE_CONF} ./nuse dig www.google.com
 sudo NUSECONF=${NUSE_CONF} ./nuse host www.google.com
 sudo NUSECONF=${NUSE_CONF} ./nuse nslookup www.google.com 
+#sudo NUSECONF=${NUSE_CONF} ./nuse nc www.google.com 80
+sudo NUSECONF=${NUSE_CONF} ./nuse wget www.google.com -O -
 fi
