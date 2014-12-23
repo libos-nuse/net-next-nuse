@@ -546,7 +546,7 @@ int open(const char *pathname, int flags, mode_t mode)
 	int real_fd = host_open(pathname, flags, mode);
 
 	if (real_fd < 0) {
-		printf("open error %s (errno=%d)\n", pathname, errno);
+		perror("open");
 		return -1;
 	}
 	nuse_fd_table[real_fd].real_fd = real_fd;
@@ -559,7 +559,7 @@ int open64(const char *pathname, int flags, mode_t mode)
 
 	/*  printf ("%d, %llu %s %s\n", nuse_fd_table[curfd].real_fd, curfd, pathname, __FUNCTION__); */
 	if (real_fd < 0) {
-		printf("open error %s (errno=%d)\n", pathname, errno);
+		perror("open64");
 		return -1;
 	}
 	nuse_fd_table[real_fd].real_fd = real_fd;
