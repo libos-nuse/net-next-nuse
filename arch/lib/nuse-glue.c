@@ -886,13 +886,16 @@ select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 
 		pollFd[fd].events = event;
 		pollFd[fd].revents = 0;
-		pollFd[fd].fd = fd;
 
 		if (event) {
 			if (!nuse_fd_table[fd].nuse_sock) {
 				errno = EBADF;
 				return -1;
 			}
+			pollFd[fd].fd = fd;
+		}
+		else {
+			pollFd[fd].fd = -1;
 		}
 	}
 

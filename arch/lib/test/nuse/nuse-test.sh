@@ -30,8 +30,8 @@ sudo NUSECONF=${NUSE_CONF} ./nuse ping 127.0.0.1 -c 1
 
 if [ "$1" == "--extended" ] ; then
 sudo NUSECONF=${NUSE_CONF} ./nuse ping ${GW} -c 1
-sudo NUSECONF=${NUSE_CONF} ./nuse iperf -c 192.168.209.1 -p 2000 -t 3
-sudo NUSECONF=${NUSE_CONF} ./nuse iperf -c 192.168.209.1 -p 8 -u -t 3
+sudo NUSECONF=${NUSE_CONF} ./nuse iperf -c ${GW} -p 2000 -t 3
+sudo NUSECONF=${NUSE_CONF} ./nuse iperf -c ${GW} -p 8 -u -t 3
 sudo NUSECONF=${NUSE_CONF} ./nuse dig www.google.com
 sudo NUSECONF=${NUSE_CONF} ./nuse host www.google.com
 sudo NUSECONF=${NUSE_CONF} ./nuse nslookup www.google.com 

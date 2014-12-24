@@ -157,6 +157,8 @@ do_poll(struct pollfd *fds, unsigned int nfds,
 			struct file zero;
 
 			/* host's fd */
+			if (fds[i].fd == -1)
+				continue;
 			if (!nuse_fd_table[fds[i].fd].nuse_sock)
 				continue;
 			/* nuse's fd */
