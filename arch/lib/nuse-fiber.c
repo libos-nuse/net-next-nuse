@@ -1,3 +1,10 @@
+/*
+ * userspace context primitive for NUSE
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #include <stdio.h>
 #define __USE_GNU 1
 #include <pthread.h>

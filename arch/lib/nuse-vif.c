@@ -1,3 +1,10 @@
+/*
+ * virtual network interface feature for NUSE
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <errno.h>

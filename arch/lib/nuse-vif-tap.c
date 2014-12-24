@@ -1,3 +1,11 @@
+/*
+ * tun/tap based virtual network interface feature for NUSE
+ * Copyright (c) 2015 Ryo Nakamura
+ *
+ * Author: Ryo Nakamura <upa@wide.ad.jp>
+ *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>

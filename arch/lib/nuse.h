@@ -1,3 +1,10 @@
+/*
+ * Network stack in userspace (NUSE) for POSIX userspace backend
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #ifndef NUSE_H
 #define NUSE_H
 

@@ -1,3 +1,10 @@
+/*
+ * host system/library calls for NUSE
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #ifndef NUSE_HOSTCALLS_H
 #define NUSE_HOSTCALLS_H
 

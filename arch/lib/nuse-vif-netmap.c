@@ -1,3 +1,11 @@
+/*
+ * netmapp based virtual network interface feature for NUSE
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ *         Ryo Nakamura <upa@wide.ad.jp>
+ */
+
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>

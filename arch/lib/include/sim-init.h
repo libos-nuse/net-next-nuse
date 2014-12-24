@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2015 INRIA, Hajime Tazaki
+ *
+ * Author: Mathieu Lacage <mathieu.lacage@gmail.com>
+ *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #ifndef SIM_INIT_H
 #define SIM_INIT_H
 

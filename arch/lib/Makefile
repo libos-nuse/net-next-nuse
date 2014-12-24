@@ -137,7 +137,7 @@ lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
 glue.c fs.c sysctl.c timer.c \
 hrtimer.c sched.c sysfs.c workqueue.c \
 print.c security.c slab.c tasklet.c \
-proc.c seq.c socket.c tasklet-hrtimer.c \
+proc.c seq.c tasklet-hrtimer.c \
 cred.c pid.c modules.c filemap.c splice.c vmscan.c \
 dcache.c super.c inode.c
 

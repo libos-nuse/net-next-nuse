@@ -1,3 +1,11 @@
+/*
+ * Network stack in userspace (NUSE) for POSIX userspace backend
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ *         Ryo Nakamura <upa@wide.ad.jp>
+ */
+
 #include <linux/init.h>         /* initcall_t */
 #include <linux/list.h>         /* linked-list */
 #include <linux/kernel.h>       /* SYSTEM_BOOTING */

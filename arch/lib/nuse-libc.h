@@ -1,3 +1,10 @@
+/*
+ * glibc prototypes for NUSE
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #ifndef NUSE_LIBC_H
 #define NUSE_LIBC_H
 

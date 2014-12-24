@@ -1,3 +1,10 @@
+/*
+ * sleep/wakeup (poll/select/epoll) implementation for NUSE
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #include <linux/poll.h>
 #include <linux/net.h>
 #include "nuse.h"

@@ -1,3 +1,10 @@
+/*
+ * config file interface for NUSE
+ * Copyright (c) 2015 Ryo Nakamura
+ *
+ * Author: Ryo Nakamura <upa@wide.ad.jp>
+ *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
 
 #include <sys/socket.h>
 #include <linux/socket.h>

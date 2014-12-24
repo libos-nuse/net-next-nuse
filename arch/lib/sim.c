@@ -1,3 +1,11 @@
+/*
+ * network simulator backend for library version of Linux kernel
+ * Copyright (c) 2015 INRIA, Hajime Tazaki
+ *
+ * Author: Mathieu Lacage <mathieu.lacage@gmail.com>
+ *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #include <linux/init.h>         /* initcall_t */
 #include <linux/kernel.h>       /* SYSTEM_BOOTING */
 #include <linux/sched.h>        /* struct task_struct */

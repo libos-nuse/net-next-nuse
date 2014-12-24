@@ -1,3 +1,11 @@
+/*
+ * glue code for library version of Linux kernel
+ * Copyright (c) 2014 Hajime Tazaki
+ *
+ * Author: Mathieu Lacage <mathieu.lacage@gmail.com>
+ *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #include <linux/fs.h>
 #include <linux/net.h>
 #include <linux/slab.h>

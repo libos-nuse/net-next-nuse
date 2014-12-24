@@ -1,3 +1,10 @@
+/*
+ * host system/library calls for NUSE
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #define _GNU_SOURCE /* Get RTLD_NEXT */
 #include <dlfcn.h>
 #include <stdio.h>

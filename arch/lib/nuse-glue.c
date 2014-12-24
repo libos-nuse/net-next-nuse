@@ -1,3 +1,12 @@
+/*
+ * system calls glue code for NUSE
+ * Copyright (c) 2015 Hajime Tazaki
+ *
+ * Author: Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ *
+ * Note: some of the code is picked from rumpkernel, written by Antti Kantee.
+ */
+
 //#include <pthread.h>
 #include <net/net_namespace.h>
 #include <errno.h>

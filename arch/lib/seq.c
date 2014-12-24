@@ -1,3 +1,11 @@
+/*
+ * glue code for library version of Linux kernel
+ * Copyright (c) 2015 INRIA, Hajime Tazaki
+ *
+ * Author: Mathieu Lacage <mathieu.lacage@gmail.com>
+ *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #include <linux/seq_file.h>
 
 struct hlist_node *seq_hlist_next_rcu(void *v,
