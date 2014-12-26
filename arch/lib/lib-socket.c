@@ -88,6 +88,7 @@ ssize_t lib_sock_sendmsg(struct SimSocket *socket,
 			int flags)
 {
 	struct socket *kernel_socket = (struct socket *)socket;
+	struct iovec *kernel_iov = copy_iovec(msg->msg_iov, msg->msg_iovlen);
 	struct msghdr msg_sys;
 	int retval;
 
@@ -98,9 +99,10 @@ ssize_t lib_sock_sendmsg(struct SimSocket *socket,
 	msg_sys.msg_flags = flags;
 
 	iov_iter_init(&msg_sys.msg_iter, WRITE,
-		msg->msg_iov, msg->msg_iovlen, iov_size(msg));
+		kernel_iov, msg->msg_iovlen, iov_size(msg));
 
 	retval = sock_sendmsg(kernel_socket, &msg_sys, iov_size(msg));
+	lib_free(kernel_iov);
 	return retval;
 }
 int lib_sock_getsockname(struct SimSocket *socket, struct sockaddr *name,
