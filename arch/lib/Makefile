@@ -18,6 +18,7 @@ dpdk_no=
 dpdkl_yes=-L $(RTE_SDK)/$(RTE_TARGET) -L$(RTE_SDK)/$(RTE_TARGET)/lib $(ARCH_DIR)/nuse-vif-dpdk.o $(DPDK_LDLIBS)
 dpdkl_no=
 
+DPDK_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(dpdk_$(DPDK)))))
 RTE_SDK=$(shell expr `pwd`)/dpdk
 RTE_TARGET=build
 
@@ -278,7 +279,7 @@ quiet_cmd_linksim = LIBSIM	$@
       cmd_linksim = $(CC) -Wl,--whole-archive $(OBJS) $(SIM_OBJ) $(LDFLAGS) $(LDFLAGS_SIM) -o $@; \
 		    ln -s -f $(SIM_LIB) liblinux.so
 
-$(NUSE_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(ARCH_DIR)/nuse-vif-dpdk.o $(NUSE_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
+$(NUSE_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(DPDK_OBJ) $(NUSE_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linknuse)
 
 $(SIM_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(SIM_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
