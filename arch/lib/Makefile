@@ -219,7 +219,7 @@ $(COMPILE_H): include/generated/utsrelease.h
 	"$(UTS_MACHINE)" "$(CONFIG_SMP)" "$(CONFIG_PREEMPT)" "$(CC) $(KBUILD_CFLAGS)"
 
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
-OBJS=$(COMPILE_H) $(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
+OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
 quiet_cmd_cc = CC   $@
       cmd_cc = 	mkdir -p $(dir $@);	\
 		$(CC) $(CFLAGS) -c $< -o $@
@@ -261,7 +261,7 @@ install-dir:
 quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
 		  for f in $(ALL_OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean); do rm -f $$f; done 2>/dev/null ;\
-		  rm -rf $(ARCH_DIR)/linker.lds $(AUTOCONF) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null ;\
+		  rm -rf $(ARCH_DIR)/linker.lds $(AUTOCONF) $(COMPILE_H) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null ;\
 		  rm -f $(DEPENDS) ;\
 		  $(MAKE) -C $(ARCH_DIR)/test clean ;\
 		  $(MAKE) -C $(ARCH_DIR)/test/nuse clean
@@ -279,10 +279,10 @@ quiet_cmd_linksim = LIBSIM	$@
       cmd_linksim = $(CC) -Wl,--whole-archive $(OBJS) $(SIM_OBJ) $(LDFLAGS) $(LDFLAGS_SIM) -o $@; \
 		    ln -s -f $(SIM_LIB) liblinux.so
 
-$(NUSE_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(DPDK_OBJ) $(NUSE_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
+$(NUSE_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(COMPILE_H) $(DPDK_OBJ) $(NUSE_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linknuse)
 
-$(SIM_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(SIM_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
+$(SIM_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(AUTOCONF) $(COMPILE_H) $(SIM_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(call if_changed,linksim)
 
 test:
