@@ -36,14 +36,14 @@ nuse_set_if_promisc(const char *ifname)
 	strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
 
 	if (host_ioctl(fd, SIOCGIFFLAGS, &ifr) != 0) {
-		printf("failed to get interface status");
+		printf("failed to get interface status\n");
 		return -1;
 	}
 
 	ifr.ifr_flags |= IFF_UP | IFF_PROMISC;
 
 	if (host_ioctl(fd, SIOCSIFFLAGS, &ifr) != 0) {
-		printf("failed to set interface to promisc");
+		printf("failed to set interface to promisc\n");
 		return -1;
 	}
 

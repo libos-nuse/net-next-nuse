@@ -73,10 +73,18 @@ nuse_config_parse_interface(char *line, FILE *fp, struct nuse_config *cf)
 				vifcf->type = NUSE_VIF_TAP;
 			else if (strncmp(args[1], "DPDK", 4) == 0)
 				vifcf->type = NUSE_VIF_DPDK;
+			else if (strncmp(args[1], "PIPE", 4) == 0)
+				vifcf->type = NUSE_VIF_PIPE;
 			else {
 				printf("invalid vif type %s\n", args[1]);
+				free(vifcf);
 				return 0;
 			}
+		}
+
+		/* mkfifo path for VIF_PIPE */
+		if (strncmp(args[0], "pipepath", 4) == 0) {
+			strncpy(vifcf->pipepath, args[1], PATH_MAX);
 		}
 	}
 

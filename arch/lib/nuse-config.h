@@ -2,6 +2,7 @@
 #ifndef _NUSE_CONFIG_H_
 #define _NUSE_CONFIG_H_
 
+#include <limits.h>	/* PATH_MAX */
 #include <linux/if_ether.h>
 #include <linux/route.h>
 
@@ -24,6 +25,9 @@ struct nuse_vif_config {
 
 	struct ifreq ifr_vif_addr;
 	struct ifreq ifr_vif_mask;
+
+	/* for vif-pipe */
+	char pipepath[PATH_MAX];
 };
 
 struct nuse_route_config {

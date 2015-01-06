@@ -332,7 +332,13 @@ nuse_netdev_create(struct nuse_vif_config *vifcf)
 	printf("  macaddr = %s\n", vifcf->macaddr);
 	printf("  type    = %d\n", vifcf->type);
 
-	vif = nuse_vif_create(vifcf->type, vifcf->ifname);
+	if (vifcf->type == NUSE_VIF_PIPE) {
+		printf("  path    = %s\n", vifcf->pipepath);
+		vif = nuse_vif_create(vifcf->type, vifcf->pipepath);
+	} else {
+		vif = nuse_vif_create(vifcf->type, vifcf->ifname);
+	}
+
 	if (!vif) {
 		lib_printf("vif create error\n");
 		lib_assert(0);
@@ -355,25 +361,23 @@ nuse_netdev_create(struct nuse_vif_config *vifcf)
 	ether_setup((struct net_device *)dev);
 
 	/* assign IPv4 address */
-	/* XXX: ifr_name is already fileed by nuse_config_parse_interface,
+	/* XXX: ifr_name is already filed by nuse_config_parse_interface,
 	   I don't know why, but vifcf->ifr_vif_addr.ifr_name is NULL here. */
 	strcpy(vifcf->ifr_vif_addr.ifr_name, vifcf->ifname);
 
 	err = devinet_ioctl(&init_net, SIOCSIFADDR, &vifcf->ifr_vif_addr);
 	if (err) {
 		perror("devinet_ioctl");
-		printf("err devinet_ioctl for assign address %s for %s,%s %d\n",
-		       vifcf->address, vifcf->ifname,
-		       vifcf->ifr_vif_addr.ifr_name, err);
+		printf("err devinet_ioctl for assign address %s for %s %d\n",
+		       vifcf->address, vifcf->ifname, err);
 	}
 
 	/* set netmask */
 	err = devinet_ioctl(&init_net, SIOCSIFNETMASK, &vifcf->ifr_vif_mask);
 	if (err) {
 		perror("devinet_ioctl");
-		printf("err devinet_ioctl for assign netmask %s for %s,%s %d\n",
-		       vifcf->netmask, vifcf->ifname,
-		       vifcf->ifr_vif_mask.ifr_name, err);
+		printf("err devinet_ioctl for assign netmask %s for %s %d\n",
+		       vifcf->netmask, vifcf->ifname, err);
 	}
 
 	/* IFF_UP */

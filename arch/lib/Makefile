@@ -56,7 +56,7 @@ dpdk-sdk:
 
 NUSE_USPACE_SRC=\
 nuse-fiber.c nuse-vif.c nuse-hostcalls.c nuse-config.c \
-nuse-vif-rawsock.c nuse-vif-tap.c $(netmap_$(NETMAP))
+nuse-vif-rawsock.c nuse-vif-tap.c nuse-vif-pipe.c $(netmap_$(NETMAP))
 
 NUSE_SRC=$(NUSE_USPACE_SRC)\
 nuse.c nuse-poll.c nuse-glue.c
