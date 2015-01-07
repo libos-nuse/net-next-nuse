@@ -61,3 +61,4 @@ in Userspace (NUSE). other files are shared functions between them.
  Mathieu Lacage <mathieu.lacage@gmail.com>
  Hajime Tazaki <tazaki@sfc.wide.ad.jp>
  Frederic Urbani <frederic.urbani@inria.fr>
+ Ryo Nakamura <upa@haeena.net>
