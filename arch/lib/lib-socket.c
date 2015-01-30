@@ -38,6 +38,7 @@ int lib_sock_socket(int domain, int type, int protocol,
 	/* XXX: SCTP code never look at flags args, but file flags instead. */
 	struct file *fp = lib_malloc(sizeof(struct file));
 	(*kernel_socket)->file = fp;
+	fp->f_cred = lib_malloc(sizeof(struct cred));
 	return retval;
 }
 int lib_sock_close(struct SimSocket *socket)
