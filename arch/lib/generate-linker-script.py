@@ -23,6 +23,7 @@ def linker_script(reading, writing):
     . = ALIGN (CONSTANT (MAXPAGESIZE));
     .initcall.init : AT(ADDR(.initcall.init)) {
      __initcall_start = .;
+     *(.initcallearly.init)
      *(.initcall0.init)
      *(.initcall0s.init)
      *(.initcall1.init)

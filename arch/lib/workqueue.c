@@ -226,4 +226,4 @@ static int __init init_workqueues(void)
 						    WQ_POWER_EFFICIENT, 0);
 	return 0;
 }
-fs_initcall(init_workqueues);
+early_initcall(init_workqueues);
