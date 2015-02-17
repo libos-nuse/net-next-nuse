@@ -152,12 +152,10 @@ void flush_remote(unsigned long cache_pfn, unsigned long cache_control,
 	cpumask_scnprintf(cache_buf, sizeof(cache_buf), &cache_cpumask_copy);
 	cpumask_scnprintf(tlb_buf, sizeof(tlb_buf), &tlb_cpumask_copy);
 
-	pr_err("hv_flush_remote(%#llx, %#lx, %p [%s],"
-	       " %#lx, %#lx, %#lx, %p [%s], %p, %d) = %d\n",
+	pr_err("hv_flush_remote(%#llx, %#lx, %p [%s], %#lx, %#lx, %#lx, %p [%s], %p, %d) = %d\n",
 	       cache_pa, cache_control, cache_cpumask, cache_buf,
 	       (unsigned long)tlb_va, tlb_length, tlb_pgsize,
-	       tlb_cpumask, tlb_buf,
-	       asids, asidcount, rc);
+	       tlb_cpumask, tlb_buf, asids, asidcount, rc);
 	panic("Unsafe to continue.");
 }
 
@@ -265,10 +263,6 @@ static int pte_to_home(pte_t pte)
 /* Update the home of a PTE if necessary (can also be used for a pgprot_t). */
 pte_t pte_set_home(pte_t pte, int home)
 {
-	/* Check for non-linear file mapping "PTEs" and pass them through. */
-	if (pte_file(pte))
-		return pte;
-
 #if CHIP_HAS_MMIO()
 	/* Check for MMIO mappings and pass them through. */
 	if (hv_pte_get_mode(pte) == HV_PTE_MODE_MMIO)

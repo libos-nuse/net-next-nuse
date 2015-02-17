@@ -12,7 +12,6 @@
 
 #include <linux/module.h>
 #include <linux/fs.h>
-#include <linux/version.h>
 #include <linux/timer.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -806,7 +805,6 @@ static struct platform_driver g2d_pdrv = {
 	.id_table	= g2d_driver_ids,
 	.driver		= {
 		.name = G2D_NAME,
-		.owner = THIS_MODULE,
 		.of_match_table = exynos_g2d_match,
 	},
 };

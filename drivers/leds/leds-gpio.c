@@ -203,7 +203,7 @@ static struct gpio_leds_priv *gpio_leds_create(struct platform_device *pdev)
 		fwnode_property_read_string(child, "linux,default-trigger",
 					    &led.default_trigger);
 
-		if (!fwnode_property_read_string(child, "linux,default_state",
+		if (!fwnode_property_read_string(child, "default-state",
 						 &state)) {
 			if (!strcmp(state, "keep"))
 				led.default_state = LEDS_GPIO_DEFSTATE_KEEP;
@@ -291,7 +291,6 @@ static struct platform_driver gpio_led_driver = {
 	.remove		= gpio_led_remove,
 	.driver		= {
 		.name	= "leds-gpio",
-		.owner	= THIS_MODULE,
 		.of_match_table = of_gpio_leds_match,
 	},
 };

@@ -17,10 +17,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
 #include <linux/clk.h>
@@ -395,7 +391,6 @@ MODULE_DEVICE_TABLE(of, bcm2835_spi_match);
 static struct platform_driver bcm2835_spi_driver = {
 	.driver		= {
 		.name		= DRV_NAME,
-		.owner		= THIS_MODULE,
 		.of_match_table	= bcm2835_spi_match,
 	},
 	.probe		= bcm2835_spi_probe,

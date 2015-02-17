@@ -2607,9 +2607,9 @@ static int scrub_extent_for_parity(struct scrub_parity *sparity,
 		ret = scrub_pages_for_parity(sparity, logical, l, physical, dev,
 					     flags, gen, mirror_num,
 					     have_csum ? csum : NULL);
-skip:
 		if (ret)
 			return ret;
+skip:
 		len -= l;
 		logical += l;
 		physical += l;
@@ -3053,7 +3053,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 
 	ppath = btrfs_alloc_path();
 	if (!ppath) {
-		btrfs_free_path(ppath);
+		btrfs_free_path(path);
 		return -ENOMEM;
 	}
 
@@ -3065,6 +3065,8 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	path->search_commit_root = 1;
 	path->skip_locking = 1;
 
+	ppath->search_commit_root = 1;
+	ppath->skip_locking = 1;
 	/*
 	 * trigger the readahead for extent tree csum tree and wait for
 	 * completion. During readahead, the scrub is officially paused

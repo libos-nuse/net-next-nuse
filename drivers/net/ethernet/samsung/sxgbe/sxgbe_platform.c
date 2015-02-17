@@ -108,10 +108,6 @@ static int sxgbe_platform_probe(struct platform_device *pdev)
 		}
 	}
 
-	/* Get MAC address if available (DT) */
-	if (mac)
-		ether_addr_copy(priv->dev->dev_addr, mac);
-
 	priv = sxgbe_drv_probe(&(pdev->dev), plat_dat, addr);
 	if (!priv) {
 		pr_err("%s: main driver probe failed\n", __func__);
@@ -124,6 +120,10 @@ static int sxgbe_platform_probe(struct platform_device *pdev)
 		dev_err(dev, "sxgbe common irq parsing failed\n");
 		goto err_drv_remove;
 	}
+
+	/* Get MAC address if available (DT) */
+	if (mac)
+		ether_addr_copy(priv->dev->dev_addr, mac);
 
 	/* Get the TX/RX IRQ numbers */
 	for (i = 0, chan = 1; i < SXGBE_TX_QUEUES; i++) {
@@ -233,7 +233,6 @@ static struct platform_driver sxgbe_platform_driver = {
 	.remove	= sxgbe_platform_remove,
 	.driver	= {
 		.name		= SXGBE_RESOURCE_NAME,
-		.owner		= THIS_MODULE,
 		.pm		= &sxgbe_platform_pm_ops,
 		.of_match_table	= of_match_ptr(sxgbe_dt_ids),
 	},

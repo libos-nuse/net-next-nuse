@@ -829,6 +829,15 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			CONFIG_DEBUG_PAGEALLOC, hence this option will not help
 			tracking down these problems.
 
+	debug_pagealloc=
+			[KNL] When CONFIG_DEBUG_PAGEALLOC is set, this
+			parameter enables the feature at boot time. In
+			default, it is disabled. We can avoid allocating huge
+			chunk of memory for debug pagealloc if we don't enable
+			it at boot time and the system will work mostly same
+			with the kernel built without CONFIG_DEBUG_PAGEALLOC.
+			on: enable the feature
+
 	debugpat	[X86] Enable PAT debugging
 
 	decnet.addr=	[HW,NET]
@@ -1228,9 +1237,7 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			multiple times interleaved with hugepages= to reserve
 			huge pages of different sizes. Valid pages sizes on
 			x86-64 are 2M (when the CPU supports "pse") and 1G
-			(when the CPU supports the "pdpe1gb" cpuinfo flag)
-			Note that 1GB pages can only be allocated at boot time
-			using hugepages= and not freed afterwards.
+			(when the CPU supports the "pdpe1gb" cpuinfo flag).
 
 	hvc_iucv=	[S390] Number of z/VM IUCV hypervisor console (HVC)
 			       terminal devices. Valid values: 0..8
@@ -1270,6 +1277,7 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 	i8042.notimeout	[HW] Ignore timeout condition signalled by controller
 	i8042.reset	[HW] Reset the controller during init and cleanup
 	i8042.unlock	[HW] Unlock (ignore) the keylock
+	i8042.kbdreset  [HW] Reset device connected to KBD port
 
 	i810=		[HW,DRM]
 
@@ -1369,6 +1377,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			Formats: { "ima" | "ima-ng" }
 			Default: "ima-ng"
 
+	ima_template_fmt=
+	                [IMA] Define a custom template format.
+			Format: { "field1|...|fieldN" }
+
 	ima.ahash_minsize= [IMA] Minimum file size for asynchronous hash usage
 			Format: <min_file_size>
 			Set the minimal file size for using asynchronous hash.
@@ -1446,9 +1458,21 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 		       disable
 		         Do not enable intel_pstate as the default
 		         scaling driver for the supported processors
+		       force
+			 Enable intel_pstate on systems that prohibit it by default
+			 in favor of acpi-cpufreq. Forcing the intel_pstate driver
+			 instead of acpi-cpufreq may disable platform features, such
+			 as thermal controls and power capping, that rely on ACPI
+			 P-States information being indicated to OSPM and therefore
+			 should be used with caution. This option does not work with
+			 processors that aren't supported by the intel_pstate driver
+			 or on platforms that use pcc-cpufreq instead of acpi-cpufreq.
 		       no_hwp
 		         Do not enable hardware P state control (HWP)
 			 if available.
+		hwp_only
+			Only load intel_pstate on systems which support
+			hardware P state control (HWP) if available.
 
 	intremap=	[X86-64, Intel-IOMMU]
 			on	enable Interrupt Remapping (default)
@@ -1473,6 +1497,8 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 		forcesac
 		soft
 		pt		[x86, IA-64]
+		nobypass	[PPC/POWERNV]
+			Disable IOMMU bypass, using IOMMU for PCI devices.
 
 
 	io7=		[HW] IO7 for Marvel based alpha systems
@@ -2506,6 +2532,12 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 	OSS		[HW,OSS]
 			See Documentation/sound/oss/oss-parameters.txt
 
+	page_owner=	[KNL] Boot-time page_owner enabling option.
+			Storage of the information about who allocated
+			each page is disabled in default. With this switch,
+			we can turn it on.
+			on: enable the feature
+
 	panic=		[KNL] Kernel behaviour on panic: delay <timeout>
 			timeout > 0: seconds before rebooting
 			timeout = 0: wait forever
@@ -3180,6 +3212,18 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 	retain_initrd	[RAM] Keep initrd memory after extraction
 
+	rfkill.default_state=
+		0	"airplane mode".  All wifi, bluetooth, wimax, gps, fm,
+			etc. communication is blocked by default.
+		1	Unblocked.
+
+	rfkill.master_switch_mode=
+		0	The "airplane mode" button does nothing.
+		1	The "airplane mode" button toggles between everything
+			blocked and the previous configuration.
+		2	The "airplane mode" button toggles between everything
+			blocked and everything unblocked.
+
 	rhash_entries=	[KNL,NET]
 			Set number of hash buckets for route cache
 
@@ -3552,6 +3596,24 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 			See also Documentation/trace/ftrace.txt "trace options"
 			section.
+
+	tp_printk[FTRACE]
+			Have the tracepoints sent to printk as well as the
+			tracing ring buffer. This is useful for early boot up
+			where the system hangs or reboots and does not give the
+			option for reading the tracing buffer or performing a
+			ftrace_dump_on_oops.
+
+			To turn off having tracepoints sent to printk,
+			 echo 0 > /proc/sys/kernel/tracepoint_printk
+			Note, echoing 1 into this file without the
+			tracepoint_printk kernel cmdline option has no effect.
+
+			** CAUTION **
+
+			Having tracepoints sent to printk() and activating high
+			frequency tracepoints such as irq or sched, can cause
+			the system to live lock.
 
 	traceoff_on_warning
 			[FTRACE] enable this option to disable tracing when a

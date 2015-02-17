@@ -138,7 +138,6 @@ struct at91_devtype_data {
 
 struct at91_priv {
 	struct can_priv can;		/* must be the first member! */
-	struct net_device *dev;
 	struct napi_struct napi;
 
 	void __iomem *reg_base;
@@ -1350,7 +1349,6 @@ static int at91_can_probe(struct platform_device *pdev)
 	priv->can.do_get_berr_counter = at91_get_berr_counter;
 	priv->can.ctrlmode_supported = CAN_CTRLMODE_3_SAMPLES |
 		CAN_CTRLMODE_LISTENONLY;
-	priv->dev = dev;
 	priv->reg_base = addr;
 	priv->devtype_data = *devtype_data;
 	priv->clk = clk;
@@ -1428,7 +1426,6 @@ static struct platform_driver at91_can_driver = {
 	.remove = at91_can_remove,
 	.driver = {
 		.name = KBUILD_MODNAME,
-		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(at91_can_dt_ids),
 	},
 	.id_table = at91_can_id_table,

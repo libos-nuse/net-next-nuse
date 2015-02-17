@@ -5238,6 +5238,7 @@ static int dsi_init_pll_data(struct platform_device *dsidev)
 	}
 
 	pll->name = dsi->module_id == 0 ? "dsi0" : "dsi1";
+	pll->id = dsi->module_id == 0 ? DSS_PLL_DSI1 : DSS_PLL_DSI2;
 	pll->clkin = clk;
 	pll->base = dsi->pll_base;
 
@@ -5572,7 +5573,6 @@ static struct platform_driver omap_dsihw_driver = {
 	.remove         = __exit_p(omap_dsihw_remove),
 	.driver         = {
 		.name   = "omapdss_dsi",
-		.owner  = THIS_MODULE,
 		.pm	= &dsi_pm_ops,
 		.of_match_table = dsi_of_match,
 		.suppress_bind_attrs = true,

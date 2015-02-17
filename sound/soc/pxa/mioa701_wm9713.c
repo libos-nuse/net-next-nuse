@@ -81,7 +81,7 @@ static int rear_amp_power(struct snd_soc_codec *codec, int power)
 static int rear_amp_event(struct snd_soc_dapm_widget *widget,
 			  struct snd_kcontrol *kctl, int event)
 {
-	struct snd_soc_codec *codec = widget->codec;
+	struct snd_soc_codec *codec = widget->dapm->card->rtd[0].codec;
 
 	return rear_amp_power(codec, SND_SOC_DAPM_EVENT_ON(event));
 }
@@ -202,7 +202,6 @@ static struct platform_driver mioa701_wm9713_driver = {
 	.remove		= mioa701_wm9713_remove,
 	.driver		= {
 		.name		= "mioa701-wm9713",
-		.owner		= THIS_MODULE,
 		.pm     = &snd_soc_pm_ops,
 	},
 };

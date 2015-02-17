@@ -787,6 +787,7 @@ static const struct dev_pm_ops hdmi_pm_ops = {
 
 static const struct of_device_id hdmi_of_match[] = {
 	{ .compatible = "ti,omap5-hdmi", },
+	{ .compatible = "ti,dra7-hdmi", },
 	{},
 };
 
@@ -795,7 +796,6 @@ static struct platform_driver omapdss_hdmihw_driver = {
 	.remove         = __exit_p(omapdss_hdmihw_remove),
 	.driver         = {
 		.name   = "omapdss_hdmi5",
-		.owner  = THIS_MODULE,
 		.pm	= &hdmi_pm_ops,
 		.of_match_table = hdmi_of_match,
 		.suppress_bind_attrs = true,

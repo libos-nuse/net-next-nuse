@@ -785,6 +785,7 @@ static void prb_close_block(struct tpacket_kbdq_core *pkc1,
 
 	struct tpacket3_hdr *last_pkt;
 	struct tpacket_hdr_v1 *h1 = &pbd1->hdr.bh1;
+	struct sock *sk = &po->sk;
 
 	if (po->stats.stats3.tp_drops)
 		status |= TP_STATUS_LOSING;
@@ -808,6 +809,8 @@ static void prb_close_block(struct tpacket_kbdq_core *pkc1,
 
 	/* Flush the block */
 	prb_flush_block(pkc1, pbd1, status);
+
+	sk->sk_data_ready(sk);
 
 	pkc1->kactive_blk_num = GET_NEXT_PRB_BLK_NUM(pkc1);
 }
@@ -983,8 +986,8 @@ static void prb_clear_rxhash(struct tpacket_kbdq_core *pkc,
 static void prb_fill_vlan_info(struct tpacket_kbdq_core *pkc,
 			struct tpacket3_hdr *ppd)
 {
-	if (vlan_tx_tag_present(pkc->skb)) {
-		ppd->hv1.tp_vlan_tci = vlan_tx_tag_get(pkc->skb);
+	if (skb_vlan_tag_present(pkc->skb)) {
+		ppd->hv1.tp_vlan_tci = skb_vlan_tag_get(pkc->skb);
 		ppd->hv1.tp_vlan_tpid = ntohs(pkc->skb->vlan_proto);
 		ppd->tp_status = TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 	} else {
@@ -1997,8 +2000,8 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 		h.h2->tp_net = netoff;
 		h.h2->tp_sec = ts.tv_sec;
 		h.h2->tp_nsec = ts.tv_nsec;
-		if (vlan_tx_tag_present(skb)) {
-			h.h2->tp_vlan_tci = vlan_tx_tag_get(skb);
+		if (skb_vlan_tag_present(skb)) {
+			h.h2->tp_vlan_tci = skb_vlan_tag_get(skb);
 			h.h2->tp_vlan_tpid = ntohs(skb->vlan_proto);
 			status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else {
@@ -2052,12 +2055,12 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 	smp_wmb();
 #endif
 
-	if (po->tp_version <= TPACKET_V2)
+	if (po->tp_version <= TPACKET_V2) {
 		__packet_set_status(po, h.raw, status);
-	else
+		sk->sk_data_ready(sk);
+	} else {
 		prb_clear_blk_fill_status(&po->rx_ring);
-
-	sk->sk_data_ready(sk);
+	}
 
 drop_n_restore:
 	if (skb_head != skb->data && skb_shared(skb)) {
@@ -2099,7 +2102,7 @@ static bool ll_header_truncated(const struct net_device *dev, int len)
 {
 	/* net device doesn't like empty head */
 	if (unlikely(len <= dev->hard_header_len)) {
-		net_warn_ratelimited("%s: packet size is too short (%d < %d)\n",
+		net_warn_ratelimited("%s: packet size is too short (%d <= %d)\n",
 				     current->comm, len, dev->hard_header_len);
 		return true;
 	}
@@ -2514,7 +2517,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	err = -EINVAL;
 	if (sock->type == SOCK_DGRAM) {
 		offset = dev_hard_header(skb, dev, ntohs(proto), addr, NULL, len);
-		if (unlikely(offset) < 0)
+		if (unlikely(offset < 0))
 			goto out_free;
 	} else {
 		if (ll_header_truncated(dev, len))
@@ -3007,8 +3010,8 @@ static int packet_recvmsg(struct kiocb *iocb, struct socket *sock,
 		aux.tp_snaplen = skb->len;
 		aux.tp_mac = 0;
 		aux.tp_net = skb_network_offset(skb);
-		if (vlan_tx_tag_present(skb)) {
-			aux.tp_vlan_tci = vlan_tx_tag_get(skb);
+		if (skb_vlan_tag_present(skb)) {
+			aux.tp_vlan_tci = skb_vlan_tag_get(skb);
 			aux.tp_vlan_tpid = ntohs(skb->vlan_proto);
 			aux.tp_status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else {

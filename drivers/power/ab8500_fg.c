@@ -2435,20 +2435,6 @@ static void ab8500_fg_reinit_work(struct work_struct *work)
 	}
 }
 
-/**
- * ab8500_fg_reinit() - forces FG algorithm to reinitialize with current values
- *
- * This function can be used to force the FG algorithm to recalculate a new
- * voltage based battery capacity.
- */
-void ab8500_fg_reinit(void)
-{
-	struct ab8500_fg *di = ab8500_fg_get();
-	/* User won't be notified if a null pointer returned. */
-	if (di != NULL)
-		queue_delayed_work(di->fg_wq, &di->fg_reinit_work, 0);
-}
-
 /* Exposure to the sysfs interface */
 
 struct ab8500_fg_sysfs_entry {
@@ -3281,7 +3267,6 @@ static struct platform_driver ab8500_fg_driver = {
 	.resume = ab8500_fg_resume,
 	.driver = {
 		.name = "ab8500-fg",
-		.owner = THIS_MODULE,
 		.of_match_table = ab8500_fg_match,
 	},
 };

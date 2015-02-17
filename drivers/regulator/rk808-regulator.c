@@ -97,7 +97,7 @@ static int rk808_set_ramp_delay(struct regulator_dev *rdev, int ramp_delay)
 				  RK808_RAMP_RATE_MASK, ramp_value);
 }
 
-int rk808_set_suspend_voltage(struct regulator_dev *rdev, int uv)
+static int rk808_set_suspend_voltage(struct regulator_dev *rdev, int uv)
 {
 	unsigned int reg;
 	int sel = regulator_map_voltage_linear_range(rdev, uv, uv);
@@ -112,7 +112,7 @@ int rk808_set_suspend_voltage(struct regulator_dev *rdev, int uv)
 				  sel);
 }
 
-int rk808_set_suspend_enable(struct regulator_dev *rdev)
+static int rk808_set_suspend_enable(struct regulator_dev *rdev)
 {
 	unsigned int reg;
 
@@ -123,7 +123,7 @@ int rk808_set_suspend_enable(struct regulator_dev *rdev)
 				  0);
 }
 
-int rk808_set_suspend_disable(struct regulator_dev *rdev)
+static int rk808_set_suspend_disable(struct regulator_dev *rdev)
 {
 	unsigned int reg;
 
@@ -419,7 +419,6 @@ static struct platform_driver rk808_regulator_driver = {
 	.probe = rk808_regulator_probe,
 	.driver = {
 		.name = "rk808-regulator",
-		.owner = THIS_MODULE,
 	},
 };
 

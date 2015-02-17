@@ -1118,8 +1118,7 @@ static int __init ssi_port_probe(struct platform_device *pd)
 	dev_dbg(&pd->dev, "init ssi port...\n");
 
 	if (!try_module_get(ssi->owner)) {
-		dev_err(&pd->dev, "could not increment parent module refcount (err=%d)\n",
-			err);
+		dev_err(&pd->dev, "could not increment parent module refcount\n");
 		return -ENODEV;
 	}
 
@@ -1385,7 +1384,6 @@ static struct platform_driver ssi_port_pdriver = {
 	.remove	= __exit_p(ssi_port_remove),
 	.driver	= {
 		.name	= "omap_ssi_port",
-		.owner	= THIS_MODULE,
 		.of_match_table = omap_ssi_port_of_match,
 		.pm	= DEV_PM_OPS,
 	},

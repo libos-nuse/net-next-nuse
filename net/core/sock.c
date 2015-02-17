@@ -325,6 +325,8 @@ __u32 sysctl_rmem_default __read_mostly = SK_RMEM_MAX;
 int sysctl_optmem_max __read_mostly = sizeof(unsigned long)*(2*UIO_MAXIOV+512);
 EXPORT_SYMBOL(sysctl_optmem_max);
 
+int sysctl_tstamp_allow_data __read_mostly = 1;
+
 struct static_key memalloc_socks = STATIC_KEY_INIT_FALSE;
 EXPORT_SYMBOL_GPL(memalloc_socks);
 
@@ -840,6 +842,7 @@ set_rcvbuf:
 			ret = -EINVAL;
 			break;
 		}
+
 		if (val & SOF_TIMESTAMPING_OPT_ID &&
 		    !(sk->sk_tsflags & SOF_TIMESTAMPING_OPT_ID)) {
 			if (sk->sk_protocol == IPPROTO_TCP) {
@@ -1731,17 +1734,33 @@ void *sock_kmalloc(struct sock *sk, int size, gfp_t priority)
 }
 EXPORT_SYMBOL(sock_kmalloc);
 
-/*
- * Free an option memory block.
+/* Free an option memory block. Note, we actually want the inline
+ * here as this allows gcc to detect the nullify and fold away the
+ * condition entirely.
  */
-void sock_kfree_s(struct sock *sk, void *mem, int size)
+static inline void __sock_kfree_s(struct sock *sk, void *mem, int size,
+				  const bool nullify)
 {
 	if (WARN_ON_ONCE(!mem))
 		return;
-	kfree(mem);
+	if (nullify)
+		kzfree(mem);
+	else
+		kfree(mem);
 	atomic_sub(size, &sk->sk_omem_alloc);
 }
+
+void sock_kfree_s(struct sock *sk, void *mem, int size)
+{
+	__sock_kfree_s(sk, mem, size, false);
+}
 EXPORT_SYMBOL(sock_kfree_s);
+
+void sock_kzfree_s(struct sock *sk, void *mem, int size)
+{
+	__sock_kfree_s(sk, mem, size, true);
+}
+EXPORT_SYMBOL(sock_kzfree_s);
 
 /* It is almost wait_for_tcp_memory minus release_sock/lock_sock.
    I think, these locks should be removed for datagram sockets.

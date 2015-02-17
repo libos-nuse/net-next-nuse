@@ -15,7 +15,7 @@ if IOMMU_SUPPORT
 
 config OF_IOMMU
        def_bool y
-       depends on OF
+       depends on OF && IOMMU_API
 
 config FSL_PAMU
 	bool "Freescale IOMMU support"
@@ -187,7 +187,7 @@ config TEGRA_IOMMU_SMMU
 
 config EXYNOS_IOMMU
 	bool "Exynos IOMMU Support"
-	depends on ARCH_EXYNOS
+	depends on ARCH_EXYNOS && ARM
 	select IOMMU_API
 	select ARM_DMA_USE_IOMMU
 	help

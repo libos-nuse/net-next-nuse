@@ -206,6 +206,9 @@ struct mapped_device {
 	/* zero-length flush that will be cloned and submitted to targets */
 	struct bio flush_bio;
 
+	/* the number of internal suspends */
+	unsigned internal_suspend_count;
+
 	struct dm_stats stats;
 };
 
@@ -605,13 +608,10 @@ static void end_io_acct(struct dm_io *io)
 	struct mapped_device *md = io->md;
 	struct bio *bio = io->bio;
 	unsigned long duration = jiffies - io->start_time;
-	int pending, cpu;
+	int pending;
 	int rw = bio_data_dir(bio);
 
-	cpu = part_stat_lock();
-	part_round_stats(cpu, &dm_disk(md)->part0);
-	part_stat_add(cpu, &dm_disk(md)->part0, ticks[rw], duration);
-	part_stat_unlock();
+	generic_end_io_acct(rw, &dm_disk(md)->part0, io->start_time);
 
 	if (unlikely(dm_stats_used(&md->stats)))
 		dm_stats_account_io(&md->stats, bio->bi_rw, bio->bi_iter.bi_sector,
@@ -902,7 +902,7 @@ static void disable_write_same(struct mapped_device *md)
 
 static void clone_endio(struct bio *bio, int error)
 {
-	int r = 0;
+	int r = error;
 	struct dm_target_io *tio = container_of(bio, struct dm_target_io, clone);
 	struct dm_io *io = tio->io;
 	struct mapped_device *md = tio->io->md;
@@ -1651,16 +1651,12 @@ static void _dm_request(struct request_queue *q, struct bio *bio)
 {
 	int rw = bio_data_dir(bio);
 	struct mapped_device *md = q->queuedata;
-	int cpu;
 	int srcu_idx;
 	struct dm_table *map;
 
 	map = dm_get_live_table(md, &srcu_idx);
 
-	cpu = part_stat_lock();
-	part_stat_inc(cpu, &dm_disk(md)->part0, ios[rw]);
-	part_stat_add(cpu, &dm_disk(md)->part0, sectors[rw], bio_sectors(bio));
-	part_stat_unlock();
+	generic_start_io_acct(rw, bio_sectors(bio), &dm_disk(md)->part0);
 
 	/* if we're suspended, we have to queue this io for later */
 	if (unlikely(test_bit(DMF_BLOCK_IO_FOR_SUSPEND, &md->flags))) {
@@ -2935,7 +2931,7 @@ static void __dm_internal_suspend(struct mapped_device *md, unsigned suspend_fla
 {
 	struct dm_table *map = NULL;
 
-	if (dm_suspended_internally_md(md))
+	if (md->internal_suspend_count++)
 		return; /* nested internal suspend */
 
 	if (dm_suspended_md(md)) {
@@ -2960,7 +2956,9 @@ static void __dm_internal_suspend(struct mapped_device *md, unsigned suspend_fla
 
 static void __dm_internal_resume(struct mapped_device *md)
 {
-	if (!dm_suspended_internally_md(md))
+	BUG_ON(!md->internal_suspend_count);
+
+	if (--md->internal_suspend_count)
 		return; /* resume from nested internal suspend */
 
 	if (dm_suspended_md(md))

@@ -80,7 +80,7 @@ static irqreturn_t xenvif_tx_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-int xenvif_poll(struct napi_struct *napi, int budget)
+static int xenvif_poll(struct napi_struct *napi, int budget)
 {
 	struct xenvif_queue *queue =
 		container_of(napi, struct xenvif_queue, napi);
@@ -166,7 +166,7 @@ static int xenvif_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto drop;
 
 	cb = XENVIF_RX_CB(skb);
-	cb->expires = jiffies + rx_drain_timeout_jiffies;
+	cb->expires = jiffies + vif->drain_timeout;
 
 	xenvif_rx_queue_tail(queue, skb);
 	xenvif_kick_thread(queue);
@@ -414,6 +414,8 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	vif->ip_csum = 1;
 	vif->dev = dev;
 	vif->disabled = false;
+	vif->drain_timeout = msecs_to_jiffies(rx_drain_timeout_msecs);
+	vif->stall_timeout = msecs_to_jiffies(rx_stall_timeout_msecs);
 
 	/* Start out with no queues. */
 	vif->queues = NULL;
@@ -481,9 +483,8 @@ int xenvif_init_queue(struct xenvif_queue *queue)
 	 * better enable it. The long term solution would be to use just a
 	 * bunch of valid page descriptors, without dependency on ballooning
 	 */
-	err = alloc_xenballooned_pages(MAX_PENDING_REQS,
-				       queue->mmap_pages,
-				       false);
+	err = gnttab_alloc_pages(MAX_PENDING_REQS,
+				 queue->mmap_pages);
 	if (err) {
 		netdev_err(queue->vif->dev, "Could not reserve mmap_pages\n");
 		return -ENOMEM;
@@ -576,6 +577,7 @@ int xenvif_connect(struct xenvif_queue *queue, unsigned long tx_ring_ref,
 		goto err_rx_unbind;
 	}
 	queue->task = task;
+	get_task_struct(task);
 
 	task = kthread_create(xenvif_dealloc_kthread,
 			      (void *)queue, "%s-dealloc", queue->name);
@@ -632,6 +634,7 @@ void xenvif_disconnect(struct xenvif *vif)
 
 		if (queue->task) {
 			kthread_stop(queue->task);
+			put_task_struct(queue->task);
 			queue->task = NULL;
 		}
 
@@ -660,7 +663,7 @@ void xenvif_disconnect(struct xenvif *vif)
  */
 void xenvif_deinit_queue(struct xenvif_queue *queue)
 {
-	free_xenballooned_pages(MAX_PENDING_REQS, queue->mmap_pages);
+	gnttab_free_pages(MAX_PENDING_REQS, queue->mmap_pages);
 }
 
 void xenvif_free(struct xenvif *vif)

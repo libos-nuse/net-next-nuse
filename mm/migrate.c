@@ -179,37 +179,6 @@ out:
 }
 
 /*
- * Congratulations to trinity for discovering this bug.
- * mm/fremap.c's remap_file_pages() accepts any range within a single vma to
- * convert that vma to VM_NONLINEAR; and generic_file_remap_pages() will then
- * replace the specified range by file ptes throughout (maybe populated after).
- * If page migration finds a page within that range, while it's still located
- * by vma_interval_tree rather than lost to i_mmap_nonlinear list, no problem:
- * zap_pte() clears the temporary migration entry before mmap_sem is dropped.
- * But if the migrating page is in a part of the vma outside the range to be
- * remapped, then it will not be cleared, and remove_migration_ptes() needs to
- * deal with it.  Fortunately, this part of the vma is of course still linear,
- * so we just need to use linear location on the nonlinear list.
- */
-static int remove_linear_migration_ptes_from_nonlinear(struct page *page,
-		struct address_space *mapping, void *arg)
-{
-	struct vm_area_struct *vma;
-	/* hugetlbfs does not support remap_pages, so no huge pgoff worries */
-	pgoff_t pgoff = page->index << (PAGE_CACHE_SHIFT - PAGE_SHIFT);
-	unsigned long addr;
-
-	list_for_each_entry(vma,
-		&mapping->i_mmap_nonlinear, shared.nonlinear) {
-
-		addr = vma->vm_start + ((pgoff - vma->vm_pgoff) << PAGE_SHIFT);
-		if (addr >= vma->vm_start && addr < vma->vm_end)
-			remove_migration_pte(page, vma, addr, arg);
-	}
-	return SWAP_AGAIN;
-}
-
-/*
  * Get rid of all migration entries and replace them by
  * references to the indicated page.
  */
@@ -218,7 +187,6 @@ static void remove_migration_ptes(struct page *old, struct page *new)
 	struct rmap_walk_control rwc = {
 		.rmap_one = remove_migration_pte,
 		.arg = old,
-		.file_nonlinear = remove_linear_migration_ptes_from_nonlinear,
 	};
 
 	rmap_walk(new, &rwc);
@@ -229,7 +197,7 @@ static void remove_migration_ptes(struct page *old, struct page *new)
  * get to the page and wait until migration is finished.
  * When we return from this function the fault will be retried.
  */
-static void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
+void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
 				spinlock_t *ptl)
 {
 	pte_t pte;
@@ -746,7 +714,7 @@ static int fallback_migrate_page(struct address_space *mapping,
  *  MIGRATEPAGE_SUCCESS - success
  */
 static int move_to_new_page(struct page *newpage, struct page *page,
-				int remap_swapcache, enum migrate_mode mode)
+				int page_was_mapped, enum migrate_mode mode)
 {
 	struct address_space *mapping;
 	int rc;
@@ -784,7 +752,7 @@ static int move_to_new_page(struct page *newpage, struct page *page,
 		newpage->mapping = NULL;
 	} else {
 		mem_cgroup_migrate(page, newpage, false);
-		if (remap_swapcache)
+		if (page_was_mapped)
 			remove_migration_ptes(page, newpage);
 		page->mapping = NULL;
 	}
@@ -798,7 +766,7 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 				int force, enum migrate_mode mode)
 {
 	int rc = -EAGAIN;
-	int remap_swapcache = 1;
+	int page_was_mapped = 0;
 	struct anon_vma *anon_vma = NULL;
 
 	if (!trylock_page(page)) {
@@ -870,7 +838,6 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 			 * migrated but are not remapped when migration
 			 * completes
 			 */
-			remap_swapcache = 0;
 		} else {
 			goto out_unlock;
 		}
@@ -910,13 +877,17 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 	}
 
 	/* Establish migration ptes or remove ptes */
-	try_to_unmap(page, TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
+	if (page_mapped(page)) {
+		try_to_unmap(page,
+			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
+		page_was_mapped = 1;
+	}
 
 skip_unmap:
 	if (!page_mapped(page))
-		rc = move_to_new_page(newpage, page, remap_swapcache, mode);
+		rc = move_to_new_page(newpage, page, page_was_mapped, mode);
 
-	if (rc && remap_swapcache)
+	if (rc && page_was_mapped)
 		remove_migration_ptes(page, page);
 
 	/* Drop an anon_vma reference if we took one */
@@ -1017,6 +988,7 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 {
 	int rc = 0;
 	int *result = NULL;
+	int page_was_mapped = 0;
 	struct page *new_hpage;
 	struct anon_vma *anon_vma = NULL;
 
@@ -1047,12 +1019,16 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 	if (PageAnon(hpage))
 		anon_vma = page_get_anon_vma(hpage);
 
-	try_to_unmap(hpage, TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
+	if (page_mapped(hpage)) {
+		try_to_unmap(hpage,
+			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
+		page_was_mapped = 1;
+	}
 
 	if (!page_mapped(hpage))
-		rc = move_to_new_page(new_hpage, hpage, 1, mode);
+		rc = move_to_new_page(new_hpage, hpage, page_was_mapped, mode);
 
-	if (rc != MIGRATEPAGE_SUCCESS)
+	if (rc != MIGRATEPAGE_SUCCESS && page_was_mapped)
 		remove_migration_ptes(hpage, hpage);
 
 	if (anon_vma)
@@ -1260,7 +1236,8 @@ static int do_move_page_to_node_array(struct mm_struct *mm,
 			goto put_and_set;
 
 		if (PageHuge(page)) {
-			isolate_huge_page(page, &pagelist);
+			if (PageHead(page))
+				isolate_huge_page(page, &pagelist);
 			goto put_and_set;
 		}
 
@@ -1526,27 +1503,6 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
 out:
 	put_task_struct(task);
 	return err;
-}
-
-/*
- * Call migration functions in the vma_ops that may prepare
- * memory in a vm for migration. migration functions may perform
- * the migration for vmas that do not have an underlying page struct.
- */
-int migrate_vmas(struct mm_struct *mm, const nodemask_t *to,
-	const nodemask_t *from, unsigned long flags)
-{
- 	struct vm_area_struct *vma;
- 	int err = 0;
-
-	for (vma = mm->mmap; vma && !err; vma = vma->vm_next) {
- 		if (vma->vm_ops && vma->vm_ops->migrate) {
- 			err = vma->vm_ops->migrate(vma, to, from, flags);
- 			if (err)
- 				break;
- 		}
- 	}
- 	return err;
 }
 
 #ifdef CONFIG_NUMA_BALANCING
@@ -1854,7 +1810,7 @@ fail_putback:
 	 */
 	flush_cache_range(vma, mmun_start, mmun_end);
 	page_add_anon_rmap(new_page, vma, mmun_start);
-	pmdp_clear_flush(vma, mmun_start, pmd);
+	pmdp_clear_flush_notify(vma, mmun_start, pmd);
 	set_pmd_at(mm, mmun_start, pmd, entry);
 	flush_tlb_range(vma, mmun_start, mmun_end);
 	update_mmu_cache_pmd(vma, address, &entry);
@@ -1862,6 +1818,7 @@ fail_putback:
 	if (page_count(page) != 2) {
 		set_pmd_at(mm, mmun_start, pmd, orig_entry);
 		flush_tlb_range(vma, mmun_start, mmun_end);
+		mmu_notifier_invalidate_range(mm, mmun_start, mmun_end);
 		update_mmu_cache_pmd(vma, address, &entry);
 		page_remove_rmap(new_page);
 		goto fail_putback;

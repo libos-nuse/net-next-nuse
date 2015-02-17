@@ -600,7 +600,7 @@ kimage_file_alloc_init(struct kimage **rimage, int kernel_fd,
 	if (!kexec_on_panic) {
 		image->swap_page = kimage_alloc_control_pages(image, 0);
 		if (!image->swap_page) {
-			pr_err(KERN_ERR "Could not allocate swap buffer\n");
+			pr_err("Could not allocate swap buffer\n");
 			goto out_free_control_pages;
 		}
 	}
@@ -2512,7 +2512,7 @@ static int kexec_apply_relocations(struct kimage *image)
 			continue;
 
 		/*
-		 * Respective archicture needs to provide support for applying
+		 * Respective architecture needs to provide support for applying
 		 * relocations of type SHT_RELA/SHT_REL.
 		 */
 		if (sechdrs[i].sh_type == SHT_RELA)

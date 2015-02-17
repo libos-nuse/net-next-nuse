@@ -914,7 +914,7 @@ static int abx500_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 		}
 	}
 
-	ret = pinconf_generic_parse_dt_config(np, &configs, &nconfigs);
+	ret = pinconf_generic_parse_dt_config(np, pctldev, &configs, &nconfigs);
 	if (nconfigs) {
 		const char *gpio_name;
 		const char *pin;
@@ -1278,7 +1278,6 @@ static int abx500_gpio_remove(struct platform_device *pdev)
 static struct platform_driver abx500_gpio_driver = {
 	.driver = {
 		.name = "abx500-gpio",
-		.owner = THIS_MODULE,
 		.of_match_table = abx500_gpio_match,
 	},
 	.probe = abx500_gpio_probe,

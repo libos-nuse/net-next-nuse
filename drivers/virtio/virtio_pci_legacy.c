@@ -19,14 +19,6 @@
 
 #include "virtio_pci_common.h"
 
-/* Qumranet donated their vendor ID for devices 0x1000 thru 0x10FF. */
-static const struct pci_device_id virtio_pci_id_table[] = {
-	{ PCI_DEVICE(0x1af4, PCI_ANY_ID) },
-	{ 0 }
-};
-
-MODULE_DEVICE_TABLE(pci, virtio_pci_id_table);
-
 /* virtio config->get_features() implementation */
 static u64 vp_get_features(struct virtio_device *vdev)
 {
@@ -219,8 +211,19 @@ static const struct virtio_config_ops virtio_pci_config_ops = {
 	.set_vq_affinity = vp_set_vq_affinity,
 };
 
+static void virtio_pci_release_dev(struct device *_d)
+{
+	struct virtio_device *vdev = dev_to_virtio(_d);
+	struct virtio_pci_device *vp_dev = to_vp_device(vdev);
+
+	/* As struct device is a kobject, it's not safe to
+	 * free the memory (including the reference counter itself)
+	 * until it's release callback. */
+	kfree(vp_dev);
+}
+
 /* the PCI probing function */
-static int virtio_pci_probe(struct pci_dev *pci_dev,
+int virtio_pci_legacy_probe(struct pci_dev *pci_dev,
 			    const struct pci_device_id *id)
 {
 	struct virtio_pci_device *vp_dev;
@@ -300,7 +303,7 @@ out:
 	return err;
 }
 
-static void virtio_pci_remove(struct pci_dev *pci_dev)
+void virtio_pci_legacy_remove(struct pci_dev *pci_dev)
 {
 	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
 
@@ -310,17 +313,4 @@ static void virtio_pci_remove(struct pci_dev *pci_dev)
 	pci_iounmap(pci_dev, vp_dev->ioaddr);
 	pci_release_regions(pci_dev);
 	pci_disable_device(pci_dev);
-	kfree(vp_dev);
 }
-
-static struct pci_driver virtio_pci_driver = {
-	.name		= "virtio-pci",
-	.id_table	= virtio_pci_id_table,
-	.probe		= virtio_pci_probe,
-	.remove		= virtio_pci_remove,
-#ifdef CONFIG_PM_SLEEP
-	.driver.pm	= &virtio_pci_pm_ops,
-#endif
-};
-
-module_pci_driver(virtio_pci_driver);

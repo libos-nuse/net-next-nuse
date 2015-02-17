@@ -275,9 +275,11 @@ opaque_hashval(const void *ptr, int nbytes)
 	return x;
 }
 
-static void nfsd4_free_file(struct nfs4_file *f)
+static void nfsd4_free_file_rcu(struct rcu_head *rcu)
 {
-	kmem_cache_free(file_slab, f);
+	struct nfs4_file *fp = container_of(rcu, struct nfs4_file, fi_rcu);
+
+	kmem_cache_free(file_slab, fp);
 }
 
 static inline void
@@ -286,9 +288,10 @@ put_nfs4_file(struct nfs4_file *fi)
 	might_lock(&state_lock);
 
 	if (atomic_dec_and_lock(&fi->fi_ref, &state_lock)) {
-		hlist_del(&fi->fi_hash);
+		hlist_del_rcu(&fi->fi_hash);
 		spin_unlock(&state_lock);
-		nfsd4_free_file(fi);
+		WARN_ON_ONCE(!list_empty(&fi->fi_delegations));
+		call_rcu(&fi->fi_rcu, nfsd4_free_file_rcu);
 	}
 }
 
@@ -1440,7 +1443,7 @@ static void init_session(struct svc_rqst *rqstp, struct nfsd4_session *new, stru
 	list_add(&new->se_perclnt, &clp->cl_sessions);
 	spin_unlock(&clp->cl_lock);
 
-	if (cses->flags & SESSION4_BACK_CHAN) {
+	{
 		struct sockaddr *sa = svc_addr(rqstp);
 		/*
 		 * This is a little silly; with sessions there's no real
@@ -1711,15 +1714,14 @@ static int copy_cred(struct svc_cred *target, struct svc_cred *source)
 	return 0;
 }
 
-static long long
+static int
 compare_blob(const struct xdr_netobj *o1, const struct xdr_netobj *o2)
 {
-	long long res;
-
-	res = o1->len - o2->len;
-	if (res)
-		return res;
-	return (long long)memcmp(o1->data, o2->data, o1->len);
+	if (o1->len < o2->len)
+		return -1;
+	if (o1->len > o2->len)
+		return 1;
+	return memcmp(o1->data, o2->data, o1->len);
 }
 
 static int same_name(const char *n1, const char *n2)
@@ -1907,7 +1909,7 @@ add_clp_to_name_tree(struct nfs4_client *new_clp, struct rb_root *root)
 static struct nfs4_client *
 find_clp_in_name_tree(struct xdr_netobj *name, struct rb_root *root)
 {
-	long long cmp;
+	int cmp;
 	struct rb_node *node = root->rb_node;
 	struct nfs4_client *clp;
 
@@ -3057,10 +3059,9 @@ static struct nfs4_file *nfsd4_alloc_file(void)
 }
 
 /* OPEN Share state helper functions */
-static void nfsd4_init_file(struct nfs4_file *fp, struct knfsd_fh *fh)
+static void nfsd4_init_file(struct knfsd_fh *fh, unsigned int hashval,
+				struct nfs4_file *fp)
 {
-	unsigned int hashval = file_hashval(fh);
-
 	lockdep_assert_held(&state_lock);
 
 	atomic_set(&fp->fi_ref, 1);
@@ -3073,7 +3074,7 @@ static void nfsd4_init_file(struct nfs4_file *fp, struct knfsd_fh *fh)
 	fp->fi_share_deny = 0;
 	memset(fp->fi_fds, 0, sizeof(fp->fi_fds));
 	memset(fp->fi_access, 0, sizeof(fp->fi_access));
-	hlist_add_head(&fp->fi_hash, &file_hashtbl[hashval]);
+	hlist_add_head_rcu(&fp->fi_hash, &file_hashtbl[hashval]);
 }
 
 void
@@ -3294,17 +3295,14 @@ move_to_close_lru(struct nfs4_ol_stateid *s, struct net *net)
 
 /* search file_hashtbl[] for file */
 static struct nfs4_file *
-find_file_locked(struct knfsd_fh *fh)
+find_file_locked(struct knfsd_fh *fh, unsigned int hashval)
 {
-	unsigned int hashval = file_hashval(fh);
 	struct nfs4_file *fp;
 
-	lockdep_assert_held(&state_lock);
-
-	hlist_for_each_entry(fp, &file_hashtbl[hashval], fi_hash) {
+	hlist_for_each_entry_rcu(fp, &file_hashtbl[hashval], fi_hash) {
 		if (nfsd_fh_match(&fp->fi_fhandle, fh)) {
-			get_nfs4_file(fp);
-			return fp;
+			if (atomic_inc_not_zero(&fp->fi_ref))
+				return fp;
 		}
 	}
 	return NULL;
@@ -3314,10 +3312,11 @@ static struct nfs4_file *
 find_file(struct knfsd_fh *fh)
 {
 	struct nfs4_file *fp;
+	unsigned int hashval = file_hashval(fh);
 
-	spin_lock(&state_lock);
-	fp = find_file_locked(fh);
-	spin_unlock(&state_lock);
+	rcu_read_lock();
+	fp = find_file_locked(fh, hashval);
+	rcu_read_unlock();
 	return fp;
 }
 
@@ -3325,11 +3324,18 @@ static struct nfs4_file *
 find_or_add_file(struct nfs4_file *new, struct knfsd_fh *fh)
 {
 	struct nfs4_file *fp;
+	unsigned int hashval = file_hashval(fh);
+
+	rcu_read_lock();
+	fp = find_file_locked(fh, hashval);
+	rcu_read_unlock();
+	if (fp)
+		return fp;
 
 	spin_lock(&state_lock);
-	fp = find_file_locked(fh);
-	if (fp == NULL) {
-		nfsd4_init_file(new, fh);
+	fp = find_file_locked(fh, hashval);
+	if (likely(fp == NULL)) {
+		nfsd4_init_file(fh, hashval, new);
 		fp = new;
 	}
 	spin_unlock(&state_lock);
@@ -3471,7 +3477,8 @@ nfsd_break_deleg_cb(struct file_lock *fl)
 }
 
 static int
-nfsd_change_deleg_cb(struct file_lock **onlist, int arg, struct list_head *dispose)
+nfsd_change_deleg_cb(struct file_lock *onlist, int arg,
+		     struct list_head *dispose)
 {
 	if (arg & F_UNLCK)
 		return lease_modify(onlist, arg, dispose);
@@ -3891,11 +3898,11 @@ nfs4_set_delegation(struct nfs4_client *clp, struct svc_fh *fh,
 		status = nfs4_setlease(dp);
 		goto out;
 	}
-	atomic_inc(&fp->fi_delegees);
 	if (fp->fi_had_conflict) {
 		status = -EAGAIN;
 		goto out_unlock;
 	}
+	atomic_inc(&fp->fi_delegees);
 	hash_delegation_locked(dp, fp);
 	status = 0;
 out_unlock:
@@ -4127,7 +4134,7 @@ void nfsd4_cleanup_open_state(struct nfsd4_compound_state *cstate,
 		nfs4_put_stateowner(so);
 	}
 	if (open->op_file)
-		nfsd4_free_file(open->op_file);
+		kmem_cache_free(file_slab, open->op_file);
 	if (open->op_stp)
 		nfs4_put_stid(&open->op_stp->st_stid);
 }
@@ -5550,10 +5557,11 @@ out_nfserr:
 static bool
 check_for_locks(struct nfs4_file *fp, struct nfs4_lockowner *lowner)
 {
-	struct file_lock **flpp;
+	struct file_lock *fl;
 	int status = false;
 	struct file *filp = find_any_file(fp);
 	struct inode *inode;
+	struct file_lock_context *flctx;
 
 	if (!filp) {
 		/* Any valid lock stateid should have some sort of access */
@@ -5562,15 +5570,18 @@ check_for_locks(struct nfs4_file *fp, struct nfs4_lockowner *lowner)
 	}
 
 	inode = file_inode(filp);
+	flctx = inode->i_flctx;
 
-	spin_lock(&inode->i_lock);
-	for (flpp = &inode->i_flock; *flpp != NULL; flpp = &(*flpp)->fl_next) {
-		if ((*flpp)->fl_owner == (fl_owner_t)lowner) {
-			status = true;
-			break;
+	if (flctx && !list_empty_careful(&flctx->flc_posix)) {
+		spin_lock(&flctx->flc_lock);
+		list_for_each_entry(fl, &flctx->flc_posix, fl_list) {
+			if (fl->fl_owner == (fl_owner_t)lowner) {
+				status = true;
+				break;
+			}
 		}
+		spin_unlock(&flctx->flc_lock);
 	}
-	spin_unlock(&inode->i_lock);
 	fput(filp);
 	return status;
 }

@@ -426,7 +426,7 @@ struct zone {
 	const char		*name;
 
 	/*
-	 * Number of MIGRATE_RESEVE page block. To maintain for just
+	 * Number of MIGRATE_RESERVE page block. To maintain for just
 	 * optimization. Protected by zone->lock.
 	 */
 	int			nr_migrate_reserve_block;
@@ -722,6 +722,9 @@ typedef struct pglist_data {
 	int nr_zones;
 #ifdef CONFIG_FLAT_NODE_MEM_MAP	/* means !SPARSEMEM */
 	struct page *node_mem_map;
+#ifdef CONFIG_PAGE_EXTENSION
+	struct page_ext *node_page_ext;
+#endif
 #endif
 #ifndef CONFIG_NO_BOOTMEM
 	struct bootmem_data *bdata;
@@ -967,7 +970,6 @@ static inline int zonelist_node_idx(struct zoneref *zoneref)
  * @z - The cursor used as a starting point for the search
  * @highest_zoneidx - The zone index of the highest zone to return
  * @nodes - An optional nodemask to filter the zonelist with
- * @zone - The first suitable zone found is returned via this parameter
  *
  * This function returns the next zone at or below a given zone index that is
  * within the allowed nodemask using a cursor as the starting point for the
@@ -977,8 +979,7 @@ static inline int zonelist_node_idx(struct zoneref *zoneref)
  */
 struct zoneref *next_zones_zonelist(struct zoneref *z,
 					enum zone_type highest_zoneidx,
-					nodemask_t *nodes,
-					struct zone **zone);
+					nodemask_t *nodes);
 
 /**
  * first_zones_zonelist - Returns the first zone at or below highest_zoneidx within the allowed nodemask in a zonelist
@@ -997,8 +998,10 @@ static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
 					nodemask_t *nodes,
 					struct zone **zone)
 {
-	return next_zones_zonelist(zonelist->_zonerefs, highest_zoneidx, nodes,
-								zone);
+	struct zoneref *z = next_zones_zonelist(zonelist->_zonerefs,
+							highest_zoneidx, nodes);
+	*zone = zonelist_zone(z);
+	return z;
 }
 
 /**
@@ -1015,7 +1018,8 @@ static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
 #define for_each_zone_zonelist_nodemask(zone, z, zlist, highidx, nodemask) \
 	for (z = first_zones_zonelist(zlist, highidx, nodemask, &zone);	\
 		zone;							\
-		z = next_zones_zonelist(++z, highidx, nodemask, &zone))	\
+		z = next_zones_zonelist(++z, highidx, nodemask),	\
+			zone = zonelist_zone(z))			\
 
 /**
  * for_each_zone_zonelist - helper macro to iterate over valid zones in a zonelist at or below a given zone index
@@ -1075,6 +1079,7 @@ static inline unsigned long early_pfn_to_nid(unsigned long pfn)
 #define SECTION_ALIGN_DOWN(pfn)	((pfn) & PAGE_SECTION_MASK)
 
 struct page;
+struct page_ext;
 struct mem_section {
 	/*
 	 * This is, logically, a pointer to an array of struct
@@ -1092,6 +1097,14 @@ struct mem_section {
 
 	/* See declaration of similar field in struct zone */
 	unsigned long *pageblock_flags;
+#ifdef CONFIG_PAGE_EXTENSION
+	/*
+	 * If !SPARSEMEM, pgdat doesn't have page_ext pointer. We use
+	 * section. (see page_ext.h about this.)
+	 */
+	struct page_ext *page_ext;
+	unsigned long pad;
+#endif
 	/*
 	 * WARNING: mem_section must be a power-of-2 in size for the
 	 * calculation and use of SECTION_ROOT_MASK to make sense.

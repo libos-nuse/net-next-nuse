@@ -2,6 +2,7 @@ config ARM64
 	def_bool y
 	select ARCH_BINFMT_ELF_RANDOMIZE_PIE
 	select ARCH_HAS_ATOMIC64_DEC_IF_POSITIVE
+	select ARCH_HAS_GCOV_PROFILE_ALL
 	select ARCH_HAS_SG_CHAIN
 	select ARCH_HAS_TICK_BROADCAST if GENERIC_CLOCKEVENTS_BROADCAST
 	select ARCH_USE_CMPXCHG_LOCKREF
@@ -13,7 +14,9 @@ config ARM64
 	select ARM_ARCH_TIMER
 	select ARM_GIC
 	select AUDIT_ARCH_COMPAT_GENERIC
+	select ARM_GIC_V2M if PCI_MSI
 	select ARM_GIC_V3
+	select ARM_GIC_V3_ITS if PCI_MSI
 	select BUILDTIME_EXTABLE_SORT
 	select CLONE_BACKWARDS
 	select COMMON_CLK
@@ -537,6 +540,21 @@ config CP15_BARRIER_EMULATION
 
 	  If unsure, say Y
 
+config SETEND_EMULATION
+	bool "Emulate SETEND instruction"
+	help
+	  The SETEND instruction alters the data-endianness of the
+	  AArch32 EL0, and is deprecated in ARMv8.
+
+	  Say Y here to enable software emulation of the instruction
+	  for AArch32 userspace code.
+
+	  Note: All the cpus on the system must have mixed endian support at EL0
+	  for this feature to be enabled. If a new CPU - which doesn't support mixed
+	  endian - is hotplugged in after this feature has been enabled, there could
+	  be unexpected results in the applications.
+
+	  If unsure, say Y
 endif
 
 endmenu
@@ -623,9 +641,6 @@ source "kernel/power/Kconfig"
 
 config ARCH_SUSPEND_POSSIBLE
 	def_bool y
-
-config ARM64_CPU_SUSPEND
-	def_bool PM_SLEEP
 
 endmenu
 

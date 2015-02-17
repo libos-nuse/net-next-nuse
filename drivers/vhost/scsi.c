@@ -911,6 +911,23 @@ vhost_scsi_map_iov_to_prot(struct tcm_vhost_cmd *cmd,
 	return 0;
 }
 
+static int vhost_scsi_to_tcm_attr(int attr)
+{
+	switch (attr) {
+	case VIRTIO_SCSI_S_SIMPLE:
+		return TCM_SIMPLE_TAG;
+	case VIRTIO_SCSI_S_ORDERED:
+		return TCM_ORDERED_TAG;
+	case VIRTIO_SCSI_S_HEAD:
+		return TCM_HEAD_TAG;
+	case VIRTIO_SCSI_S_ACA:
+		return TCM_ACA_TAG;
+	default:
+		break;
+	}
+	return TCM_SIMPLE_TAG;
+}
+
 static void tcm_vhost_submission_work(struct work_struct *work)
 {
 	struct tcm_vhost_cmd *cmd =
@@ -936,9 +953,10 @@ static void tcm_vhost_submission_work(struct work_struct *work)
 	rc = target_submit_cmd_map_sgls(se_cmd, tv_nexus->tvn_se_sess,
 			cmd->tvc_cdb, &cmd->tvc_sense_buf[0],
 			cmd->tvc_lun, cmd->tvc_exp_data_len,
-			cmd->tvc_task_attr, cmd->tvc_data_direction,
-			TARGET_SCF_ACK_KREF, sg_ptr, cmd->tvc_sgl_count,
-			NULL, 0, sg_prot_ptr, cmd->tvc_prot_sgl_count);
+			vhost_scsi_to_tcm_attr(cmd->tvc_task_attr),
+			cmd->tvc_data_direction, TARGET_SCF_ACK_KREF,
+			sg_ptr, cmd->tvc_sgl_count, NULL, 0, sg_prot_ptr,
+			cmd->tvc_prot_sgl_count);
 	if (rc < 0) {
 		transport_send_check_condition_and_sense(se_cmd,
 				TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE, 0);
@@ -1061,7 +1079,7 @@ vhost_scsi_handle_vq(struct vhost_scsi *vs, struct vhost_virtqueue *vq)
 			       req_size, vq->iov[0].iov_len);
 			break;
 		}
-		ret = memcpy_fromiovecend(req, &vq->iov[0], 0, req_size);
+		ret = copy_from_user(req, vq->iov[0].iov_base, req_size);
 		if (unlikely(ret)) {
 			vq_err(vq, "Faulted on virtio_scsi_cmd_req\n");
 			break;

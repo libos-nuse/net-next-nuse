@@ -387,7 +387,7 @@ static pteval_t pte_pfn_to_mfn(pteval_t val)
 		unsigned long mfn;
 
 		if (!xen_feature(XENFEAT_auto_translated_physmap))
-			mfn = get_phys_to_machine(pfn);
+			mfn = __pfn_to_mfn(pfn);
 		else
 			mfn = pfn;
 		/*
@@ -1113,20 +1113,16 @@ static void __init xen_cleanhighmap(unsigned long vaddr,
 	 * instead of somewhere later and be confusing. */
 	xen_mc_flush();
 }
-static void __init xen_pagetable_p2m_copy(void)
+
+static void __init xen_pagetable_p2m_free(void)
 {
 	unsigned long size;
 	unsigned long addr;
-	unsigned long new_mfn_list;
-
-	if (xen_feature(XENFEAT_auto_translated_physmap))
-		return;
 
 	size = PAGE_ALIGN(xen_start_info->nr_pages * sizeof(unsigned long));
 
-	new_mfn_list = xen_revector_p2m_tree();
 	/* No memory or already called. */
-	if (!new_mfn_list || new_mfn_list == xen_start_info->mfn_list)
+	if ((unsigned long)xen_p2m_addr == xen_start_info->mfn_list)
 		return;
 
 	/* using __ka address and sticking INVALID_P2M_ENTRY! */
@@ -1144,8 +1140,6 @@ static void __init xen_pagetable_p2m_copy(void)
 
 	size = PAGE_ALIGN(xen_start_info->nr_pages * sizeof(unsigned long));
 	memblock_free(__pa(xen_start_info->mfn_list), size);
-	/* And revector! Bye bye old array */
-	xen_start_info->mfn_list = new_mfn_list;
 
 	/* At this stage, cleanup_highmap has already cleaned __ka space
 	 * from _brk_limit way up to the max_pfn_mapped (which is the end of
@@ -1169,17 +1163,35 @@ static void __init xen_pagetable_p2m_copy(void)
 }
 #endif
 
+static void __init xen_pagetable_p2m_setup(void)
+{
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return;
+
+	xen_vmalloc_p2m_tree();
+
+#ifdef CONFIG_X86_64
+	xen_pagetable_p2m_free();
+#endif
+	/* And revector! Bye bye old array */
+	xen_start_info->mfn_list = (unsigned long)xen_p2m_addr;
+}
+
 static void __init xen_pagetable_init(void)
 {
 	paging_init();
-#ifdef CONFIG_X86_64
-	xen_pagetable_p2m_copy();
-#endif
+	xen_post_allocator_init();
+
+	xen_pagetable_p2m_setup();
+
 	/* Allocate and initialize top and mid mfn levels for p2m structure */
 	xen_build_mfn_list_list();
 
+	/* Remap memory freed due to conflicts with E820 map */
+	if (!xen_feature(XENFEAT_auto_translated_physmap))
+		xen_remap_memory();
+
 	xen_setup_shared_info();
-	xen_post_allocator_init();
 }
 static void xen_write_cr2(unsigned long cr2)
 {
@@ -1477,7 +1489,7 @@ static void __init xen_set_pte_init(pte_t *ptep, pte_t pte)
 	native_set_pte(ptep, pte);
 }
 
-static void pin_pagetable_pfn(unsigned cmd, unsigned long pfn)
+static void __init pin_pagetable_pfn(unsigned cmd, unsigned long pfn)
 {
 	struct mmuext_op op;
 	op.cmd = cmd;
@@ -1645,7 +1657,7 @@ void __init xen_reserve_top(void)
  * Like __va(), but returns address in the kernel mapping (which is
  * all we have until the physical memory mapping has been set up.
  */
-static void *__ka(phys_addr_t paddr)
+static void * __init __ka(phys_addr_t paddr)
 {
 #ifdef CONFIG_X86_64
 	return (void *)(paddr + __START_KERNEL_map);
@@ -1655,7 +1667,7 @@ static void *__ka(phys_addr_t paddr)
 }
 
 /* Convert a machine address to physical address */
-static unsigned long m2p(phys_addr_t maddr)
+static unsigned long __init m2p(phys_addr_t maddr)
 {
 	phys_addr_t paddr;
 
@@ -1666,13 +1678,14 @@ static unsigned long m2p(phys_addr_t maddr)
 }
 
 /* Convert a machine address to kernel virtual */
-static void *m2v(phys_addr_t maddr)
+static void * __init m2v(phys_addr_t maddr)
 {
 	return __ka(m2p(maddr));
 }
 
 /* Set the page permissions on an identity-mapped pages */
-static void set_page_prot_flags(void *addr, pgprot_t prot, unsigned long flags)
+static void __init set_page_prot_flags(void *addr, pgprot_t prot,
+				       unsigned long flags)
 {
 	unsigned long pfn = __pa(addr) >> PAGE_SHIFT;
 	pte_t pte = pfn_pte(pfn, prot);
@@ -1684,7 +1697,7 @@ static void set_page_prot_flags(void *addr, pgprot_t prot, unsigned long flags)
 	if (HYPERVISOR_update_va_mapping((unsigned long)addr, pte, flags))
 		BUG();
 }
-static void set_page_prot(void *addr, pgprot_t prot)
+static void __init set_page_prot(void *addr, pgprot_t prot)
 {
 	return set_page_prot_flags(addr, prot, UVMF_NONE);
 }
@@ -1721,10 +1734,8 @@ static void __init xen_map_identity_early(pmd_t *pmd, unsigned long max_pfn)
 		for (pteidx = 0; pteidx < PTRS_PER_PTE; pteidx++, pfn++) {
 			pte_t pte;
 
-#ifdef CONFIG_X86_32
 			if (pfn > max_pfn_mapped)
 				max_pfn_mapped = pfn;
-#endif
 
 			if (!pte_none(pte_page[pteidx]))
 				continue;
@@ -1757,7 +1768,7 @@ void __init xen_setup_machphys_mapping(void)
 }
 
 #ifdef CONFIG_X86_64
-static void convert_pfn_mfn(void *v)
+static void __init convert_pfn_mfn(void *v)
 {
 	pte_t *pte = v;
 	int i;

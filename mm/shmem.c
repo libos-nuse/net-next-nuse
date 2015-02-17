@@ -1013,7 +1013,7 @@ static int shmem_replace_page(struct page **pagep, gfp_t gfp,
 		 */
 		oldpage = newpage;
 	} else {
-		mem_cgroup_migrate(oldpage, newpage, false);
+		mem_cgroup_migrate(oldpage, newpage, true);
 		lru_cache_add_anon(newpage);
 		*pagep = newpage;
 	}
@@ -1131,7 +1131,7 @@ repeat:
 			 * truncated or holepunched since swap was confirmed.
 			 * shmem_undo_range() will have done some of the
 			 * unaccounting, now delete_from_swap_cache() will do
-			 * the rest (including mem_cgroup_uncharge_swapcache).
+			 * the rest.
 			 * Reset swap.val? No, leave it so "failed" goes back to
 			 * "repeat": reading a hole and writing should succeed.
 			 */
@@ -1536,7 +1536,7 @@ static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	 * holes of a sparse file, we actually need to allocate those pages,
 	 * and even mark them dirty, so it cannot exceed the max_blocks limit.
 	 */
-	if (segment_eq(get_fs(), KERNEL_DS))
+	if (!iter_is_iovec(to))
 		sgp = SGP_DIRTY;
 
 	index = *ppos >> PAGE_CACHE_SHIFT;
@@ -3201,7 +3201,6 @@ static const struct vm_operations_struct shmem_vm_ops = {
 	.set_policy     = shmem_set_policy,
 	.get_policy     = shmem_get_policy,
 #endif
-	.remap_pages	= generic_file_remap_pages,
 };
 
 static struct dentry *shmem_mount(struct file_system_type *fs_type,

@@ -76,10 +76,6 @@ static const struct snd_soc_dapm_route ttc_audio_map[] = {
 static int ttc_pm860x_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_soc_codec *codec = rtd->codec;
-	struct snd_soc_dapm_context *dapm = &codec->dapm;
-
-	snd_soc_dapm_disable_pin(dapm, "Headset Mic 2");
-	snd_soc_dapm_disable_pin(dapm, "Headset Stereophone");
 
 	/* Headset jack detection */
 	snd_soc_jack_new(codec, "Headphone Jack", SND_JACK_HEADPHONE
@@ -155,7 +151,6 @@ static int ttc_dkb_remove(struct platform_device *pdev)
 static struct platform_driver ttc_dkb_driver = {
 	.driver		= {
 		.name	= "ttc-dkb-audio",
-		.owner	= THIS_MODULE,
 		.pm     = &snd_soc_pm_ops,
 	},
 	.probe		= ttc_dkb_probe,
