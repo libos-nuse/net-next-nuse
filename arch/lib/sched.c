@@ -346,3 +346,8 @@ u64 local_clock(void)
 void __sched schedule_preempt_disabled(void)
 {
 }
+
+void resched_cpu(int cpu)
+{
+	rcu_sched_qs();
+}
