@@ -83,11 +83,15 @@
  *
  * CHECKSUM_PARTIAL:
  *
- *   This is identical to the case for output below. This may occur on a packet
+ *   A checksum is set up to be offloaded to a device as described in the
+ *   output description for CHECKSUM_PARTIAL. This may occur on a packet
  *   received directly from another Linux OS, e.g., a virtualized Linux kernel
- *   on the same host. The packet can be treated in the same way as
- *   CHECKSUM_UNNECESSARY, except that on output (i.e., forwarding) the
- *   checksum must be filled in by the OS or the hardware.
+ *   on the same host, or it may be set in the input path in GRO or remote
+ *   checksum offload. For the purposes of checksum verification, the checksum
+ *   referred to by skb->csum_start + skb->csum_offset and any preceding
+ *   checksums in the packet are considered verified. Any checksums in the
+ *   packet that are after the checksum being offloaded are not considered to
+ *   be verified.
  *
  * B. Checksumming on output.
  *
@@ -866,8 +870,7 @@ unsigned int skb_seq_read(unsigned int consumed, const u8 **data,
 void skb_abort_seq_read(struct skb_seq_state *st);
 
 unsigned int skb_find_text(struct sk_buff *skb, unsigned int from,
-			   unsigned int to, struct ts_config *config,
-			   struct ts_state *state);
+			   unsigned int to, struct ts_config *config);
 
 /*
  * Packet hash types specify the type of hash in skb_set_hash.
@@ -2915,7 +2918,10 @@ __sum16 __skb_checksum_complete(struct sk_buff *skb);
 
 static inline int skb_csum_unnecessary(const struct sk_buff *skb)
 {
-	return ((skb->ip_summed & CHECKSUM_UNNECESSARY) || skb->csum_valid);
+	return ((skb->ip_summed == CHECKSUM_UNNECESSARY) ||
+		skb->csum_valid ||
+		(skb->ip_summed == CHECKSUM_PARTIAL &&
+		 skb_checksum_start_offset(skb) >= 0));
 }
 
 /**
@@ -3097,15 +3103,28 @@ do {									\
 				       compute_pseudo(skb, proto));	\
 } while (0)
 
+static inline void skb_remcsum_adjust_partial(struct sk_buff *skb, void *ptr,
+					      u16 start, u16 offset)
+{
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = ((unsigned char *)ptr + start) - skb->head;
+	skb->csum_offset = offset - start;
+}
+
 /* Update skbuf and packet to reflect the remote checksum offload operation.
  * When called, ptr indicates the starting point for skb->csum when
  * ip_summed is CHECKSUM_COMPLETE. If we need create checksum complete
  * here, skb_postpull_rcsum is done so skb->csum start is ptr.
  */
 static inline void skb_remcsum_process(struct sk_buff *skb, void *ptr,
-				       int start, int offset)
+				       int start, int offset, bool nopartial)
 {
 	__wsum delta;
+
+	if (!nopartial) {
+		skb_remcsum_adjust_partial(skb, ptr, start, offset);
+		return;
+	}
 
 	 if (unlikely(skb->ip_summed != CHECKSUM_COMPLETE)) {
 		__skb_checksum_complete(skb);
