@@ -85,10 +85,11 @@ RUMP_CLIENT_SRC_PATH=$(addprefix $(ARCH_DIR)/,$(RUMP_CLIENT_SRC))
 rump-git-sparse:
 	@rm -f git-sparse
 	@wget --no-check-certificate -q \
-	 https://raw.githubusercontent.com/icoxfog417/git-sparse/master/git-sparse
-	@sed -i "s/\/bin\/sh/\/bin\/bash/" git-sparse
-	@chmod +x git-sparse
-	PATH=${PATH}:./ git sparse
+	 https://raw.githubusercontent.com/icoxfog417/git-sparse/master/git-sparse \
+	 -O $(ARCH_DIR)/git-sparse
+	@sed -i "s/\/bin\/sh/\/bin\/bash/" $(ARCH_DIR)/git-sparse
+	@chmod +x $(ARCH_DIR)/git-sparse
+	@PATH=${PATH}:$(ARCH_DIR) git sparse
 
 RUMP_CFLAGS=-I$(ARCH_DIR)/$(RUMP_TOP)/lib/librumpuser \
 	-I$(ARCH_DIR)/$(RUMP_TOP)/sys/rump/include \
@@ -318,9 +319,9 @@ library: $(KERNEL_LIB) $(ARCH_DIR)/libnuse-hijack.so
 modules: $(modules)
 
 quiet_cmd_nusetest = BUILDTEST   $@
-      cmd_nusetest = $(MAKE) -s -C $(ARCH_DIR)/test/nuse
+      cmd_nusetest = $(MAKE) -s -C $(ARCH_DIR)/example
 
-nuse: $(ARCH_DIR)/test/nuse
+nuse: $(ARCH_DIR)/example
 	$(call if_changed,nusetest)
 
 install: modules library
@@ -333,7 +334,7 @@ quiet_cmd_clean = CLEAN   $@
 		  rm -rf $(ARCH_DIR)/linker.lds $(AUTOCONF) $(COMPILE_H) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null ;\
 		  rm -f $(DEPENDS) ;\
 		  $(MAKE) -C $(ARCH_DIR)/test clean ;\
-		  $(MAKE) -C $(ARCH_DIR)/test/nuse clean
+		  $(MAKE) -C $(ARCH_DIR)/example clean
 
 ALL_OBJS=$(NUSE_OBJ) $(SIM_OBJ) $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean) \
 	$(ARCH_DIR)/libnuse-hijack.so $(ARCH_DIR)/librumpclient.so
@@ -343,7 +344,9 @@ archclean:
 quiet_cmd_linknuse = LIBNUSE	$@
       # order of $(dpdkl_$(DPDK)) matters...
       cmd_linknuse = $(CC) -Wl,--whole-archive $(dpdkl_$(DPDK)) $(OBJS) $(NUSE_OBJ) $(LDFLAGS) $(LDFLAGS_NUSE) -o $@; \
-		     ln -s -f $(NUSE_LIB) libnuse-linux.so
+		     ln -s -f $(NUSE_LIB) libnuse-linux.so; \
+		     ln -s -f $(ARCH_DIR)/nuse ./nuse
+
 
 quiet_cmd_linksim = LIBSIM	$@
       cmd_linksim = $(CC) -Wl,--whole-archive $(OBJS) $(SIM_OBJ) $(LDFLAGS) $(LDFLAGS_SIM) -o $@; \
@@ -360,10 +363,8 @@ test:
 
 .PHONY : clean depend git-sparse
 
-quiet_cmd_deps = DEPS  $@
-      cmd_deps = set -e; $(CC) -MM -MT $(<:.c=.o) $(CFLAGS) $< > $@
 .%.d:%.c $(srctree)/.config
-	$(call if_changed,deps)
+	$(Q) set -e; $(CC) -MM -MT $(<:.c=.o) $(CFLAGS) $< > $@
 
 KBUILD_KCONFIG := arch/$(ARCH)/Kconfig
 CLEAN_FILES := $(ARCH_DIR)/test/buildtop/source/quagga/lib/*.lo
