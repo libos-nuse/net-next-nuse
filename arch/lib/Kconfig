@@ -107,6 +107,9 @@ config SYSFS
 config PROC_SYSCTL
        def_bool y
 
+config NETDEVICES
+       def_bool y
+
 source "net/Kconfig"
 
 source "drivers/base/Kconfig"
