@@ -61,7 +61,7 @@ static struct super_block *alloc_super(struct file_system_type *type)
 			s = NULL;
 			goto fail;
 		}
-		s->s_bdi = &default_backing_dev_info;
+		s->s_bdi = &noop_backing_dev_info;
 		INIT_HLIST_NODE(&s->s_instances);
 		INIT_HLIST_BL_HEAD(&s->s_anon);
 		INIT_LIST_HEAD(&s->s_inodes);

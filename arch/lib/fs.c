@@ -23,11 +23,11 @@
 __cacheline_aligned_in_smp DEFINE_SEQLOCK(mount_lock);
 struct super_block;
 
-struct backing_dev_info default_backing_dev_info = {
+struct backing_dev_info noop_backing_dev_info = {
 	.name		= "default",
 	.ra_pages	= VM_MAX_READAHEAD * 1024 / PAGE_CACHE_SIZE,
 	.state		= 0,
-	.capabilities	= BDI_CAP_MAP_COPY,
+	.capabilities	= NOMMU_MAP_COPY,
 };
 struct user_namespace init_user_ns;
 

@@ -64,6 +64,7 @@ int sched_rr_timeslice = RR_TIMESLICE;
 /* from main.c */
 bool initcall_debug;
 bool static_key_initialized __read_mostly = false;
+unsigned long __start_rodata, __end_rodata;
 
 unsigned long __raw_local_save_flags(void)
 {
