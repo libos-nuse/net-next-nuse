@@ -49,7 +49,6 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_flags = 0;
 	atomic_set(&inode->i_count, 1);
 	inode->i_op = &empty_iops;
-	inode->i_fop = &empty_iops;
 	inode->__i_nlink = 1;
 	inode->i_opflags = 0;
 	i_uid_write(inode, 0);
