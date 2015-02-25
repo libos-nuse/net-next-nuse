@@ -1,4 +1,0 @@
-#ifndef _ASM_SIM_STACKTRACE_H
-#define _ASM_SIM_STACKTRACE_H
-
-#endif /* _ASM_SIM_STACKTRACE_H */

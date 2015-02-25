@@ -182,7 +182,7 @@ CFLAGS+= \
  -DKBUILD_BASENAME=\"clnt\" -DKBUILD_MODNAME=\"nsc\" -DMODVERSIONS \
  -DEXPORT_SYMTAB -include $(srctree)/include/linux/kconfig.h \
  -U__FreeBSD__ -D__linux__=1 -Dlinux=1 -D__linux=1 \
- -I$(ARCH_DIR)/include -I$(srctree)/include \
+ -I$(ARCH_DIR)/include -I$(srctree)/include -I$(ARCH_DIR)/include/generated \
  -I$(ARCH_DIR) -I$(srctree) -I$(srctree) -I$(srctree)/include/uapi \
  -DCONFIG_DEFAULT_HOSTNAME=\"lib\"
 
@@ -282,7 +282,7 @@ $(CRC32TABLE): $(srctree)/lib/gen_crc32table
        chk_compile.h = :
  quiet_chk_compile.h = echo '  CHK     $@'
 silent_chk_compile.h = :
-$(COMPILE_H): include/generated/utsrelease.h
+$(COMPILE_H): include/generated/utsrelease.h asm-generic
 	@$($(quiet)chk_compile.h)
 	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkcompile_h $@ \
 	"$(UTS_MACHINE)" "$(CONFIG_SMP)" "$(CONFIG_PREEMPT)" "$(CC) $(KBUILD_CFLAGS)"
