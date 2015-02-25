@@ -20,6 +20,17 @@ so they are configured different IP addresses as other virtualization
 methods do.
 
 
+* How different with others ?
+
+- User-mode Linux (UML)
+
+UML is a way to execute Linux kernel code as a userspace
+application. It is completly isolated from host kernel but can host
+arbitrary userspace applications on top of UML.
+
+- name space
+
+
 * Build
 
 configuration of arch/lib follows a standard configuration of kernel.
