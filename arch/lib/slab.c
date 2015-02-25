@@ -11,6 +11,7 @@
 #include <linux/page-flags.h>
 #include <linux/types.h>
 #include <linux/slab.h>
+#include <linux/slab_def.h>
 
 void kfree(const void *p)
 {

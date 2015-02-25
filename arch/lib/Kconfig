@@ -95,6 +95,9 @@ config SPLIT_PTLOCK_CPUS
 config FLATMEM
        def_bool y
 
+config SLAB
+       def_bool y
+
 config SYSCTL
        def_bool y
 
