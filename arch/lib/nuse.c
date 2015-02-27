@@ -17,14 +17,9 @@
 #include <net/route.h>
 #include <net/ipconfig.h>       /* ip_route_iotcl() */
 #include <net/net_namespace.h>
-#include <bits/pthreadtypes.h>
-#include <drivers/base/base.h>
-#include <include/linux/idr.h>
-#include <include/linux/rcupdate.h>
+#include <linux/idr.h>
+#include <linux/rcupdate.h>
 
-#include <stdio.h>
-#include <sys/ioctl.h>
-#include <dlfcn.h>
 #include "sim-init.h"
 #include "sim-assert.h"
 #include "sim.h"
@@ -38,6 +33,8 @@
 
 struct SimTask;
 
+
+int vprintf(const char *format, va_list ap);
 
 int nuse_vprintf(struct SimKernel *kernel, const char *str, va_list args)
 {
@@ -155,7 +152,7 @@ static void *nuse_task_start_trampoline(void *context)
 	if (nuse_fiber_is_stopped(ctx->task->private)) {
 		lib_free(ctx);
 		lib_update_jiffies();
-		printf("canceled\n");
+		pr_info("canceled\n");
 		return NULL;
 	}
 
@@ -256,7 +253,7 @@ nuse_netdev_rx_trampoline(void *context)
 	struct nuse_vif *vif = lib_dev_get_private(dev);
 
 	nuse_vif_read(vif, dev);
-	printf("should not reach here %s\n", __func__);
+	pr_err("should not reach here %s\n", __func__);
 	/* should not reach */
 	return dev;
 }
@@ -300,7 +297,7 @@ void nuse_signal_raised(struct SimKernel *kernel, struct SimTask *task, int sig)
 	static int logged = 0;
 
 	if (!logged) {
-		lib_printf("%s: Not implemented yet\n", __func__);
+		pr_err("%s: Not implemented yet\n", __func__);
 		logged = 1;
 	}
 }
@@ -319,7 +316,7 @@ nuse_netdev_lo_up(void)
 		sprintf(ifr.ifr_name, "lo");
 		err = devinet_ioctl(&init_net, SIOCSIFFLAGS, &ifr);
 		if (err)
-			lib_printf("err devinet_ioctl %d\n", err);
+			pr_err("err devinet_ioctl %d\n", err);
 		init_loopback = 1;
 	}
 }
@@ -334,21 +331,21 @@ nuse_netdev_create(struct nuse_vif_config *vifcf)
 	struct SimTask *task = NULL;
 	void *fiber;
 
-	printf("create vif %s\n", vifcf->ifname);
-	printf("  address = %s\n", vifcf->address);
-	printf("  netmask = %s\n", vifcf->netmask);
-	printf("  macaddr = %s\n", vifcf->macaddr);
-	printf("  type    = %d\n", vifcf->type);
+	pr_info("create vif %s\n", vifcf->ifname);
+	pr_info("  address = %s\n", vifcf->address);
+	pr_info("  netmask = %s\n", vifcf->netmask);
+	pr_info("  macaddr = %s\n", vifcf->macaddr);
+	pr_info("  type    = %d\n", vifcf->type);
 
 	if (vifcf->type == NUSE_VIF_PIPE) {
-		printf("  path    = %s\n", vifcf->pipepath);
+		pr_info("  path    = %s\n", vifcf->pipepath);
 		vif = nuse_vif_create(vifcf->type, vifcf->pipepath);
 	} else {
 		vif = nuse_vif_create(vifcf->type, vifcf->ifname);
 	}
 
 	if (!vif) {
-		lib_printf("vif create error\n");
+		pr_err("vif create error\n");
 		lib_assert(0);
 	}
 
@@ -360,10 +357,10 @@ nuse_netdev_create(struct nuse_vif_config *vifcf)
 	    vifcf->mac[3] == 0 && vifcf->mac[4] == 0 && vifcf->mac[5] == 0) {
 		eth_random_addr(vifcf->mac);
 		((struct net_device *)dev)->addr_assign_type = NET_ADDR_RANDOM;
-		printf("mac address for %s is randomized ", vifcf->ifname);
-		printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
-		       vifcf->mac[0], vifcf->mac[1], vifcf->mac[2],
-		       vifcf->mac[3], vifcf->mac[4], vifcf->mac[5]);
+		pr_info("mac address for %s is randomized ", vifcf->ifname);
+		pr_info("%02x:%02x:%02x:%02x:%02x:%02x\n",
+			vifcf->mac[0], vifcf->mac[1], vifcf->mac[2],
+			vifcf->mac[3], vifcf->mac[4], vifcf->mac[5]);
 	}
 	lib_dev_set_address(dev, vifcf->mac);
 	ether_setup((struct net_device *)dev);
@@ -375,16 +372,16 @@ nuse_netdev_create(struct nuse_vif_config *vifcf)
 
 	err = devinet_ioctl(&init_net, SIOCSIFADDR, &vifcf->ifr_vif_addr);
 	if (err) {
-		perror("devinet_ioctl");
-		printf("err devinet_ioctl for assign address %s for %s %d\n",
+		pr_err("devinet_ioctl");
+		pr_err("err devinet_ioctl for assign address %s for %s %d\n",
 		       vifcf->address, vifcf->ifname, err);
 	}
 
 	/* set netmask */
 	err = devinet_ioctl(&init_net, SIOCSIFNETMASK, &vifcf->ifr_vif_mask);
 	if (err) {
-		perror("devinet_ioctl");
-		printf("err devinet_ioctl for assign netmask %s for %s %d\n",
+		pr_err("devinet_ioctl (errno = %d)", errno);
+		pr_err("err devinet_ioctl for assign netmask %s for %s %d\n",
 		       vifcf->netmask, vifcf->ifname, err);
 	}
 
@@ -395,8 +392,8 @@ nuse_netdev_create(struct nuse_vif_config *vifcf)
 
 	err = devinet_ioctl(&init_net, SIOCSIFFLAGS, &ifr);
 	if (err) {
-		perror("devinet_ioctl");
-		printf("err devinet_ioctl to set ifup dev %s %d\n",
+		pr_err("devinet_ioctl (errno=%d)", errno);
+		pr_err("err devinet_ioctl to set ifup dev %s %d\n",
 		       vifcf->ifname, err);
 	}
 
@@ -416,8 +413,8 @@ nuse_route_install(struct nuse_route_config *rtcf)
 
 	err = ip_rt_ioctl(&init_net, SIOCADDRT, &rtcf->route);
 	if (err)
-		lib_printf("err ip_rt_ioctl to add route to %s via %s %d\n",
-			   rtcf->network, rtcf->gateway, err);
+		pr_err("err ip_rt_ioctl to add route to %s via %s %d\n",
+		       rtcf->network, rtcf->gateway, err);
 }
 
 extern void lib_init(struct SimExported *exported,
@@ -483,10 +480,10 @@ nuse_init(void)
 	/* read and parse a config file */
 	config = host_getenv("NUSECONF");
 	if (config == NULL)
-		printf("config file is not specified\n");
+		pr_err("config file is not specified\n");
 	else {
 		if (!nuse_config_parse(&cf, config)) {
-			printf("parse config file failed\n");
+			pr_err("parse config file failed\n");
 			lib_assert(0);
 		}
 
@@ -506,6 +503,6 @@ nuse_init(void)
 void __attribute__((destructor))
 nuse_exit(void)
 {
-	printf("finishing NUSE\n");
+	pr_info("finishing NUSE\n");
 	nuse_syscall_proxy_exit();
 }

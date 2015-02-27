@@ -87,6 +87,8 @@ ssize_t nuse_recvmsg(int fd, const struct user_msghdr *msghdr, int flags);
 ssize_t nuse_sendmsg(int fd, const struct user_msghdr *msghdr, int flags);
 int nuse_sendmmsg(int fd, struct mmsghdr *msgvec, unsigned int vlen,
 		unsigned int flags);
+int nuse_recvmmsg(int fd, struct mmsghdr *msgvec, unsigned int vlen,
+		  unsigned int flags, struct timespec *timeout);
 int nuse_getsockname(int fd, struct sockaddr *name, int *namelen);
 int nuse_getpeername(int fd, struct sockaddr *name, int *namelen);
 int nuse_bind(int fd, struct sockaddr *name, int namelen);

@@ -36,6 +36,6 @@ $(OBJS): Makefile $(SRCS)
 	$(CC) $(CFLAGS) -c $(SRCS)
 
 clean:
-	rm -f $(TARGET)
-	rm -f *.o
-	rm -f *-ld
+	@rm -f $(TARGET)
+	@rm -f *.o
+	@rm -f *-ld

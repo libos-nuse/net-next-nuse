@@ -13,6 +13,12 @@ struct pthread;
 struct pthread_attr;
 typedef unsigned long int pthread_t;
 
+#ifndef errno
+//#include <errno.h>
+extern int *__errno_location (void);
+#define errno (*__errno_location())
+#endif /* errno */
+
 /* nuse-hostcalls.c */
 void nuse_hostcall_init(void);
 

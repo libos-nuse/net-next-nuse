@@ -11,9 +11,8 @@
 #include <linux/sched.h>        /* struct task_struct */
 #include <linux/device.h>
 #include <drivers/base/base.h>
-#include <include/linux/idr.h>
-#include <include/linux/rcupdate.h>
-#include <stdio.h>
+#include <linux/idr.h>
+#include <linux/rcupdate.h>
 #include "sim-init.h"
 #include "sim.h"
 

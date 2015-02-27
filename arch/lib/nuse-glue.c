@@ -9,9 +9,8 @@
 
 //#include <pthread.h>
 #include <net/net_namespace.h>
-#include <errno.h>
-#include <poll.h>
-#include <unistd.h>
+#include <linux/poll.h>
+#include <linux/unistd.h>
 
 #include "sim-init.h"
 #include "sim-assert.h"
@@ -24,6 +23,8 @@
 	extern __typeof (name) aliasname __attribute__ ((weak, alias (# name)))
 
 /* #include <sys/select.h> */
+typedef long intptr_t;
+typedef unsigned int nfds_t;
 typedef long int __fd_mask;
 # define __FDS_BITS(set) ((set)->fds_bits)
 # define __FD_ZERO(set)  \
@@ -349,7 +350,7 @@ int nuse_accept4(int fd, struct sockaddr *addr, int *addrlen, int flags)
 	if (retval < 0) {
 		errno = -retval;
 		free(new_socket);
-		printf("accept err\n");
+		pr_err("accept err\n");
 		return -1;
 	}
 	if (addr != 0) {
@@ -357,7 +358,7 @@ int nuse_accept4(int fd, struct sockaddr *addr, int *addrlen, int flags)
 		if (retval < 0) {
 			errno = -retval;
 			lib_sock_close(new_socket);
-			printf("getpeername err\n");
+			pr_err("getpeername err\n");
 			return -1;
 		}
 	}
@@ -416,7 +417,7 @@ ssize_t nuse_writev(int fd, const struct iovec *iov, size_t count)
 weak_alias(nuse_writev, writev);
 
 ssize_t nuse_sendto(int fd, const void *buf, size_t len, int flags,
-			const struct sockaddr *dest_addr, socklen_t addrlen)
+			const struct sockaddr *dest_addr, unsigned int addrlen)
 {
 	struct user_msghdr msg;
 	struct iovec iov;
@@ -604,7 +605,7 @@ int open(const char *pathname, int flags, mode_t mode)
 	int real_fd = host_open(pathname, flags, mode);
 
 	if (real_fd < 0) {
-		perror("open");
+		pr_err("open (errno=%d)\n", errno);
 		return -1;
 	}
 	nuse_fd_table[real_fd].real_fd = real_fd;
@@ -617,7 +618,7 @@ int open64(const char *pathname, int flags, mode_t mode)
 
 	/*  printf ("%d, %llu %s %s\n", nuse_fd_table[curfd].real_fd, curfd, pathname, __FUNCTION__); */
 	if (real_fd < 0) {
-		perror("open64");
+		pr_err("open64 (errno=%d)\n", errno);
 		return -1;
 	}
 	nuse_fd_table[real_fd].real_fd = real_fd;
@@ -1112,7 +1113,7 @@ epoll_wait(int epollfd, struct epoll_event *events,
 			    || (POLLERR & pollFd[j].revents)) {
 				memcpy(events, rev, sizeof(struct epoll_event));
 				events->events = pollFd[j].revents;
-				printf("epoll woke up for read with %d\n", fd);
+				pr_info("epoll woke up for read with %d\n", fd);
 				pollRet++;
 				events++;
 			}
@@ -1121,14 +1122,14 @@ epoll_wait(int epollfd, struct epoll_event *events,
 				events->events = pollFd[j].revents;
 				/* *events = *epollFd->evs[fd]; */
 				/* events->data.fd = fd; */
-				printf("epoll woke up for write with %d\n", fd);
+				pr_info("epoll woke up for write with %d\n", fd);
 				pollRet++;
 				events++;
 			}
 			if (POLLPRI & pollFd[j].revents) {
 				memcpy(events, rev, sizeof(struct epoll_event));
 				events->events = pollFd[j].revents;
-				printf("epoll woke up for other with %d\n", fd);
+				pr_info("epoll woke up for other with %d\n", fd);
 				/* *events = *epollFd->evs[fd]; */
 				/* events->data.fd = fd; */
 				pollRet++;

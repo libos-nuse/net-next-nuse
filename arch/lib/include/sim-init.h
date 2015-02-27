@@ -8,15 +8,15 @@
 #ifndef SIM_INIT_H
 #define SIM_INIT_H
 
-#include <stdarg.h>
-#include <linux/types.h>
 #include <linux/socket.h>
-#include <stdio.h>
 #include "sim-types.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+struct file;
+typedef struct file FILE;
 
 struct SimExported {
 	struct SimTask *(*task_create)(void *priv, unsigned long pid);

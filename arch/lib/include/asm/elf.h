@@ -7,4 +7,6 @@
 #define ELF_CLASS ELFCLASS32
 #endif
 
+#define task_pt_regs(t) NULL
+
 #endif /* _ASM_SIM_ELF_H */

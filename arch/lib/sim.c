@@ -13,7 +13,6 @@
 #include <drivers/base/base.h>
 #include <include/linux/idr.h>
 #include <include/linux/rcupdate.h>
-#include <stdio.h>
 #include "sim-init.h"
 #include "sim.h"
 
