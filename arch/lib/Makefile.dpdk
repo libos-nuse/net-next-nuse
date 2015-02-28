@@ -25,10 +25,3 @@ ifeq ($(DPDK), yes)
 else
 	@echo -n ""
 endif
-
-dpdk-sdk:
-	git submodule init; \
-	git submodule update; \
-	cd $(srctree)/dpdk ; make CONFIG_RTE_LIBRTE_ETHDEV_DEBUG=y T=$(shell expr `uname -m`)-native-linuxapp-gcc config
-	cd $(srctree)/dpdk ; make SRCARCH=x86 CONFIG_RTE_BUILD_COMBINE_LIBS=y EXTRA_CFLAGS="-fPIC -g"
-

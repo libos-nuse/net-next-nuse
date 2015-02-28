@@ -2,8 +2,13 @@ language: c
 install:
     - sudo apt-get update
     - sudo apt-get install bc
+    - sudo apt-get -y install linux-headers-generic
 compiler:
   - gcc
 script:
-  - make defconfig ARCH=lib V=1 && make clean ARCH=lib V=1 && make library ARCH=lib V=1
+  - sudo ln -sf $(ls /lib/modules | sed 1q) /lib/modules/$(uname -r)
+  - arch/lib/dpdk-sdk-build.sh
+  - make defconfig ARCH=lib V=1
+  # disable DPDK build for a while
+  - make clean ARCH=lib V=1 && make library ARCH=lib V=1
   - ./arch/lib/test/nuse-test.sh

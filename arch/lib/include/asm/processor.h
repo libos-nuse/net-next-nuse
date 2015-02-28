@@ -12,6 +12,7 @@ void *current_text_addr(void);
 #define TASK_SIZE ((~(long)0))
 
 #define thread_saved_pc(x) (unsigned long)0
+#define task_pt_regs(t) NULL
 
 int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags);
 

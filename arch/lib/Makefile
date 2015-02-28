@@ -69,7 +69,7 @@ netmap_no=
 DPDK?=no
 dpdk_yes=nuse-vif-dpdk.c
 dpdk_no=
-dpdkl_yes=-L $(RTE_SDK)/$(RTE_TARGET) -L$(RTE_SDK)/$(RTE_TARGET)/lib $(ARCH_DIR)/nuse-vif-dpdk.o $(DPDK_LDLIBS)
+dpdkl_yes=-L$(RTE_SDK)/$(RTE_TARGET)/lib $(ARCH_DIR)/nuse-vif-dpdk.o $(DPDK_LDLIBS)
 dpdkl_no=
 
 COV?=no
