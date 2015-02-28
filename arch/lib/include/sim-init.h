@@ -15,8 +15,8 @@
 extern "C" {
 #endif
 
-struct file;
-typedef struct file FILE;
+struct _IO_FILE;
+typedef struct _IO_FILE FILE;
 
 struct SimExported {
 	struct SimTask *(*task_create)(void *priv, unsigned long pid);
