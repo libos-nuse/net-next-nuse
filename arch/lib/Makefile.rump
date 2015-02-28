@@ -58,7 +58,7 @@ $(RUMP_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile
 quiet_cmd_rumpsys = RUMPS		$@
       cmd_rumpsys = $(CC) $(CFLAGS_USPACE) $(RUMP_CFLAGS) \
                     -I$(srctree)/include -DHOSTOPS -c $< -o $@
-$(RUMP_NUSE_OBJ): %.o : %.c $(ARCH_DIR)/Makefile
+$(RUMP_NUSE_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile
 	$(call if_changed,rumpsys)
 
 # librumpclient.so
