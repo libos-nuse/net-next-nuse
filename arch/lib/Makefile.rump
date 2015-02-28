@@ -48,7 +48,7 @@ $(RUMPUSER_CONF_H):
 # rumpserver object compile: embed to libnuse-linux.so
 quiet_cmd_rumps = RUMPS		$@
       cmd_rumps = $(CC) $(CFLAGS_USPACE) $(RUMP_CFLAGS) \
-                  -I$(srctree)/include -DHOSTOPS -c $< -o $@
+                  -DHOSTOPS -c $< -o $@
 $(RUMP_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile
 	$(call if_changed,rumps)
 
