@@ -2,8 +2,10 @@ RUMP_TOP=rump
 # RUMP_DEBUG=-DDEBUG -DDEBUGJACK
 RUMPUSER_CONF_H=$(ARCH_DIR)/$(RUMP_TOP)/lib/librumpuser/rumpuser_config.h
 
+RUMP_NUSE_SRC= \
+nuse-syscalls.c
+
 RUMP_SRC= \
-nuse-syscalls.c \
 $(RUMP_TOP)/lib/librumpuser/rumpuser_sp.c \
 $(RUMP_TOP)/lib/librumpuser/rumpuser.c \
 $(RUMP_TOP)/lib/librumpuser/rumpuser_errtrans.c \
@@ -28,6 +30,7 @@ RUMP_CFLAGS=-I$(ARCH_DIR)/$(RUMP_TOP)/lib/librumpuser \
 	-DRUMP_CLIENT \
 	$(RUMP_DEBUG)
 
+RUMP_NUSE_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_NUSE_SRC))))
 RUMP_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_SRC))))
 RUMP_CLIENT_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_CLIENT_SRC))))
 RUMP_HIJACK_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_HIJACK_SRC))))
@@ -51,6 +54,12 @@ quiet_cmd_rumps = RUMPS		$@
                   -DHOSTOPS -c $< -o $@
 $(RUMP_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile
 	$(call if_changed,rumps)
+
+quiet_cmd_rumpsys = RUMPS		$@
+      cmd_rumpsys = $(CC) $(CFLAGS_USPACE) $(RUMP_CFLAGS) \
+                    -I$(srctree)/include -DHOSTOPS -c $< -o $@
+$(RUMP_NUSE_OBJ): %.o : %.c $(ARCH_DIR)/Makefile
+	$(call if_changed,rumpsys)
 
 # librumpclient.so
 quiet_cmd_rclient = RUMPHJ	$@
