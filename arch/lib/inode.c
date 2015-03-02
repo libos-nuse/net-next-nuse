@@ -91,7 +91,6 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 #ifdef CONFIG_FSNOTIFY
 	inode->i_fsnotify_mask = 0;
 #endif
-	inode->i_flctx = NULL;
 	/* this_cpu_inc(nr_inodes); */
 
 	return 0;
