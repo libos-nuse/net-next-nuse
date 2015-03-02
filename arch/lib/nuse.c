@@ -232,6 +232,8 @@ void nuse_event_cancel(struct SimKernel *kernel, void *event)
 
 	nuse_fiber_stop(task->private);
 	/*  nuse_fiber_free (task->private); */
+	if (task->head.prev == LIST_POISON2)
+		return;
 	list_del_rcu(&task->head);
 }
 

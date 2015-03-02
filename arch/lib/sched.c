@@ -135,7 +135,8 @@ void add_wait_queue_exclusive(wait_queue_head_t *q, wait_queue_t *wait)
 }
 void remove_wait_queue(wait_queue_head_t *q, wait_queue_t *wait)
 {
-	list_del(&wait->task_list);
+	if (wait->task_list.prev != LIST_POISON2)
+		list_del(&wait->task_list);
 }
 void
 prepare_to_wait_exclusive(wait_queue_head_t *q, wait_queue_t *wait, int state)
@@ -167,8 +168,9 @@ int autoremove_wake_function(wait_queue_t *wait, unsigned mode, int sync,
 {
 	int ret = default_wake_function(wait, mode, sync, key);
 
-	if (ret)
+	if (ret && (wait->task_list.prev != LIST_POISON2)) {
 		list_del_init(&wait->task_list);
+	}
 	return ret;
 }
 
@@ -208,7 +210,9 @@ unsigned long wait_for_completion_timeout(struct completion *x,
 		do
 			timeout = schedule_timeout(timeout);
 		while (!x->done && timeout);
-		list_del(&wait.task_list);
+		if (wait.task_list.prev != LIST_POISON2) {
+			list_del(&wait.task_list);
+		}
 		if (!x->done)
 			return timeout;
 	}
