@@ -87,6 +87,12 @@ int nuse_access(struct SimKernel *kernel, const char *pathname, int mode)
 {
 	return host_access(pathname, mode);
 }
+int atexit(void (*function)(void))
+{
+	/* XXX: need to handle host_atexit, but can't dynamically resolv 
+	   the symbol so, ignore it for the time being */
+	return 0;
+}
 
 static struct SimTask *g_nuse_main_ctx = NULL;
 struct list_head g_task_lists = LIST_HEAD_INIT(g_task_lists);

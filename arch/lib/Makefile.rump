@@ -30,6 +30,9 @@ RUMP_CFLAGS=-I$(ARCH_DIR)/$(RUMP_TOP)/lib/librumpuser \
 	-DRUMP_CLIENT \
 	$(RUMP_DEBUG)
 
+RUMP_LDFLAGS=-lpthread -ldl -Wl,-rpath=$(ARCH_DIR) -L$(ARCH_DIR) -lrumpclient \
+	$(covl_$(COV))
+
 RUMP_NUSE_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_NUSE_SRC))))
 RUMP_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_SRC))))
 RUMP_CLIENT_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_CLIENT_SRC))))
@@ -52,32 +55,31 @@ $(RUMPUSER_CONF_H):
 quiet_cmd_rumps = RUMPS		$@
       cmd_rumps = $(CC) $(CFLAGS_USPACE) $(RUMP_CFLAGS) \
                   -DHOSTOPS -c $< -o $@
-$(RUMP_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile
+$(RUMP_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile.rump
 	$(call if_changed,rumps)
 
 quiet_cmd_rumpsys = RUMPS		$@
       cmd_rumpsys = $(CC) $(CFLAGS_USPACE) $(RUMP_CFLAGS) \
                     -I$(srctree)/include -DHOSTOPS -c $< -o $@
-$(RUMP_NUSE_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile
+$(RUMP_NUSE_OBJ): %.o : %.c $(RUMPUSER_CONF_H) $(ARCH_DIR)/Makefile.rump
 	$(call if_changed,rumpsys)
 
 # librumpclient.so
 quiet_cmd_rclient = RUMPHJ	$@
-      cmd_rclient = $(CC) -shared $(RUMP_CLIENT_OBJ) -o $@
-$(ARCH_DIR)/librumpclient.so: $(RUMP_CLIENT_OBJ) $(ARCH_DIR)/Makefile
+      cmd_rclient = $(CC) -shared $(RUMP_CLIENT_OBJ) $(covl_$(COV)) -o $@
+$(ARCH_DIR)/librumpclient.so: $(RUMP_CLIENT_OBJ) $(ARCH_DIR)/Makefile.rump
 	$(call if_changed,rclient)
 
 # rump {client,hijack} compile
 quiet_cmd_rumpc = RUMPC		$@
       cmd_rumpc = $(CC) $(RUMP_CFLAGS) -U_FORTIFY_SOURCE -c $< -o $@
-$(RUMP_CLIENT_OBJ): %.o : %.c $(ARCH_DIR)/Makefile
+$(RUMP_CLIENT_OBJ): %.o : %.c $(ARCH_DIR)/Makefile.rump
 	$(call if_changed,rumpc)
-$(RUMP_HIJACK_OBJ): %.o : %.c $(ARCH_DIR)/Makefile
+$(RUMP_HIJACK_OBJ): %.o : %.c $(ARCH_DIR)/Makefile.rump
 	$(call if_changed,rumpc)
 
 # libnuse-hijack.so
 quiet_cmd_hijack = RUMPHJ	$@
-      cmd_hijack = $(CC) -shared $(RUMP_HIJACK_OBJ) -lpthread -ldl \
-	-Wl,-rpath=$(ARCH_DIR) -L$(ARCH_DIR) -lrumpclient -o $@
-$(ARCH_DIR)/libnuse-hijack.so: $(RUMP_HIJACK_OBJ) $(ARCH_DIR)/librumpclient.so $(ARCH_DIR)/Makefile
+      cmd_hijack = $(CC) -shared $(RUMP_HIJACK_OBJ) $(RUMP_LDFLAGS) -o $@
+$(ARCH_DIR)/libnuse-hijack.so: $(RUMP_HIJACK_OBJ) $(ARCH_DIR)/librumpclient.so $(ARCH_DIR)/Makefile.rump
 	$(call if_changed,hijack)
