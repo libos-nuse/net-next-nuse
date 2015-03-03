@@ -1,5 +1,7 @@
 ARCH_DIR := arch/lib
 SRCDIR=$(dir $(firstword $(MAKEFILE_LIST)))
+DCE_TESTDIR=$(srctree)/tools/testing/libos/
+KBUILD_KCONFIG := arch/$(ARCH)/Kconfig
 
 CC = gcc
 GCCVERSIONGTEQ48 := $(shell expr `gcc -dumpversion` \>= 4.8)
@@ -223,12 +225,6 @@ $(NUSE_USPACE_OBJ): %.o : %.c
 library: $(KERNEL_LIB) $(ARCH_DIR)/libnuse-hijack.so
 modules: $(modules)
 
-quiet_cmd_nusetest = BUILDTEST   $@
-      cmd_nusetest = $(MAKE) -s -C $(ARCH_DIR)/example
-
-nuse: $(ARCH_DIR)/example
-	$(call if_changed,nusetest)
-
 install: modules library
 
 install-dir:
@@ -236,9 +232,7 @@ install-dir:
 quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
 		  for f in $(ALL_OBJS); do rm -f $$f; done 2>/dev/null ;\
-		  rm -rf $(ARCH_DIR)/linker.lds $(COMPILE_H) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null ;\
-		  $(MAKE) -C $(ARCH_DIR)/test clean ;\
-		  $(MAKE) -C $(ARCH_DIR)/example clean
+		  rm -rf $(ARCH_DIR)/linker.lds $(COMPILE_H) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null
 
 archclean:
 	$(call if_changed,clean)
@@ -266,9 +260,7 @@ deplib: $(DEPENDS)
 	-include $(DEPENDS)
 
 test:
-	$(MAKE) -C $(ARCH_DIR)/test
+	$(MAKE) -C $(DCE_TESTDIR)/
 
 .PHONY : clean deplib git-sparse
 
-KBUILD_KCONFIG := arch/$(ARCH)/Kconfig
-CLEAN_FILES := $(ARCH_DIR)/test/buildtop/source/quagga/lib/*.lo

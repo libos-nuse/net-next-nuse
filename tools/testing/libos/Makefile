@@ -10,6 +10,7 @@ check_pkgs:
 	@./bake/bake.py check | grep autoreconf | grep OK || (echo "autotools is missing" && ./bake/bake.py check && exit 1)
 
 testbin: bake check_pkgs
+	@cp bakeconf-linux.xml bake/bakeconf.xml
 	@mkdir -p buildtop/build/bin_dce
 	cd buildtop ; \
 	../bake/bake.py configure -e dce-linux-inkernel $(BAKECONF_PARAMS)
@@ -21,13 +22,13 @@ testbin: bake check_pkgs
 	../bake/bake.py build
 
 test:
-	@./test.sh ADD_PARAM=$(ADD_PARAM)
+	@./dce-test.sh ADD_PARAM=$(ADD_PARAM)
 
 test-valgrind:
-	@./test.sh -g ADD_PARAM=$(ADD_PARAM)
+	@./dce-test.sh -g ADD_PARAM=$(ADD_PARAM)
 
 test-fault-injection:
-	@./test.sh -f ADD_PARAM=$(ADD_PARAM)
+	@./dce-test.sh -f ADD_PARAM=$(ADD_PARAM)
 
 clean:
 #	@rm -rf buildtop
