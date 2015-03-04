@@ -7,7 +7,19 @@
 
 #include <linux/poll.h>
 #include <linux/net.h>
-#include "nuse.h"
+
+/* FIXME */
+struct nuse_socket {
+	struct SimSocket *kern_sock;
+	int refcnt;
+	int flags;
+};
+
+struct nuse_fd {
+	int real_fd;
+	struct epoll_fd *epoll_fd;
+	struct nuse_socket *nuse_sock;
+};
 
 extern struct nuse_fd nuse_fd_table[1024];
 
@@ -171,7 +183,6 @@ do_poll(struct pollfd *fds, unsigned int nfds,
 			/* nuse's fd */
 			sock = (struct socket *)
 				nuse_fd_table[fds[i].fd].nuse_sock->kern_sock;
-
 			pt->_key = fds[i].events | POLLERR | POLLHUP;
 			mask = sock->ops->poll(&zero, sock, pt);
 			mask &= (fds[i].events | POLLERR | POLLHUP);

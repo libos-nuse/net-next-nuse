@@ -1,6 +1,6 @@
-config LIB
-       bool
-       default y
+menuconfig LIB
+       bool "LibOS-specific options"
+       def_bool n
        select PROC_FS
        select PROC_SYSCTL
        select SYSCTL
@@ -10,6 +10,25 @@ config LIB
           the linux kernel that includes only its network stack and is
 	  used within the userspace application, and ns-3 simulator.
 	  For more information, about ns-3, see http://www.nsnam.org.
+
+if LIB
+
+config LIB_NUSE_DPDK
+	bool "Virtual interface with Intel DPDK"
+	def_bool n
+	depends on LIB
+	help
+	  Build DPDK packet I/O as a virtual interface for NUSE.
+	  For DPDK, see http://dpdk.org
+
+config LIB_NUSE_NETMAP
+	def_bool n
+	depends on LIB
+	help
+	  Build netmap packet I/O as a virtual interface for NUSE.
+	  For netmap, see http://info.iet.unipi.it/~luigi/netmap/
+
+endif # if LIB
 
 config EXPERIMENTAL
 	def_bool y

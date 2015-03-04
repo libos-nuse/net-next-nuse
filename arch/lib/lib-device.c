@@ -97,6 +97,7 @@ struct SimDevice *lib_dev_create(char *ifname, void *priv,
 	}
 	dev->priv = priv;
 	err = register_netdev(&dev->dev);
+	ether_setup((struct net_device *)dev);
 	return dev;
 }
 void lib_dev_destroy(struct SimDevice *dev)

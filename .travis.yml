@@ -7,8 +7,7 @@ compiler:
   - gcc
 script:
   - sudo ln -sf $(ls /lib/modules | sed 1q) /lib/modules/$(uname -r)
-  - arch/lib/dpdk-sdk-build.sh
   - make defconfig ARCH=lib V=1
   # disable DPDK build for a while
   - make clean ARCH=lib V=1 && make library ARCH=lib V=1
-  - ./arch/lib/test/nuse-test.sh
+  - ./tools/testing/libos/nuse-test.sh

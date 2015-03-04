@@ -46,9 +46,6 @@ void lib_poll_event(int flag, void *context);
 void lib_softirq_wakeup(void);
 void lib_update_jiffies(void);
 void *lib_dev_get_private(struct SimDevice *);
-struct SimDevice *lib_dev_create(char *ifname,
-				 void *priv, enum SimDevFlags flags);
-void lib_dev_set_address(struct SimDevice *dev, unsigned char buffer[6]);
 void lib_proc_net_initialize(void);
 
 #endif /* SIM_H */

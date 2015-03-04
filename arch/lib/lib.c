@@ -78,6 +78,8 @@ struct SimImported g_imported;
 		return RETURN_ ## type(rettype, (name(v0, v1, v2, v3, v4))); \
 	}
 
+FORWARDER3(lib_dev_create, nvoid, struct SimDevice *, char *, void *,
+	   enum SimDevFlags);
 FORWARDER1(lib_dev_destroy, void, void, struct SimDevice *);
 FORWARDER2(lib_dev_set_address, void, void, struct SimDevice *,
 	   unsigned char *);
@@ -148,7 +150,7 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	exported->sock_poll = lib_sock_poll_forwarder;
 	exported->sock_pollfreewait = lib_sock_pollfreewait_forwarder;
 
-	exported->dev_create = NULL;
+	exported->dev_create = lib_dev_create_forwarder;
 	exported->dev_destroy = lib_dev_destroy_forwarder;
 	exported->dev_get_private = lib_dev_get_private;
 	exported->dev_set_address = lib_dev_set_address_forwarder;

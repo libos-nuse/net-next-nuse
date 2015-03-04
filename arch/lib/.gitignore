@@ -5,4 +5,4 @@ timeconst.h
 hz.bc
 crc32table.h
 *.d
-git-sparse
+tools

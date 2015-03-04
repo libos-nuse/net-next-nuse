@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+LIBOS_TOOLS=arch/lib/tools
+
 IFNAME=`ip route |grep default | awk '{print $5}'`
 GW=`ip route |grep default | awk '{print $3}'`
 #XXX
@@ -26,6 +28,7 @@ route
 
 ENDCONF
 
+cd ${LIBOS_TOOLS}
 sudo NUSECONF=${NUSE_CONF} ./nuse ping 127.0.0.1 -c 2
 
 # rump test
@@ -37,7 +40,7 @@ RUMP_URL=unix:///tmp/rump-server-nuse.$PID_SLEEP
 # ls -ltr /tmp/*
 
 sudo chmod 777 /tmp/rump-server-nuse.$PID_SLEEP
-LD_PRELOAD=./arch/lib/libnuse-hijack.so  RUMPHIJACK=socket=all \
+LD_PRELOAD=./libnuse-hijack.so  RUMPHIJACK=socket=all \
     RUMP_SERVER=$RUMP_URL ip addr show
 
 wait %1

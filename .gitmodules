@@ -1,7 +1,0 @@
-[submodule "dpdk"]
-	path = dpdk
-	url = git://dpdk.org/dpdk
-	ignore = dirty
-[submodule "arch/lib/rump"]
-	path = arch/lib/rump
-	url = git://github.com/libos-nuse/src-netbsd.git

@@ -10,21 +10,19 @@ ifeq "$(GCCVERSIONGTEQ48)" "1"
 endif
 
 
-include $(ARCH_DIR)/Makefile.dpdk
-include $(ARCH_DIR)/Makefile.rump
 -include $(ARCH_DIR)/objs.mk
 -include $(srctree)/.config
 include $(ARCH_DIR)/processor.mk
 
 # targets
-NUSE_LIB=libnuse-linux$(KERNELVERSION).so
-SIM_LIB=libsim-linux$(KERNELVERSION).so
-KERNEL_LIB=$(NUSE_LIB) $(SIM_LIB)
+LIBOS_TOOLS=$(ARCH_DIR)/tools
+LIBOS_GIT_REPO=git://github.com/libos-nuse/linux-libos-tools
+KERNEL_LIB=liblinux-$(KERNELVERSION).so
 
-ALL_OBJS=$(NUSE_OBJ) $(SIM_OBJ) $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean) \
-	$(ARCH_DIR)/libnuse-hijack.so $(ARCH_DIR)/librumpclient.so
+ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
 
 # auto generated files
+AUTOGENS=$(CRC32TABLE) $(COMPILE_H) $(ARCH_DIR)/timeconst.h $(ARCH_DIR)/linker.lds
 COMPILE_H=$(srctree)/include/generated/compile.h
 
 # from lib/Makefile
@@ -33,15 +31,7 @@ hostprogs-y	:= $(srctree)/lib/gen_crc32table
 clean-files	:= crc32table.h
 
 # sources and objects
-NUSE_USPACE_SRC=\
-nuse-fiber.c nuse-vif.c nuse-hostcalls.c nuse-config.c \
-nuse-vif-rawsock.c nuse-vif-tap.c nuse-vif-pipe.c $(netmap_$(NETMAP))
-
-NUSE_SRC=$(NUSE_USPACE_SRC) $(RUMP_NUSE_SRC) $(RUMP_SRC) \
-nuse.c nuse-poll.c nuse-glue.c
-
-SIM_SRC=\
-sim.c
+NUSE_SRC=  nuse-poll.c
 
 LIB_SRC=\
 lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
@@ -50,12 +40,9 @@ hrtimer.c sched.c sysfs.c workqueue.c \
 print.c security.c slab.c tasklet.c \
 proc.c seq.c tasklet-hrtimer.c \
 cred.c pid.c modules.c filemap.c splice.c vmscan.c \
-dcache.c super.c inode.c
+dcache.c super.c inode.c $(NUSE_SRC)
 
-SIM_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(SIM_SRC))))
-NUSE_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(NUSE_SRC))))
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
-NUSE_USPACE_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(NUSE_USPACE_SRC))))
 
 DEPENDS=$(addprefix $(ARCH_DIR)/.,\
 	$(addsuffix .d,$(basename $(NUSE_SRC)))\
@@ -64,16 +51,6 @@ DEPENDS=$(addprefix $(ARCH_DIR)/.,\
 	)
 
 # options
-NETMAP?=no
-netmap_yes=nuse-vif-netmap.c
-netmap_no=
-
-DPDK?=no
-dpdk_yes=nuse-vif-dpdk.c
-dpdk_no=
-dpdkl_yes=-L$(RTE_SDK)/$(RTE_TARGET)/lib $(ARCH_DIR)/nuse-vif-dpdk.o $(DPDK_LDLIBS)
-dpdkl_no=
-
 COV?=no
 cov_yes=-fprofile-arcs -ftest-coverage
 cov_no=
@@ -93,7 +70,7 @@ CFLAGS_USPACE= \
  -fno-inline -fno-strict-aliasing -fno-common \
  -fno-delete-null-pointer-checks -fno-builtin \
  -fno-stack-protector -Wno-unused -Wno-pointer-sign \
- $(PIC_CFLAGS) -D_DEBUG $(cov_$(COV))
+ $(PIC_CFLAGS) -D_DEBUG $(cov_$(COV)) -I$(ARCH_DIR)/include
 
 CFLAGS+= \
  $(CFLAGS_USPACE) -nostdinc -D__KERNEL__ -iwithprefix $(srctree)/include \
@@ -101,7 +78,7 @@ CFLAGS+= \
  -DEXPORT_SYMTAB \
  -U__FreeBSD__ -D__linux__=1 -Dlinux=1 -D__linux=1 \
  -DCONFIG_DEFAULT_HOSTNAME=\"lib\" \
- -I$(ARCH_DIR)/include -I$(ARCH_DIR)/include/generated/uapi \
+ -I$(ARCH_DIR)/include/generated/uapi \
  -I$(ARCH_DIR)/include/generated \
  -I$(srctree)/include -I$(ARCH_DIR)/include/uapi \
  -I$(srctree)/include/uapi -I$(srctree)/include/generated/uapi \
@@ -113,8 +90,6 @@ CFLAGS+= -DCONFIG_64BIT
 endif
 
 LDFLAGS += -shared -nodefaultlibs -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
-LDFLAGS_NUSE = -ldl -lpthread -lrt
-LDFLAGS_SIM =
 
 # targets
 
@@ -207,14 +182,6 @@ quiet_cmd_builtin = BUILTIN   $@
 		    if test -n "$($(srctree)/$@)"; then for f in $($(srctree)/$@); \
 		    do $(AR) Tcru $@ $$f; done; else $(AR) Tcru $@; fi
 
-# XXX: no idea how to handle these exception cleanly..
-quiet_cmd_ccusp = CC   $@
-      cmd_ccusp = mkdir -p $(dir $@);	\
-		$(CC) $(CFLAGS_USPACE) -c $< -o $@
-
-$(NUSE_USPACE_OBJ): %.o : %.c
-	$(call if_changed,ccusp)
-
 %/builtin.o:
 	$(call if_changed,builtin)
 %.ko:%.o
@@ -222,36 +189,33 @@ $(NUSE_USPACE_OBJ): %.o : %.c
 %.o:%.c
 	$(call if_changed,cc)
 
-library: $(KERNEL_LIB) $(ARCH_DIR)/libnuse-hijack.so
+library: $(KERNEL_LIB) $(LIBOS_TOOLS)
 modules: $(modules)
+
+$(LIBOS_TOOLS): $(KERNEL_LIB)
+	if [ ! -d "$@" ]; then \
+		git clone $(LIBOS_GIT_REPO) $@ ;\
+	fi
+	$(MAKE) -C $(LIBOS_TOOLS)
 
 install: modules library
 
 install-dir:
 
+$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOGENS) $(OBJS)
+	$(call if_changed,linklib)
+
+quiet_cmd_linklib = LIB	$@
+      cmd_linklib = $(CC) -Wl,--whole-archive $(OBJS) $(LDFLAGS) -o $@; \
+		    ln -s -f $(KERNEL_LIB) liblinux.so
+
 quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
 		  for f in $(ALL_OBJS); do rm -f $$f; done 2>/dev/null ;\
-		  rm -rf $(ARCH_DIR)/linker.lds $(COMPILE_H) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null
+		  rm -rf $(AUTOGENS) $(ARCH_DIR)/objs.mk 2>/dev/null
 
 archclean:
 	$(call if_changed,clean)
-
-quiet_cmd_linknuse = LIBNUSE	$@
-      # order of $(dpdkl_$(DPDK)) matters...
-      cmd_linknuse = $(CC) -Wl,--whole-archive $(dpdkl_$(DPDK)) $(OBJS) $(NUSE_OBJ) $(LDFLAGS) $(LDFLAGS_NUSE) -o $@; \
-		     ln -s -f $(NUSE_LIB) libnuse-linux.so; \
-		     ln -s -f $(ARCH_DIR)/nuse ./nuse
-
-quiet_cmd_linksim = LIBSIM	$@
-      cmd_linksim = $(CC) -Wl,--whole-archive $(OBJS) $(SIM_OBJ) $(LDFLAGS) $(LDFLAGS_SIM) -o $@; \
-		    ln -s -f $(SIM_LIB) liblinux.so
-
-$(NUSE_LIB):rump-git-sparse $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(ARCH_DIR)/timeconst.h $(COMPILE_H) $(DPDK_OBJ) $(NUSE_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
-	$(call if_changed,linknuse)
-
-$(SIM_LIB): $(ARCH_DIR)/objs.mk $(CRC32TABLE) $(ARCH_DIR)/timeconst.h $(COMPILE_H) $(SIM_OBJ) $(OBJS) $(ARCH_DIR)/linker.lds
-	$(call if_changed,linksim)
 
 .%.d:%.c $(srctree)/.config
 	$(Q) set -e; $(CC) -MM -MT $(<:.c=.o) $(CFLAGS) $< > $@
@@ -262,5 +226,5 @@ deplib: $(DEPENDS)
 test:
 	$(MAKE) -C $(DCE_TESTDIR)/
 
-.PHONY : clean deplib git-sparse
+.PHONY : clean deplib
 
