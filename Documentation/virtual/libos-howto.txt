@@ -30,6 +30,11 @@ arbitrary userspace applications on top of UML.
 
 - name space
 
+Container technologies with namespace brings a process-level isolation
+to host multiple network entities but shares the kernel among
+processes, which prevents to introduce new features implemented in
+kernel space.
+
 
 * Build
 
@@ -76,7 +81,7 @@ target code.
 For the first step, you need to obtain network simulator environment. 'make testbin'
 does all the stuff for the preparation.
 
-% make testbin -C arch/lib/test
+% make testbin -C tools/testing/libos
 
 Then, you can 'make test' for your code.
 
@@ -110,14 +115,14 @@ in Userspace (NUSE). other files are shared functions between them.
 
 * More information
 - ns-3-users@googlegroups.com (ns-3 related questions)
-- articles
+- articles, slides
  Experimentation Tools for Networking Research (Lacage, 2010)
    http://cutebugs.net/files/thesis.pdf
  Direct code execution: revisiting library OS architecture for reproducible
   network experiments (Tazaki et al., 2013)
    http://dx.doi.org/10.1145/2535372.2535374
  Library Operating System with Mainline Linux Network Stack (Tazaki et al., 2015)
-   (TBA)
+   https://www.netdev01.org/docs/netdev01-tazaki-libos.pdf (slides)
 
 
 * Authors
