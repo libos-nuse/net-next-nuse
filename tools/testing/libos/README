@@ -1,0 +1,29 @@
+
+- bakeconf-linux.xml
+a supplement file for bake integration tool. with this file, all of
+necessary files including ns-3 network simulator are downloaded and
+built for the testing. 'make testbin -C tools/testing/libos' will use
+this file.
+
+for more information about bake, see the following page.
+https://www.nsnam.org/docs/bake/tutorial/html/index.html
+
+- bisect.sh
+a sample script to bisect an issue of network stack code with the help
+of LibOS (and ns-3 network simulator). This was used to detect the issue
+for the following patch.
+
+http://patchwork.ozlabs.org/patch/436351/
+
+- dce-test.sh
+a test script invoked by 'make test ARCH=lib'. The contents of test
+scenario are implemented as test suites of ns-3 network simulator.
+
+- testpy.supp
+a suppression file for valgrind memory error detector. it mainly
+includes symbols which are used by ns-3 DCE extension, which were not
+fixed memory errors.
+
+- nuse-test.sh
+a simple test script for Network Stack in Userspace (NUSE).
+

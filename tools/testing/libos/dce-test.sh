@@ -9,8 +9,9 @@ FAULT_INJECTION=""
 
 if [ "$1" = "-g" ] ; then
  VALGRIND="-g"
-elif [ "$1" = "-f" ] ; then
- FAULT_INJECTION="-f"
+# Not implemneted yet.
+#elif [ "$1" = "-f" ] ; then
+# FAULT_INJECTION="-f"
 fi
 
 # FIXME
