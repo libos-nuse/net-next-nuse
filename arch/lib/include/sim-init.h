@@ -54,7 +54,7 @@ struct SimExported {
 	void (*sock_poll)(struct SimSocket *socket, void *ret);
 	void (*sock_pollfreewait)(void *polltable);
 
-	struct SimDevice *(*dev_create)(char *ifname, void *priv,
+	struct SimDevice *(*dev_create)(const char *ifname, void *priv,
 					enum SimDevFlags flags);
 	void (*dev_destroy)(struct SimDevice *dev);
 	void *(*dev_get_private)(struct SimDevice *task);

@@ -84,6 +84,7 @@ struct SimDevice *lib_dev_create(char *ifname, void *priv,
 		(struct SimDevice *)alloc_netdev(sizeof(struct SimDevice),
 						 ifname, NET_NAME_UNKNOWN,
 						 &lib_dev_setup);
+	ether_setup((struct net_device *)dev);
 
 	if (flags & SIM_DEV_NOARP)
 		dev->dev.flags |= IFF_NOARP;
@@ -97,7 +98,6 @@ struct SimDevice *lib_dev_create(char *ifname, void *priv,
 	}
 	dev->priv = priv;
 	err = register_netdev(&dev->dev);
-	ether_setup((struct net_device *)dev);
 	return dev;
 }
 void lib_dev_destroy(struct SimDevice *dev)

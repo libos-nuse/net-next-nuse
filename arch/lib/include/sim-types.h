@@ -12,6 +12,8 @@
 extern "C" {
 #endif
 
+#define LIBOS_API_VERSION     2
+
 struct SimTask;
 struct SimDevice;
 struct SimSocket;

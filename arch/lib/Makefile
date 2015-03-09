@@ -172,6 +172,8 @@ $(COMPILE_H): include/generated/utsrelease.h asm-generic $(version_h)
 
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
+export OBJS KERNEL_LIB
+
 quiet_cmd_cc = CC   $@
       cmd_cc = 	mkdir -p $(dir $@);	\
 		$(CC) $(CFLAGS) -c $< -o $@
@@ -192,8 +194,8 @@ quiet_cmd_builtin = BUILTIN   $@
 library: $(KERNEL_LIB) $(LIBOS_TOOLS)
 modules: $(modules)
 
-$(LIBOS_TOOLS): $(KERNEL_LIB)
-	if [ ! -d "$@" ]; then \
+$(LIBOS_TOOLS): $(KERNEL_LIB) Makefile FORCE
+	$(Q) if [ ! -d "$@" ]; then \
 		git clone $(LIBOS_GIT_REPO) $@ ;\
 	fi
 	$(MAKE) -C $(LIBOS_TOOLS)
@@ -205,7 +207,7 @@ install-dir:
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOGENS) $(OBJS)
 	$(call if_changed,linklib)
 
-quiet_cmd_linklib = LIB	$@
+quiet_cmd_linklib = LIB		$@
       cmd_linklib = $(CC) -Wl,--whole-archive $(OBJS) $(LDFLAGS) -o $@; \
 		    ln -s -f $(KERNEL_LIB) liblinux.so
 
