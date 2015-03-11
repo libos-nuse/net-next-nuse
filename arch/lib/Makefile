@@ -31,8 +31,6 @@ hostprogs-y	:= $(srctree)/lib/gen_crc32table
 clean-files	:= crc32table.h
 
 # sources and objects
-NUSE_SRC=  nuse-poll.c
-
 LIB_SRC=\
 lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
 glue.c fs.c sysctl.c timer.c \
@@ -40,13 +38,11 @@ hrtimer.c sched.c sysfs.c workqueue.c \
 print.c security.c slab.c tasklet.c \
 proc.c seq.c tasklet-hrtimer.c \
 cred.c pid.c modules.c filemap.c splice.c vmscan.c \
-dcache.c super.c inode.c $(NUSE_SRC)
+dcache.c super.c inode.c
 
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
 
 DEPENDS=$(addprefix $(ARCH_DIR)/.,\
-	$(addsuffix .d,$(basename $(NUSE_SRC)))\
-	$(addsuffix .d,$(basename $(SIM_SRC)))\
 	$(addsuffix .d,$(basename $(LIB_SRC)))\
 	)
 
@@ -198,7 +194,7 @@ $(LIBOS_TOOLS): $(KERNEL_LIB) Makefile FORCE
 	$(Q) if [ ! -d "$@" ]; then \
 		git clone $(LIBOS_GIT_REPO) $@ ;\
 	fi
-	$(MAKE) -C $(LIBOS_TOOLS)
+	$(Q) $(MAKE) -C $(LIBOS_TOOLS)
 
 install: modules library
 
@@ -214,7 +210,8 @@ quiet_cmd_linklib = LIB		$@
 quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
 		  for f in $(ALL_OBJS); do rm -f $$f; done 2>/dev/null ;\
-		  rm -rf $(AUTOGENS) $(ARCH_DIR)/objs.mk 2>/dev/null
+		  rm -rf $(AUTOGENS) $(ARCH_DIR)/objs.mk 2>/dev/null ;\
+		  $(MAKE) -C $(LIBOS_TOOLS) clean
 
 archclean:
 	$(call if_changed,clean)
@@ -226,7 +223,7 @@ deplib: $(DEPENDS)
 	-include $(DEPENDS)
 
 test:
-	$(MAKE) -C $(DCE_TESTDIR)/
+	$(Q) $(MAKE) -C $(DCE_TESTDIR)/
 
 .PHONY : clean deplib
 

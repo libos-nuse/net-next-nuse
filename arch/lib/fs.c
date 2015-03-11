@@ -127,7 +127,7 @@ struct file *fget_light(unsigned int fd, int *fput_needed)
 }
 void fput(struct file *file)
 {
-	lib_assert(false);
+	return;
 }
 
 struct dentry *d_alloc(struct dentry *entry, const struct qstr *str)

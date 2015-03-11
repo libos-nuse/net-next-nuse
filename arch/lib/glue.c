@@ -271,15 +271,6 @@ char *get_options(const char *str, int nints, int *ints)
 	/* we return 0 to indicate no options. */
 	return 0;
 }
-
-int poll_select_set_timeout(struct timespec *to, long sec, long nsec)
-{
-	/* called from net/socket.c from __sys_recvmmsg (yes, _two_ ms) */
-	/* we don't care because we don't implement this syscall. */
-	lib_assert(false);
-	return 0;
-}
-
 void __xchg_called_with_bad_pointer(void)
 {
 	/* never called theoretically. */

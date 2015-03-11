@@ -76,7 +76,7 @@ static void lib_dev_setup(struct net_device *dev)
 }
 
 
-struct SimDevice *lib_dev_create(char *ifname, void *priv,
+struct SimDevice *lib_dev_create(const char *ifname, void *priv,
 				 enum SimDevFlags flags)
 {
 	int err;
