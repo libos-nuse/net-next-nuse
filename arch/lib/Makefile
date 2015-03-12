@@ -211,7 +211,7 @@ quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
 		  for f in $(ALL_OBJS); do rm -f $$f; done 2>/dev/null ;\
 		  rm -rf $(AUTOGENS) $(ARCH_DIR)/objs.mk 2>/dev/null ;\
-		  -$(MAKE) -C $(LIBOS_TOOLS) clean
+		  if [ -d $(LIBOS_TOOLS) ]; then $(MAKE) -C $(LIBOS_TOOLS) clean ; fi
 
 archclean:
 	$(call if_changed,clean)
