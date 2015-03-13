@@ -25,6 +25,7 @@ kernel_dev_xmit(struct sk_buff *skb,
 		struct net_device *dev)
 {
 	int err;
+	int flags = 0;
 
 	netif_stop_queue(dev);
 	if (skb->ip_summed == CHECKSUM_PARTIAL) {
@@ -35,7 +36,10 @@ kernel_dev_xmit(struct sk_buff *skb,
 		}
 	}
 
-	lib_dev_xmit((struct SimDevice *)dev, skb->data, skb->len);
+	if (skb->xmit_more) {
+		flags = 1;
+	}
+	lib_dev_xmit((struct SimDevice *)dev, skb->data, skb->len, flags);
 	dev_kfree_skb(skb);
 	netif_wake_queue(dev);
 	return 0;

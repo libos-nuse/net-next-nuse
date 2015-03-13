@@ -273,9 +273,10 @@ void lib_task_yield(void)
 	lib_update_jiffies();
 }
 
-void lib_dev_xmit(struct SimDevice *dev, unsigned char *data, int len)
+void lib_dev_xmit(struct SimDevice *dev, unsigned char *data, int len,
+		  int flags)
 {
-	return g_imported.dev_xmit(g_kernel, dev, data, len);
+	return g_imported.dev_xmit(g_kernel, dev, data, len, flags);
 }
 
 void lib_signal_raised(struct SimTask *task, int sig)
