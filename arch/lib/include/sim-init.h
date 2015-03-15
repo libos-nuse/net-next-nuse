@@ -116,7 +116,7 @@ struct SimImported {
 	void (*task_yield)(struct SimKernel *kernel);
 
 	void (*dev_xmit)(struct SimKernel *kernel, struct SimDevice *dev,
-			 unsigned char *data, int len, int flags);
+			 unsigned char *data, int len, unsigned int flags);
 	void (*signal_raised)(struct SimKernel *kernel, struct SimTask *task,
 			int sig);
 	void (*poll_event)(int flag, void *context);

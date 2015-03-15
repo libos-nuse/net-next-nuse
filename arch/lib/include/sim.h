@@ -36,7 +36,7 @@ struct SimTask *lib_task_create(void *priv, unsigned long pid);
 void lib_task_destroy(struct SimTask *task);
 void *lib_task_get_private(struct SimTask *task);
 
-void lib_dev_xmit(struct SimDevice *dev, unsigned char *data, int len, int flags);
+void lib_dev_xmit(struct SimDevice *dev, unsigned char *data, int len, unsigned int flags);
 struct SimDevicePacket lib_dev_create_packet(struct SimDevice *dev, int size);
 void lib_dev_rx(struct SimDevice *device, struct SimDevicePacket packet);
 
