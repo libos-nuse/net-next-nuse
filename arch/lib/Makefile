@@ -22,8 +22,9 @@ KERNEL_LIB=liblinux-$(KERNELVERSION).so
 ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
 
 # auto generated files
-AUTOGENS=$(CRC32TABLE) $(COMPILE_H) $(ARCH_DIR)/timeconst.h $(ARCH_DIR)/linker.lds
+AUTOGENS=$(CRC32TABLE) $(COMPILE_H) $(BOUNDS_H) $(ARCH_DIR)/timeconst.h $(ARCH_DIR)/linker.lds
 COMPILE_H=$(srctree)/include/generated/compile.h
+BOUNDS_H=$(srctree)/include/generated/bounds.h
 
 # from lib/Makefile
 CRC32TABLE = $(ARCH_DIR)/crc32table.h
@@ -157,7 +158,7 @@ quiet_cmd_crc32 = GEN     $@
 $(CRC32TABLE): $(srctree)/lib/gen_crc32table
 	$(call if_changed,crc32)
 
-# copy from init/Makefile
+# copied from init/Makefile
        chk_compile.h = :
  quiet_chk_compile.h = echo '  CHK     $@'
 silent_chk_compile.h = :
@@ -165,6 +166,24 @@ $(COMPILE_H): include/generated/utsrelease.h asm-generic $(version_h)
 	@$($(quiet)chk_compile.h)
 	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkcompile_h $@ \
 	"$(UTS_MACHINE)" "$(CONFIG_SMP)" "$(CONFIG_PREEMPT)" "$(CC) $(KBUILD_CFLAGS)"
+
+# crafted from $(srctree)/Kbuild
+quiet_cmd_lib_bounds = GEN     $@
+define cmd_lib_bounds
+	(set -e; \
+	 echo "#ifndef GENERATED_BOUNDS_H"; \
+	 echo "#define GENERATED_BOUNDS_H"; \
+	 echo ""; \
+	 echo "#define NR_PAGEFLAGS (__NR_PAGEFLAGS)"; \
+	 echo "#define MAX_NR_ZONES (__MAX_NR_ZONES)"; \
+	 echo ""; \
+	 echo "#endif /* GENERATED_BOUNDS_H */") > $@
+endef
+
+$(BOUNDS_H): FORCE
+	$(Q)mkdir -p $(dir $@)
+	$(call cmd,lib_bounds)
+
 
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
