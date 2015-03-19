@@ -5833,7 +5833,7 @@ M:	Hajime Tazaki <tazaki@sfc.wide.ad.jp>
 L:	(TBD)
 W:	http://libos-nuse.github.io/
 S:	Maintained
-F:	Documentation/virtual/liblibos-howto.txt
+F:	Documentation/virtual/libos-howto.txt
 F:	arch/lib/
 F:	tools/testing/libos/
 
