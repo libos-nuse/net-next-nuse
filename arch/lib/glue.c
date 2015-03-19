@@ -31,14 +31,22 @@ struct kernel_param;
 struct super_block;
 struct tvec_base {};
 
-char core_pattern[CORENAME_MAX_SIZE] = "core";  /* defined in fs/exec.c */
-unsigned long avenrun[3];                       /* defined in sched.c, used in net/sched/em_meta.c */
-int hashdist = HASHDIST_DEFAULT;                /* defined in mm/page_alloc.c, used in net/xfrm/xfrm_hash.c */
-struct pglist_data __refdata contig_page_data;  /* defined in mm/page_alloc.c */
-struct page *mem_map = 0;                       /* defined in linux/mmzone.h mm/memory.c */
-struct tvec_base boot_tvec_bases;               /* used during boot. */
-int nr_threads = 0;                             /* used by sysinfo in kernel/timer.c */
-atomic_long_t vm_stat[NR_VM_ZONE_STAT_ITEMS];   /* not very useful in mm/vmstat.c */
+/* defined in fs/exec.c */
+char core_pattern[CORENAME_MAX_SIZE] = "core";
+/* defined in sched.c, used in net/sched/em_meta.c */
+unsigned long avenrun[3];
+/* defined in mm/page_alloc.c, used in net/xfrm/xfrm_hash.c */
+int hashdist = HASHDIST_DEFAULT;
+/* defined in mm/page_alloc.c */
+struct pglist_data __refdata contig_page_data;
+/* defined in linux/mmzone.h mm/memory.c */
+struct page *mem_map = 0;
+/* used during boot. */
+struct tvec_base boot_tvec_bases;
+/* used by sysinfo in kernel/timer.c */
+int nr_threads = 0;
+/* not very useful in mm/vmstat.c */
+atomic_long_t vm_stat[NR_VM_ZONE_STAT_ITEMS];
 
 /* XXX: used in network stack ! */
 unsigned long num_physpages = 0;

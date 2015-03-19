@@ -80,9 +80,8 @@ static void timer_trampoline(void *context)
 	ensure_softirq_opened();
 	timer = context;
 	timer->base = 0;
-	if (timer->entry.prev != LIST_POISON2) {
+	if (timer->entry.prev != LIST_POISON2)
 		list_del(&timer->entry);
-	}
 	list_add_tail(&timer->entry, &g_expired_events);
 	raise_softirq(TIMER_SOFTIRQ);
 }

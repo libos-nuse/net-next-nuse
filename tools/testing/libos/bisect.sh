@@ -1,4 +1,4 @@
-#!/bin/sh 
+#!/bin/sh
 
 git merge origin/nuse --no-commit
 make clean ARCH=lib

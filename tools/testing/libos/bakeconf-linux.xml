@@ -322,7 +322,7 @@
          <attribute name="build_arguments" value="CCOPTS+=-fpic CCOPTS+=-D_GNU_SOURCE CCOPTS+=-O0 CCOPTS+=-U_FORTIFY_SOURCE CCOPTS+=-g LDFLAGS=-pie LDFLAGS+=-rdynamic"/>
        </build>
      </module>
-     
+
     <module name="ns-3-dev-dce">
       <source type="mercurial">
         <attribute name="url" value="http://code.nsnam.org/ns-3-dev"/>
@@ -583,7 +583,7 @@
       </source>
       <build type="autotools" objdir="yes">
 	<attribute name="configure_arguments" value="../configure --prefix=$INSTALLDIR --exec-prefix=$INSTALLDIR -enable-userlevel --disable-linuxmodule --enable-nsclick --enable-wifi"/>
-	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/."/> 
+	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/."/>
       </build>
     </module>
 
@@ -594,7 +594,7 @@
       </source>
       <build type="autotools" objdir="yes">
 	<attribute name="configure_arguments" value="../configure --prefix=$INSTALLDIR --exec-prefix=$INSTALLDIR -enable-userlevel --disable-linuxmodule --enable-nsclick --enable-wifi"/>
-	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/."/> 
+	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/."/>
       </build>
     </module>
 
@@ -605,7 +605,7 @@
       </source>
       <build type="autotools" objdir="yes">
 	<attribute name="configure_arguments" value="../configure --prefix=$INSTALLDIR --exec-prefix=$INSTALLDIR -enable-userlevel --disable-linuxmodule --enable-nsclick --enable-wifi"/>
-	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/."/> 
+	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/."/>
       </build>
     </module>
 
@@ -617,8 +617,8 @@
       </source>
       <build type="autotools" objdir="yes">
 	<attribute name="configure_arguments" value="../configure -enable-userlevel --disable-linuxmodule --enable-nsclick --enable-wifi"/>
-	<!--	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/.; cp -r $SRCDIR/include $INSTALLDIR/lib"/> 
-	--> 
+	<!--	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; cp -r $OBJDIR/include $INSTALLDIR/lib/.; cp -r $SRCDIR/include $INSTALLDIR/lib"/>
+	-->
       </build>
     </module>
 
@@ -643,9 +643,9 @@
 	<attribute name="configure_arguments" value="configure --prefix=$INSTALLDIR"/>
 	<attribute name="no_installation" value="True"/>
 
-        <!-- It complains if the lib directory exists, so I am removing the lib directory. Another 
+        <!-- It complains if the lib directory exists, so I am removing the lib directory. Another
              thing is that it try to install things by default, so the instalation is not required-->
-        
+
 	<attribute name="pre_installation" value="mv $INSTALLDIR/lib $INSTALLDIR/libTmp"/>
 	<attribute name="post_installation" value="mkdir $INSTALLDIR/lib; mv $INSTALLDIR/libTmp/* $INSTALLDIR/lib/.; rm -rf $INSTALLDIR/libTmp" />
       </build>
@@ -731,7 +731,7 @@
         <attribute name="try_to_install" value="False"/>
         <attribute name="name_apt-get" value="python-pygraphviz"/>
         <attribute name="name_yum" value="graphviz-python"/>
-        <attribute name="name_yum" value="py27-pygraphviz"/> 
+        <attribute name="name_yum" value="py27-pygraphviz"/>
         <attribute name="more_information" value="The pygraphviz is not installed, try to install it."/>
       </source>
       <build type="none" objdir="no">
@@ -881,7 +881,7 @@
         jobstr=[]
         if not jobs == -1:
             jobstr = ['-j', str(jobs)]
-        env.run(['python', os.path.join(env.srcdir, 'scons.py'), 
+        env.run(['python', os.path.join(env.srcdir, 'scons.py'),
                  'prefix=' + env.installdir, 'install'] + jobstr,
                 directory=env.srcdir )
         srcLib = os.path.join(env.srcdir, 'lib')
@@ -892,7 +892,7 @@
                  shutil.copy2(os.path.join(srcLib, file), destination)
              except Exception as e:
                  print ("   > Error executing copy : " + str(e) + "\n")
-       
+
     def clean(self, env):
         env.run(['python', os.path.join(env.srcdir, 'scons.py'), '-c'],
                 directory=env.srcdir)
@@ -900,7 +900,7 @@
         return True</code>
       </build>
     </module>
-    
+
    <module name="nsc-0.5.3">
       <source type="mercurial">
 	<attribute name="url" value="https://secure.wand.net.nz/mercurial/nsc"/>
@@ -936,7 +936,7 @@
                  shutil.copy2(os.path.join(srcLib, file), destination)
              except Exception as e:
                  print ("   > Error executing copy : " + str(e) + "\n")
-       
+
     def clean(self, env):
         env.run(['python', os.path.join(env.srcdir, 'scons.py'), '-c'],
                 directory=env.srcdir)
@@ -2016,7 +2016,7 @@
 <!--  Bake dependencies end -->
 
   </modules>
- 
+
   <predefined name="set-bake-env">
       <enable name="mercurial"/>
       <enable name="subversion"/>
@@ -2049,7 +2049,7 @@
     <append name="CFLAGS" value="-O3"/>
     <append name="CXXFLAGS" value="-O3"/>
   </predefined>
-  
+
   <predefined name="ns3">
     <enable name="ns-3-dev"/>
     <!--    <configuration installdir="." sourcedir="../source"/> -->

@@ -297,7 +297,7 @@ int lib_sock_cansend(struct SimSocket *socket)
  * poll return of the corresponding kernel socket, and in opaque field there is
  * a reference to the kernel poll table we will use this reference to remove us
  * from the file wait queue when ending the DCE poll call or when ending the DCE
- * process which is curently polling.
+ * process which is currently polling.
  *
  */
 struct poll_table_ref {
@@ -386,7 +386,8 @@ void lib_sock_poll(struct SimSocket *socket, struct poll_table_ref *ret)
 	}
 
 	ret->ret = sock->ops->poll(&zero, sock, pwait);
-	/* Pass back the kernel poll table to DCE in order to DCE to remove from wait queue */
+	/* Pass back the kernel poll table to DCE in order to DCE to */
+	/* remove from wait queue */
 	/* using lib_sock_pollfreewait method below */
 	ret->opaque = ptable;
 }

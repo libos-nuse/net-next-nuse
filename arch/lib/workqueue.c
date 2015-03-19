@@ -138,7 +138,8 @@ bool cancel_work_sync(struct work_struct *work)
 		/* work was queued. now unqueued. */
 		if (work->entry.prev != LIST_POISON2) {
 			list_del_init(&work->entry);
-			clear_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(work));
+			clear_bit(WORK_STRUCT_PENDING_BIT,
+				  work_data_bits(work));
 			retval = 1;
 		}
 	}

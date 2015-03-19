@@ -82,7 +82,8 @@ struct proc_dir_entry *proc_create_data(const char *name, umode_t mode,
 	de->data = data;
 	return de;
 }
-static int proc_match(unsigned int len, const char *name, struct proc_dir_entry *de)
+static int proc_match(unsigned int len, const char *name,
+		      struct proc_dir_entry *de)
 {
 	if (len < de->namelen)
 		return -1;

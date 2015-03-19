@@ -3,7 +3,7 @@
 
 struct thread_struct {};
 
-#define cpu_relax() 
+#define cpu_relax()
 #define cpu_relax_lowlatency() cpu_relax()
 #define KSTK_ESP(tsk)	(0)
 

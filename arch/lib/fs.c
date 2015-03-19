@@ -127,7 +127,6 @@ struct file *fget_light(unsigned int fd, int *fput_needed)
 }
 void fput(struct file *file)
 {
-	return;
 }
 
 struct dentry *d_alloc(struct dentry *entry, const struct qstr *str)
@@ -154,12 +153,11 @@ pid_t f_getown(struct file *filp)
 	lib_assert(false);
 	return 0;
 }
+
 void f_setown(struct file *filp, unsigned long arg, int force)
 {
 	lib_assert(false);
-	return;
 }
-
 
 void kill_fasync(struct fasync_struct **fs, int a, int b)
 {

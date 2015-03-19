@@ -78,7 +78,7 @@ struct SimImported g_imported;
 		return RETURN_ ## type(rettype, (name(v0, v1, v2, v3, v4))); \
 	}
 
-FORWARDER3(lib_dev_create, nvoid, struct SimDevice *, char *, void *,
+FORWARDER3(lib_dev_create, nvoid, struct SimDevice *, const char *, void *,
 	   enum SimDevFlags);
 FORWARDER1(lib_dev_destroy, void, void, struct SimDevice *);
 FORWARDER2(lib_dev_set_address, void, void, struct SimDevice *,

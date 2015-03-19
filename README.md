@@ -2,7 +2,7 @@ A library operating system version of Linux kernel
 ==================================================
 
 [![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/libos-nuse/net-next-nuse?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-NUSE [![Build Status](https://travis-ci.org/libos-nuse/net-next-nuse.png)](https://travis-ci.org/libos-nuse/net-next-nuse)  
+NUSE [![Build Status](https://travis-ci.org/libos-nuse/net-next-nuse.png)](https://travis-ci.org/libos-nuse/net-next-nuse)
 DCE [![Build Status](https://travis-ci.org/direct-code-execution/net-next-sim.png)](https://travis-ci.org/direct-code-execution/net-next-sim)
 
 <!--
@@ -28,7 +28,7 @@ https://github.com/libos-nuse/net-next-nuse/tree/nuse/Documentation/virtual/libo
 ## Applications
 Right now, we have 2 sub-projects of this LibOS.
 
-- Network Stack in Userspace (NUSE)  
+- Network Stack in Userspace (NUSE)
 _NUSE_ allows us to use Linux network stack as a library which any applications can directory use by linking the library.
 Each application has its own network stack so, it provides an instant virtualized environment apart from a host operating system.
 - Direct Code Execution (DCE)
@@ -36,7 +36,7 @@ _DCE_ provides network simulator integration with Linux kernel so that any Linux
 
 
 ## Quick start
-* for NUSE  
+* for NUSE
 https://github.com/libos-nuse/net-next-nuse/wiki/Quick-Start
-* for DCE  
+* for DCE
 http://direct-code-execution.github.io/net-next-sim/

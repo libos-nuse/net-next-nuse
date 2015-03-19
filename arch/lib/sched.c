@@ -168,9 +168,9 @@ int autoremove_wake_function(wait_queue_t *wait, unsigned mode, int sync,
 {
 	int ret = default_wake_function(wait, mode, sync, key);
 
-	if (ret && (wait->task_list.prev != LIST_POISON2)) {
+	if (ret && (wait->task_list.prev != LIST_POISON2))
 		list_del_init(&wait->task_list);
-	}
+
 	return ret;
 }
 
@@ -210,9 +210,9 @@ unsigned long wait_for_completion_timeout(struct completion *x,
 		do
 			timeout = schedule_timeout(timeout);
 		while (!x->done && timeout);
-		if (wait.task_list.prev != LIST_POISON2) {
+		if (wait.task_list.prev != LIST_POISON2)
 			list_del(&wait.task_list);
-		}
+
 		if (!x->done)
 			return timeout;
 	}
