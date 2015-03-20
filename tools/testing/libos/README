@@ -19,11 +19,6 @@ http://patchwork.ozlabs.org/patch/436351/
 a test script invoked by 'make test ARCH=lib'. The contents of test
 scenario are implemented as test suites of ns-3 network simulator.
 
-- testpy.supp
-a suppression file for valgrind memory error detector. it mainly
-includes symbols which are used by ns-3 DCE extension, which were not
-fixed memory errors.
-
 - nuse-test.sh
 a simple test script for Network Stack in Userspace (NUSE).
 
