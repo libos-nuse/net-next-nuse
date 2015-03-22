@@ -10,7 +10,7 @@ check_pkgs:
 	@./bake/bake.py check | grep autoreconf | grep OK || (echo "autotools is missing" && ./bake/bake.py check && exit 1)
 
 testbin: bake check_pkgs
-	@cp bakeconf-linux.xml bake/bakeconf.xml
+	@cp ../../../arch/lib/tools/bakeconf-linux.xml bake/bakeconf.xml
 	@mkdir -p buildtop/build/bin_dce
 	cd buildtop ; \
 	../bake/bake.py configure -e dce-linux-inkernel $(BAKECONF_PARAMS)
