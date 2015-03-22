@@ -1,13 +1,4 @@
 
-- bakeconf-linux.xml
-a supplement file for bake integration tool. with this file, all of
-necessary files including ns-3 network simulator are downloaded and
-built for the testing. 'make testbin -C tools/testing/libos' will use
-this file.
-
-for more information about bake, see the following page.
-https://www.nsnam.org/docs/bake/tutorial/html/index.html
-
 - bisect.sh
 a sample script to bisect an issue of network stack code with the help
 of LibOS (and ns-3 network simulator). This was used to detect the issue
