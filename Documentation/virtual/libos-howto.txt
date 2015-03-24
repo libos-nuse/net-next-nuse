@@ -7,8 +7,14 @@ New hardware independent architecture 'arch/lib', configured by
 CONFIG_LIB gives you two features.
 
 - network stack in userspace (NUSE)
-- network simulator integration, which is called Direct Code Execution
-  (DCE)
+  NUSE will give you a personalized network stack for each application
+  without replacing host operating system.
+
+- network simulator integration, which is called Direct Code Execution (DCE)
+  DCE will give us a network simulation environment with Linux network stack
+  to investigate the detail behavior protocol implementation with a flexible
+  network configuration. This is also useful for the testing environment.
+
 (- more abstracted implementation of underlying platform will be a future
    direction (e.g., rump hypercall))
 
@@ -28,7 +34,7 @@ UML is a way to execute Linux kernel code as a userspace
 application. It is completely isolated from host kernel but can host
 arbitrary userspace applications on top of UML.
 
-- name space
+- namespace / container
 
 Container technologies with namespace brings a process-level isolation
 to host multiple network entities but shares the kernel among
@@ -36,7 +42,7 @@ processes, which prevents to introduce new features implemented in
 kernel space.
 
 
-* Build
+* How to build it ?
 
 configuration of arch/lib follows a standard configuration of kernel.
 
@@ -50,6 +56,8 @@ then you can build a set of libraries for libos.
 
  make library ARCH=lib
 
+This will give you a shared library file liblinux-$(KERNELVERSION).so
+in the top directory.
 
 * Hello world
 
@@ -61,25 +69,21 @@ at arch/lib/nuse.conf.sample: you may copy and modify it for your purpose.
  sudo NUSECONF=nuse.conf ./nuse ping www.google.com
 
 
-* Features
-- per-userspace application network stack
-- netmap support
-- intel dpdk support
-
 
 * Example use cases
 - regression test with Direct Code Execution (DCE)
 
-'make test' by DCE gives a test platform for networking code, with the help
-of network simulator facilities like link delay/bandwidth/drop configurations,
-large network topology with userspace routing protocol daemons, etc.
+'make test' by DCE gives a test platform for networking code, with the
+help of network simulator facilities like link delay/bandwidth/drop
+configurations, large network topology with userspace routing protocol
+daemons, etc.
 
-An interesting feature is the determinism of any test executions. A test script
-always gives same results in every execution if there is no modification on test
-target code.
+An interesting feature is the determinism of any test executions. A
+test script always gives same results in every execution if there is
+no modification on test target code.
 
-For the first step, you need to obtain network simulator environment. 'make testbin'
-does all the stuff for the preparation.
+For the first step, you need to obtain network simulator
+environment. 'make testbin' does all the stuff for the preparation.
 
 % make testbin -C tools/testing/libos
 
@@ -101,16 +105,23 @@ Then, you can 'make test' for your code.
 
 an application can use its own network stack, distinct from host network stack
 in order to personalize any network feature to the application specific one.
-The 'nuse' wrapper script, based on LD_PRELOAD technique, carefully replace
-socket API and redirect system calls to the network stack library, provided by
+The 'nuse' wrapper script, based on LD_PRELOAD technique, carefully replaces
+socket API and redirects system calls to the network stack library, provided by
 this framework.
 
+the network stack can be used with any kind of raw-socket like
+technologies such as Intel DPDK, netmap, etc.
 
-* Files
 
-files sim*.[c] indicate to relate to simulator via Direct Code
-Execution (DCE), files nuse*.[ch] indicate to relate to Network Stack
-in Userspace (NUSE). other files are shared functions between them.
+
+* Files / External Repository
+
+The kernel source tree (i.e., arch/lib) only contains a shared part of
+applications (NUSE/DCE). Pure userspace part is managed at a different
+repository, called Linux-libos-tools: it is automatically downloaded
+during make library.
+
+ https://github.com/libos-nuse/linux-libos-tools
 
 
 * More information
