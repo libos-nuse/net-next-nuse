@@ -184,13 +184,13 @@ int pdflush_proc_obsolete(struct ctl_table *table, int write,
 
 /* from proc_sysctl.c (XXX) */
 extern struct ctl_table_root sysctl_table_root;
-void first_entry(struct ctl_dir *dir,
+void ctl_table_first_entry(struct ctl_dir *dir,
 		 struct ctl_table_header **phead, struct ctl_table **pentry);
-void next_entry(struct ctl_table_header **phead, struct ctl_table **pentry);
-struct ctl_table *find_entry(struct ctl_table_header **phead,
+void ctl_table_next_entry(struct ctl_table_header **phead, struct ctl_table **pentry);
+struct ctl_table *ctl_table_find_entry(struct ctl_table_header **phead,
 			     struct ctl_dir *dir, const char *name,
 			     int namelen);
-struct ctl_dir *xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir);
+struct ctl_dir *ctl_table_xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir);
 /* for init_net (XXX, should be fixed) */
 #include <net/net_namespace.h>
 
@@ -220,14 +220,15 @@ static void iterate_recursive(const struct SimSysIterator *iter,
 	struct ctl_dir *ctl_dir;
 
 	ctl_dir = container_of(head, struct ctl_dir, header);
-	for (first_entry(ctl_dir, &h, &entry); h; next_entry(&h, &entry)) {
+	for (ctl_table_first_entry(ctl_dir, &h, &entry); h;
+	     ctl_table_next_entry(&h, &entry)) {
 		struct ctl_dir *dir;
 		int ret;
 		const char *procname;
 
 		/* copy from sysctl_follow_link () */
 		if (S_ISLNK(entry->mode)) {
-			dir = xlate_dir(&init_net.sysctls, h->parent);
+			dir = ctl_table_xlate_dir(&init_net.sysctls, h->parent);
 			if (IS_ERR(dir)) {
 				ret = PTR_ERR(dir);
 				lib_assert(false);
@@ -235,8 +236,8 @@ static void iterate_recursive(const struct SimSysIterator *iter,
 				procname = entry->procname;
 				h = NULL;
 				entry =
-					find_entry(&h, dir, procname,
-						   strlen(procname));
+					ctl_table_find_entry(&h, dir, procname,
+							     strlen(procname));
 				ret = -ENOENT;
 			}
 		}
