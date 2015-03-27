@@ -10,10 +10,14 @@
 
 #include <linux/list.h>
 #include <linux/etherdevice.h>
+#include <linux/netdevice.h>
 #include <linux/phy.h>
 #include <linux/phy_fixed.h>
 #include <linux/of_net.h>
 #include <linux/of_mdio.h>
+#include <net/rtnetlink.h>
+#include <net/switchdev.h>
+#include <linux/if_bridge.h>
 #include "dsa_priv.h"
 
 /* slave mii_bus handling ***************************************************/
@@ -60,11 +64,18 @@ static int dsa_slave_init(struct net_device *dev)
 	return 0;
 }
 
+static inline bool dsa_port_is_bridged(struct dsa_slave_priv *p)
+{
+	return !!p->bridge_dev;
+}
+
 static int dsa_slave_open(struct net_device *dev)
 {
 	struct dsa_slave_priv *p = netdev_priv(dev);
 	struct net_device *master = p->parent->dst->master_netdev;
 	struct dsa_switch *ds = p->parent;
+	u8 stp_state = dsa_port_is_bridged(p) ?
+			BR_STATE_BLOCKING : BR_STATE_FORWARDING;
 	int err;
 
 	if (!(master->flags & IFF_UP))
@@ -92,6 +103,9 @@ static int dsa_slave_open(struct net_device *dev)
 		if (err)
 			goto clear_promisc;
 	}
+
+	if (ds->drv->port_stp_update)
+		ds->drv->port_stp_update(ds, p->port, stp_state);
 
 	if (p->phy)
 		phy_start(p->phy);
@@ -132,6 +146,9 @@ static int dsa_slave_close(struct net_device *dev)
 
 	if (ds->drv->port_disable)
 		ds->drv->port_disable(ds, p->port, p->phy);
+
+	if (ds->drv->port_stp_update)
+		ds->drv->port_stp_update(ds, p->port, BR_STATE_DISABLED);
 
 	return 0;
 }
@@ -192,6 +209,92 @@ static int dsa_slave_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		return phy_mii_ioctl(p->phy, ifr, cmd);
 
 	return -EOPNOTSUPP;
+}
+
+/* Return a bitmask of all ports being currently bridged within a given bridge
+ * device. Note that on leave, the mask will still return the bitmask of ports
+ * currently bridged, prior to port removal, and this is exactly what we want.
+ */
+static u32 dsa_slave_br_port_mask(struct dsa_switch *ds,
+				  struct net_device *bridge)
+{
+	struct dsa_slave_priv *p;
+	unsigned int port;
+	u32 mask = 0;
+
+	for (port = 0; port < DSA_MAX_PORTS; port++) {
+		if (!dsa_is_port_initialized(ds, port))
+			continue;
+
+		p = netdev_priv(ds->ports[port]);
+
+		if (ds->ports[port]->priv_flags & IFF_BRIDGE_PORT &&
+		    p->bridge_dev == bridge)
+			mask |= 1 << port;
+	}
+
+	return mask;
+}
+
+static int dsa_slave_stp_update(struct net_device *dev, u8 state)
+{
+	struct dsa_slave_priv *p = netdev_priv(dev);
+	struct dsa_switch *ds = p->parent;
+	int ret = -EOPNOTSUPP;
+
+	if (ds->drv->port_stp_update)
+		ret = ds->drv->port_stp_update(ds, p->port, state);
+
+	return ret;
+}
+
+static int dsa_slave_bridge_port_join(struct net_device *dev,
+				      struct net_device *br)
+{
+	struct dsa_slave_priv *p = netdev_priv(dev);
+	struct dsa_switch *ds = p->parent;
+	int ret = -EOPNOTSUPP;
+
+	p->bridge_dev = br;
+
+	if (ds->drv->port_join_bridge)
+		ret = ds->drv->port_join_bridge(ds, p->port,
+						dsa_slave_br_port_mask(ds, br));
+
+	return ret;
+}
+
+static int dsa_slave_bridge_port_leave(struct net_device *dev)
+{
+	struct dsa_slave_priv *p = netdev_priv(dev);
+	struct dsa_switch *ds = p->parent;
+	int ret = -EOPNOTSUPP;
+
+
+	if (ds->drv->port_leave_bridge)
+		ret = ds->drv->port_leave_bridge(ds, p->port,
+						 dsa_slave_br_port_mask(ds, p->bridge_dev));
+
+	p->bridge_dev = NULL;
+
+	/* Port left the bridge, put in BR_STATE_DISABLED by the bridge layer,
+	 * so allow it to be in BR_STATE_FORWARDING to be kept functional
+	 */
+	dsa_slave_stp_update(dev, BR_STATE_FORWARDING);
+
+	return ret;
+}
+
+static int dsa_slave_parent_id_get(struct net_device *dev,
+				   struct netdev_phys_item_id *psid)
+{
+	struct dsa_slave_priv *p = netdev_priv(dev);
+	struct dsa_switch *ds = p->parent;
+
+	psid->id_len = sizeof(ds->index);
+	memcpy(&psid->id, &ds->index, psid->id_len);
+
+	return 0;
 }
 
 static netdev_tx_t dsa_slave_xmit(struct sk_buff *skb, struct net_device *dev)
@@ -472,6 +575,11 @@ static const struct net_device_ops dsa_slave_netdev_ops = {
 	.ndo_do_ioctl		= dsa_slave_ioctl,
 };
 
+static const struct swdev_ops dsa_slave_swdev_ops = {
+	.swdev_parent_id_get = dsa_slave_parent_id_get,
+	.swdev_port_stp_update = dsa_slave_stp_update,
+};
+
 static void dsa_slave_adjust_link(struct net_device *dev)
 {
 	struct dsa_slave_priv *p = netdev_priv(dev);
@@ -513,6 +621,24 @@ static int dsa_slave_fixed_link_update(struct net_device *dev,
 }
 
 /* slave device setup *******************************************************/
+static int dsa_slave_phy_connect(struct dsa_slave_priv *p,
+				 struct net_device *slave_dev,
+				 int addr)
+{
+	struct dsa_switch *ds = p->parent;
+
+	p->phy = ds->slave_mii_bus->phy_map[addr];
+	if (!p->phy)
+		return -ENODEV;
+
+	/* Use already configured phy mode */
+	p->phy_interface = p->phy->interface;
+	phy_connect_direct(slave_dev, p->phy, dsa_slave_adjust_link,
+			   p->phy_interface);
+
+	return 0;
+}
+
 static int dsa_slave_phy_setup(struct dsa_slave_priv *p,
 				struct net_device *slave_dev)
 {
@@ -546,10 +672,25 @@ static int dsa_slave_phy_setup(struct dsa_slave_priv *p,
 	if (ds->drv->get_phy_flags)
 		phy_flags = ds->drv->get_phy_flags(ds, p->port);
 
-	if (phy_dn)
-		p->phy = of_phy_connect(slave_dev, phy_dn,
-					dsa_slave_adjust_link, phy_flags,
-					p->phy_interface);
+	if (phy_dn) {
+		ret = of_mdio_parse_addr(&slave_dev->dev, phy_dn);
+		/* If this PHY address is part of phys_mii_mask, which means
+		 * that we need to divert reads and writes to/from it, then we
+		 * want to bind this device using the slave MII bus created by
+		 * DSA to make that happen.
+		 */
+		if (!phy_is_fixed && ret >= 0 &&
+		    (ds->phys_mii_mask & (1 << ret))) {
+			ret = dsa_slave_phy_connect(p, slave_dev, ret);
+			if (ret)
+				return ret;
+		} else {
+			p->phy = of_phy_connect(slave_dev, phy_dn,
+						dsa_slave_adjust_link,
+						phy_flags,
+						p->phy_interface);
+		}
+	}
 
 	if (p->phy && phy_is_fixed)
 		fixed_phy_set_link_update(p->phy, dsa_slave_fixed_link_update);
@@ -558,14 +699,9 @@ static int dsa_slave_phy_setup(struct dsa_slave_priv *p,
 	 * MDIO bus instead
 	 */
 	if (!p->phy) {
-		p->phy = ds->slave_mii_bus->phy_map[p->port];
-		if (!p->phy)
-			return -ENODEV;
-
-		/* Use already configured phy mode */
-		p->phy_interface = p->phy->interface;
-		phy_connect_direct(slave_dev, p->phy, dsa_slave_adjust_link,
-				   p->phy_interface);
+		ret = dsa_slave_phy_connect(p, slave_dev, p->port);
+		if (ret)
+			return ret;
 	} else {
 		netdev_info(slave_dev, "attached PHY at address %d [%s]\n",
 			    p->phy->addr, p->phy->drv->name);
@@ -605,9 +741,8 @@ int dsa_slave_resume(struct net_device *slave_dev)
 	return 0;
 }
 
-struct net_device *
-dsa_slave_create(struct dsa_switch *ds, struct device *parent,
-		 int port, char *name)
+int dsa_slave_create(struct dsa_switch *ds, struct device *parent,
+		     int port, char *name)
 {
 	struct net_device *master = ds->dst->master_netdev;
 	struct net_device *slave_dev;
@@ -617,13 +752,14 @@ dsa_slave_create(struct dsa_switch *ds, struct device *parent,
 	slave_dev = alloc_netdev(sizeof(struct dsa_slave_priv), name,
 				 NET_NAME_UNKNOWN, ether_setup);
 	if (slave_dev == NULL)
-		return slave_dev;
+		return -ENOMEM;
 
 	slave_dev->features = master->vlan_features;
 	slave_dev->ethtool_ops = &dsa_slave_ethtool_ops;
 	eth_hw_addr_inherit(slave_dev, master);
 	slave_dev->tx_queue_len = 0;
 	slave_dev->netdev_ops = &dsa_slave_netdev_ops;
+	slave_dev->swdev_ops = &dsa_slave_swdev_ops;
 
 	SET_NETDEV_DEV(slave_dev, parent);
 	slave_dev->dev.of_node = ds->pd->port_dn[port];
@@ -667,19 +803,64 @@ dsa_slave_create(struct dsa_switch *ds, struct device *parent,
 	ret = dsa_slave_phy_setup(p, slave_dev);
 	if (ret) {
 		free_netdev(slave_dev);
-		return NULL;
+		return ret;
 	}
 
+	ds->ports[port] = slave_dev;
 	ret = register_netdev(slave_dev);
 	if (ret) {
 		netdev_err(master, "error %d registering interface %s\n",
 			   ret, slave_dev->name);
 		phy_disconnect(p->phy);
+		ds->ports[port] = NULL;
 		free_netdev(slave_dev);
-		return NULL;
+		return ret;
 	}
 
 	netif_carrier_off(slave_dev);
 
-	return slave_dev;
+	return 0;
+}
+
+static bool dsa_slave_dev_check(struct net_device *dev)
+{
+	return dev->netdev_ops == &dsa_slave_netdev_ops;
+}
+
+static int dsa_slave_master_changed(struct net_device *dev)
+{
+	struct net_device *master = netdev_master_upper_dev_get(dev);
+	struct dsa_slave_priv *p = netdev_priv(dev);
+	int err = 0;
+
+	if (master && master->rtnl_link_ops &&
+	    !strcmp(master->rtnl_link_ops->kind, "bridge"))
+		err = dsa_slave_bridge_port_join(dev, master);
+	else if (dsa_port_is_bridged(p))
+		err = dsa_slave_bridge_port_leave(dev);
+
+	return err;
+}
+
+int dsa_slave_netdevice_event(struct notifier_block *unused,
+			      unsigned long event, void *ptr)
+{
+	struct net_device *dev;
+	int err = 0;
+
+	switch (event) {
+	case NETDEV_CHANGEUPPER:
+		dev = netdev_notifier_info_to_dev(ptr);
+		if (!dsa_slave_dev_check(dev))
+			goto out;
+
+		err = dsa_slave_master_changed(dev);
+		if (err)
+			netdev_warn(dev, "failed to reflect master change\n");
+
+		break;
+	}
+
+out:
+	return NOTIFY_DONE;
 }

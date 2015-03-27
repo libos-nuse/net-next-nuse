@@ -152,7 +152,6 @@ static struct neighbour *ipv4_neigh_lookup(const struct dst_entry *dst,
 
 static struct dst_ops ipv4_dst_ops = {
 	.family =		AF_INET,
-	.protocol =		cpu_to_be16(ETH_P_IP),
 	.check =		ipv4_dst_check,
 	.default_advmss =	ipv4_default_advmss,
 	.mtu =			ipv4_mtu,
@@ -483,7 +482,7 @@ u32 ip_idents_reserve(u32 hash, int segs)
 }
 EXPORT_SYMBOL(ip_idents_reserve);
 
-void __ip_select_ident(struct iphdr *iph, int segs)
+void __ip_select_ident(struct net *net, struct iphdr *iph, int segs)
 {
 	static u32 ip_idents_hashrnd __read_mostly;
 	u32 hash, id;
@@ -492,7 +491,7 @@ void __ip_select_ident(struct iphdr *iph, int segs)
 
 	hash = jhash_3words((__force u32)iph->daddr,
 			    (__force u32)iph->saddr,
-			    iph->protocol,
+			    iph->protocol ^ net_hash_mix(net),
 			    ip_idents_hashrnd);
 	id = ip_idents_reserve(hash, segs);
 	iph->id = htons(id);
@@ -2225,7 +2224,6 @@ static u32 *ipv4_rt_blackhole_cow_metrics(struct dst_entry *dst,
 
 static struct dst_ops ipv4_dst_blackhole_ops = {
 	.family			=	AF_INET,
-	.protocol		=	cpu_to_be16(ETH_P_IP),
 	.check			=	ipv4_blackhole_dst_check,
 	.mtu			=	ipv4_blackhole_mtu,
 	.default_advmss		=	ipv4_default_advmss,

@@ -449,7 +449,7 @@ int t4_edc_read(struct adapter *adap, int idx, u32 addr, __be32 *data, u64 *ecc)
  *	@mtype: memory type: MEM_EDC0, MEM_EDC1 or MEM_MC
  *	@addr: address within indicated memory type
  *	@len: amount of memory to transfer
- *	@buf: host memory buffer
+ *	@hbuf: host memory buffer
  *	@dir: direction of transfer T4_MEMORY_READ (1) or T4_MEMORY_WRITE (0)
  *
  *	Reads/writes an [almost] arbitrary memory region in the firmware: the
@@ -460,15 +460,17 @@ int t4_edc_read(struct adapter *adap, int idx, u32 addr, __be32 *data, u64 *ecc)
  *	caller's responsibility to perform appropriate byte order conversions.
  */
 int t4_memory_rw(struct adapter *adap, int win, int mtype, u32 addr,
-		 u32 len, __be32 *buf, int dir)
+		 u32 len, void *hbuf, int dir)
 {
 	u32 pos, offset, resid, memoffset;
 	u32 edc_size, mc_size, win_pf, mem_reg, mem_aperture, mem_base;
+	u32 *buf;
 
 	/* Argument sanity checks ...
 	 */
-	if (addr & 0x3)
+	if (addr & 0x3 || (uintptr_t)hbuf & 0x3)
 		return -EINVAL;
+	buf = (u32 *)hbuf;
 
 	/* It's convenient to be able to handle lengths which aren't a
 	 * multiple of 32-bits because we often end up transferring files to
@@ -532,14 +534,45 @@ int t4_memory_rw(struct adapter *adap, int win, int mtype, u32 addr,
 
 	/* Transfer data to/from the adapter as long as there's an integral
 	 * number of 32-bit transfers to complete.
+	 *
+	 * A note on Endianness issues:
+	 *
+	 * The "register" reads and writes below from/to the PCI-E Memory
+	 * Window invoke the standard adapter Big-Endian to PCI-E Link
+	 * Little-Endian "swizzel."  As a result, if we have the following
+	 * data in adapter memory:
+	 *
+	 *     Memory:  ... | b0 | b1 | b2 | b3 | ...
+	 *     Address:      i+0  i+1  i+2  i+3
+	 *
+	 * Then a read of the adapter memory via the PCI-E Memory Window
+	 * will yield:
+	 *
+	 *     x = readl(i)
+	 *         31                  0
+	 *         [ b3 | b2 | b1 | b0 ]
+	 *
+	 * If this value is stored into local memory on a Little-Endian system
+	 * it will show up correctly in local memory as:
+	 *
+	 *     ( ..., b0, b1, b2, b3, ... )
+	 *
+	 * But on a Big-Endian system, the store will show up in memory
+	 * incorrectly swizzled as:
+	 *
+	 *     ( ..., b3, b2, b1, b0, ... )
+	 *
+	 * So we need to account for this in the reads and writes to the
+	 * PCI-E Memory Window below by undoing the register read/write
+	 * swizzels.
 	 */
 	while (len > 0) {
 		if (dir == T4_MEMORY_READ)
-			*buf++ = (__force __be32) t4_read_reg(adap,
-							mem_base + offset);
+			*buf++ = le32_to_cpu((__force __le32)t4_read_reg(adap,
+						mem_base + offset));
 		else
 			t4_write_reg(adap, mem_base + offset,
-				     (__force u32) *buf++);
+				     (__force u32)cpu_to_le32(*buf++));
 		offset += sizeof(__be32);
 		len -= sizeof(__be32);
 
@@ -568,15 +601,16 @@ int t4_memory_rw(struct adapter *adap, int win, int mtype, u32 addr,
 	 */
 	if (resid) {
 		union {
-			__be32 word;
+			u32 word;
 			char byte[4];
 		} last;
 		unsigned char *bp;
 		int i;
 
 		if (dir == T4_MEMORY_READ) {
-			last.word = (__force __be32) t4_read_reg(adap,
-							mem_base + offset);
+			last.word = le32_to_cpu(
+					(__force __le32)t4_read_reg(adap,
+						mem_base + offset));
 			for (bp = (unsigned char *)buf, i = resid; i < 4; i++)
 				bp[i] = last.byte[i];
 		} else {
@@ -584,7 +618,7 @@ int t4_memory_rw(struct adapter *adap, int win, int mtype, u32 addr,
 			for (i = resid; i < 4; i++)
 				last.byte[i] = 0;
 			t4_write_reg(adap, mem_base + offset,
-				     (__force u32) last.word);
+				     (__force u32)cpu_to_le32(last.word));
 		}
 	}
 
@@ -833,7 +867,7 @@ static int flash_wait_op(struct adapter *adapter, int attempts, int delay)
  *	Read the specified number of 32-bit words from the serial flash.
  *	If @byte_oriented is set the read data is stored as a byte array
  *	(i.e., big-endian), otherwise as 32-bit words in the platform's
- *	natural endianess.
+ *	natural endianness.
  */
 int t4_read_flash(struct adapter *adapter, unsigned int addr,
 		  unsigned int nwords, u32 *data, int byte_oriented)
@@ -1086,7 +1120,7 @@ int t4_prep_fw(struct adapter *adap, struct fw_info *fw_info,
 		}
 
 		/* Installed successfully, update the cached header too. */
-		memcpy(card_fw, fs_fw, sizeof(*card_fw));
+		*card_fw = *fs_fw;
 		card_fw_usable = 1;
 		*reset = 0;	/* already reset as part of load_fw */
 	}
@@ -3524,7 +3558,7 @@ int t4_fixup_host_params(struct adapter *adap, unsigned int page_size,
 	 * For the single-MTU buffers in unpacked mode we need to include
 	 * space for the SGE Control Packet Shift, 14 byte Ethernet header,
 	 * possible 4 byte VLAN tag, all rounded up to the next Ingress Packet
-	 * Padding boundry.  All of these are accommodated in the Factory
+	 * Padding boundary.  All of these are accommodated in the Factory
 	 * Default Firmware Configuration File but we need to adjust it for
 	 * this host's cache line size.
 	 */
@@ -4495,7 +4529,7 @@ int t4_init_tp_params(struct adapter *adap)
 							       PROTOCOL_F);
 
 	/* If TP_INGRESS_CONFIG.VNID == 0, then TP_VLAN_PRI_MAP.VNIC_ID
-	 * represents the presense of an Outer VLAN instead of a VNIC ID.
+	 * represents the presence of an Outer VLAN instead of a VNIC ID.
 	 */
 	if ((adap->params.tp.ingress_config & VNIC_F) == 0)
 		adap->params.tp.vnic_shift = -1;

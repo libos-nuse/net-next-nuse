@@ -310,11 +310,11 @@ bool stmmac_eee_init(struct stmmac_priv *priv)
 		spin_lock_irqsave(&priv->lock, flags);
 		if (!priv->eee_active) {
 			priv->eee_active = 1;
-			init_timer(&priv->eee_ctrl_timer);
-			priv->eee_ctrl_timer.function = stmmac_eee_ctrl_timer;
-			priv->eee_ctrl_timer.data = (unsigned long)priv;
-			priv->eee_ctrl_timer.expires = STMMAC_LPI_T(eee_timer);
-			add_timer(&priv->eee_ctrl_timer);
+			setup_timer(&priv->eee_ctrl_timer,
+				    stmmac_eee_ctrl_timer,
+				    (unsigned long)priv);
+			mod_timer(&priv->eee_ctrl_timer,
+				  STMMAC_LPI_T(eee_timer));
 
 			priv->hw->mac->set_eee_timer(priv->hw,
 						     STMMAC_DEFAULT_LIT_LS,
@@ -609,7 +609,7 @@ static int stmmac_hwtstamp_ioctl(struct net_device *dev, struct ifreq *ifr)
 		 * where, freq_div_ratio = clk_ptp_ref_i/50MHz
 		 * hence, addend = ((2^32) * 50MHz)/clk_ptp_ref_i;
 		 * NOTE: clk_ptp_ref_i should be >= 50MHz to
-		 *       achive 20ns accuracy.
+		 *       achieve 20ns accuracy.
 		 *
 		 * 2^x * y == (y << x), hence
 		 * 2^32 * 50000000 ==> (50000000 << 32)

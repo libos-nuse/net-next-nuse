@@ -3206,10 +3206,9 @@ int skb_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 	struct skb_shared_info *pinfo, *skbinfo = skb_shinfo(skb);
 	unsigned int offset = skb_gro_offset(skb);
 	unsigned int headlen = skb_headlen(skb);
-	struct sk_buff *nskb, *lp, *p = *head;
 	unsigned int len = skb_gro_len(skb);
+	struct sk_buff *lp, *p = *head;
 	unsigned int delta_truesize;
-	unsigned int headroom;
 
 	if (unlikely(p->len + len >= 65536))
 		return -E2BIG;
@@ -3276,48 +3275,6 @@ int skb_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 		NAPI_GRO_CB(skb)->free = NAPI_GRO_FREE_STOLEN_HEAD;
 		goto done;
 	}
-	/* switch back to head shinfo */
-	pinfo = skb_shinfo(p);
-
-	if (pinfo->frag_list)
-		goto merge;
-	if (skb_gro_len(p) != pinfo->gso_size)
-		return -E2BIG;
-
-	headroom = skb_headroom(p);
-	nskb = alloc_skb(headroom + skb_gro_offset(p), GFP_ATOMIC);
-	if (unlikely(!nskb))
-		return -ENOMEM;
-
-	__copy_skb_header(nskb, p);
-	nskb->mac_len = p->mac_len;
-
-	skb_reserve(nskb, headroom);
-	__skb_put(nskb, skb_gro_offset(p));
-
-	skb_set_mac_header(nskb, skb_mac_header(p) - p->data);
-	skb_set_network_header(nskb, skb_network_offset(p));
-	skb_set_transport_header(nskb, skb_transport_offset(p));
-
-	__skb_pull(p, skb_gro_offset(p));
-	memcpy(skb_mac_header(nskb), skb_mac_header(p),
-	       p->data - skb_mac_header(p));
-
-	skb_shinfo(nskb)->frag_list = p;
-	skb_shinfo(nskb)->gso_size = pinfo->gso_size;
-	pinfo->gso_size = 0;
-	__skb_header_release(p);
-	NAPI_GRO_CB(nskb)->last = p;
-
-	nskb->data_len += p->len;
-	nskb->truesize += p->truesize;
-	nskb->len += p->len;
-
-	*head = nskb;
-	nskb->next = p->next;
-	p->next = NULL;
-
-	p = nskb;
 
 merge:
 	delta_truesize = skb->truesize;
@@ -3620,13 +3577,14 @@ struct sk_buff *sock_dequeue_err_skb(struct sock *sk)
 {
 	struct sk_buff_head *q = &sk->sk_error_queue;
 	struct sk_buff *skb, *skb_next;
+	unsigned long flags;
 	int err = 0;
 
-	spin_lock_bh(&q->lock);
+	spin_lock_irqsave(&q->lock, flags);
 	skb = __skb_dequeue(q);
 	if (skb && (skb_next = skb_peek(q)))
 		err = SKB_EXT_ERR(skb_next)->ee.ee_errno;
-	spin_unlock_bh(&q->lock);
+	spin_unlock_irqrestore(&q->lock, flags);
 
 	sk->sk_err = err;
 	if (err)
@@ -3731,9 +3689,13 @@ void __skb_tstamp_tx(struct sk_buff *orig_skb,
 		     struct sock *sk, int tstype)
 {
 	struct sk_buff *skb;
-	bool tsonly = sk->sk_tsflags & SOF_TIMESTAMPING_OPT_TSONLY;
+	bool tsonly;
 
-	if (!sk || !skb_may_tx_timestamp(sk, tsonly))
+	if (!sk)
+		return;
+
+	tsonly = sk->sk_tsflags & SOF_TIMESTAMPING_OPT_TSONLY;
+	if (!skb_may_tx_timestamp(sk, tsonly))
 		return;
 
 	if (tsonly)
@@ -4171,7 +4133,7 @@ void skb_scrub_packet(struct sk_buff *skb, bool xnet)
 	skb->ignore_df = 0;
 	skb_dst_drop(skb);
 	skb->mark = 0;
-	skb->sender_cpu = 0;
+	skb_sender_cpu_clear(skb);
 	skb_init_secmark(skb);
 	secpath_reset(skb);
 	nf_reset(skb);

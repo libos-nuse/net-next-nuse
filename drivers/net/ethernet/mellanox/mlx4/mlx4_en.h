@@ -453,7 +453,7 @@ struct mlx4_en_port_stats {
 	unsigned long rx_chksum_none;
 	unsigned long rx_chksum_complete;
 	unsigned long tx_chksum_offload;
-#define NUM_PORT_STATS		9
+#define NUM_PORT_STATS		10
 };
 
 struct mlx4_en_perf_stats {
@@ -608,6 +608,7 @@ struct mlx4_en_priv {
 #ifdef CONFIG_MLX4_EN_DCB
 	struct ieee_ets ets;
 	u16 maxrate[IEEE_8021QAZ_MAX_TCS];
+	enum dcbnl_cndd_states cndd_state[IEEE_8021QAZ_MAX_TCS];
 #endif
 #ifdef CONFIG_RFS_ACCEL
 	spinlock_t filters_lock;

@@ -713,7 +713,7 @@ static int update_vport_qp_param(struct mlx4_dev *dev,
 	struct mlx4_vport_oper_state *vp_oper;
 	struct mlx4_priv *priv;
 	u32 qp_type;
-	int port;
+	int port, err = 0;
 
 	port = (qpc->pri_path.sched_queue & 0x40) ? 2 : 1;
 	priv = mlx4_priv(dev);
@@ -738,7 +738,9 @@ static int update_vport_qp_param(struct mlx4_dev *dev,
 			} else {
 				struct mlx4_update_qp_params params = {.flags = 0};
 
-				mlx4_update_qp(dev, qpn, MLX4_UPDATE_QP_VSD, &params);
+				err = mlx4_update_qp(dev, qpn, MLX4_UPDATE_QP_VSD, &params);
+				if (err)
+					goto out;
 			}
 		}
 
@@ -773,7 +775,8 @@ static int update_vport_qp_param(struct mlx4_dev *dev,
 		qpc->pri_path.feup |= MLX4_FSM_FORCE_ETH_SRC_MAC;
 		qpc->pri_path.grh_mylmc = (0x80 & qpc->pri_path.grh_mylmc) + vp_oper->mac_idx;
 	}
-	return 0;
+out:
+	return err;
 }
 
 static int mpt_mask(struct mlx4_dev *dev)
@@ -2944,8 +2947,12 @@ static int verify_qp_parameters(struct mlx4_dev *dev,
 	qp_type	= (be32_to_cpu(qp_ctx->flags) >> 16) & 0xff;
 	optpar	= be32_to_cpu(*(__be32 *) inbox->buf);
 
-	if (slave != mlx4_master_func_num(dev))
+	if (slave != mlx4_master_func_num(dev)) {
 		qp_ctx->params2 &= ~MLX4_QP_BIT_FPP;
+		/* setting QP rate-limit is disallowed for VFs */
+		if (qp_ctx->rate_limit_params)
+			return -EPERM;
+	}
 
 	switch (qp_type) {
 	case MLX4_QP_ST_RC:
@@ -3024,7 +3031,7 @@ int mlx4_WRITE_MTT_wrapper(struct mlx4_dev *dev, int slave,
 
 	/* Call the SW implementation of write_mtt:
 	 * - Prepare a dummy mtt struct
-	 * - Translate inbox contents to simple addresses in host endianess */
+	 * - Translate inbox contents to simple addresses in host endianness */
 	mtt.offset = 0;  /* TBD this is broken but I don't handle it since
 			    we don't really use it */
 	mtt.order = 0;

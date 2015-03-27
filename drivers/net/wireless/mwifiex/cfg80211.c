@@ -1563,7 +1563,7 @@ mwifiex_cfg80211_del_station(struct wiphy *wiphy, struct net_device *dev,
 
 	wiphy_dbg(wiphy, "%s: mac address %pM\n", __func__, params->mac);
 
-	memset(deauth_mac, 0, ETH_ALEN);
+	eth_zero_addr(deauth_mac);
 
 	spin_lock_irqsave(&priv->sta_list_spinlock, flags);
 	sta_node = mwifiex_get_sta_entry(priv, params->mac);
@@ -1786,7 +1786,7 @@ mwifiex_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 	wiphy_dbg(wiphy, "info: successfully disconnected from %pM:"
 		" reason code %d\n", priv->cfg_bssid, reason_code);
 
-	memset(priv->cfg_bssid, 0, ETH_ALEN);
+	eth_zero_addr(priv->cfg_bssid);
 	priv->hs2_enabled = false;
 
 	return 0;
@@ -2046,7 +2046,7 @@ mwifiex_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		dev_dbg(priv->adapter->dev,
 			"info: association to bssid %pM failed\n",
 			priv->cfg_bssid);
-		memset(priv->cfg_bssid, 0, ETH_ALEN);
+		eth_zero_addr(priv->cfg_bssid);
 
 		if (ret > 0)
 			cfg80211_connect_result(priv->netdev, priv->cfg_bssid,
@@ -2194,7 +2194,7 @@ mwifiex_cfg80211_leave_ibss(struct wiphy *wiphy, struct net_device *dev)
 	if (mwifiex_deauthenticate(priv, NULL))
 		return -EFAULT;
 
-	memset(priv->cfg_bssid, 0, ETH_ALEN);
+	eth_zero_addr(priv->cfg_bssid);
 
 	return 0;
 }
@@ -2397,7 +2397,6 @@ mwifiex_setup_ht_caps(struct ieee80211_sta_ht_cap *ht_info,
 	ht_info->mcs.tx_params = IEEE80211_HT_MCS_TX_DEFINED;
 }
 
-#define MWIFIEX_MAX_WQ_LEN  30
 /*
  *  create a new virtual interface with the given name
  */
@@ -2411,7 +2410,6 @@ struct wireless_dev *mwifiex_add_virtual_intf(struct wiphy *wiphy,
 	struct mwifiex_private *priv;
 	struct net_device *dev;
 	void *mdev_priv;
-	char dfs_cac_str[MWIFIEX_MAX_WQ_LEN], dfs_chsw_str[MWIFIEX_MAX_WQ_LEN];
 
 	if (!adapter)
 		return ERR_PTR(-EFAULT);
@@ -2576,12 +2574,10 @@ struct wireless_dev *mwifiex_add_virtual_intf(struct wiphy *wiphy,
 		return ERR_PTR(-EFAULT);
 	}
 
-	strcpy(dfs_cac_str, "MWIFIEX_DFS_CAC");
-	strcat(dfs_cac_str, name);
-	priv->dfs_cac_workqueue = alloc_workqueue(dfs_cac_str,
+	priv->dfs_cac_workqueue = alloc_workqueue("MWIFIEX_DFS_CAC%s",
 						  WQ_HIGHPRI |
 						  WQ_MEM_RECLAIM |
-						  WQ_UNBOUND, 1);
+						  WQ_UNBOUND, 1, name);
 	if (!priv->dfs_cac_workqueue) {
 		wiphy_err(wiphy, "cannot register virtual network device\n");
 		free_netdev(dev);
@@ -2594,11 +2590,9 @@ struct wireless_dev *mwifiex_add_virtual_intf(struct wiphy *wiphy,
 
 	INIT_DELAYED_WORK(&priv->dfs_cac_work, mwifiex_dfs_cac_work_queue);
 
-	strcpy(dfs_chsw_str, "MWIFIEX_DFS_CHSW");
-	strcat(dfs_chsw_str, name);
-	priv->dfs_chan_sw_workqueue = alloc_workqueue(dfs_chsw_str,
+	priv->dfs_chan_sw_workqueue = alloc_workqueue("MWIFIEX_DFS_CHSW%s",
 						      WQ_HIGHPRI | WQ_UNBOUND |
-						      WQ_MEM_RECLAIM, 1);
+						      WQ_MEM_RECLAIM, 1, name);
 	if (!priv->dfs_chan_sw_workqueue) {
 		wiphy_err(wiphy, "cannot register virtual network device\n");
 		free_netdev(dev);

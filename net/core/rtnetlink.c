@@ -982,6 +982,24 @@ static int rtnl_phys_port_id_fill(struct sk_buff *skb, struct net_device *dev)
 	return 0;
 }
 
+static int rtnl_phys_port_name_fill(struct sk_buff *skb, struct net_device *dev)
+{
+	char name[IFNAMSIZ];
+	int err;
+
+	err = dev_get_phys_port_name(dev, name, sizeof(name));
+	if (err) {
+		if (err == -EOPNOTSUPP)
+			return 0;
+		return err;
+	}
+
+	if (nla_put(skb, IFLA_PHYS_PORT_NAME, strlen(name), name))
+		return -EMSGSIZE;
+
+	return 0;
+}
+
 static int rtnl_phys_switch_id_fill(struct sk_buff *skb, struct net_device *dev)
 {
 	int err;
@@ -1070,6 +1088,9 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
 	}
 
 	if (rtnl_phys_port_id_fill(skb, dev))
+		goto nla_put_failure;
+
+	if (rtnl_phys_port_name_fill(skb, dev))
 		goto nla_put_failure;
 
 	if (rtnl_phys_switch_id_fill(skb, dev))
@@ -1300,7 +1321,6 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	s_h = cb->args[0];
 	s_idx = cb->args[1];
 
-	rcu_read_lock();
 	cb->seq = net->dev_base_seq;
 
 	/* A hack to preserve kernel<->userspace interface.
@@ -1322,7 +1342,7 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	for (h = s_h; h < NETDEV_HASHENTRIES; h++, s_idx = 0) {
 		idx = 0;
 		head = &net->dev_index_head[h];
-		hlist_for_each_entry_rcu(dev, head, index_hlist) {
+		hlist_for_each_entry(dev, head, index_hlist) {
 			if (idx < s_idx)
 				goto cont;
 			err = rtnl_fill_ifinfo(skb, dev, RTM_NEWLINK,
@@ -1344,7 +1364,6 @@ cont:
 		}
 	}
 out:
-	rcu_read_unlock();
 	cb->args[1] = idx;
 	cb->args[0] = h;
 
@@ -1817,6 +1836,42 @@ errout:
 	return err;
 }
 
+static int rtnl_group_dellink(const struct net *net, int group)
+{
+	struct net_device *dev, *aux;
+	LIST_HEAD(list_kill);
+	bool found = false;
+
+	if (!group)
+		return -EPERM;
+
+	for_each_netdev(net, dev) {
+		if (dev->group == group) {
+			const struct rtnl_link_ops *ops;
+
+			found = true;
+			ops = dev->rtnl_link_ops;
+			if (!ops || !ops->dellink)
+				return -EOPNOTSUPP;
+		}
+	}
+
+	if (!found)
+		return -ENODEV;
+
+	for_each_netdev_safe(net, dev, aux) {
+		if (dev->group == group) {
+			const struct rtnl_link_ops *ops;
+
+			ops = dev->rtnl_link_ops;
+			ops->dellink(dev, &list_kill);
+		}
+	}
+	unregister_netdevice_many(&list_kill);
+
+	return 0;
+}
+
 static int rtnl_dellink(struct sk_buff *skb, struct nlmsghdr *nlh)
 {
 	struct net *net = sock_net(skb->sk);
@@ -1840,6 +1895,8 @@ static int rtnl_dellink(struct sk_buff *skb, struct nlmsghdr *nlh)
 		dev = __dev_get_by_index(net, ifm->ifi_index);
 	else if (tb[IFLA_IFNAME])
 		dev = __dev_get_by_name(net, ifname);
+	else if (tb[IFLA_GROUP])
+		return rtnl_group_dellink(net, nla_get_u32(tb[IFLA_GROUP]));
 	else
 		return -EINVAL;
 
@@ -2012,8 +2069,8 @@ replay:
 	}
 
 	if (1) {
-		struct nlattr *attr[ops ? ops->maxtype + 1 : 0];
-		struct nlattr *slave_attr[m_ops ? m_ops->slave_maxtype + 1 : 0];
+		struct nlattr *attr[ops ? ops->maxtype + 1 : 1];
+		struct nlattr *slave_attr[m_ops ? m_ops->slave_maxtype + 1 : 1];
 		struct nlattr **data = NULL;
 		struct nlattr **slave_data = NULL;
 		struct net *dest_net, *link_net = NULL;
@@ -2122,6 +2179,10 @@ replay:
 		if (IS_ERR(dest_net))
 			return PTR_ERR(dest_net);
 
+		err = -EPERM;
+		if (!netlink_ns_capable(skb, dest_net->user_ns, CAP_NET_ADMIN))
+			goto out;
+
 		if (tb[IFLA_LINK_NETNSID]) {
 			int id = nla_get_s32(tb[IFLA_LINK_NETNSID]);
 
@@ -2130,6 +2191,9 @@ replay:
 				err =  -EINVAL;
 				goto out;
 			}
+			err = -EPERM;
+			if (!netlink_ns_capable(skb, link_net->user_ns, CAP_NET_ADMIN))
+				goto out;
 		}
 
 		dev = rtnl_create_link(link_net ? : dest_net, ifname,
@@ -2161,28 +2225,28 @@ replay:
 			}
 		}
 		err = rtnl_configure_link(dev, ifm);
-		if (err < 0) {
-			if (ops->newlink) {
-				LIST_HEAD(list_kill);
-
-				ops->dellink(dev, &list_kill);
-				unregister_netdevice_many(&list_kill);
-			} else {
-				unregister_netdevice(dev);
-			}
-			goto out;
-		}
-
+		if (err < 0)
+			goto out_unregister;
 		if (link_net) {
 			err = dev_change_net_namespace(dev, dest_net, ifname);
 			if (err < 0)
-				unregister_netdevice(dev);
+				goto out_unregister;
 		}
 out:
 		if (link_net)
 			put_net(link_net);
 		put_net(dest_net);
 		return err;
+out_unregister:
+		if (ops->newlink) {
+			LIST_HEAD(list_kill);
+
+			ops->dellink(dev, &list_kill);
+			unregister_netdevice_many(&list_kill);
+		} else {
+			unregister_netdevice(dev);
+		}
+		goto out;
 	}
 }
 

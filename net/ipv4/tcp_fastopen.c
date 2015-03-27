@@ -155,12 +155,7 @@ static bool tcp_fastopen_create_child(struct sock *sk,
 	tp = tcp_sk(child);
 
 	tp->fastopen_rsk = req;
-	/* Do a hold on the listner sk so that if the listener is being
-	 * closed, the child that has been accepted can live on and still
-	 * access listen_lock.
-	 */
-	sock_hold(sk);
-	tcp_rsk(req)->listener = sk;
+	tcp_rsk(req)->tfo_listener = true;
 
 	/* RFC1323: The window in SYN & SYN/ACK segments is never
 	 * scaled. So correct it appropriately.
@@ -174,6 +169,7 @@ static bool tcp_fastopen_create_child(struct sock *sk,
 	inet_csk_reset_xmit_timer(child, ICSK_TIME_RETRANS,
 				  TCP_TIMEOUT_INIT, TCP_RTO_MAX);
 
+	atomic_set(&req->rsk_refcnt, 1);
 	/* Add the child socket directly into the accept queue */
 	inet_csk_reqsk_queue_add(sk, req, child);
 
@@ -221,7 +217,6 @@ static bool tcp_fastopen_create_child(struct sock *sk,
 	WARN_ON(req->sk == NULL);
 	return true;
 }
-EXPORT_SYMBOL(tcp_fastopen_create_child);
 
 static bool tcp_fastopen_queue_check(struct sock *sk)
 {
@@ -245,7 +240,7 @@ static bool tcp_fastopen_queue_check(struct sock *sk)
 		struct request_sock *req1;
 		spin_lock(&fastopenq->lock);
 		req1 = fastopenq->rskq_rst_head;
-		if ((req1 == NULL) || time_after(req1->expires, jiffies)) {
+		if (!req1 || time_after(req1->rsk_timer.expires, jiffies)) {
 			spin_unlock(&fastopenq->lock);
 			NET_INC_STATS_BH(sock_net(sk),
 					 LINUX_MIB_TCPFASTOPENLISTENOVERFLOW);
@@ -254,7 +249,7 @@ static bool tcp_fastopen_queue_check(struct sock *sk)
 		fastopenq->rskq_rst_head = req1->dl_next;
 		fastopenq->qlen--;
 		spin_unlock(&fastopenq->lock);
-		reqsk_free(req1);
+		reqsk_put(req1);
 	}
 	return true;
 }

@@ -354,6 +354,7 @@ struct bcmgenet_mib_counters {
 #define EXT_GPHY_CTRL			0x1C
 #define  EXT_CFG_IDDQ_BIAS		(1 << 0)
 #define  EXT_CFG_PWR_DOWN		(1 << 1)
+#define  EXT_CK25_DIS			(1 << 4)
 #define  EXT_GPHY_RESET			(1 << 5)
 
 /* DMA rings size */
@@ -503,11 +504,13 @@ enum bcmgenet_version {
  */
 struct bcmgenet_hw_params {
 	u8		tx_queues;
+	u8		tx_bds_per_q;
 	u8		rx_queues;
-	u8		bds_cnt;
+	u8		rx_bds_per_q;
 	u8		bp_in_en_shift;
 	u32		bp_in_mask;
 	u8		hfb_filter_cnt;
+	u8		hfb_filter_size;
 	u8		qtag_mask;
 	u16		tbuf_offset;
 	u32		hfb_offset;
@@ -520,10 +523,12 @@ struct bcmgenet_hw_params {
 
 struct bcmgenet_tx_ring {
 	spinlock_t	lock;		/* ring lock */
+	struct napi_struct napi;	/* NAPI per tx queue */
 	unsigned int	index;		/* ring index */
 	unsigned int	queue;		/* queue index */
 	struct enet_cb	*cbs;		/* tx ring buffer control block*/
 	unsigned int	size;		/* size of each tx ring */
+	unsigned int    clean_ptr;      /* Tx ring clean pointer */
 	unsigned int	c_index;	/* last consumer index of each ring*/
 	unsigned int	free_bds;	/* # of free bds for each ring */
 	unsigned int	write_ptr;	/* Tx ring write pointer SW copy */
@@ -534,6 +539,18 @@ struct bcmgenet_tx_ring {
 			   struct bcmgenet_tx_ring *);
 	void (*int_disable)(struct bcmgenet_priv *priv,
 			    struct bcmgenet_tx_ring *);
+	struct bcmgenet_priv *priv;
+};
+
+struct bcmgenet_rx_ring {
+	unsigned int	index;		/* Rx ring index */
+	struct enet_cb	*cbs;		/* Rx ring buffer control block */
+	unsigned int	size;		/* Rx ring size */
+	unsigned int	c_index;	/* Rx last consumer index */
+	unsigned int	read_ptr;	/* Rx ring read pointer */
+	unsigned int	cb_ptr;		/* Rx ring initial CB ptr */
+	unsigned int	end_ptr;	/* Rx ring end CB ptr */
+	unsigned int	old_discards;
 };
 
 /* device context */
@@ -556,13 +573,11 @@ struct bcmgenet_priv {
 
 	/* receive variables */
 	void __iomem *rx_bds;
-	void __iomem *rx_bd_assign_ptr;
-	int rx_bd_assign_index;
 	struct enet_cb *rx_cbs;
 	unsigned int num_rx_bds;
 	unsigned int rx_buf_len;
-	unsigned int rx_read_ptr;
-	unsigned int rx_c_index;
+
+	struct bcmgenet_rx_ring rx_rings[DESC_INDEX + 1];
 
 	/* other misc variables */
 	struct bcmgenet_hw_params *hw_params;
@@ -649,6 +664,7 @@ int bcmgenet_mii_init(struct net_device *dev);
 int bcmgenet_mii_config(struct net_device *dev, bool init);
 void bcmgenet_mii_exit(struct net_device *dev);
 void bcmgenet_mii_reset(struct net_device *dev);
+void bcmgenet_phy_power_set(struct net_device *dev, bool enable);
 void bcmgenet_mii_setup(struct net_device *dev);
 
 /* Wake-on-LAN routines */

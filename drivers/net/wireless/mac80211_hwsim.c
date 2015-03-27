@@ -946,7 +946,8 @@ static void mac80211_hwsim_tx_frame_nl(struct ieee80211_hw *hw,
 		goto nla_put_failure;
 
 	genlmsg_end(skb, msg_head);
-	genlmsg_unicast(&init_net, skb, dst_portid);
+	if (genlmsg_unicast(&init_net, skb, dst_portid))
+		goto err_free_txskb;
 
 	/* Enqueue the packet */
 	skb_queue_tail(&data->pending, my_skb);
@@ -955,6 +956,8 @@ static void mac80211_hwsim_tx_frame_nl(struct ieee80211_hw *hw,
 	return;
 
 nla_put_failure:
+	nlmsg_free(skb);
+err_free_txskb:
 	printk(KERN_DEBUG "mac80211_hwsim: error occurred in %s\n", __func__);
 	ieee80211_free_txskb(hw, my_skb);
 	data->tx_failed++;
@@ -1908,7 +1911,7 @@ static void mac80211_hwsim_sw_scan_complete(struct ieee80211_hw *hw,
 
 	printk(KERN_DEBUG "hwsim sw_scan_complete\n");
 	hwsim->scanning = false;
-	memset(hwsim->scan_addr, 0, ETH_ALEN);
+	eth_zero_addr(hwsim->scan_addr);
 
 	mutex_unlock(&hwsim->mutex);
 }
@@ -2264,7 +2267,7 @@ static int mac80211_hwsim_new_radio(struct genl_info *info,
 	skb_queue_head_init(&data->pending);
 
 	SET_IEEE80211_DEV(hw, data->dev);
-	memset(addr, 0, ETH_ALEN);
+	eth_zero_addr(addr);
 	addr[0] = 0x02;
 	addr[3] = idx >> 8;
 	addr[4] = idx;
@@ -2597,7 +2600,7 @@ static void hwsim_mon_setup(struct net_device *dev)
 	ether_setup(dev);
 	dev->tx_queue_len = 0;
 	dev->type = ARPHRD_IEEE80211_RADIOTAP;
-	memset(dev->dev_addr, 0, ETH_ALEN);
+	eth_zero_addr(dev->dev_addr);
 	dev->dev_addr[0] = 0x12;
 }
 

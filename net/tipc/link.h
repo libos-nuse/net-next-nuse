@@ -60,6 +60,7 @@
  */
 #define LINK_STARTED    0x0001
 #define LINK_STOPPED    0x0002
+#define LINK_SYNCHING   0x0004
 
 /* Starting value for maximum packet size negotiation on unicast links
  * (unless bearer MTU is less)
@@ -118,13 +119,14 @@ struct tipc_stats {
  * @pmsg: convenience pointer to "proto_msg" field
  * @priority: current link priority
  * @net_plane: current link network plane ('A' through 'H')
- * @queue_limit: outbound message queue congestion thresholds (indexed by user)
+ * @backlog_limit: backlog queue congestion thresholds (indexed by importance)
  * @exp_msg_count: # of tunnelled messages expected during link changeover
  * @reset_checkpoint: seq # of last acknowledged message at time of link reset
  * @max_pkt: current maximum packet size for this link
  * @max_pkt_target: desired maximum packet size for this link
  * @max_pkt_probes: # of probes based on current (max_pkt, max_pkt_target)
- * @outqueue: outbound message queue
+ * @transmitq: queue for sent, non-acked messages
+ * @backlogq: queue for messages waiting to be sent
  * @next_out_no: next sequence number to use for outbound messages
  * @last_retransmitted: sequence number of most recently retransmitted message
  * @stale_count: # of identical retransmit requests made by peer
@@ -165,11 +167,11 @@ struct tipc_link {
 	struct tipc_msg *pmsg;
 	u32 priority;
 	char net_plane;
-	u32 queue_limit[15];	/* queue_limit[0]==window limit */
 
 	/* Changeover */
 	u32 exp_msg_count;
 	u32 reset_checkpoint;
+	u32 synch_point;
 
 	/* Max packet negotiation */
 	u32 max_pkt;
@@ -177,20 +179,25 @@ struct tipc_link {
 	u32 max_pkt_probes;
 
 	/* Sending */
-	struct sk_buff_head outqueue;
+	struct sk_buff_head transmq;
+	struct sk_buff_head backlogq;
+	struct {
+		u16 len;
+		u16 limit;
+	} backlog[5];
 	u32 next_out_no;
+	u32 window;
 	u32 last_retransmitted;
 	u32 stale_count;
 
 	/* Reception */
 	u32 next_in_no;
-	struct sk_buff_head deferred_queue;
-	u32 unacked_window;
+	u32 rcv_unacked;
+	struct sk_buff_head deferdq;
 	struct sk_buff_head inputq;
 	struct sk_buff_head namedq;
 
 	/* Congestion handling */
-	struct sk_buff *next_out;
 	struct sk_buff_head wakeupq;
 
 	/* Fragmentation/reassembly */
@@ -300,11 +307,6 @@ static inline int link_reset_unknown(struct tipc_link *l_ptr)
 static inline int link_reset_reset(struct tipc_link *l_ptr)
 {
 	return l_ptr->state == RESET_RESET;
-}
-
-static inline int link_congested(struct tipc_link *l_ptr)
-{
-	return skb_queue_len(&l_ptr->outqueue) >= l_ptr->queue_limit[0];
 }
 
 #endif

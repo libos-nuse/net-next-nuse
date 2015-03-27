@@ -76,6 +76,7 @@ struct discovery_state {
 	u8			last_adv_data[HCI_MAX_AD_LENGTH];
 	u8			last_adv_data_len;
 	bool			report_invalid_rssi;
+	bool			result_filtering;
 	s8			rssi;
 	u16			uuid_count;
 	u8			(*uuids)[16];
@@ -108,7 +109,7 @@ struct bt_uuid {
 struct smp_csrk {
 	bdaddr_t bdaddr;
 	u8 bdaddr_type;
-	u8 master;
+	u8 type;
 	u8 val[16];
 };
 
@@ -352,8 +353,7 @@ struct hci_dev {
 
 	struct rfkill		*rfkill;
 
-	unsigned long		dbg_flags;
-	unsigned long		dev_flags;
+	DECLARE_BITMAP(dev_flags, __HCI_NUM_FLAGS);
 
 	struct delayed_work	le_scan_disable;
 	struct delayed_work	le_scan_restart;
@@ -373,6 +373,7 @@ struct hci_dev {
 	int (*close)(struct hci_dev *hdev);
 	int (*flush)(struct hci_dev *hdev);
 	int (*setup)(struct hci_dev *hdev);
+	int (*shutdown)(struct hci_dev *hdev);
 	int (*send)(struct hci_dev *hdev, struct sk_buff *skb);
 	void (*notify)(struct hci_dev *hdev, unsigned int evt);
 	void (*hw_error)(struct hci_dev *hdev, u8 code);
@@ -498,19 +499,29 @@ struct hci_conn_params {
 extern struct list_head hci_dev_list;
 extern struct list_head hci_cb_list;
 extern rwlock_t hci_dev_list_lock;
-extern rwlock_t hci_cb_list_lock;
+extern struct mutex hci_cb_list_lock;
+
+#define hci_dev_set_flag(hdev, nr)             set_bit((nr), (hdev)->dev_flags)
+#define hci_dev_clear_flag(hdev, nr)           clear_bit((nr), (hdev)->dev_flags)
+#define hci_dev_change_flag(hdev, nr)          change_bit((nr), (hdev)->dev_flags)
+#define hci_dev_test_flag(hdev, nr)            test_bit((nr), (hdev)->dev_flags)
+#define hci_dev_test_and_set_flag(hdev, nr)    test_and_set_bit((nr), (hdev)->dev_flags)
+#define hci_dev_test_and_clear_flag(hdev, nr)  test_and_clear_bit((nr), (hdev)->dev_flags)
+#define hci_dev_test_and_change_flag(hdev, nr) test_and_change_bit((nr), (hdev)->dev_flags)
+
+#define hci_dev_clear_volatile_flags(hdev)			\
+	do {							\
+		hci_dev_clear_flag(hdev, HCI_LE_SCAN);		\
+		hci_dev_clear_flag(hdev, HCI_LE_ADV);		\
+		hci_dev_clear_flag(hdev, HCI_PERIODIC_INQ);	\
+	} while (0)
 
 /* ----- HCI interface to upper protocols ----- */
 int l2cap_connect_ind(struct hci_dev *hdev, bdaddr_t *bdaddr);
-void l2cap_connect_cfm(struct hci_conn *hcon, u8 status);
 int l2cap_disconn_ind(struct hci_conn *hcon);
-void l2cap_disconn_cfm(struct hci_conn *hcon, u8 reason);
-int l2cap_security_cfm(struct hci_conn *hcon, u8 status, u8 encrypt);
 int l2cap_recv_acldata(struct hci_conn *hcon, struct sk_buff *skb, u16 flags);
 
 int sco_connect_ind(struct hci_dev *hdev, bdaddr_t *bdaddr, __u8 *flags);
-void sco_connect_cfm(struct hci_conn *hcon, __u8 status);
-void sco_disconn_cfm(struct hci_conn *hcon, __u8 reason);
 int sco_recv_scodata(struct hci_conn *hcon, struct sk_buff *skb);
 
 /* ----- Inquiry cache ----- */
@@ -529,6 +540,7 @@ static inline void discovery_init(struct hci_dev *hdev)
 
 static inline void hci_discovery_filter_clear(struct hci_dev *hdev)
 {
+	hdev->discovery.result_filtering = false;
 	hdev->discovery.report_invalid_rssi = true;
 	hdev->discovery.rssi = HCI_RSSI_INVALID;
 	hdev->discovery.uuid_count = 0;
@@ -584,7 +596,6 @@ enum {
 	HCI_CONN_SC_ENABLED,
 	HCI_CONN_AES_CCM,
 	HCI_CONN_POWER_SAVE,
-	HCI_CONN_REMOTE_OOB,
 	HCI_CONN_FLUSH_KEY,
 	HCI_CONN_ENCRYPT,
 	HCI_CONN_AUTH,
@@ -600,14 +611,14 @@ enum {
 static inline bool hci_conn_ssp_enabled(struct hci_conn *conn)
 {
 	struct hci_dev *hdev = conn->hdev;
-	return test_bit(HCI_SSP_ENABLED, &hdev->dev_flags) &&
+	return hci_dev_test_flag(hdev, HCI_SSP_ENABLED) &&
 	       test_bit(HCI_CONN_SSP_ENABLED, &conn->flags);
 }
 
 static inline bool hci_conn_sc_enabled(struct hci_conn *conn)
 {
 	struct hci_dev *hdev = conn->hdev;
-	return test_bit(HCI_SC_ENABLED, &hdev->dev_flags) &&
+	return hci_dev_test_flag(hdev, HCI_SC_ENABLED) &&
 	       test_bit(HCI_CONN_SC_ENABLED, &conn->flags);
 }
 
@@ -969,6 +980,8 @@ struct smp_irk *hci_add_irk(struct hci_dev *hdev, bdaddr_t *bdaddr,
 void hci_remove_irk(struct hci_dev *hdev, bdaddr_t *bdaddr, u8 addr_type);
 void hci_smp_irks_clear(struct hci_dev *hdev);
 
+bool hci_bdaddr_is_paired(struct hci_dev *hdev, bdaddr_t *bdaddr, u8 type);
+
 void hci_remote_oob_data_clear(struct hci_dev *hdev);
 struct oob_data *hci_find_remote_oob_data(struct hci_dev *hdev,
 					  bdaddr_t *bdaddr, u8 bdaddr_type);
@@ -1025,10 +1038,10 @@ void hci_conn_del_sysfs(struct hci_conn *conn);
 #define lmp_host_le_capable(dev)   (!!((dev)->features[1][0] & LMP_HOST_LE))
 #define lmp_host_le_br_capable(dev) (!!((dev)->features[1][0] & LMP_HOST_LE_BREDR))
 
-#define hdev_is_powered(hdev) (test_bit(HCI_UP, &hdev->flags) && \
-				!test_bit(HCI_AUTO_OFF, &hdev->dev_flags))
-#define bredr_sc_enabled(dev) (lmp_sc_capable(dev) && \
-			       test_bit(HCI_SC_ENABLED, &(dev)->dev_flags))
+#define hdev_is_powered(dev)   (test_bit(HCI_UP, &(dev)->flags) && \
+				!hci_dev_test_flag(dev, HCI_AUTO_OFF))
+#define bredr_sc_enabled(dev)  (lmp_sc_capable(dev) && \
+				hci_dev_test_flag(dev, HCI_SC_ENABLED))
 
 /* ----- HCI protocols ----- */
 #define HCI_PROTO_DEFER             0x01
@@ -1050,28 +1063,6 @@ static inline int hci_proto_connect_ind(struct hci_dev *hdev, bdaddr_t *bdaddr,
 	}
 }
 
-static inline void hci_proto_connect_cfm(struct hci_conn *conn, __u8 status)
-{
-	switch (conn->type) {
-	case ACL_LINK:
-	case LE_LINK:
-		l2cap_connect_cfm(conn, status);
-		break;
-
-	case SCO_LINK:
-	case ESCO_LINK:
-		sco_connect_cfm(conn, status);
-		break;
-
-	default:
-		BT_ERR("unknown link type %d", conn->type);
-		break;
-	}
-
-	if (conn->connect_cfm_cb)
-		conn->connect_cfm_cb(conn, status);
-}
-
 static inline int hci_proto_disconn_ind(struct hci_conn *conn)
 {
 	if (conn->type != ACL_LINK && conn->type != LE_LINK)
@@ -1080,91 +1071,69 @@ static inline int hci_proto_disconn_ind(struct hci_conn *conn)
 	return l2cap_disconn_ind(conn);
 }
 
-static inline void hci_proto_disconn_cfm(struct hci_conn *conn, __u8 reason)
-{
-	switch (conn->type) {
-	case ACL_LINK:
-	case LE_LINK:
-		l2cap_disconn_cfm(conn, reason);
-		break;
-
-	case SCO_LINK:
-	case ESCO_LINK:
-		sco_disconn_cfm(conn, reason);
-		break;
-
-	/* L2CAP would be handled for BREDR chan */
-	case AMP_LINK:
-		break;
-
-	default:
-		BT_ERR("unknown link type %d", conn->type);
-		break;
-	}
-
-	if (conn->disconn_cfm_cb)
-		conn->disconn_cfm_cb(conn, reason);
-}
-
-static inline void hci_proto_auth_cfm(struct hci_conn *conn, __u8 status)
-{
-	__u8 encrypt;
-
-	if (conn->type != ACL_LINK && conn->type != LE_LINK)
-		return;
-
-	if (test_bit(HCI_CONN_ENCRYPT_PEND, &conn->flags))
-		return;
-
-	encrypt = test_bit(HCI_CONN_ENCRYPT, &conn->flags) ? 0x01 : 0x00;
-	l2cap_security_cfm(conn, status, encrypt);
-
-	if (conn->security_cfm_cb)
-		conn->security_cfm_cb(conn, status);
-}
-
-static inline void hci_proto_encrypt_cfm(struct hci_conn *conn, __u8 status,
-								__u8 encrypt)
-{
-	if (conn->type != ACL_LINK && conn->type != LE_LINK)
-		return;
-
-	l2cap_security_cfm(conn, status, encrypt);
-
-	if (conn->security_cfm_cb)
-		conn->security_cfm_cb(conn, status);
-}
-
 /* ----- HCI callbacks ----- */
 struct hci_cb {
 	struct list_head list;
 
 	char *name;
 
+	void (*connect_cfm)	(struct hci_conn *conn, __u8 status);
+	void (*disconn_cfm)	(struct hci_conn *conn, __u8 status);
 	void (*security_cfm)	(struct hci_conn *conn, __u8 status,
 								__u8 encrypt);
 	void (*key_change_cfm)	(struct hci_conn *conn, __u8 status);
 	void (*role_switch_cfm)	(struct hci_conn *conn, __u8 status, __u8 role);
 };
 
+static inline void hci_connect_cfm(struct hci_conn *conn, __u8 status)
+{
+	struct hci_cb *cb;
+
+	mutex_lock(&hci_cb_list_lock);
+	list_for_each_entry(cb, &hci_cb_list, list) {
+		if (cb->connect_cfm)
+			cb->connect_cfm(conn, status);
+	}
+	mutex_unlock(&hci_cb_list_lock);
+
+	if (conn->connect_cfm_cb)
+		conn->connect_cfm_cb(conn, status);
+}
+
+static inline void hci_disconn_cfm(struct hci_conn *conn, __u8 reason)
+{
+	struct hci_cb *cb;
+
+	mutex_lock(&hci_cb_list_lock);
+	list_for_each_entry(cb, &hci_cb_list, list) {
+		if (cb->disconn_cfm)
+			cb->disconn_cfm(conn, reason);
+	}
+	mutex_unlock(&hci_cb_list_lock);
+
+	if (conn->disconn_cfm_cb)
+		conn->disconn_cfm_cb(conn, reason);
+}
+
 static inline void hci_auth_cfm(struct hci_conn *conn, __u8 status)
 {
 	struct hci_cb *cb;
 	__u8 encrypt;
-
-	hci_proto_auth_cfm(conn, status);
 
 	if (test_bit(HCI_CONN_ENCRYPT_PEND, &conn->flags))
 		return;
 
 	encrypt = test_bit(HCI_CONN_ENCRYPT, &conn->flags) ? 0x01 : 0x00;
 
-	read_lock(&hci_cb_list_lock);
+	mutex_lock(&hci_cb_list_lock);
 	list_for_each_entry(cb, &hci_cb_list, list) {
 		if (cb->security_cfm)
 			cb->security_cfm(conn, status, encrypt);
 	}
-	read_unlock(&hci_cb_list_lock);
+	mutex_unlock(&hci_cb_list_lock);
+
+	if (conn->security_cfm_cb)
+		conn->security_cfm_cb(conn, status);
 }
 
 static inline void hci_encrypt_cfm(struct hci_conn *conn, __u8 status,
@@ -1178,26 +1147,27 @@ static inline void hci_encrypt_cfm(struct hci_conn *conn, __u8 status,
 	if (conn->pending_sec_level > conn->sec_level)
 		conn->sec_level = conn->pending_sec_level;
 
-	hci_proto_encrypt_cfm(conn, status, encrypt);
-
-	read_lock(&hci_cb_list_lock);
+	mutex_lock(&hci_cb_list_lock);
 	list_for_each_entry(cb, &hci_cb_list, list) {
 		if (cb->security_cfm)
 			cb->security_cfm(conn, status, encrypt);
 	}
-	read_unlock(&hci_cb_list_lock);
+	mutex_unlock(&hci_cb_list_lock);
+
+	if (conn->security_cfm_cb)
+		conn->security_cfm_cb(conn, status);
 }
 
 static inline void hci_key_change_cfm(struct hci_conn *conn, __u8 status)
 {
 	struct hci_cb *cb;
 
-	read_lock(&hci_cb_list_lock);
+	mutex_lock(&hci_cb_list_lock);
 	list_for_each_entry(cb, &hci_cb_list, list) {
 		if (cb->key_change_cfm)
 			cb->key_change_cfm(conn, status);
 	}
-	read_unlock(&hci_cb_list_lock);
+	mutex_unlock(&hci_cb_list_lock);
 }
 
 static inline void hci_role_switch_cfm(struct hci_conn *conn, __u8 status,
@@ -1205,12 +1175,12 @@ static inline void hci_role_switch_cfm(struct hci_conn *conn, __u8 status,
 {
 	struct hci_cb *cb;
 
-	read_lock(&hci_cb_list_lock);
+	mutex_lock(&hci_cb_list_lock);
 	list_for_each_entry(cb, &hci_cb_list, list) {
 		if (cb->role_switch_cfm)
 			cb->role_switch_cfm(conn, status, role);
 	}
-	read_unlock(&hci_cb_list_lock);
+	mutex_unlock(&hci_cb_list_lock);
 }
 
 static inline bool eir_has_data_type(u8 *data, size_t data_len, u8 type)
@@ -1312,10 +1282,34 @@ void *hci_sent_cmd_data(struct hci_dev *hdev, __u16 opcode);
 
 /* ----- HCI Sockets ----- */
 void hci_send_to_sock(struct hci_dev *hdev, struct sk_buff *skb);
-void hci_send_to_control(struct sk_buff *skb, struct sock *skip_sk);
+void hci_send_to_channel(unsigned short channel, struct sk_buff *skb,
+			 int flag, struct sock *skip_sk);
 void hci_send_to_monitor(struct hci_dev *hdev, struct sk_buff *skb);
 
 void hci_sock_dev_event(struct hci_dev *hdev, int event);
+
+#define HCI_MGMT_VAR_LEN	BIT(0)
+#define HCI_MGMT_NO_HDEV	BIT(1)
+#define HCI_MGMT_UNTRUSTED	BIT(2)
+#define HCI_MGMT_UNCONFIGURED	BIT(3)
+
+struct hci_mgmt_handler {
+	int (*func) (struct sock *sk, struct hci_dev *hdev, void *data,
+		     u16 data_len);
+	size_t data_len;
+	unsigned long flags;
+};
+
+struct hci_mgmt_chan {
+	struct list_head list;
+	unsigned short channel;
+	size_t handler_count;
+	const struct hci_mgmt_handler *handlers;
+	void (*hdev_init) (struct sock *sk, struct hci_dev *hdev);
+};
+
+int hci_mgmt_chan_register(struct hci_mgmt_chan *c);
+void hci_mgmt_chan_unregister(struct hci_mgmt_chan *c);
 
 /* Management interface */
 #define DISCOV_TYPE_BREDR		(BIT(BDADDR_BREDR))
@@ -1336,7 +1330,6 @@ void hci_sock_dev_event(struct hci_dev *hdev, int event);
 #define DISCOV_BREDR_INQUIRY_LEN	0x08
 #define DISCOV_LE_RESTART_DELAY		msecs_to_jiffies(200)	/* msec */
 
-int mgmt_control(struct sock *sk, struct msghdr *msg, size_t len);
 int mgmt_new_settings(struct hci_dev *hdev);
 void mgmt_index_added(struct hci_dev *hdev);
 void mgmt_index_removed(struct hci_dev *hdev);

@@ -369,7 +369,7 @@ enum {
 	MAX_OFLD_QSETS = 16,          /* # of offload Tx/Rx queue sets */
 	MAX_CTRL_QUEUES = NCHAN,      /* # of control Tx queues */
 	MAX_RDMA_QUEUES = NCHAN,      /* # of streaming RDMA Rx queues */
-	MAX_RDMA_CIQS = NCHAN,        /* # of  RDMA concentrator IQs */
+	MAX_RDMA_CIQS = 32,        /* # of  RDMA concentrator IQs */
 	MAX_ISCSI_QUEUES = NCHAN,     /* # of streaming iSCSI Rx queues */
 };
 
@@ -386,6 +386,10 @@ struct adapter;
 struct sge_rspq;
 
 #include "cxgb4_dcb.h"
+
+#ifdef CONFIG_CHELSIO_T4_FCOE
+#include "cxgb4_fcoe.h"
+#endif /* CONFIG_CHELSIO_T4_FCOE */
 
 struct port_info {
 	struct adapter *adapter;
@@ -406,6 +410,9 @@ struct port_info {
 #ifdef CONFIG_CHELSIO_T4_DCB
 	struct port_dcb_info dcb;     /* Data Center Bridging support */
 #endif
+#ifdef CONFIG_CHELSIO_T4_FCOE
+	struct cxgb_fcoe fcoe;
+#endif /* CONFIG_CHELSIO_T4_FCOE */
 };
 
 struct dentry;
@@ -599,8 +606,8 @@ struct sge {
 	u16 rdmaqs;                 /* # of available RDMA Rx queues */
 	u16 rdmaciqs;               /* # of available RDMA concentrator IQs */
 	u16 ofld_rxq[MAX_OFLD_QSETS];
-	u16 rdma_rxq[NCHAN];
-	u16 rdma_ciq[NCHAN];
+	u16 rdma_rxq[MAX_RDMA_QUEUES];
+	u16 rdma_ciq[MAX_RDMA_CIQS];
 	u16 timer_val[SGE_NTIMERS];
 	u8 counter_val[SGE_NCOUNTERS];
 	u32 fl_pg_order;            /* large page allocation size */
@@ -1103,7 +1110,7 @@ int t4_restart_aneg(struct adapter *adap, unsigned int mbox, unsigned int port);
 #define T4_MEMORY_WRITE	0
 #define T4_MEMORY_READ	1
 int t4_memory_rw(struct adapter *adap, int win, int mtype, u32 addr, u32 len,
-		 __be32 *buf, int dir);
+		 void *buf, int dir);
 static inline int t4_memory_write(struct adapter *adap, int mtype, u32 addr,
 				  u32 len, __be32 *buf)
 {
