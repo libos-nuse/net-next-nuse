@@ -228,3 +228,11 @@ int mod_timer_pending(struct timer_list *timer, unsigned long expires)
 		return 0;
 	return mod_timer(timer, expires);
 }
+
+int mod_timer_pinned(struct timer_list *timer, unsigned long expires)
+{
+	if (timer->expires == expires && timer_pending(timer))
+		return 1;
+
+	return mod_timer(timer, expires);
+}

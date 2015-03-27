@@ -107,7 +107,7 @@ kernel/time/_to_keep=time.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
-mm/_to_keep=util.o list_lru.o iov_iter.o
+mm/_to_keep=util.o list_lru.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
@@ -117,7 +117,7 @@ find_last_bit.o find_next_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
-rhashtable.o
+rhashtable.o iov_iter.o
 fs/_to_keep=read_write.o libfs.o namei.o
 fs/proc/_to_keep=proc_sysctl.o
 init/_to_keep=version.o
