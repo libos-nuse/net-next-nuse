@@ -187,7 +187,7 @@ $(BOUNDS_H): FORCE
 
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
-export OBJS KERNEL_LIB
+export OBJS KERNEL_LIB COV covl_yes covl_no
 
 quiet_cmd_cc = CC   $@
       cmd_cc = 	mkdir -p $(dir $@);	\
