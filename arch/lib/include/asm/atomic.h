@@ -17,8 +17,11 @@ static inline void atomic64_sub(long i, atomic64_t *v)
 {
 	v->counter -= i;
 }
+static inline void atomic64_inc(atomic64_t *v)
+{
+	v->counter++;
+}
 int atomic64_sub_and_test(long i, atomic64_t *v);
-void atomic64_inc(atomic64_t *v);
 #define atomic64_dec(v)			atomic64_sub(1LL, (v))
 int atomic64_dec_and_test(atomic64_t *v);
 int atomic64_inc_and_test(atomic64_t *v);

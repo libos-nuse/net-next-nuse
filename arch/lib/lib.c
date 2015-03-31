@@ -10,6 +10,8 @@
 #include <linux/kernel.h>       /* SYSTEM_BOOTING */
 #include <linux/sched.h>        /* struct task_struct */
 #include <linux/device.h>
+#include <linux/fs.h>
+#include <linux/mm.h>
 #include <drivers/base/base.h>
 #include <linux/idr.h>
 #include <linux/rcupdate.h>
@@ -17,6 +19,8 @@
 #include "sim.h"
 
 enum system_states system_state = SYSTEM_BOOTING;
+/* glues */
+struct task_struct init_task;
 
 struct SimImported g_imported;
 
@@ -170,6 +174,7 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	devices_init();
 	/* in lib/idr.c (called normally by init/main.c) */
 	idr_init_cache();
+	vfs_caches_init(totalram_pages);
 
 	lib_proc_net_initialize();
 

@@ -49,11 +49,6 @@ void do_gettimeofday(struct timeval *tv)
 	*tv = ns_to_timeval(ns);
 }
 
-int cap_settime(struct timespec *ts, struct timezone *tz)
-{
-	lib_assert(false);
-	return -EPERM;
-}
 int do_adjtimex(struct timex *timex)
 {
 	lib_assert(false);

@@ -3,6 +3,7 @@
 
 #define TIF_NEED_RESCHED 1
 #define TIF_SIGPENDING 2
+#define TIF_MEMDIE 5
 
 struct thread_info {
 	__u32 flags;

@@ -17,6 +17,7 @@
 #include <linux/binfmts.h>
 #include <linux/init_task.h>
 #include <linux/sched/rt.h>
+#include <linux/backing-dev.h>
 #include <stdarg.h>
 #include "sim-assert.h"
 #include "sim.h"
@@ -31,8 +32,6 @@ struct kernel_param;
 struct super_block;
 struct tvec_base {};
 
-/* defined in fs/exec.c */
-char core_pattern[CORENAME_MAX_SIZE] = "core";
 /* defined in sched.c, used in net/sched/em_meta.c */
 unsigned long avenrun[3];
 /* defined in mm/page_alloc.c, used in net/xfrm/xfrm_hash.c */
@@ -62,11 +61,14 @@ int fs_overflowgid = 0;
 int fs_overflowuid = 0;
 unsigned long sysctl_overcommit_kbytes __read_mostly;
 DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
+static DECLARE_BITMAP(cpu_possible_bits, CONFIG_NR_CPUS) __read_mostly;
+const struct cpumask *const cpu_possible_mask = to_cpumask(cpu_possible_bits);
 
-/* from kobject_uevent.c */
-char uevent_helper[UEVENT_HELPER_PATH_LEN] = "dummy-uevent";
-/* from ksysfs.c */
-int rcu_expedited;
+struct backing_dev_info noop_backing_dev_info = {
+	.name		= "noop",
+	.capabilities	= 0,
+};
+
 /* from rt.c */
 int sched_rr_timeslice = RR_TIMESLICE;
 /* from main.c */
@@ -74,10 +76,6 @@ bool initcall_debug;
 bool static_key_initialized __read_mostly = false;
 unsigned long __start_rodata, __end_rodata;
 
-unsigned long __raw_local_save_flags(void)
-{
-	return g_irqflags;
-}
 unsigned long arch_local_save_flags(void)
 {
 	return local_irqflags;
@@ -87,16 +85,6 @@ void arch_local_irq_restore(unsigned long flags)
 	local_irqflags = flags;
 }
 
-int in_egroup_p(kgid_t grp)
-{
-	/* called from sysctl code. */
-	lib_assert(false);
-	return 0;
-}
-
-void __local_bh_enable_ip(unsigned long ip, unsigned int cnt)
-{
-}
 
 unsigned long long nr_context_switches(void)
 {
@@ -119,11 +107,6 @@ long get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 }
 
 
-unsigned long wrong_size_cmpxchg(volatile void *ptr)
-{
-	lib_assert(false);
-}
-
 void dump_stack(void)
 {
 	/* we assert to make sure that we catch whoever calls dump_stack */
@@ -140,16 +123,11 @@ void lib_printf(const char *str, ...)
 	va_end(args);
 }
 
-void atomic64_inc(atomic64_t *v)
-{
-	v->counter++;
-}
-
 #include <linux/vmalloc.h>
 #include <linux/kmemleak.h>
 
-static unsigned long __meminitdata nr_kernel_pages;
-static unsigned long __meminitdata nr_all_pages;
+static unsigned long __meminitdata nr_kernel_pages = 8192;
+static unsigned long __meminitdata nr_all_pages = 81920;
 /*
  * allocate a large system hash table from bootmem
  * - it is assumed that the hash table must contain an exact power-of-2
@@ -244,16 +222,6 @@ void *__init alloc_large_system_hash(const char *tablename,
 	return table;
 }
 
-int vm_insert_page(struct vm_area_struct *area, unsigned long addr,
-		   struct page *page)
-{
-	/* this function is called from af_packet.c to support mmap on packet
-	   sockets since we will never call mmap on them, this function
-	   should never be called. */
-	lib_assert(false);
-	return 0; /* quiet compiler */
-}
-
 void si_meminfo(struct sysinfo *val)
 {
 	/* This function is called from the ip layer to get information about
@@ -273,28 +241,12 @@ void *high_memory = 0;
 
 
 
-char *get_options(const char *str, int nints, int *ints)
-{
-	/* called from net/core/dev.c */
-	/* we return 0 to indicate no options. */
-	return 0;
-}
-void __xchg_called_with_bad_pointer(void)
-{
-	/* never called theoretically. */
-	lib_assert(false);
-}
-
 void async_synchronize_full(void)
 {
 	/* called from drivers/base/ *.c */
 	/* there is nothing to do, really. */
 }
-int send_sigurg(struct fown_struct *fown)
-{
-	lib_assert(false);
-	return 0;
-}
+
 int send_sig(int signal, struct task_struct *task, int x)
 {
 	struct SimTask *lib_task = container_of(task, struct SimTask,
@@ -316,11 +268,6 @@ struct pid *cad_pid = 0;
 
 void add_device_randomness(const void *buf, unsigned int size)
 {
-}
-
-int kobject_uevent(struct kobject *kobj, enum kobject_action action)
-{
-	return 0;
 }
 
 int sched_rr_handler(struct ctl_table *table, int write,

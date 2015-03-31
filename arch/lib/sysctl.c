@@ -96,13 +96,9 @@ int sysctl_overcommit_ratio = 50;
 int sysctl_panic_on_oom = 0;
 int sysctl_oom_dump_tasks = 0;
 int sysctl_oom_kill_allocating_task = 0;
-int sysctl_nr_open = 1024 * 1024;
-int sysctl_nr_open_min = BITS_PER_LONG;
-int sysctl_nr_open_max = 1024 * 1024;
 int sysctl_nr_trim_pages = 0;
 int sysctl_drop_caches = 0;
 int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES - 1] = { 32 };
-int sysctl_vfs_cache_pressure = 100;
 unsigned int sysctl_sched_child_runs_first = 0;
 unsigned int sysctl_sched_compat_yield = 0;
 unsigned int sysctl_sched_rt_period = 1000000;
@@ -154,25 +150,14 @@ int C_A_D = 0;
 struct nsproxy init_nsproxy;
 #include <linux/reboot.h>
 char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
-#include <linux/pipe_fs_i.h>
-unsigned int pipe_max_pages =  PIPE_DEF_BUFFERS * 16;
-unsigned int pipe_max_size = 1048576;
-unsigned int pipe_min_size = PAGE_SIZE;
 unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
 unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
-
-int pipe_proc_fn(struct ctl_table *table, int write, void __user *buf,
-		 size_t *lenp, loff_t *ppos)
-{
-	return -1;
-}
 
 int pdflush_proc_obsolete(struct ctl_table *table, int write,
 			  void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	return nr_pdflush_threads;
 }
-
 #include <linux/fs.h>
 
 /**

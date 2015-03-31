@@ -25,3 +25,8 @@ int generic_file_readonly_mmap(struct file *file, struct vm_area_struct *vma)
 	return -ENOSYS;
 }
 
+ssize_t
+generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
+{
+	return 0;
+}

@@ -11,6 +11,8 @@
 struct sock;
 struct sk_buff;
 
+int file_caps_enabled = 0;
+
 bool capable(int cap)
 {
 	switch (cap) {

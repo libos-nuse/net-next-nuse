@@ -102,3 +102,7 @@ void raise_softirq(unsigned int nr)
 	raise_softirq_irqoff(nr);
 	local_irq_restore(flags);
 }
+
+void __local_bh_enable_ip(unsigned long ip, unsigned int cnt)
+{
+}

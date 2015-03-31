@@ -34,12 +34,10 @@ clean-files	:= crc32table.h
 # sources and objects
 LIB_SRC=\
 lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
-glue.c fs.c sysctl.c timer.c \
-hrtimer.c sched.c sysfs.c workqueue.c \
-print.c security.c slab.c tasklet.c \
-proc.c seq.c tasklet-hrtimer.c \
-cred.c pid.c modules.c filemap.c splice.c vmscan.c \
-dcache.c super.c inode.c
+timer.c hrtimer.c sched.c workqueue.c \
+print.c slab.c tasklet.c tasklet-hrtimer.c \
+glue.c fs.c sysctl.c proc.c sysfs.c \
+capability.c pid.c modules.c filemap.c vmscan.c
 
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
 
@@ -102,7 +100,7 @@ space:= $(empty) $(empty)
 colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
-rwsem.o semaphore.o kfifo.o
+rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o
 kernel/time/_to_keep=time.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
@@ -110,16 +108,18 @@ kernel/bpf_to_keep=bpf/core.o
 mm/_to_keep=util.o list_lru.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o
-drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
+drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o
 drivers/net/_to_keep=loopback.o
 lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
 find_last_bit.o find_next_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
-rhashtable.o iov_iter.o
-fs/_to_keep=read_write.o libfs.o namei.o
-fs/proc/_to_keep=proc_sysctl.o
+rhashtable.o iov_iter.o cmdline.o kobject_uevent.o
+fs/_to_keep=read_write.o libfs.o namei.o filesystems.o file.o file_table.o \
+dcache.o inode.o pipe.o char_dev.o splice.o no-block.o seq_file.o super.o \
+fcntl.o coredump.o
+fs/proc/_to_keep=proc_sysctl.o proc_net.o root.o generic.o inode.o
 init/_to_keep=version.o
 
 quiet_cmd_objsmk = OBJS-MK   $@

@@ -10,6 +10,7 @@
 #include <linux/list.h>
 #include <linux/sched.h>
 #include <linux/nsproxy.h>
+#include <linux/hash.h>
 #include <net/net_namespace.h>
 #include "lib.h"
 #include "sim.h"
@@ -257,6 +258,46 @@ int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags,
 						kernel_task);
 
 	return lib_task_wakeup(lib_task);
+}
+__sched int bit_wait(struct wait_bit_key *word)
+{
+	if (signal_pending_state(current->state, current))
+		return 1;
+	schedule();
+	return 0;
+}
+int wake_bit_function(wait_queue_t *wait, unsigned mode, int sync, void *arg)
+{
+	struct wait_bit_key *key = arg;
+	struct wait_bit_queue *wait_bit
+		= container_of(wait, struct wait_bit_queue, wait);
+
+	if (wait_bit->key.flags != key->flags ||
+			wait_bit->key.bit_nr != key->bit_nr ||
+			test_bit(key->bit_nr, key->flags))
+		return 0;
+	else
+		return autoremove_wake_function(wait, mode, sync, key);
+}
+void __wake_up_bit(wait_queue_head_t *wq, void *word, int bit)
+{
+	struct wait_bit_key key = __WAIT_BIT_KEY_INITIALIZER(word, bit);
+	if (waitqueue_active(wq))
+		__wake_up(wq, TASK_NORMAL, 1, &key);
+}
+void wake_up_bit(void *word, int bit)
+{
+	/* FIXME */
+	return;
+	__wake_up_bit(bit_waitqueue(word, bit), word, bit);
+}
+wait_queue_head_t *bit_waitqueue(void *word, int bit)
+{
+	const int shift = BITS_PER_LONG == 32 ? 5 : 6;
+	const struct zone *zone = page_zone(virt_to_page(word));
+	unsigned long val = (unsigned long)word << shift | bit;
+
+	return &zone->wait_table[hash_long(val, zone->wait_table_bits)];
 }
 
 

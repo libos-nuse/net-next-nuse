@@ -12,6 +12,9 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 
+/* glues */
+struct kmem_cache *files_cachep;
+
 void kfree(const void *p)
 {
 	unsigned long start;
