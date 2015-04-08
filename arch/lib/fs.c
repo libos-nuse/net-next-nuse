@@ -12,6 +12,7 @@
 #include "sim-assert.h"
 
 __cacheline_aligned_in_smp DEFINE_SEQLOCK(mount_lock);
+unsigned int dirtytime_expire_interval;
 
 void __init mnt_init(void)
 {
@@ -56,6 +57,11 @@ void inode_wait_for_writeback(struct inode *inode)
 }
 void truncate_inode_pages_final(struct address_space *mapping)
 {
+}
+int dirtytime_interval_handler(struct ctl_table *table, int write,
+			       void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	return -ENOSYS;
 }
 
 unsigned int nr_free_buffer_pages(void)
