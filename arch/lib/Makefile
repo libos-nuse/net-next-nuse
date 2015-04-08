@@ -189,7 +189,7 @@ KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
 export OBJS KERNEL_LIB COV covl_yes covl_no
 
-quiet_cmd_cc = CC   $@
+quiet_cmd_cc = CC      $@
       cmd_cc = 	mkdir -p $(dir $@);	\
 		$(CC) $(CFLAGS) -c $< -o $@
 quiet_cmd_linkko = KO   $@
@@ -222,7 +222,7 @@ install-dir:
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOGENS) $(OBJS)
 	$(call if_changed,linklib)
 
-quiet_cmd_linklib = LIB		$@
+quiet_cmd_linklib = LIB     $@
       cmd_linklib = $(CC) -Wl,--whole-archive $(OBJS) $(LDFLAGS) -o $@; \
 		    ln -s -f $(KERNEL_LIB) liblinux.so
 
