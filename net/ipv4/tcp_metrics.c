@@ -28,7 +28,8 @@ static struct tcp_metrics_block *__tcp_get_metrics(const struct inetpeer_addr *s
 
 struct tcp_fastopen_metrics {
 	u16	mss;
-	u16	syn_loss:10;		/* Recurring Fast Open SYN losses */
+	u16	syn_loss:10,		/* Recurring Fast Open SYN losses */
+		try_exp:2;		/* Request w/ exp. option (once) */
 	unsigned long	last_syn_loss;	/* Last Fast Open SYN loss */
 	struct	tcp_fastopen_cookie	cookie;
 };
@@ -80,17 +81,11 @@ static void tcp_metric_set(struct tcp_metrics_block *tm,
 static bool addr_same(const struct inetpeer_addr *a,
 		      const struct inetpeer_addr *b)
 {
-	const struct in6_addr *a6, *b6;
-
 	if (a->family != b->family)
 		return false;
 	if (a->family == AF_INET)
 		return a->addr.a4 == b->addr.a4;
-
-	a6 = (const struct in6_addr *) &a->addr.a6[0];
-	b6 = (const struct in6_addr *) &b->addr.a6[0];
-
-	return ipv6_addr_equal(a6, b6);
+	return ipv6_addr_equal(&a->addr.in6, &b->addr.in6);
 }
 
 struct tcpm_hash_bucket {
@@ -137,6 +132,8 @@ static void tcpm_suck_dst(struct tcp_metrics_block *tm,
 	if (fastopen_clear) {
 		tm->tcpm_fastopen.mss = 0;
 		tm->tcpm_fastopen.syn_loss = 0;
+		tm->tcpm_fastopen.try_exp = 0;
+		tm->tcpm_fastopen.cookie.exp = false;
 		tm->tcpm_fastopen.cookie.len = 0;
 	}
 }
@@ -256,8 +253,8 @@ static struct tcp_metrics_block *__tcp_get_metrics_req(struct request_sock *req,
 		break;
 #if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
-		*(struct in6_addr *)saddr.addr.a6 = inet_rsk(req)->ir_v6_loc_addr;
-		*(struct in6_addr *)daddr.addr.a6 = inet_rsk(req)->ir_v6_rmt_addr;
+		saddr.addr.in6 = inet_rsk(req)->ir_v6_loc_addr;
+		daddr.addr.in6 = inet_rsk(req)->ir_v6_rmt_addr;
 		hash = ipv6_addr_hash(&inet_rsk(req)->ir_v6_rmt_addr);
 		break;
 #endif
@@ -304,9 +301,9 @@ static struct tcp_metrics_block *__tcp_get_metrics_tw(struct inet_timewait_sock 
 			hash = (__force unsigned int) daddr.addr.a4;
 		} else {
 			saddr.family = AF_INET6;
-			*(struct in6_addr *)saddr.addr.a6 = tw->tw_v6_rcv_saddr;
+			saddr.addr.in6 = tw->tw_v6_rcv_saddr;
 			daddr.family = AF_INET6;
-			*(struct in6_addr *)daddr.addr.a6 = tw->tw_v6_daddr;
+			daddr.addr.in6 = tw->tw_v6_daddr;
 			hash = ipv6_addr_hash(&tw->tw_v6_daddr);
 		}
 	}
@@ -354,9 +351,9 @@ static struct tcp_metrics_block *tcp_get_metrics(struct sock *sk,
 			hash = (__force unsigned int) daddr.addr.a4;
 		} else {
 			saddr.family = AF_INET6;
-			*(struct in6_addr *)saddr.addr.a6 = sk->sk_v6_rcv_saddr;
+			saddr.addr.in6 = sk->sk_v6_rcv_saddr;
 			daddr.family = AF_INET6;
-			*(struct in6_addr *)daddr.addr.a6 = sk->sk_v6_daddr;
+			daddr.addr.in6 = sk->sk_v6_daddr;
 			hash = ipv6_addr_hash(&sk->sk_v6_daddr);
 		}
 	}
@@ -511,7 +508,7 @@ void tcp_init_metrics(struct sock *sk)
 	struct tcp_metrics_block *tm;
 	u32 val, crtt = 0; /* cached RTT scaled by 8 */
 
-	if (dst == NULL)
+	if (!dst)
 		goto reset;
 
 	dst_confirm(dst);
@@ -719,6 +716,8 @@ void tcp_fastopen_cache_get(struct sock *sk, u16 *mss,
 			if (tfom->mss)
 				*mss = tfom->mss;
 			*cookie = tfom->cookie;
+			if (cookie->len <= 0 && tfom->try_exp == 1)
+				cookie->exp = true;
 			*syn_loss = tfom->syn_loss;
 			*last_syn_loss = *syn_loss ? tfom->last_syn_loss : 0;
 		} while (read_seqretry(&fastopen_seqlock, seq));
@@ -727,7 +726,8 @@ void tcp_fastopen_cache_get(struct sock *sk, u16 *mss,
 }
 
 void tcp_fastopen_cache_set(struct sock *sk, u16 mss,
-			    struct tcp_fastopen_cookie *cookie, bool syn_lost)
+			    struct tcp_fastopen_cookie *cookie, bool syn_lost,
+			    u16 try_exp)
 {
 	struct dst_entry *dst = __sk_dst_get(sk);
 	struct tcp_metrics_block *tm;
@@ -744,6 +744,9 @@ void tcp_fastopen_cache_set(struct sock *sk, u16 mss,
 			tfom->mss = mss;
 		if (cookie && cookie->len > 0)
 			tfom->cookie = *cookie;
+		else if (try_exp > tfom->try_exp &&
+			 tfom->cookie.len <= 0 && !tfom->cookie.exp)
+			tfom->try_exp = try_exp;
 		if (syn_lost) {
 			++tfom->syn_loss;
 			tfom->last_syn_loss = jiffies;
@@ -792,19 +795,19 @@ static int tcp_metrics_fill_info(struct sk_buff *msg,
 
 	switch (tm->tcpm_daddr.family) {
 	case AF_INET:
-		if (nla_put_be32(msg, TCP_METRICS_ATTR_ADDR_IPV4,
-				tm->tcpm_daddr.addr.a4) < 0)
+		if (nla_put_in_addr(msg, TCP_METRICS_ATTR_ADDR_IPV4,
+				    tm->tcpm_daddr.addr.a4) < 0)
 			goto nla_put_failure;
-		if (nla_put_be32(msg, TCP_METRICS_ATTR_SADDR_IPV4,
-				tm->tcpm_saddr.addr.a4) < 0)
+		if (nla_put_in_addr(msg, TCP_METRICS_ATTR_SADDR_IPV4,
+				    tm->tcpm_saddr.addr.a4) < 0)
 			goto nla_put_failure;
 		break;
 	case AF_INET6:
-		if (nla_put(msg, TCP_METRICS_ATTR_ADDR_IPV6, 16,
-			    tm->tcpm_daddr.addr.a6) < 0)
+		if (nla_put_in6_addr(msg, TCP_METRICS_ATTR_ADDR_IPV6,
+				     &tm->tcpm_daddr.addr.in6) < 0)
 			goto nla_put_failure;
-		if (nla_put(msg, TCP_METRICS_ATTR_SADDR_IPV6, 16,
-			    tm->tcpm_saddr.addr.a6) < 0)
+		if (nla_put_in6_addr(msg, TCP_METRICS_ATTR_SADDR_IPV6,
+				     &tm->tcpm_saddr.addr.in6) < 0)
 			goto nla_put_failure;
 		break;
 	default:
@@ -954,7 +957,7 @@ static int __parse_nl_addr(struct genl_info *info, struct inetpeer_addr *addr,
 	a = info->attrs[v4];
 	if (a) {
 		addr->family = AF_INET;
-		addr->addr.a4 = nla_get_be32(a);
+		addr->addr.a4 = nla_get_in_addr(a);
 		if (hash)
 			*hash = (__force unsigned int) addr->addr.a4;
 		return 0;
@@ -964,9 +967,9 @@ static int __parse_nl_addr(struct genl_info *info, struct inetpeer_addr *addr,
 		if (nla_len(a) != sizeof(struct in6_addr))
 			return -EINVAL;
 		addr->family = AF_INET6;
-		memcpy(addr->addr.a6, nla_data(a), sizeof(addr->addr.a6));
+		addr->addr.in6 = nla_get_in6_addr(a);
 		if (hash)
-			*hash = ipv6_addr_hash((struct in6_addr *) addr->addr.a6);
+			*hash = ipv6_addr_hash(&addr->addr.in6);
 		return 0;
 	}
 	return optional ? 1 : -EAFNOSUPPORT;

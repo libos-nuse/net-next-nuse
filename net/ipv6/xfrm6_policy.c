@@ -61,9 +61,7 @@ static int xfrm6_get_saddr(struct net *net,
 		return -EHOSTUNREACH;
 
 	dev = ip6_dst_idev(dst)->dev;
-	ipv6_dev_get_saddr(dev_net(dev), dev,
-			   (struct in6_addr *)&daddr->a6, 0,
-			   (struct in6_addr *)&saddr->a6);
+	ipv6_dev_get_saddr(dev_net(dev), dev, &daddr->in6, 0, &saddr->in6);
 	dst_release(dst);
 	return 0;
 }
@@ -370,7 +368,7 @@ static void __net_exit xfrm6_net_exit(struct net *net)
 {
 	struct ctl_table *table;
 
-	if (net->ipv6.sysctl.xfrm6_hdr == NULL)
+	if (!net->ipv6.sysctl.xfrm6_hdr)
 		return;
 
 	table = net->ipv6.sysctl.xfrm6_hdr->ctl_table_arg;

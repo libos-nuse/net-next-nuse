@@ -355,7 +355,7 @@ bool tipc_msg_bundle(struct sk_buff *bskb, struct sk_buff *skb, u32 mtu)
 	start = align(bsz);
 	pad = start - bsz;
 
-	if (unlikely(msg_user(msg) == CHANGEOVER_PROTOCOL))
+	if (unlikely(msg_user(msg) == TUNNEL_PROTOCOL))
 		return false;
 	if (unlikely(msg_user(msg) == BCAST_PROTOCOL))
 		return false;
@@ -433,7 +433,7 @@ bool tipc_msg_make_bundle(struct sk_buff **skb, u32 mtu, u32 dnode)
 
 	if (msg_user(msg) == MSG_FRAGMENTER)
 		return false;
-	if (msg_user(msg) == CHANGEOVER_PROTOCOL)
+	if (msg_user(msg) == TUNNEL_PROTOCOL)
 		return false;
 	if (msg_user(msg) == BCAST_PROTOCOL)
 		return false;
@@ -511,15 +511,18 @@ bool tipc_msg_lookup_dest(struct net *net, struct sk_buff *skb,
 {
 	struct tipc_msg *msg = buf_msg(skb);
 	u32 dport;
+	u32 own_addr = tipc_own_addr(net);
 
 	if (!msg_isdata(msg))
 		return false;
 	if (!msg_named(msg))
 		return false;
+	if (msg_errcode(msg))
+		return false;
 	*err = -TIPC_ERR_NO_NAME;
 	if (skb_linearize(skb))
 		return false;
-	if (msg_reroute_cnt(msg) > 0)
+	if (msg_reroute_cnt(msg))
 		return false;
 	*dnode = addr_domain(net, msg_lookup_scope(msg));
 	dport = tipc_nametbl_translate(net, msg_nametype(msg),
@@ -527,6 +530,8 @@ bool tipc_msg_lookup_dest(struct net *net, struct sk_buff *skb,
 	if (!dport)
 		return false;
 	msg_incr_reroute_cnt(msg);
+	if (*dnode != own_addr)
+		msg_set_prevnode(msg, own_addr);
 	msg_set_destnode(msg, *dnode);
 	msg_set_destport(msg, dport);
 	*err = TIPC_OK;

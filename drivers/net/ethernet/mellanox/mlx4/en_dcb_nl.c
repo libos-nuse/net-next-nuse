@@ -35,6 +35,7 @@
 #include <linux/math64.h>
 
 #include "mlx4_en.h"
+#include "fw_qos.h"
 
 /* Definitions for QCN
  */
@@ -226,6 +227,10 @@ static int mlx4_en_dcbnl_ieee_setpfc(struct net_device *dev,
 				    prof->rx_ppp);
 	if (err)
 		en_err(priv, "Failed setting pause params\n");
+	else
+		mlx4_en_update_pfc_stats_bitmap(mdev->dev, &priv->stats_bitmap,
+						prof->rx_ppp, prof->rx_pause,
+						prof->tx_ppp, prof->tx_pause);
 
 	return err;
 }

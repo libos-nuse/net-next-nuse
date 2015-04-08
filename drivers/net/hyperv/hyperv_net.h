@@ -128,9 +128,10 @@ struct ndis_tcp_ip_checksum_info;
 struct hv_netvsc_packet {
 	/* Bookkeeping stuff */
 	u32 status;
+	bool part_of_skb;
 
-	struct hv_device *device;
 	bool is_data_pkt;
+	bool xmit_more; /* from skb */
 	u16 vlan_tci;
 
 	u16 q_idx;
@@ -149,7 +150,7 @@ struct hv_netvsc_packet {
 	/* Points to the send/receive buffer where the ethernet frame is */
 	void *data;
 	u32 page_buf_cnt;
-	struct hv_page_buffer page_buf[0];
+	struct hv_page_buffer *page_buf;
 };
 
 struct netvsc_device_info {
@@ -187,6 +188,7 @@ int netvsc_send(struct hv_device *device,
 		struct hv_netvsc_packet *packet);
 void netvsc_linkstatus_callback(struct hv_device *device_obj,
 				struct rndis_message *resp);
+void netvsc_xmit_completion(void *context);
 int netvsc_recv_callback(struct hv_device *device_obj,
 			struct hv_netvsc_packet *packet,
 			struct ndis_tcp_ip_checksum_info *csum_info);
@@ -596,7 +598,16 @@ struct nvsp_message {
 
 #define VRSS_SEND_TAB_SIZE 16
 
-/* Per netvsc channel-specific */
+#define RNDIS_MAX_PKT_DEFAULT 8
+#define RNDIS_PKT_ALIGN_DEFAULT 8
+
+struct multi_send_data {
+	spinlock_t lock; /* protect struct multi_send_data */
+	struct hv_netvsc_packet *pkt; /* netvsc pkt pending */
+	u32 count; /* counter of batched packets */
+};
+
+/* Per netvsc device */
 struct netvsc_device {
 	struct hv_device *dev;
 
@@ -647,6 +658,10 @@ struct netvsc_device {
 	unsigned char *cb_buffer;
 	/* The sub channel callback buffer */
 	unsigned char *sub_cb_buf;
+
+	struct multi_send_data msd[NR_CPUS];
+	u32 max_pkt; /* max number of pkt in one send, e.g. 8 */
+	u32 pkt_align; /* alignment bytes, e.g. 8 */
 };
 
 /* NdisInitialize message */
@@ -944,6 +959,10 @@ struct ndis_tcp_lso_info {
 #define NDIS_HASH_PPI_SIZE (sizeof(struct rndis_per_packet_info) + \
 		sizeof(u32))
 
+/* Total size of all PPI data */
+#define NDIS_ALL_PPI_SIZE (NDIS_VLAN_PPI_SIZE + NDIS_CSUM_PPI_SIZE + \
+			   NDIS_LSO_PPI_SIZE + NDIS_HASH_PPI_SIZE)
+
 /* Format of Information buffer passed in a SetRequest for the OID */
 /* OID_GEN_RNDIS_CONFIG_PARAMETER. */
 struct rndis_config_parameter_info {
@@ -1155,6 +1174,8 @@ struct rndis_message {
 
 #define RNDIS_HEADER_SIZE	(sizeof(struct rndis_message) - \
 				 sizeof(union rndis_message_container))
+
+#define RNDIS_AND_PPI_SIZE (sizeof(struct rndis_message) + NDIS_ALL_PPI_SIZE)
 
 #define NDIS_PACKET_TYPE_DIRECTED	0x00000001
 #define NDIS_PACKET_TYPE_MULTICAST	0x00000002

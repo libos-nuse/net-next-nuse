@@ -293,6 +293,7 @@ struct bcmgenet_mib_counters {
 #define UMAC_IRQ_PHY_DET_F		(1 << 3)
 #define UMAC_IRQ_LINK_UP		(1 << 4)
 #define UMAC_IRQ_LINK_DOWN		(1 << 5)
+#define UMAC_IRQ_LINK_EVENT		(UMAC_IRQ_LINK_UP | UMAC_IRQ_LINK_DOWN)
 #define UMAC_IRQ_UMAC			(1 << 6)
 #define UMAC_IRQ_UMAC_TSV		(1 << 7)
 #define UMAC_IRQ_TBUF_UNDERRUN		(1 << 8)
@@ -303,12 +304,21 @@ struct bcmgenet_mib_counters {
 #define UMAC_IRQ_RXDMA_MBDONE		(1 << 13)
 #define UMAC_IRQ_RXDMA_PDONE		(1 << 14)
 #define UMAC_IRQ_RXDMA_BDONE		(1 << 15)
+#define UMAC_IRQ_RXDMA_DONE		(UMAC_IRQ_RXDMA_PDONE | \
+					 UMAC_IRQ_RXDMA_BDONE)
 #define UMAC_IRQ_TXDMA_MBDONE		(1 << 16)
 #define UMAC_IRQ_TXDMA_PDONE		(1 << 17)
 #define UMAC_IRQ_TXDMA_BDONE		(1 << 18)
+#define UMAC_IRQ_TXDMA_DONE		(UMAC_IRQ_TXDMA_PDONE | \
+					 UMAC_IRQ_TXDMA_BDONE)
 /* Only valid for GENETv3+ */
 #define UMAC_IRQ_MDIO_DONE		(1 << 23)
 #define UMAC_IRQ_MDIO_ERROR		(1 << 24)
+
+/* INTRL2 instance 1 definitions */
+#define UMAC_IRQ1_TX_INTR_MASK		0xFFFF
+#define UMAC_IRQ1_RX_INTR_MASK		0xFFFF
+#define UMAC_IRQ1_RX_INTR_SHIFT		16
 
 /* Register block offsets */
 #define GENET_SYS_OFF			0x0000
@@ -498,6 +508,7 @@ enum bcmgenet_version {
 #define GENET_HAS_40BITS	(1 << 0)
 #define GENET_HAS_EXT		(1 << 1)
 #define GENET_HAS_MDIO_INTR	(1 << 2)
+#define GENET_HAS_MOCA_LINK_DET	(1 << 3)
 
 /* BCMGENET hardware parameters, keep this structure nicely aligned
  * since it is going to be used in hot paths
@@ -535,14 +546,13 @@ struct bcmgenet_tx_ring {
 	unsigned int	prod_index;	/* Tx ring producer index SW copy */
 	unsigned int	cb_ptr;		/* Tx ring initial CB ptr */
 	unsigned int	end_ptr;	/* Tx ring end CB ptr */
-	void (*int_enable)(struct bcmgenet_priv *priv,
-			   struct bcmgenet_tx_ring *);
-	void (*int_disable)(struct bcmgenet_priv *priv,
-			    struct bcmgenet_tx_ring *);
+	void (*int_enable)(struct bcmgenet_tx_ring *);
+	void (*int_disable)(struct bcmgenet_tx_ring *);
 	struct bcmgenet_priv *priv;
 };
 
 struct bcmgenet_rx_ring {
+	struct napi_struct napi;	/* Rx NAPI struct */
 	unsigned int	index;		/* Rx ring index */
 	struct enet_cb	*cbs;		/* Rx ring buffer control block */
 	unsigned int	size;		/* Rx ring size */
@@ -551,6 +561,9 @@ struct bcmgenet_rx_ring {
 	unsigned int	cb_ptr;		/* Rx ring initial CB ptr */
 	unsigned int	end_ptr;	/* Rx ring end CB ptr */
 	unsigned int	old_discards;
+	void (*int_enable)(struct bcmgenet_rx_ring *);
+	void (*int_disable)(struct bcmgenet_rx_ring *);
+	struct bcmgenet_priv *priv;
 };
 
 /* device context */
@@ -558,11 +571,6 @@ struct bcmgenet_priv {
 	void __iomem *base;
 	enum bcmgenet_version version;
 	struct net_device *dev;
-	u32 int0_mask;
-	u32 int1_mask;
-
-	/* NAPI for descriptor based rx */
-	struct napi_struct napi ____cacheline_aligned;
 
 	/* transmit variables */
 	void __iomem *tx_bds;
