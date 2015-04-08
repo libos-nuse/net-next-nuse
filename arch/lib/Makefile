@@ -133,7 +133,7 @@ quiet_cmd_objsmk = OBJS-MK   $@
 	done > $@
 
 $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/Makefile
-	$(call if_changed,objsmk)
+	+$(call if_changed,objsmk)
 
 quiet_cmd_timeconst = GEN     $@
       cmd_timeconst = echo "hz=$(CONFIG_HZ)" > $(ARCH_DIR)/hz.bc ; \
@@ -164,7 +164,7 @@ $(CRC32TABLE): $(srctree)/lib/gen_crc32table
 silent_chk_compile.h = :
 $(COMPILE_H): include/generated/utsrelease.h asm-generic $(version_h)
 	@$($(quiet)chk_compile.h)
-	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkcompile_h $@ \
+	+$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkcompile_h $@ \
 	"$(UTS_MACHINE)" "$(CONFIG_SMP)" "$(CONFIG_PREEMPT)" "$(CC) $(KBUILD_CFLAGS)"
 
 # crafted from $(srctree)/Kbuild
