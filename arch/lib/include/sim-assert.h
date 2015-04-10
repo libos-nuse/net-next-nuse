@@ -11,10 +11,10 @@
 #include "sim-printf.h"
 
 #define lib_assert(v) {							\
+		char *p = 0;						\
 		while (!(v)) {						\
 			lib_printf("Assert failed %s:%u \"" #v "\"\n",	\
 				__FILE__, __LINE__);			\
-			char *p = 0;					\
 			*p = 1;						\
 		}							\
 	}

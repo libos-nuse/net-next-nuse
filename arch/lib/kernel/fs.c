@@ -25,6 +25,8 @@ struct vfsmount *kern_mount_data(struct file_system_type *type, void *data)
 	static int count = 0;
 	struct mount *mnt = &local_mnt;
 	struct dentry *root = 0;
+	int flags;
+	char *name;
 
 	/* XXX */
 	if (count != 0) return &local_mnt.mnt;
@@ -33,8 +35,8 @@ struct vfsmount *kern_mount_data(struct file_system_type *type, void *data)
 	memset(mnt, 0, sizeof(struct mount));
 	if (!type)
 		return ERR_PTR(-ENODEV);
-	int flags = MS_KERNMOUNT;
-	char *name = (char *)type->name;
+	flags = MS_KERNMOUNT;
+	name = (char *)type->name;
 
 	if (flags & MS_KERNMOUNT)
 		mnt->mnt.mnt_flags = MNT_INTERNAL;

@@ -110,6 +110,9 @@ config PROC_SYSCTL
 config NETDEVICES
        def_bool y
 
+config ARCH_INIT_TASK
+       def_bool y
+
 source "net/Kconfig"
 
 source "drivers/base/Kconfig"

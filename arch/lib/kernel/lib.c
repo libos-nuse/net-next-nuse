@@ -130,6 +130,9 @@ struct SimKernel *g_kernel;
 void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	      struct SimKernel *kernel)
 {
+	initcall_t *call;
+	extern initcall_t __initcall_start[], __initcall_end[];
+
 	/* make sure we can call the callbacks */
 	g_imported = *imported;
 	g_kernel = kernel;
@@ -179,9 +182,6 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	lib_proc_net_initialize();
 
 	/* and, then, call the normal initcalls */
-	initcall_t *call;
-	extern initcall_t __initcall_start[], __initcall_end[];
-
 	call = __initcall_start;
 	do {
 		(*call)();
