@@ -125,6 +125,7 @@ during make library.
 
 
 * More information
+- libos-nuse@googlegroups.com (LibOS in general and NUSE related questions)
 - ns-3-users@googlegroups.com (ns-3 related questions)
 - articles, slides
  Experimentation Tools for Networking Research (Lacage, 2010)

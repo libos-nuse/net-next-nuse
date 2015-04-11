@@ -5854,7 +5854,7 @@ F:	tools/lib/lockdep/
 
 LIBRARY OS (LIBOS)
 M:	Hajime Tazaki <tazaki@sfc.wide.ad.jp>
-L:	(TBD)
+L:	libos-nuse@googlegroups.com
 W:	http://libos-nuse.github.io/
 S:	Maintained
 F:	Documentation/virtual/libos-howto.txt
