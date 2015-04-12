@@ -47,11 +47,11 @@ void tasklet_hrtimer_init(struct tasklet_hrtimer *ttimer,
 
 void __tasklet_hi_schedule(struct tasklet_struct *t)
 {
-	void *event;
 	/* Note: no need to set TASKLET_STATE_SCHED because
 	   it is set by caller. */
 	lib_assert(t->next == 0);
 	/* run the tasklet at the next immediately available opportunity. */
-	event = lib_event_schedule_ns(0, (void *)&t->func, (void *)t->data);
+	void *event =
+		lib_event_schedule_ns(0, (void *)&t->func, (void *)t->data);
 	t->next = event;
 }

@@ -55,8 +55,8 @@ static void ensure_softirq_opened(void)
 }
 static void trampoline(void *context)
 {
-	struct tasklet_struct *tasklet = context;
 	ensure_softirq_opened();
+	struct tasklet_struct *tasklet = context;
 	/* allow the tasklet to re-schedule itself */
 	lib_assert(tasklet->next != 0);
 	tasklet->next = 0;
