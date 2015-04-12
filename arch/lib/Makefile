@@ -120,29 +120,12 @@ net/built-in.o:
 $(ARCH_DIR)/kernel/built-in.o:
 	$(Q)$(MAKE) -f ./scripts/Makefile.build obj=$(ARCH_DIR)/kernel
 
-# crafted from $(srctree)/Kbuild
-quiet_cmd_lib_bounds = GEN     $@
-define cmd_lib_bounds
-	(set -e; \
-	 echo "#ifndef GENERATED_BOUNDS_H"; \
-	 echo "#define GENERATED_BOUNDS_H"; \
-	 echo ""; \
-	 echo "#define NR_PAGEFLAGS (__NR_PAGEFLAGS)"; \
-	 echo "#define MAX_NR_ZONES (__MAX_NR_ZONES)"; \
-	 echo ""; \
-	 echo "#endif /* GENERATED_BOUNDS_H */") > $@
-endef
-
-include/generated/bounds.h: FORCE
-	$(Q)mkdir -p $(dir $@)
-	$(call cmd,lib_bounds)
-
 all: library
 vmlinux:
 
 module: library
 
-library: archprepare $(KERNEL_LIB) $(LIBOS_TOOLS)
+library: $(KERNEL_LIB) $(LIBOS_TOOLS)
 
 $(LIBOS_TOOLS): $(KERNEL_LIB) Makefile FORCE
 	$(Q) if [ ! -d "$@" ]; then \
@@ -165,8 +148,7 @@ define archhelp
   echo '* library	- Shared library file (liblinux-$(KERNELVERSION).so)'
 endef
 
-archprepare: include/generated/utsrelease.h asm-generic $(version_h) \
-include/generated/bounds.h
+# archprepare:
 
 head-y = 
 init-y = 
