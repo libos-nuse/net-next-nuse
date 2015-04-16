@@ -111,7 +111,7 @@ ssize_t lib_sock_sendmsg(struct SimSocket *socket,
 	iov_iter_init(&msg_sys.msg_iter, WRITE,
 		kernel_iov, msg->msg_iovlen, iov_size(msg));
 
-	retval = sock_sendmsg(kernel_socket, &msg_sys, iov_size(msg));
+	retval = sock_sendmsg(kernel_socket, &msg_sys);
 	lib_free(kernel_iov);
 	return retval;
 }
