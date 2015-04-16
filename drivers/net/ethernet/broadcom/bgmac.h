@@ -356,13 +356,15 @@
 #define BGMAC_MAX_RX_RINGS			1
 
 #define BGMAC_TX_RING_SLOTS			128
-#define BGMAC_RX_RING_SLOTS			512 - 1		/* Why -1? Well, Broadcom does that... */
+#define BGMAC_RX_RING_SLOTS			512
 
 #define BGMAC_RX_HEADER_LEN			28		/* Last 24 bytes are unused. Well... */
 #define BGMAC_RX_FRAME_OFFSET			30		/* There are 2 unused bytes between header and real data */
+#define BGMAC_RX_BUF_OFFSET			(NET_SKB_PAD + NET_IP_ALIGN - \
+						 BGMAC_RX_FRAME_OFFSET)
 #define BGMAC_RX_MAX_FRAME_SIZE			1536		/* Copied from b44/tg3 */
 #define BGMAC_RX_BUF_SIZE			(BGMAC_RX_FRAME_OFFSET + BGMAC_RX_MAX_FRAME_SIZE)
-#define BGMAC_RX_ALLOC_SIZE			(SKB_DATA_ALIGN(BGMAC_RX_BUF_SIZE) + \
+#define BGMAC_RX_ALLOC_SIZE			(SKB_DATA_ALIGN(BGMAC_RX_BUF_SIZE + BGMAC_RX_BUF_OFFSET) + \
 						 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
 
 #define BGMAC_BFL_ENETROBO			0x0010		/* has ephy roboswitch spi */
@@ -414,14 +416,13 @@ enum bgmac_dma_ring_type {
  * empty.
  */
 struct bgmac_dma_ring {
-	u16 num_slots;
-	u16 start;
-	u16 end;
+	u32 start;
+	u32 end;
 
-	u16 mmio_base;
 	struct bgmac_dma_desc *cpu_base;
 	dma_addr_t dma_base;
 	u32 index_base; /* Used for unaligned rings only, otherwise 0 */
+	u16 mmio_base;
 	bool unaligned;
 
 	struct bgmac_slot_info slots[BGMAC_RX_RING_SLOTS];
@@ -452,7 +453,6 @@ struct bgmac {
 
 	/* Int */
 	u32 int_mask;
-	u32 int_status;
 
 	/* Current MAC state */
 	int mac_speed;

@@ -25,6 +25,7 @@
 #include <linux/proc_fs.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv6.h>
+#include <linux/netfilter_bridge.h>
 #include <linux/netfilter/nfnetlink.h>
 #include <linux/netfilter/nfnetlink_queue.h>
 #include <linux/list.h>
@@ -54,7 +55,7 @@ struct nfqnl_instance {
 	struct hlist_node hlist;		/* global list of queues */
 	struct rcu_head rcu;
 
-	int peer_portid;
+	u32 peer_portid;
 	unsigned int queue_maxlen;
 	unsigned int copy_range;
 	unsigned int queue_dropped;
@@ -109,8 +110,7 @@ instance_lookup(struct nfnl_queue_net *q, u_int16_t queue_num)
 }
 
 static struct nfqnl_instance *
-instance_create(struct nfnl_queue_net *q, u_int16_t queue_num,
-		int portid)
+instance_create(struct nfnl_queue_net *q, u_int16_t queue_num, u32 portid)
 {
 	struct nfqnl_instance *inst;
 	unsigned int h;
@@ -396,14 +396,18 @@ nfqnl_build_packet_message(struct net *net, struct nfqnl_instance *queue,
 					 htonl(br_port_get_rcu(indev)->br->dev->ifindex)))
 				goto nla_put_failure;
 		} else {
+			int physinif;
+
 			/* Case 2: indev is bridge group, we need to look for
 			 * physical device (when called from ipv4) */
 			if (nla_put_be32(skb, NFQA_IFINDEX_INDEV,
 					 htonl(indev->ifindex)))
 				goto nla_put_failure;
-			if (entskb->nf_bridge && entskb->nf_bridge->physindev &&
+
+			physinif = nf_bridge_get_physinif(entskb);
+			if (physinif &&
 			    nla_put_be32(skb, NFQA_IFINDEX_PHYSINDEV,
-					 htonl(entskb->nf_bridge->physindev->ifindex)))
+					 htonl(physinif)))
 				goto nla_put_failure;
 		}
 #endif
@@ -426,14 +430,18 @@ nfqnl_build_packet_message(struct net *net, struct nfqnl_instance *queue,
 					 htonl(br_port_get_rcu(outdev)->br->dev->ifindex)))
 				goto nla_put_failure;
 		} else {
+			int physoutif;
+
 			/* Case 2: outdev is bridge group, we need to look for
 			 * physical output device (when called from ipv4) */
 			if (nla_put_be32(skb, NFQA_IFINDEX_OUTDEV,
 					 htonl(outdev->ifindex)))
 				goto nla_put_failure;
-			if (entskb->nf_bridge && entskb->nf_bridge->physoutdev &&
+
+			physoutif = nf_bridge_get_physoutif(entskb);
+			if (physoutif &&
 			    nla_put_be32(skb, NFQA_IFINDEX_PHYSOUTDEV,
-					 htonl(entskb->nf_bridge->physoutdev->ifindex)))
+					 htonl(physoutif)))
 				goto nla_put_failure;
 		}
 #endif
@@ -765,11 +773,12 @@ dev_cmp(struct nf_queue_entry *entry, unsigned long ifindex)
 			return 1;
 #if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 	if (entry->skb->nf_bridge) {
-		if (entry->skb->nf_bridge->physindev &&
-		    entry->skb->nf_bridge->physindev->ifindex == ifindex)
-			return 1;
-		if (entry->skb->nf_bridge->physoutdev &&
-		    entry->skb->nf_bridge->physoutdev->ifindex == ifindex)
+		int physinif, physoutif;
+
+		physinif = nf_bridge_get_physinif(entry->skb);
+		physoutif = nf_bridge_get_physoutif(entry->skb);
+
+		if (physinif == ifindex || physoutif == ifindex)
 			return 1;
 	}
 #endif
@@ -860,7 +869,7 @@ static const struct nla_policy nfqa_verdict_batch_policy[NFQA_MAX+1] = {
 };
 
 static struct nfqnl_instance *
-verdict_instance_lookup(struct nfnl_queue_net *q, u16 queue_num, int nlportid)
+verdict_instance_lookup(struct nfnl_queue_net *q, u16 queue_num, u32 nlportid)
 {
 	struct nfqnl_instance *queue;
 
@@ -1242,7 +1251,7 @@ static int seq_show(struct seq_file *s, void *v)
 {
 	const struct nfqnl_instance *inst = v;
 
-	seq_printf(s, "%5d %6d %5d %1d %5d %5d %5d %8d %2d\n",
+	seq_printf(s, "%5u %6u %5u %1u %5u %5u %5u %8u %2d\n",
 		   inst->queue_num,
 		   inst->peer_portid, inst->queue_total,
 		   inst->copy_mode, inst->copy_range,

@@ -314,6 +314,28 @@ struct page;
 struct address_space;
 struct writeback_control;
 
+#define IOCB_EVENTFD		(1 << 0)
+
+struct kiocb {
+	struct file		*ki_filp;
+	loff_t			ki_pos;
+	void (*ki_complete)(struct kiocb *iocb, long ret, long ret2);
+	void			*private;
+	int			ki_flags;
+};
+
+static inline bool is_sync_kiocb(struct kiocb *kiocb)
+{
+	return kiocb->ki_complete == NULL;
+}
+
+static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
+{
+	*kiocb = (struct kiocb) {
+		.ki_filp = filp,
+	};
+}
+
 /*
  * "descriptor" for what we're up to with a read.
  * This allows us to use the same read code yet
@@ -1549,7 +1571,7 @@ struct file_operations {
 	long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
 	long (*compat_ioctl) (struct file *, unsigned int, unsigned long);
 	int (*mmap) (struct file *, struct vm_area_struct *);
-	void (*mremap)(struct file *, struct vm_area_struct *);
+	int (*mremap)(struct file *, struct vm_area_struct *);
 	int (*open) (struct inode *, struct file *);
 	int (*flush) (struct file *, fl_owner_t id);
 	int (*release) (struct inode *, struct file *);
@@ -2145,7 +2167,7 @@ struct filename {
 	const __user char	*uptr;	/* original userland pointer */
 	struct audit_names	*aname;
 	int			refcnt;
-	bool			separate; /* should "name" be freed? */
+	const char		iname[];
 };
 
 extern long vfs_truncate(struct path *, loff_t);
