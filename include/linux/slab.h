@@ -205,6 +205,14 @@ size_t ksize(const void *);
 #endif
 #endif
 
+#ifdef CONFIG_LIB
+#define KMALLOC_SHIFT_MAX	30
+#define KMALLOC_SHIFT_HIGH	PAGE_SHIFT
+#ifndef KMALLOC_SHIFT_LOW
+#define KMALLOC_SHIFT_LOW	3
+#endif
+#endif
+
 /* Maximum allocatable size */
 #define KMALLOC_MAX_SIZE	(1UL << KMALLOC_SHIFT_MAX)
 /* Maximum size for which we actually use a slab cache */
@@ -350,6 +358,9 @@ kmalloc_order_trace(size_t size, gfp_t flags, unsigned int order)
 }
 #endif
 
+#ifdef CONFIG_LIB
+#include <asm/slab.h>
+#else
 static __always_inline void *kmalloc_large(size_t size, gfp_t flags)
 {
 	unsigned int order = get_order(size);
@@ -428,6 +439,7 @@ static __always_inline void *kmalloc(size_t size, gfp_t flags)
 	}
 	return __kmalloc(size, flags);
 }
+#endif
 
 /*
  * Determine size used for the nth kmalloc cache.
