@@ -29,6 +29,7 @@ print: $(final-obj-m) $(subdirs)
 	@if test $(if $(final-obj-y),1); then \
 	  echo -n $(objdir)builtin.o; echo -n "="; echo $(addprefix $(objdir),$(final-obj-y)); \
 	  echo -n $(objdir)builtin.o; echo -n ": "; echo $(addprefix $(objdir),$(final-obj-y)); \
+          echo -n "-include "; echo $(addprefix $(objdir).,$(addsuffix ".cmd", $(final-obj-y))); \
 	  echo -n "all-obj-for-clean+="; echo $(addprefix $(objdir),$(final-obj-y)) $(objdir)builtin.o; \
 	fi
 $(final-obj-m):

@@ -12,6 +12,7 @@ endif
 
 -include $(ARCH_DIR)/objs.mk
 -include $(srctree)/.config
+include $(srctree)/scripts/Kbuild.include
 include $(ARCH_DIR)/processor.mk
 
 # targets
@@ -40,6 +41,8 @@ glue.c fs.c sysctl.c proc.c sysfs.c \
 capability.c pid.c modules.c filemap.c vmscan.c
 
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
+LIB_DEPS=$(addprefix $(ARCH_DIR)/.,$(addsuffix .o.cmd,$(basename $(LIB_SRC))))
+-include $(LIB_DEPS)
 
 DEPENDS=$(addprefix $(ARCH_DIR)/.,\
 	$(addsuffix .d,$(basename $(LIB_SRC)))\
@@ -61,7 +64,7 @@ PIC_CFLAGS=$(pic_$(PIC))
 
 # flags
 CFLAGS_USPACE= \
- $(opt_$(OPT)) -g3 -Wall -Wstrict-prototypes -Wno-trigraphs \
+ -Wp,-MD,$(depfile) $(opt_$(OPT)) -g3 -Wall -Wstrict-prototypes -Wno-trigraphs \
  -fno-inline -fno-strict-aliasing -fno-common \
  -fno-delete-null-pointer-checks -fno-builtin \
  -fno-stack-protector -Wno-unused -Wno-pointer-sign \
@@ -180,7 +183,7 @@ define cmd_lib_bounds
 	 echo "#endif /* GENERATED_BOUNDS_H */") > $@
 endef
 
-$(BOUNDS_H): FORCE
+$(BOUNDS_H):
 	$(Q)mkdir -p $(dir $@)
 	$(call cmd,lib_bounds)
 
@@ -204,7 +207,7 @@ quiet_cmd_builtin = BUILTIN   $@
 %.ko:%.o
 	$(call if_changed,linkko)
 %.o:%.c
-	$(call if_changed,cc)
+	$(call if_changed_dep,cc)
 
 library: $(KERNEL_LIB) $(LIBOS_TOOLS)
 modules: $(modules)
