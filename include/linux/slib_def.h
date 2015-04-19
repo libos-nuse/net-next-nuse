@@ -1,5 +1,5 @@
-#ifndef _ASM_SIM_SLAB_H
-#define _ASM_SIM_SLAB_H
+#ifndef _LINUX_SLLB_DEF_H
+#define _LINUX_SLLB_DEF_H
 
 
 struct kmem_cache {
@@ -18,4 +18,4 @@ static __always_inline void *kmalloc(size_t size, gfp_t flags)
 	return __kmalloc(size, flags);
 }
 
-#endif /* _ASM_SIM_SLAB_H */
+#endif /* _LINUX_SLLB_DEF_H */

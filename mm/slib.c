@@ -1,5 +1,6 @@
 /*
- * glue code for library version of Linux kernel
+ * Library Slab Allocator (SLIB)
+ *
  * Copyright (c) 2015 INRIA, Hajime Tazaki
  *
  * Author: Mathieu Lacage <mathieu.lacage@gmail.com>
@@ -11,6 +12,7 @@
 #include <linux/page-flags.h>
 #include <linux/types.h>
 #include <linux/slab.h>
+#include <linux/slib_def.h>
 
 /* glues */
 struct kmem_cache *files_cachep;
