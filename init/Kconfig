@@ -1695,6 +1695,14 @@ config SLOB
 	   allocator. SLOB is generally more space efficient but
 	   does not perform as well on large systems.
 
+config SLIB
+	bool "SLIB (Library Allocator)"
+	depends on LIB
+	help
+	   SLIB replaces the slab allocator with a registered allocator
+	   function via lib_init() used by libos (CONFIG_LIB). It usually
+	   used malloc(3) or any allocators.
+
 endchoice
 
 config SLUB_CPU_PARTIAL

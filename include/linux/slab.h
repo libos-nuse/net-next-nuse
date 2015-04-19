@@ -192,7 +192,7 @@ size_t ksize(const void *);
 #endif
 #endif
 
-#ifdef CONFIG_SLOB
+#if defined(CONFIG_SLOB) || defined(CONFIG_SLIB)
 /*
  * SLOB passes all requests larger than one page to the page allocator.
  * No kmalloc array is necessary since objects of different sizes can
@@ -350,6 +350,9 @@ kmalloc_order_trace(size_t size, gfp_t flags, unsigned int order)
 }
 #endif
 
+#ifdef CONFIG_SLIB
+#include <linux/slib_def.h>
+#else
 static __always_inline void *kmalloc_large(size_t size, gfp_t flags)
 {
 	unsigned int order = get_order(size);
@@ -428,6 +431,7 @@ static __always_inline void *kmalloc(size_t size, gfp_t flags)
 	}
 	return __kmalloc(size, flags);
 }
+#endif /* CONFIG_SLIB */
 
 /*
  * Determine size used for the nth kmalloc cache.
