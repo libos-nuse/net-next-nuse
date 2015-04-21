@@ -1,6 +1,7 @@
-menuconfig LIB
-       bool "LibOS-specific options"
-       def_bool n
+mainmenu "Linux Library OS (libos) $KERNELVERSION Configuration"
+
+config LIB
+       def_bool y
        select PROC_FS
        select PROC_SYSCTL
        select SYSCTL
@@ -11,13 +12,12 @@ menuconfig LIB
 	  used within the userspace application, and ns-3 simulator.
 	  For more information, about ns-3, see http://www.nsnam.org.
 
-config EXPERIMENTAL
-	def_bool y
-
 config MMU
         def_bool n
+
 config FPU
         def_bool n
+
 config SMP
         def_bool n
 
@@ -25,8 +25,9 @@ config ARCH
 	string
 	option env="ARCH"
 
-config KTIME_SCALAR
-       def_bool y
+config KERNELVERSION
+	string
+	option env="KERNELVERSION"
 
 config MODULES
        def_bool y
@@ -38,13 +39,11 @@ config GENERIC_CSUM
 config GENERIC_BUG
 	def_bool y
 	depends on BUG
+
 config PRINTK
        def_bool y
 
 config RWSEM_GENERIC_SPINLOCK
-	def_bool y
-
-config GENERIC_FIND_NEXT_BIT
 	def_bool y
 
 config GENERIC_HWEIGHT
@@ -120,5 +119,3 @@ source "drivers/base/Kconfig"
 source "crypto/Kconfig"
 
 source "lib/Kconfig"
-
-

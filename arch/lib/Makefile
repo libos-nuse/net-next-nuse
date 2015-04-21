@@ -1,5 +1,4 @@
 ARCH_DIR := arch/lib
-SRCDIR=$(dir $(firstword $(MAKEFILE_LIST)))
 DCE_TESTDIR=$(srctree)/tools/testing/libos/
 KBUILD_KCONFIG := arch/$(ARCH)/Kconfig
 
@@ -13,7 +12,6 @@ endif
 -include $(ARCH_DIR)/objs.mk
 -include $(srctree)/.config
 include $(srctree)/scripts/Kbuild.include
-include $(ARCH_DIR)/processor.mk
 
 # targets
 LIBOS_TOOLS=$(ARCH_DIR)/tools
@@ -23,14 +21,8 @@ KERNEL_LIB=liblinux-$(KERNELVERSION).so
 ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
 
 # auto generated files
-AUTOGENS=$(CRC32TABLE) $(COMPILE_H) $(BOUNDS_H) $(ARCH_DIR)/timeconst.h $(ARCH_DIR)/linker.lds
-COMPILE_H=$(srctree)/include/generated/compile.h
-BOUNDS_H=$(srctree)/include/generated/bounds.h
-
-# from lib/Makefile
-CRC32TABLE = $(ARCH_DIR)/crc32table.h
-hostprogs-y	:= $(srctree)/lib/gen_crc32table
-clean-files	:= crc32table.h
+AUTOGENS=include/generated/compile.h include/generated/bounds.h \
+	kernel/time/timeconst.h lib/crc32table.h $(ARCH_DIR)/linker.lds
 
 # sources and objects
 LIB_SRC=\
@@ -43,10 +35,6 @@ capability.c pid.c modules.c filemap.c vmscan.c
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
 LIB_DEPS=$(addprefix $(ARCH_DIR)/.,$(addsuffix .o.cmd,$(basename $(LIB_SRC))))
 -include $(LIB_DEPS)
-
-DEPENDS=$(addprefix $(ARCH_DIR)/.,\
-	$(addsuffix .d,$(basename $(LIB_SRC)))\
-	)
 
 # options
 COV?=no
@@ -83,10 +71,13 @@ CFLAGS+= \
  -include $(srctree)/include/linux/kconfig.h \
  -I$(ARCH_DIR) -I.
 
-ifeq ($(PROCESSOR_SIZE),64)
-CFLAGS+= -DCONFIG_64BIT
+ifeq ($(SUBARCH),x86)
+  ifeq ($(shell uname -m),x86_64)
+	CFLAGS+= -DCONFIG_64BIT
+  endif
 endif
 
+KBUILD_CFLAGS := CFLAGS
 LDFLAGS += -shared -nodefaultlibs -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
 
 # targets
@@ -138,37 +129,23 @@ quiet_cmd_objsmk = OBJS-MK   $@
 $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/Makefile
 	+$(call if_changed,objsmk)
 
-quiet_cmd_timeconst = GEN     $@
-      cmd_timeconst = echo "hz=$(CONFIG_HZ)" > $(ARCH_DIR)/hz.bc ; \
-                      bc $(ARCH_DIR)/hz.bc kernel/time/timeconst.bc > $@
-$(ARCH_DIR)/timeconst.h: $(srctree)/.config
-	$(call if_changed,timeconst)
-
 quiet_cmd_linker = GEN     $@
       cmd_linker = ld -shared --verbose | ./$^ > $@
 $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	$(call if_changed,linker)
 
-quiet_cmd_crc32src = GEN     $@
-      cmd_crc32src = $(MAKE) -f $(srctree)/Makefile silentoldconfig ; \
-                     cc $^ -o $@
-$(srctree)/lib/gen_crc32table: $(srctree)/lib/gen_crc32table.c
-	$(call if_changed,crc32src)
+# calll kernel/time/Makefile
+kernel/time/timeconst.h:
+	$(Q) $(MAKE) $(build)=kernel/time $@
 
-quiet_cmd_crc32 = GEN     $@
-      cmd_crc32 = $< > $@
+# call lib/Makefile
+lib/crc32table.h:
+	$(Q) $(MAKE) $(build)=lib $@
 
-$(CRC32TABLE): $(srctree)/lib/gen_crc32table
-	$(call if_changed,crc32)
-
-# copied from init/Makefile
-       chk_compile.h = :
- quiet_chk_compile.h = echo '  CHK     $@'
-silent_chk_compile.h = :
-$(COMPILE_H): include/generated/utsrelease.h asm-generic $(version_h)
-	@$($(quiet)chk_compile.h)
-	+$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkcompile_h $@ \
-	"$(UTS_MACHINE)" "$(CONFIG_SMP)" "$(CONFIG_PREEMPT)" "$(CC) $(KBUILD_CFLAGS)"
+# call init/Makefile
+include/generated/compile.h: asm-generic include/generated/utsrelease.h\
+	 $(version_h)
+	$(Q) $(MAKE) $(build)=init $@
 
 # crafted from $(srctree)/Kbuild
 quiet_cmd_lib_bounds = GEN     $@
@@ -183,7 +160,7 @@ define cmd_lib_bounds
 	 echo "#endif /* GENERATED_BOUNDS_H */") > $@
 endef
 
-$(BOUNDS_H):
+include/generated/bounds.h:
 	$(Q)mkdir -p $(dir $@)
 	$(call cmd,lib_bounds)
 
@@ -238,14 +215,10 @@ quiet_cmd_clean = CLEAN   $@
 archclean:
 	$(call if_changed,clean)
 
-.%.d:%.c $(srctree)/.config
-	$(Q) set -e; $(CC) -MM -MT $(<:.c=.o) $(CFLAGS) $< > $@
-
-deplib: $(DEPENDS)
-	-include $(DEPENDS)
+archprepare: include/generated/bounds.h include/generated/utsrelease.h \
+	asm-generic $(version_h)
 
 test:
 	$(Q) $(MAKE) -C $(DCE_TESTDIR)/
 
-.PHONY : clean deplib
-
+.PHONY : clean
