@@ -24,14 +24,6 @@ config MODULES
 	def_bool y
 	option modules
 
-source "net/Kconfig"
-
-source "drivers/base/Kconfig"
-
-source "crypto/Kconfig"
-
-source "lib/Kconfig"
-
 config MMU
         def_bool n
 
@@ -116,6 +108,14 @@ config PROC_SYSCTL
 
 config NETDEVICES
        def_bool y
+
+source "net/Kconfig"
+
+source "drivers/base/Kconfig"
+
+source "crypto/Kconfig"
+
+source "lib/Kconfig"
 
 config SLIB
        def_bool y
