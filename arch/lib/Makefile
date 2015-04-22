@@ -126,7 +126,7 @@ quiet_cmd_objsmk = OBJS-MK   $@
 	    to_keep=$(subst $(space),$(colon),$($(d)_to_keep)) print;) \
 	done > $@
 
-$(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(AUTOGENS) $(srctree)/.config $(ARCH_DIR)/Makefile
+$(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/Makefile
 	+$(call if_changed,objsmk)
 
 quiet_cmd_linker = GEN     $@
@@ -183,7 +183,7 @@ quiet_cmd_builtin = BUILTIN   $@
 	$(call if_changed,builtin)
 %.ko:%.o
 	$(call if_changed,linkko)
-%.o:%.c
+%.o:%.c $(AUTOGENS)
 	$(call if_changed_dep,cc)
 
 library: $(KERNEL_LIB) $(LIBOS_TOOLS)
@@ -199,7 +199,7 @@ install: modules library
 
 install-dir:
 
-$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(OBJS)
+$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOGENS) $(OBJS)
 	$(call if_changed,linklib)
 
 quiet_cmd_linklib = LIB     $@
