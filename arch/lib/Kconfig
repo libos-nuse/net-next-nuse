@@ -12,15 +12,6 @@ config LIB
 	  used within the userspace application, and ns-3 simulator.
 	  For more information, about ns-3, see http://www.nsnam.org.
 
-config MMU
-        def_bool n
-
-config FPU
-        def_bool n
-
-config SMP
-        def_bool n
-
 config ARCH
 	string
 	option env="ARCH"
@@ -30,8 +21,25 @@ config KERNELVERSION
 	option env="KERNELVERSION"
 
 config MODULES
-       def_bool y
-       option modules
+	def_bool y
+	option modules
+
+source "net/Kconfig"
+
+source "drivers/base/Kconfig"
+
+source "crypto/Kconfig"
+
+source "lib/Kconfig"
+
+config MMU
+        def_bool n
+
+config FPU
+        def_bool n
+
+config SMP
+        def_bool n
 
 config GENERIC_CSUM
 	def_bool y
@@ -111,11 +119,3 @@ config NETDEVICES
 
 config SLIB
        def_bool y
-
-source "net/Kconfig"
-
-source "drivers/base/Kconfig"
-
-source "crypto/Kconfig"
-
-source "lib/Kconfig"
