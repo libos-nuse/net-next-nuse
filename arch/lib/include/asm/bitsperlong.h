@@ -9,4 +9,8 @@
 
 #define __BITS_PER_LONG BITS_PER_LONG
 
+#ifndef BITS_PER_LONG_LONG
+#define BITS_PER_LONG_LONG 64
+#endif
+
 #endif /* _ASM_SIM_BITSPERLONG_H */

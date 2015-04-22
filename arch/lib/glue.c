@@ -277,6 +277,12 @@ int sched_rr_handler(struct ctl_table *table, int write,
 	return 0;
 }
 
+int sysctl_max_threads(struct ctl_table *table, int write,
+		       void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	return 1;
+}
+
 void on_each_cpu_mask(const struct cpumask *mask,
 		      smp_call_func_t func, void *info, bool wait)
 {

@@ -106,6 +106,9 @@ config SYSFS
 config PROC_SYSCTL
        def_bool y
 
+config MULTIUSER
+       def_bool n
+
 config NETDEVICES
        def_bool y
 
