@@ -37,6 +37,10 @@ struct kmem_cache {
 #include <linux/slub_def.h>
 #endif
 
+#ifdef CONFIG_SLIB
+#include <linux/slib_def.h>
+#endif
+
 #include <linux/memcontrol.h>
 
 /*
