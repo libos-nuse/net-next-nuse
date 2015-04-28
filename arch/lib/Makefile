@@ -135,7 +135,7 @@ $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	$(call if_changed,linker)
 
 # calll kernel/time/Makefile
-kernel/time/timeconst.h:
+kernel/time/timeconst.h: $(srctree)/.config
 	$(Q) $(MAKE) $(build)=kernel/time $@
 
 # call lib/Makefile
