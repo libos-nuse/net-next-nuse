@@ -66,5 +66,5 @@ int dirtytime_interval_handler(struct ctl_table *table, int write,
 
 unsigned int nr_free_buffer_pages(void)
 {
-	return 1024;
+	return 65535;
 }
