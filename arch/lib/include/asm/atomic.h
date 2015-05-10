@@ -2,6 +2,7 @@
 #define _ASM_SIM_ATOMIC_H
 
 #include <linux/types.h>
+#include <asm-generic/cmpxchg.h>
 
 #if !defined(CONFIG_64BIT)
 typedef struct {
@@ -37,9 +38,12 @@ static inline void atomic64_set(atomic64_t *v, long i)
 	v->counter = i;
 }
 long atomic64_sub_return(long i, atomic64_t *v);
-long atomic64_inc_return(atomic64_t *v);
-long atomic64_dec_return(atomic64_t *v);
-long atomic64_cmpxchg(atomic64_t *v, long old, long new);
+#define atomic64_inc_return(v)  (atomic64_add_return(1, (v)))
+#define atomic64_dec_return(v)  (atomic64_sub_return(1, (v)))
+static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)
+{
+	return cmpxchg(&v->counter, old, new);
+}
 long atomic64_xchg(atomic64_t *v, long new);
 int atomic64_add_unless(atomic64_t *v, long a, long u);
 int atomic64_inc_is_not_zero(atomic64_t *v);
