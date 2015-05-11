@@ -42,7 +42,12 @@ long atomic64_sub_return(long i, atomic64_t *v);
 #define atomic64_dec_return(v)  (atomic64_sub_return(1, (v)))
 static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)
 {
-	return cmpxchg(&v->counter, old, new);
+	long long val;
+
+	val = v->counter;
+	if (val == old)
+		v->counter = new;
+	return val;
 }
 long atomic64_xchg(atomic64_t *v, long new);
 int atomic64_add_unless(atomic64_t *v, long a, long u);
