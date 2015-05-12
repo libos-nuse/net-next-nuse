@@ -501,12 +501,6 @@ static inline int qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	return sch->enqueue(skb, sch);
 }
 
-static inline int qdisc_enqueue_root(struct sk_buff *skb, struct Qdisc *sch)
-{
-	qdisc_skb_cb(skb)->pkt_len = skb->len;
-	return qdisc_enqueue(skb, sch) & NET_XMIT_MASK;
-}
-
 static inline bool qdisc_is_percpu_stats(const struct Qdisc *q)
 {
 	return q->flags & TCQ_F_CPUSTATS;
@@ -755,8 +749,6 @@ static inline struct sk_buff *skb_act_clone(struct sk_buff *skb, gfp_t gfp_mask,
 
 	if (n) {
 		n->tc_verd = SET_TC_VERD(n->tc_verd, 0);
-		n->tc_verd = CLR_TC_OK2MUNGE(n->tc_verd);
-		n->tc_verd = CLR_TC_MUNGED(n->tc_verd);
 	}
 	return n;
 }

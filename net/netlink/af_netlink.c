@@ -76,17 +76,18 @@ struct listeners {
 };
 
 /* state bits */
-#define NETLINK_CONGESTED	0x0
+#define NETLINK_S_CONGESTED		0x0
 
 /* flags */
-#define NETLINK_KERNEL_SOCKET	0x1
-#define NETLINK_RECV_PKTINFO	0x2
-#define NETLINK_BROADCAST_SEND_ERROR	0x4
-#define NETLINK_RECV_NO_ENOBUFS	0x8
+#define NETLINK_F_KERNEL_SOCKET		0x1
+#define NETLINK_F_RECV_PKTINFO		0x2
+#define NETLINK_F_BROADCAST_SEND_ERROR	0x4
+#define NETLINK_F_RECV_NO_ENOBUFS	0x8
+#define NETLINK_F_LISTEN_ALL_NSID	0x10
 
 static inline int netlink_is_kernel(struct sock *sk)
 {
-	return nlk_sk(sk)->flags & NETLINK_KERNEL_SOCKET;
+	return nlk_sk(sk)->flags & NETLINK_F_KERNEL_SOCKET;
 }
 
 struct netlink_table *nl_table;
@@ -256,8 +257,9 @@ static void netlink_overrun(struct sock *sk)
 {
 	struct netlink_sock *nlk = nlk_sk(sk);
 
-	if (!(nlk->flags & NETLINK_RECV_NO_ENOBUFS)) {
-		if (!test_and_set_bit(NETLINK_CONGESTED, &nlk_sk(sk)->state)) {
+	if (!(nlk->flags & NETLINK_F_RECV_NO_ENOBUFS)) {
+		if (!test_and_set_bit(NETLINK_S_CONGESTED,
+				      &nlk_sk(sk)->state)) {
 			sk->sk_err = ENOBUFS;
 			sk->sk_error_report(sk);
 		}
@@ -270,8 +272,8 @@ static void netlink_rcv_wake(struct sock *sk)
 	struct netlink_sock *nlk = nlk_sk(sk);
 
 	if (skb_queue_empty(&sk->sk_receive_queue))
-		clear_bit(NETLINK_CONGESTED, &nlk->state);
-	if (!test_bit(NETLINK_CONGESTED, &nlk->state))
+		clear_bit(NETLINK_S_CONGESTED, &nlk->state);
+	if (!test_bit(NETLINK_S_CONGESTED, &nlk->state))
 		wake_up_interruptible(&nlk->wait);
 }
 
@@ -1117,14 +1119,15 @@ static struct proto netlink_proto = {
 };
 
 static int __netlink_create(struct net *net, struct socket *sock,
-			    struct mutex *cb_mutex, int protocol)
+			    struct mutex *cb_mutex, int protocol,
+			    int kern)
 {
 	struct sock *sk;
 	struct netlink_sock *nlk;
 
 	sock->ops = &netlink_ops;
 
-	sk = sk_alloc(net, PF_NETLINK, GFP_KERNEL, &netlink_proto);
+	sk = sk_alloc(net, PF_NETLINK, GFP_KERNEL, &netlink_proto, kern);
 	if (!sk)
 		return -ENOMEM;
 
@@ -1186,7 +1189,7 @@ static int netlink_create(struct net *net, struct socket *sock, int protocol,
 	if (err < 0)
 		goto out;
 
-	err = __netlink_create(net, sock, cb_mutex, protocol);
+	err = __netlink_create(net, sock, cb_mutex, protocol, kern);
 	if (err < 0)
 		goto out_module;
 
@@ -1656,7 +1659,7 @@ int netlink_attachskb(struct sock *sk, struct sk_buff *skb,
 	nlk = nlk_sk(sk);
 
 	if ((atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf ||
-	     test_bit(NETLINK_CONGESTED, &nlk->state)) &&
+	     test_bit(NETLINK_S_CONGESTED, &nlk->state)) &&
 	    !netlink_skb_is_mmaped(skb)) {
 		DECLARE_WAITQUEUE(wait, current);
 		if (!*timeo) {
@@ -1671,7 +1674,7 @@ int netlink_attachskb(struct sock *sk, struct sk_buff *skb,
 		add_wait_queue(&nlk->wait, &wait);
 
 		if ((atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf ||
-		     test_bit(NETLINK_CONGESTED, &nlk->state)) &&
+		     test_bit(NETLINK_S_CONGESTED, &nlk->state)) &&
 		    !sock_flag(sk, SOCK_DEAD))
 			*timeo = schedule_timeout(*timeo);
 
@@ -1895,7 +1898,7 @@ static int netlink_broadcast_deliver(struct sock *sk, struct sk_buff *skb)
 	struct netlink_sock *nlk = nlk_sk(sk);
 
 	if (atomic_read(&sk->sk_rmem_alloc) <= sk->sk_rcvbuf &&
-	    !test_bit(NETLINK_CONGESTED, &nlk->state)) {
+	    !test_bit(NETLINK_S_CONGESTED, &nlk->state)) {
 		netlink_skb_set_owner_r(skb, sk);
 		__netlink_sendskb(sk, skb);
 		return atomic_read(&sk->sk_rmem_alloc) > (sk->sk_rcvbuf >> 1);
@@ -1931,8 +1934,17 @@ static void do_one_broadcast(struct sock *sk,
 	    !test_bit(p->group - 1, nlk->groups))
 		return;
 
-	if (!net_eq(sock_net(sk), p->net))
-		return;
+	if (!net_eq(sock_net(sk), p->net)) {
+		if (!(nlk->flags & NETLINK_F_LISTEN_ALL_NSID))
+			return;
+
+		if (!peernet_has_id(sock_net(sk), p->net))
+			return;
+
+		if (!file_ns_capable(sk->sk_socket->file, p->net->user_ns,
+				     CAP_NET_BROADCAST))
+			return;
+	}
 
 	if (p->failure) {
 		netlink_overrun(sk);
@@ -1956,23 +1968,33 @@ static void do_one_broadcast(struct sock *sk,
 		netlink_overrun(sk);
 		/* Clone failed. Notify ALL listeners. */
 		p->failure = 1;
-		if (nlk->flags & NETLINK_BROADCAST_SEND_ERROR)
+		if (nlk->flags & NETLINK_F_BROADCAST_SEND_ERROR)
 			p->delivery_failure = 1;
-	} else if (p->tx_filter && p->tx_filter(sk, p->skb2, p->tx_data)) {
+		goto out;
+	}
+	if (p->tx_filter && p->tx_filter(sk, p->skb2, p->tx_data)) {
 		kfree_skb(p->skb2);
 		p->skb2 = NULL;
-	} else if (sk_filter(sk, p->skb2)) {
+		goto out;
+	}
+	if (sk_filter(sk, p->skb2)) {
 		kfree_skb(p->skb2);
 		p->skb2 = NULL;
-	} else if ((val = netlink_broadcast_deliver(sk, p->skb2)) < 0) {
+		goto out;
+	}
+	NETLINK_CB(p->skb2).nsid = peernet2id(sock_net(sk), p->net);
+	NETLINK_CB(p->skb2).nsid_is_set = true;
+	val = netlink_broadcast_deliver(sk, p->skb2);
+	if (val < 0) {
 		netlink_overrun(sk);
-		if (nlk->flags & NETLINK_BROADCAST_SEND_ERROR)
+		if (nlk->flags & NETLINK_F_BROADCAST_SEND_ERROR)
 			p->delivery_failure = 1;
 	} else {
 		p->congested |= val;
 		p->delivered = 1;
 		p->skb2 = NULL;
 	}
+out:
 	sock_put(sk);
 }
 
@@ -2057,7 +2079,7 @@ static int do_one_set_err(struct sock *sk, struct netlink_set_err_data *p)
 	    !test_bit(p->group - 1, nlk->groups))
 		goto out;
 
-	if (p->code == ENOBUFS && nlk->flags & NETLINK_RECV_NO_ENOBUFS) {
+	if (p->code == ENOBUFS && nlk->flags & NETLINK_F_RECV_NO_ENOBUFS) {
 		ret = 1;
 		goto out;
 	}
@@ -2076,7 +2098,7 @@ out:
  * @code: error code, must be negative (as usual in kernelspace)
  *
  * This function returns the number of broadcast listeners that have set the
- * NETLINK_RECV_NO_ENOBUFS socket option.
+ * NETLINK_NO_ENOBUFS socket option.
  */
 int netlink_set_err(struct sock *ssk, u32 portid, u32 group, int code)
 {
@@ -2136,9 +2158,9 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 	switch (optname) {
 	case NETLINK_PKTINFO:
 		if (val)
-			nlk->flags |= NETLINK_RECV_PKTINFO;
+			nlk->flags |= NETLINK_F_RECV_PKTINFO;
 		else
-			nlk->flags &= ~NETLINK_RECV_PKTINFO;
+			nlk->flags &= ~NETLINK_F_RECV_PKTINFO;
 		err = 0;
 		break;
 	case NETLINK_ADD_MEMBERSHIP:
@@ -2167,18 +2189,18 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 	}
 	case NETLINK_BROADCAST_ERROR:
 		if (val)
-			nlk->flags |= NETLINK_BROADCAST_SEND_ERROR;
+			nlk->flags |= NETLINK_F_BROADCAST_SEND_ERROR;
 		else
-			nlk->flags &= ~NETLINK_BROADCAST_SEND_ERROR;
+			nlk->flags &= ~NETLINK_F_BROADCAST_SEND_ERROR;
 		err = 0;
 		break;
 	case NETLINK_NO_ENOBUFS:
 		if (val) {
-			nlk->flags |= NETLINK_RECV_NO_ENOBUFS;
-			clear_bit(NETLINK_CONGESTED, &nlk->state);
+			nlk->flags |= NETLINK_F_RECV_NO_ENOBUFS;
+			clear_bit(NETLINK_S_CONGESTED, &nlk->state);
 			wake_up_interruptible(&nlk->wait);
 		} else {
-			nlk->flags &= ~NETLINK_RECV_NO_ENOBUFS;
+			nlk->flags &= ~NETLINK_F_RECV_NO_ENOBUFS;
 		}
 		err = 0;
 		break;
@@ -2201,6 +2223,16 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 		break;
 	}
 #endif /* CONFIG_NETLINK_MMAP */
+	case NETLINK_LISTEN_ALL_NSID:
+		if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_BROADCAST))
+			return -EPERM;
+
+		if (val)
+			nlk->flags |= NETLINK_F_LISTEN_ALL_NSID;
+		else
+			nlk->flags &= ~NETLINK_F_LISTEN_ALL_NSID;
+		err = 0;
+		break;
 	default:
 		err = -ENOPROTOOPT;
 	}
@@ -2227,7 +2259,7 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 		if (len < sizeof(int))
 			return -EINVAL;
 		len = sizeof(int);
-		val = nlk->flags & NETLINK_RECV_PKTINFO ? 1 : 0;
+		val = nlk->flags & NETLINK_F_RECV_PKTINFO ? 1 : 0;
 		if (put_user(len, optlen) ||
 		    put_user(val, optval))
 			return -EFAULT;
@@ -2237,7 +2269,7 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 		if (len < sizeof(int))
 			return -EINVAL;
 		len = sizeof(int);
-		val = nlk->flags & NETLINK_BROADCAST_SEND_ERROR ? 1 : 0;
+		val = nlk->flags & NETLINK_F_BROADCAST_SEND_ERROR ? 1 : 0;
 		if (put_user(len, optlen) ||
 		    put_user(val, optval))
 			return -EFAULT;
@@ -2247,7 +2279,7 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 		if (len < sizeof(int))
 			return -EINVAL;
 		len = sizeof(int);
-		val = nlk->flags & NETLINK_RECV_NO_ENOBUFS ? 1 : 0;
+		val = nlk->flags & NETLINK_F_RECV_NO_ENOBUFS ? 1 : 0;
 		if (put_user(len, optlen) ||
 		    put_user(val, optval))
 			return -EFAULT;
@@ -2265,6 +2297,16 @@ static void netlink_cmsg_recv_pktinfo(struct msghdr *msg, struct sk_buff *skb)
 
 	info.group = NETLINK_CB(skb).dst_group;
 	put_cmsg(msg, SOL_NETLINK, NETLINK_PKTINFO, sizeof(info), &info);
+}
+
+static void netlink_cmsg_listen_all_nsid(struct sock *sk, struct msghdr *msg,
+					 struct sk_buff *skb)
+{
+	if (!NETLINK_CB(skb).nsid_is_set)
+		return;
+
+	put_cmsg(msg, SOL_NETLINK, NETLINK_LISTEN_ALL_NSID, sizeof(int),
+		 &NETLINK_CB(skb).nsid);
 }
 
 static int netlink_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
@@ -2418,8 +2460,10 @@ static int netlink_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 		msg->msg_namelen = sizeof(*addr);
 	}
 
-	if (nlk->flags & NETLINK_RECV_PKTINFO)
+	if (nlk->flags & NETLINK_F_RECV_PKTINFO)
 		netlink_cmsg_recv_pktinfo(msg, skb);
+	if (nlk->flags & NETLINK_F_LISTEN_ALL_NSID)
+		netlink_cmsg_listen_all_nsid(sk, msg, skb);
 
 	memset(&scm, 0, sizeof(scm));
 	scm.creds = *NETLINK_CREDS(skb);
@@ -2473,17 +2517,10 @@ __netlink_kernel_create(struct net *net, int unit, struct module *module,
 	if (sock_create_lite(PF_NETLINK, SOCK_DGRAM, unit, &sock))
 		return NULL;
 
-	/*
-	 * We have to just have a reference on the net from sk, but don't
-	 * get_net it. Besides, we cannot get and then put the net here.
-	 * So we create one inside init_net and the move it to net.
-	 */
-
-	if (__netlink_create(&init_net, sock, cb_mutex, unit) < 0)
+	if (__netlink_create(net, sock, cb_mutex, unit, 1) < 0)
 		goto out_sock_release_nosk;
 
 	sk = sock->sk;
-	sk_change_net(sk, net);
 
 	if (!cfg || cfg->groups < 32)
 		groups = 32;
@@ -2502,7 +2539,7 @@ __netlink_kernel_create(struct net *net, int unit, struct module *module,
 		goto out_sock_release;
 
 	nlk = nlk_sk(sk);
-	nlk->flags |= NETLINK_KERNEL_SOCKET;
+	nlk->flags |= NETLINK_F_KERNEL_SOCKET;
 
 	netlink_table_grab();
 	if (!nl_table[unit].registered) {
@@ -2539,7 +2576,10 @@ EXPORT_SYMBOL(__netlink_kernel_create);
 void
 netlink_kernel_release(struct sock *sk)
 {
-	sk_release_kernel(sk);
+	if (sk == NULL || sk->sk_socket == NULL)
+		return;
+
+	sock_release(sk->sk_socket);
 }
 EXPORT_SYMBOL(netlink_kernel_release);
 

@@ -977,7 +977,8 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
  * int (*ndo_bridge_setlink)(struct net_device *dev, struct nlmsghdr *nlh,
  *			     u16 flags)
  * int (*ndo_bridge_getlink)(struct sk_buff *skb, u32 pid, u32 seq,
- *			     struct net_device *dev, u32 filter_mask)
+ *			     struct net_device *dev, u32 filter_mask,
+ *			     int nlflags)
  * int (*ndo_bridge_dellink)(struct net_device *dev, struct nlmsghdr *nlh,
  *			     u16 flags);
  *
@@ -1173,7 +1174,8 @@ struct net_device_ops {
 	int			(*ndo_bridge_getlink)(struct sk_buff *skb,
 						      u32 pid, u32 seq,
 						      struct net_device *dev,
-						      u32 filter_mask);
+						      u32 filter_mask,
+						      int nlflags);
 	int			(*ndo_bridge_dellink)(struct net_device *dev,
 						      struct nlmsghdr *nlh,
 						      u16 flags);
@@ -1653,7 +1655,11 @@ struct net_device {
 	rx_handler_func_t __rcu	*rx_handler;
 	void __rcu		*rx_handler_data;
 
+#ifdef CONFIG_NET_CLS_ACT
+	struct tcf_proto __rcu  *ingress_cl_list;
+#endif
 	struct netdev_queue __rcu *ingress_queue;
+
 	unsigned char		broadcast[MAX_ADDR_LEN];
 #ifdef CONFIG_RFS_ACCEL
 	struct cpu_rmap		*rx_cpu_rmap;

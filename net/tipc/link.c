@@ -1145,11 +1145,8 @@ void tipc_rcv(struct net *net, struct sk_buff *skb, struct tipc_bearer *b_ptr)
 		}
 		/* Synchronize with parallel link if applicable */
 		if (unlikely((l_ptr->flags & LINK_SYNCHING) && !msg_dup(msg))) {
-			link_handle_out_of_seq_msg(l_ptr, skb);
-			if (link_synch(l_ptr))
-				link_retrieve_defq(l_ptr, &head);
-			skb = NULL;
-			goto unlock;
+			if (!link_synch(l_ptr))
+				goto unlock;
 		}
 		l_ptr->next_in_no++;
 		if (unlikely(!skb_queue_empty(&l_ptr->deferdq)))
@@ -1896,6 +1893,9 @@ int tipc_nl_link_set(struct sk_buff *skb, struct genl_info *info)
 
 	name = nla_data(attrs[TIPC_NLA_LINK_NAME]);
 
+	if (strcmp(name, tipc_bclink_name) == 0)
+		return tipc_nl_bc_link_set(net, attrs);
+
 	node = tipc_link_find_owner(net, name, &bearer_id);
 	if (!node)
 		return -EINVAL;
@@ -2013,7 +2013,7 @@ msg_full:
 
 /* Caller should hold appropriate locks to protect the link */
 static int __tipc_nl_add_link(struct net *net, struct tipc_nl_msg *msg,
-			      struct tipc_link *link)
+			      struct tipc_link *link, int nlflags)
 {
 	int err;
 	void *hdr;
@@ -2022,7 +2022,7 @@ static int __tipc_nl_add_link(struct net *net, struct tipc_nl_msg *msg,
 	struct tipc_net *tn = net_generic(net, tipc_net_id);
 
 	hdr = genlmsg_put(msg->skb, msg->portid, msg->seq, &tipc_genl_family,
-			  NLM_F_MULTI, TIPC_NL_LINK_GET);
+			  nlflags, TIPC_NL_LINK_GET);
 	if (!hdr)
 		return -EMSGSIZE;
 
@@ -2095,7 +2095,7 @@ static int __tipc_nl_add_node_links(struct net *net, struct tipc_nl_msg *msg,
 		if (!node->links[i])
 			continue;
 
-		err = __tipc_nl_add_link(net, msg, node->links[i]);
+		err = __tipc_nl_add_link(net, msg, node->links[i], NLM_F_MULTI);
 		if (err)
 			return err;
 	}
@@ -2178,50 +2178,53 @@ out:
 int tipc_nl_link_get(struct sk_buff *skb, struct genl_info *info)
 {
 	struct net *net = genl_info_net(info);
-	struct sk_buff *ans_skb;
 	struct tipc_nl_msg msg;
-	struct tipc_link *link;
-	struct tipc_node *node;
 	char *name;
-	int bearer_id;
 	int err;
 
-	if (!info->attrs[TIPC_NLA_LINK_NAME])
-		return -EINVAL;
-
-	name = nla_data(info->attrs[TIPC_NLA_LINK_NAME]);
-	node = tipc_link_find_owner(net, name, &bearer_id);
-	if (!node)
-		return -EINVAL;
-
-	ans_skb = nlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
-	if (!ans_skb)
-		return -ENOMEM;
-
-	msg.skb = ans_skb;
 	msg.portid = info->snd_portid;
 	msg.seq = info->snd_seq;
 
-	tipc_node_lock(node);
-	link = node->links[bearer_id];
-	if (!link) {
-		err = -EINVAL;
-		goto err_out;
+	if (!info->attrs[TIPC_NLA_LINK_NAME])
+		return -EINVAL;
+	name = nla_data(info->attrs[TIPC_NLA_LINK_NAME]);
+
+	msg.skb = nlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!msg.skb)
+		return -ENOMEM;
+
+	if (strcmp(name, tipc_bclink_name) == 0) {
+		err = tipc_nl_add_bc_link(net, &msg);
+		if (err) {
+			nlmsg_free(msg.skb);
+			return err;
+		}
+	} else {
+		int bearer_id;
+		struct tipc_node *node;
+		struct tipc_link *link;
+
+		node = tipc_link_find_owner(net, name, &bearer_id);
+		if (!node)
+			return -EINVAL;
+
+		tipc_node_lock(node);
+		link = node->links[bearer_id];
+		if (!link) {
+			tipc_node_unlock(node);
+			nlmsg_free(msg.skb);
+			return -EINVAL;
+		}
+
+		err = __tipc_nl_add_link(net, &msg, link, 0);
+		tipc_node_unlock(node);
+		if (err) {
+			nlmsg_free(msg.skb);
+			return err;
+		}
 	}
 
-	err = __tipc_nl_add_link(net, &msg, link);
-	if (err)
-		goto err_out;
-
-	tipc_node_unlock(node);
-
-	return genlmsg_reply(ans_skb, info);
-
-err_out:
-	tipc_node_unlock(node);
-	nlmsg_free(ans_skb);
-
-	return err;
+	return genlmsg_reply(msg.skb, info);
 }
 
 int tipc_nl_link_reset_stats(struct sk_buff *skb, struct genl_info *info)

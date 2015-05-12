@@ -35,6 +35,8 @@ bits 9,10,11: redirect counter -  redirect TTL. Loop avoidance
  *
  * */
 
+#ifndef __KERNEL__
+/* backwards compat for userspace only */
 #define TC_MUNGED          _TC_MAKEMASK1(0)
 #define SET_TC_MUNGED(v)   ( TC_MUNGED | (v & ~TC_MUNGED))
 #define CLR_TC_MUNGED(v)   ( v & ~TC_MUNGED)
@@ -42,6 +44,7 @@ bits 9,10,11: redirect counter -  redirect TTL. Loop avoidance
 #define TC_OK2MUNGE        _TC_MAKEMASK1(1)
 #define SET_TC_OK2MUNGE(v)   ( TC_OK2MUNGE | (v & ~TC_OK2MUNGE))
 #define CLR_TC_OK2MUNGE(v)   ( v & ~TC_OK2MUNGE)
+#endif
 
 #define S_TC_VERD          _TC_MAKE32(2)
 #define M_TC_VERD          _TC_MAKEMASK(4,S_TC_VERD)
@@ -62,11 +65,13 @@ bits 9,10,11: redirect counter -  redirect TTL. Loop avoidance
 #define SET_TC_NCLS(v)   ( TC_NCLS | (v & ~TC_NCLS))
 #define CLR_TC_NCLS(v)   ( v & ~TC_NCLS)
 
+#ifndef __KERNEL__
 #define S_TC_RTTL          _TC_MAKE32(9)
 #define M_TC_RTTL          _TC_MAKEMASK(3,S_TC_RTTL)
 #define G_TC_RTTL(x)       _TC_GETVALUE(x,S_TC_RTTL,M_TC_RTTL)
 #define V_TC_RTTL(x)       _TC_MAKEVALUE(x,S_TC_RTTL)
 #define SET_TC_RTTL(v,n)   ((V_TC_RTTL(n)) | (v & ~M_TC_RTTL))
+#endif
 
 #define S_TC_AT          _TC_MAKE32(12)
 #define M_TC_AT          _TC_MAKEMASK(2,S_TC_AT)
