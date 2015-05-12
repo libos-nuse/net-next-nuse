@@ -1,0 +1,45 @@
+# inherit $(objdir) $(config) $(srcdir) $(to_keep) from command-line
+
+include $(config)
+include $(srcdir)Makefile
+
+# fix minor nits for make version dependencies
+ifeq (3.82,$(firstword $(sort $(MAKE_VERSION) 3.82)))
+  SEPARATOR=
+else
+  SEPARATOR=/
+endif
+
+to_keep_list=$(subst :, ,$(to_keep))
+obj-y += $(lib-y)
+obj-m += $(lib-m)
+subdirs:=$(shell echo $(filter %/, $(obj-y) $(obj-m)) | tr ' ' '\n' | sort -u | tr '\n' ' ')
+subdirs-y := $(filter %/, $(obj-y))
+subdirs-m := $(filter %/, $(obj-m))
+tmp1-obj-y=$(patsubst %/,%/builtin.o,$(obj-y))
+tmp1-obj-m=$(filter-out $(subdirs-m),$(obj-m))
+tmp2-obj-y=$(foreach m,$(tmp1-obj-y), $(if $($(m:.o=-objs)),$($(m:.o=-objs)),$(if $($(m:.o=-y)),$($(m:.o=-y)),$(m))))
+tmp2-obj-m=$(foreach m,$(tmp1-obj-m), $(if $($(m:.o=-objs)),$($(m:.o=-objs)),$(if $($(m:.o=-y)),$($(m:.o=-y)),$(m))))
+tmp3-obj-y=$(if $(to_keep_list),$(filter $(to_keep_list),$(tmp2-obj-y)),$(tmp2-obj-y))
+tmp3-obj-m=$(if $(to_keep_list),$(filter $(to_keep_list),$(tmp2-obj-m)),$(tmp2-obj-m))
+final-obj-y=$(tmp3-obj-y)
+final-obj-m=$(tmp3-obj-m)
+
+print: $(final-obj-m) $(subdirs)
+	@if test $(if $(final-obj-y),1); then \
+	  echo -n $(objdir)builtin.o; echo -n "="; echo $(addprefix $(objdir),$(final-obj-y)); \
+	  echo -n $(objdir)builtin.o; echo -n ": "; echo $(addprefix $(objdir),$(final-obj-y)); \
+	  echo -n "-include "; echo $(addprefix $(objdir).,$(addsuffix ".cmd", $(final-obj-y))); \
+	  echo -n "all-obj-for-clean+="; echo $(addprefix $(objdir),$(final-obj-y)) $(objdir)builtin.o; \
+	fi
+$(final-obj-m):
+	@echo -n "modules+="; echo $(addprefix $(objdir),$(@:.o=.ko))
+	@echo -n $(addprefix $(objdir),$(@:.o=.ko)); echo -n ": "
+	@echo $(addprefix $(objdir),$(if $($(@:.o=-objs)),$($(@:.o=-objs)),$@))
+	@echo -n $(addprefix $(objdir),$(@:.o=.ko)); echo -n "="
+	@echo $(addprefix $(objdir),$(if $($(@:.o=-objs)),$($(@:.o=-objs)),$@))
+$(subdirs):
+	@$(MAKE) -s -f $(firstword $(MAKEFILE_LIST)) objdir=$(objdir)$@$(SEPARATOR) config=$(config) srcdir=$(srcdir)$@$(SEPARATOR) to_keep=$(to_keep) print 2>/dev/null
+
+.PHONY : core
+.NOTPARALLEL : print $(subdirs) $(final-obj-m)
