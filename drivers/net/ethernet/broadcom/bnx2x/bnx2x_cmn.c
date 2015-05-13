@@ -662,7 +662,7 @@ static int bnx2x_fill_frag_skb(struct bnx2x *bp, struct bnx2x_fastpath *fp,
 static void bnx2x_frag_free(const struct bnx2x_fastpath *fp, void *data)
 {
 	if (fp->rx_frag_size)
-		put_page(virt_to_head_page(data));
+		skb_free_frag(data);
 	else
 		kfree(data);
 }
@@ -4786,6 +4786,11 @@ int bnx2x_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct bnx2x *bp = netdev_priv(dev);
 
+	if (pci_num_vf(bp->pdev)) {
+		DP(BNX2X_MSG_IOV, "VFs are enabled, can not change MTU\n");
+		return -EPERM;
+	}
+
 	if (bp->recovery_state != BNX2X_RECOVERY_DONE) {
 		BNX2X_ERR("Can't perform change MTU during parity recovery\n");
 		return -EAGAIN;
@@ -4937,11 +4942,6 @@ int bnx2x_resume(struct pci_dev *pdev)
 		return -ENODEV;
 	}
 	bp = netdev_priv(dev);
-
-	if (pci_num_vf(bp->pdev)) {
-		DP(BNX2X_MSG_IOV, "VFs are enabled, can not change MTU\n");
-		return -EPERM;
-	}
 
 	if (bp->recovery_state != BNX2X_RECOVERY_DONE) {
 		BNX2X_ERR("Handling parity error recovery. Try again later\n");
