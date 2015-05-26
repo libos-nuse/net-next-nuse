@@ -7,7 +7,7 @@ struct thread_struct {};
 #define cpu_relax_lowlatency() cpu_relax()
 #define KSTK_ESP(tsk)	(0)
 
-void *current_text_addr(void);
+# define current_text_addr() ({ __label__ _l; _l: &&_l; })
 
 #define TASK_SIZE ((~(long)0))
 
