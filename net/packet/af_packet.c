@@ -1301,17 +1301,12 @@ static int packet_rcv_has_room(struct packet_sock *po, struct sk_buff *skb)
 	int ret;
 	bool has_room;
 
-	if (po->prot_hook.func == tpacket_rcv) {
-		spin_lock(&po->sk.sk_receive_queue.lock);
-		ret = __packet_rcv_has_room(po, skb);
-		spin_unlock(&po->sk.sk_receive_queue.lock);
-	} else {
-		ret = __packet_rcv_has_room(po, skb);
-	}
-
+	spin_lock_bh(&po->sk.sk_receive_queue.lock);
+	ret = __packet_rcv_has_room(po, skb);
 	has_room = ret == ROOM_NORMAL;
 	if (po->pressure == has_room)
-		xchg(&po->pressure, !has_room);
+		po->pressure = !has_room;
+	spin_unlock_bh(&po->sk.sk_receive_queue.lock);
 
 	return ret;
 }
@@ -1394,7 +1389,7 @@ static unsigned int fanout_demux_rollover(struct packet_fanout *f,
 					  unsigned int idx, bool try_self,
 					  unsigned int num)
 {
-	struct packet_sock *po, *po_next;
+	struct packet_sock *po, *po_next, *po_skip = NULL;
 	unsigned int i, j, room = ROOM_NONE;
 
 	po = pkt_sk(f->arr[idx]);
@@ -1404,12 +1399,13 @@ static unsigned int fanout_demux_rollover(struct packet_fanout *f,
 		if (room == ROOM_NORMAL ||
 		    (room == ROOM_LOW && !fanout_flow_is_huge(po, skb)))
 			return idx;
+		po_skip = po;
 	}
 
 	i = j = min_t(int, po->rollover->sock, num - 1);
 	do {
 		po_next = pkt_sk(f->arr[i]);
-		if (po_next != po && !po_next->pressure &&
+		if (po_next != po_skip && !po_next->pressure &&
 		    packet_rcv_has_room(po_next, skb) == ROOM_NORMAL) {
 			if (i != j)
 				po->rollover->sock = i;
@@ -1554,7 +1550,8 @@ static int fanout_add(struct sock *sk, u16 id, u16 type_flags)
 	if (po->fanout)
 		return -EALREADY;
 
-	if (type_flags & PACKET_FANOUT_FLAG_ROLLOVER) {
+	if (type == PACKET_FANOUT_ROLLOVER ||
+	    (type_flags & PACKET_FANOUT_FLAG_ROLLOVER)) {
 		po->rollover = kzalloc(sizeof(*po->rollover), GFP_KERNEL);
 		if (!po->rollover)
 			return -ENOMEM;
@@ -3814,7 +3811,7 @@ static unsigned int packet_poll(struct file *file, struct socket *sock,
 			mask |= POLLIN | POLLRDNORM;
 	}
 	if (po->pressure && __packet_rcv_has_room(po, NULL) == ROOM_NORMAL)
-		xchg(&po->pressure, 0);
+		po->pressure = 0;
 	spin_unlock_bh(&sk->sk_receive_queue.lock);
 	spin_lock_bh(&sk->sk_write_queue.lock);
 	if (po->tx_ring.pg_vec) {

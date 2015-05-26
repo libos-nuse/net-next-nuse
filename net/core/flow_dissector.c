@@ -221,13 +221,13 @@ flow_label:
 			key_basic->ip_proto = ip_proto;
 			key_basic->thoff = (u16)nhoff;
 
-			if (!skb_flow_dissector_uses_key(flow_dissector,
-							 FLOW_DISSECTOR_KEY_PORTS))
-				break;
-			key_ports = skb_flow_dissector_target(flow_dissector,
-							      FLOW_DISSECTOR_KEY_PORTS,
-							      target_container);
-			key_ports->ports = flow_label;
+			if (skb_flow_dissector_uses_key(flow_dissector,
+							FLOW_DISSECTOR_KEY_PORTS)) {
+				key_ports = skb_flow_dissector_target(flow_dissector,
+								      FLOW_DISSECTOR_KEY_PORTS,
+								      target_container);
+				key_ports->ports = flow_label;
+			}
 
 			return true;
 		}
@@ -279,7 +279,6 @@ flow_label:
 
 		if (skb_flow_dissector_uses_key(flow_dissector,
 						FLOW_DISSECTOR_KEY_IPV6_HASH_ADDRS)) {
-			return true;
 			key_addrs = skb_flow_dissector_target(flow_dissector,
 							      FLOW_DISSECTOR_KEY_IPV6_HASH_ADDRS,
 							      target_container);

@@ -35,6 +35,7 @@
 #include <linux/netdev_features.h>
 #include <linux/sched.h>
 #include <net/flow_dissector.h>
+#include <linux/splice.h>
 
 /* A. Checksumming of received packets by device.
  *
@@ -170,12 +171,15 @@ struct nf_bridge_info {
 		BRNF_PROTO_UNCHANGED,
 		BRNF_PROTO_8021Q,
 		BRNF_PROTO_PPPOE
-	} orig_proto;
+	} orig_proto:8;
 	bool			pkt_otherhost;
 	unsigned int		mask;
 	struct net_device	*physindev;
-	struct net_device	*physoutdev;
-	char			neigh_header[8];
+	union {
+		struct net_device *physoutdev;
+		char neigh_header[8];
+	};
+	__be32			ipv4_daddr;
 };
 #endif
 
@@ -857,6 +861,9 @@ int skb_append_datato_frags(struct sock *sk, struct sk_buff *skb,
 			    int getfrag(void *from, char *to, int offset,
 					int len, int odd, struct sk_buff *skb),
 			    void *from, int length);
+
+int skb_append_pagefrags(struct sk_buff *skb, struct page *page,
+			 int offset, size_t size);
 
 struct skb_seq_state {
 	__u32		lower_offset;
@@ -2693,9 +2700,15 @@ int skb_copy_bits(const struct sk_buff *skb, int offset, void *to, int len);
 int skb_store_bits(struct sk_buff *skb, int offset, const void *from, int len);
 __wsum skb_copy_and_csum_bits(const struct sk_buff *skb, int offset, u8 *to,
 			      int len, __wsum csum);
-int skb_splice_bits(struct sk_buff *skb, unsigned int offset,
+ssize_t skb_socket_splice(struct sock *sk,
+			  struct pipe_inode_info *pipe,
+			  struct splice_pipe_desc *spd);
+int skb_splice_bits(struct sk_buff *skb, struct sock *sk, unsigned int offset,
 		    struct pipe_inode_info *pipe, unsigned int len,
-		    unsigned int flags);
+		    unsigned int flags,
+		    ssize_t (*splice_cb)(struct sock *,
+					 struct pipe_inode_info *,
+					 struct splice_pipe_desc *));
 void skb_copy_and_csum_dev(const struct sk_buff *skb, u8 *to);
 unsigned int skb_zerocopy_headlen(const struct sk_buff *from);
 int skb_zerocopy(struct sk_buff *to, struct sk_buff *from,
@@ -3051,7 +3064,7 @@ static inline __sum16 __skb_checksum_validate_complete(struct sk_buff *skb,
 		}
 	} else if (skb->csum_bad) {
 		/* ip_summed == CHECKSUM_NONE in this case */
-		return 1;
+		return (__force __sum16)1;
 	}
 
 	skb->csum = psum;
@@ -3353,15 +3366,14 @@ static inline int gso_pskb_expand_head(struct sk_buff *skb, int extra)
 static inline __sum16 gso_make_checksum(struct sk_buff *skb, __wsum res)
 {
 	int plen = SKB_GSO_CB(skb)->csum_start - skb_headroom(skb) -
-	    skb_transport_offset(skb);
-	__u16 csum;
+		   skb_transport_offset(skb);
+	__wsum partial;
 
-	csum = csum_fold(csum_partial(skb_transport_header(skb),
-				      plen, skb->csum));
+	partial = csum_partial(skb_transport_header(skb), plen, skb->csum);
 	skb->csum = res;
 	SKB_GSO_CB(skb)->csum_start -= plen;
 
-	return csum;
+	return csum_fold(partial);
 }
 
 static inline bool skb_is_gso(const struct sk_buff *skb)

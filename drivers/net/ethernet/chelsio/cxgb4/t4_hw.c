@@ -214,8 +214,8 @@ static void fw_asrt(struct adapter *adap, u32 mbox_addr)
 	get_mbox_rpl(adap, (__be64 *)&asrt, sizeof(asrt) / 8, mbox_addr);
 	dev_alert(adap->pdev_dev,
 		  "FW assertion at %.16s:%u, val0 %#x, val1 %#x\n",
-		  asrt.u.assert.filename_0_7, ntohl(asrt.u.assert.line),
-		  ntohl(asrt.u.assert.x), ntohl(asrt.u.assert.y));
+		  asrt.u.assert.filename_0_7, be32_to_cpu(asrt.u.assert.line),
+		  be32_to_cpu(asrt.u.assert.x), be32_to_cpu(asrt.u.assert.y));
 }
 
 static void dump_mbox(struct adapter *adap, int mbox, u32 data_reg)
@@ -233,13 +233,14 @@ static void dump_mbox(struct adapter *adap, int mbox, u32 data_reg)
 }
 
 /**
- *	t4_wr_mbox_meat - send a command to FW through the given mailbox
+ *	t4_wr_mbox_meat_timeout - send a command to FW through the given mailbox
  *	@adap: the adapter
  *	@mbox: index of the mailbox to use
  *	@cmd: the command to write
  *	@size: command length in bytes
  *	@rpl: where to optionally store the reply
  *	@sleep_ok: if true we may sleep while awaiting command completion
+ *	@timeout: time to wait for command to finish before timing out
  *
  *	Sends the given command to FW through the selected mailbox and waits
  *	for the FW to execute the command.  If @rpl is not %NULL it is used to
@@ -254,8 +255,8 @@ static void dump_mbox(struct adapter *adap, int mbox, u32 data_reg)
  *	command or FW executes it but signals an error.  In the latter case
  *	the return value is the error code indicated by FW (negated).
  */
-int t4_wr_mbox_meat(struct adapter *adap, int mbox, const void *cmd, int size,
-		    void *rpl, bool sleep_ok)
+int t4_wr_mbox_meat_timeout(struct adapter *adap, int mbox, const void *cmd,
+			    int size, void *rpl, bool sleep_ok, int timeout)
 {
 	static const int delay[] = {
 		1, 1, 3, 5, 10, 10, 20, 50, 100, 200
@@ -294,7 +295,7 @@ int t4_wr_mbox_meat(struct adapter *adap, int mbox, const void *cmd, int size,
 	delay_idx = 0;
 	ms = delay[0];
 
-	for (i = 0; i < FW_CMD_MAX_TIMEOUT; i += ms) {
+	for (i = 0; i < timeout; i += ms) {
 		if (sleep_ok) {
 			ms = delay[delay_idx];  /* last element may repeat */
 			if (delay_idx < ARRAY_SIZE(delay) - 1)
@@ -332,114 +333,11 @@ int t4_wr_mbox_meat(struct adapter *adap, int mbox, const void *cmd, int size,
 	return -ETIMEDOUT;
 }
 
-/**
- *	t4_mc_read - read from MC through backdoor accesses
- *	@adap: the adapter
- *	@addr: address of first byte requested
- *	@idx: which MC to access
- *	@data: 64 bytes of data containing the requested address
- *	@ecc: where to store the corresponding 64-bit ECC word
- *
- *	Read 64 bytes of data from MC starting at a 64-byte-aligned address
- *	that covers the requested address @addr.  If @parity is not %NULL it
- *	is assigned the 64-bit ECC word for the read data.
- */
-int t4_mc_read(struct adapter *adap, int idx, u32 addr, __be32 *data, u64 *ecc)
+int t4_wr_mbox_meat(struct adapter *adap, int mbox, const void *cmd, int size,
+		    void *rpl, bool sleep_ok)
 {
-	int i;
-	u32 mc_bist_cmd, mc_bist_cmd_addr, mc_bist_cmd_len;
-	u32 mc_bist_status_rdata, mc_bist_data_pattern;
-
-	if (is_t4(adap->params.chip)) {
-		mc_bist_cmd = MC_BIST_CMD_A;
-		mc_bist_cmd_addr = MC_BIST_CMD_ADDR_A;
-		mc_bist_cmd_len = MC_BIST_CMD_LEN_A;
-		mc_bist_status_rdata = MC_BIST_STATUS_RDATA_A;
-		mc_bist_data_pattern = MC_BIST_DATA_PATTERN_A;
-	} else {
-		mc_bist_cmd = MC_REG(MC_P_BIST_CMD_A, idx);
-		mc_bist_cmd_addr = MC_REG(MC_P_BIST_CMD_ADDR_A, idx);
-		mc_bist_cmd_len = MC_REG(MC_P_BIST_CMD_LEN_A, idx);
-		mc_bist_status_rdata = MC_REG(MC_P_BIST_STATUS_RDATA_A, idx);
-		mc_bist_data_pattern = MC_REG(MC_P_BIST_DATA_PATTERN_A, idx);
-	}
-
-	if (t4_read_reg(adap, mc_bist_cmd) & START_BIST_F)
-		return -EBUSY;
-	t4_write_reg(adap, mc_bist_cmd_addr, addr & ~0x3fU);
-	t4_write_reg(adap, mc_bist_cmd_len, 64);
-	t4_write_reg(adap, mc_bist_data_pattern, 0xc);
-	t4_write_reg(adap, mc_bist_cmd, BIST_OPCODE_V(1) | START_BIST_F |
-		     BIST_CMD_GAP_V(1));
-	i = t4_wait_op_done(adap, mc_bist_cmd, START_BIST_F, 0, 10, 1);
-	if (i)
-		return i;
-
-#define MC_DATA(i) MC_BIST_STATUS_REG(mc_bist_status_rdata, i)
-
-	for (i = 15; i >= 0; i--)
-		*data++ = htonl(t4_read_reg(adap, MC_DATA(i)));
-	if (ecc)
-		*ecc = t4_read_reg64(adap, MC_DATA(16));
-#undef MC_DATA
-	return 0;
-}
-
-/**
- *	t4_edc_read - read from EDC through backdoor accesses
- *	@adap: the adapter
- *	@idx: which EDC to access
- *	@addr: address of first byte requested
- *	@data: 64 bytes of data containing the requested address
- *	@ecc: where to store the corresponding 64-bit ECC word
- *
- *	Read 64 bytes of data from EDC starting at a 64-byte-aligned address
- *	that covers the requested address @addr.  If @parity is not %NULL it
- *	is assigned the 64-bit ECC word for the read data.
- */
-int t4_edc_read(struct adapter *adap, int idx, u32 addr, __be32 *data, u64 *ecc)
-{
-	int i;
-	u32 edc_bist_cmd, edc_bist_cmd_addr, edc_bist_cmd_len;
-	u32 edc_bist_cmd_data_pattern, edc_bist_status_rdata;
-
-	if (is_t4(adap->params.chip)) {
-		edc_bist_cmd = EDC_REG(EDC_BIST_CMD_A, idx);
-		edc_bist_cmd_addr = EDC_REG(EDC_BIST_CMD_ADDR_A, idx);
-		edc_bist_cmd_len = EDC_REG(EDC_BIST_CMD_LEN_A, idx);
-		edc_bist_cmd_data_pattern = EDC_REG(EDC_BIST_DATA_PATTERN_A,
-						    idx);
-		edc_bist_status_rdata = EDC_REG(EDC_BIST_STATUS_RDATA_A,
-						idx);
-	} else {
-		edc_bist_cmd = EDC_REG_T5(EDC_H_BIST_CMD_A, idx);
-		edc_bist_cmd_addr = EDC_REG_T5(EDC_H_BIST_CMD_ADDR_A, idx);
-		edc_bist_cmd_len = EDC_REG_T5(EDC_H_BIST_CMD_LEN_A, idx);
-		edc_bist_cmd_data_pattern =
-			EDC_REG_T5(EDC_H_BIST_DATA_PATTERN_A, idx);
-		edc_bist_status_rdata =
-			 EDC_REG_T5(EDC_H_BIST_STATUS_RDATA_A, idx);
-	}
-
-	if (t4_read_reg(adap, edc_bist_cmd) & START_BIST_F)
-		return -EBUSY;
-	t4_write_reg(adap, edc_bist_cmd_addr, addr & ~0x3fU);
-	t4_write_reg(adap, edc_bist_cmd_len, 64);
-	t4_write_reg(adap, edc_bist_cmd_data_pattern, 0xc);
-	t4_write_reg(adap, edc_bist_cmd,
-		     BIST_OPCODE_V(1) | BIST_CMD_GAP_V(1) | START_BIST_F);
-	i = t4_wait_op_done(adap, edc_bist_cmd, START_BIST_F, 0, 10, 1);
-	if (i)
-		return i;
-
-#define EDC_DATA(i) (EDC_BIST_STATUS_REG(edc_bist_status_rdata, i))
-
-	for (i = 15; i >= 0; i--)
-		*data++ = htonl(t4_read_reg(adap, EDC_DATA(i)));
-	if (ecc)
-		*ecc = t4_read_reg64(adap, EDC_DATA(16));
-#undef EDC_DATA
-	return 0;
+	return t4_wr_mbox_meat_timeout(adap, mbox, cmd, size, rpl, sleep_ok,
+				       FW_CMD_MAX_TIMEOUT);
 }
 
 /**
@@ -625,6 +523,102 @@ int t4_memory_rw(struct adapter *adap, int win, int mtype, u32 addr,
 	return 0;
 }
 
+/* Return the specified PCI-E Configuration Space register from our Physical
+ * Function.  We try first via a Firmware LDST Command since we prefer to let
+ * the firmware own all of these registers, but if that fails we go for it
+ * directly ourselves.
+ */
+u32 t4_read_pcie_cfg4(struct adapter *adap, int reg)
+{
+	u32 val, ldst_addrspace;
+
+	/* If fw_attach != 0, construct and send the Firmware LDST Command to
+	 * retrieve the specified PCI-E Configuration Space register.
+	 */
+	struct fw_ldst_cmd ldst_cmd;
+	int ret;
+
+	memset(&ldst_cmd, 0, sizeof(ldst_cmd));
+	ldst_addrspace = FW_LDST_CMD_ADDRSPACE_V(FW_LDST_ADDRSPC_FUNC_PCIE);
+	ldst_cmd.op_to_addrspace = cpu_to_be32(FW_CMD_OP_V(FW_LDST_CMD) |
+					       FW_CMD_REQUEST_F |
+					       FW_CMD_READ_F |
+					       ldst_addrspace);
+	ldst_cmd.cycles_to_len16 = cpu_to_be32(FW_LEN16(ldst_cmd));
+	ldst_cmd.u.pcie.select_naccess = FW_LDST_CMD_NACCESS_V(1);
+	ldst_cmd.u.pcie.ctrl_to_fn =
+		(FW_LDST_CMD_LC_F | FW_LDST_CMD_FN_V(adap->fn));
+	ldst_cmd.u.pcie.r = reg;
+
+	/* If the LDST Command succeeds, return the result, otherwise
+	 * fall through to reading it directly ourselves ...
+	 */
+	ret = t4_wr_mbox(adap, adap->mbox, &ldst_cmd, sizeof(ldst_cmd),
+			 &ldst_cmd);
+	if (ret == 0)
+		val = be32_to_cpu(ldst_cmd.u.pcie.data[0]);
+	else
+		/* Read the desired Configuration Space register via the PCI-E
+		 * Backdoor mechanism.
+		 */
+		t4_hw_pci_read_cfg4(adap, reg, &val);
+	return val;
+}
+
+/* Get the window based on base passed to it.
+ * Window aperture is currently unhandled, but there is no use case for it
+ * right now
+ */
+static u32 t4_get_window(struct adapter *adap, u32 pci_base, u64 pci_mask,
+			 u32 memwin_base)
+{
+	u32 ret;
+
+	if (is_t4(adap->params.chip)) {
+		u32 bar0;
+
+		/* Truncation intentional: we only read the bottom 32-bits of
+		 * the 64-bit BAR0/BAR1 ...  We use the hardware backdoor
+		 * mechanism to read BAR0 instead of using
+		 * pci_resource_start() because we could be operating from
+		 * within a Virtual Machine which is trapping our accesses to
+		 * our Configuration Space and we need to set up the PCI-E
+		 * Memory Window decoders with the actual addresses which will
+		 * be coming across the PCI-E link.
+		 */
+		bar0 = t4_read_pcie_cfg4(adap, pci_base);
+		bar0 &= pci_mask;
+		adap->t4_bar0 = bar0;
+
+		ret = bar0 + memwin_base;
+	} else {
+		/* For T5, only relative offset inside the PCIe BAR is passed */
+		ret = memwin_base;
+	}
+	return ret;
+}
+
+/* Get the default utility window (win0) used by everyone */
+u32 t4_get_util_window(struct adapter *adap)
+{
+	return t4_get_window(adap, PCI_BASE_ADDRESS_0,
+			     PCI_BASE_ADDRESS_MEM_MASK, MEMWIN0_BASE);
+}
+
+/* Set up memory window for accessing adapter memory ranges.  (Read
+ * back MA register to ensure that changes propagate before we attempt
+ * to use the new values.)
+ */
+void t4_setup_memwin(struct adapter *adap, u32 memwin_base, u32 window)
+{
+	t4_write_reg(adap,
+		     PCIE_MEM_ACCESS_REG(PCIE_MEM_ACCESS_BASE_WIN_A, window),
+		     memwin_base | BIR_V(0) |
+		     WINDOW_V(ilog2(MEMWIN0_APERTURE) - WINDOW_SHIFT_X));
+	t4_read_reg(adap,
+		    PCIE_MEM_ACCESS_REG(PCIE_MEM_ACCESS_BASE_WIN_A, window));
+}
+
 /**
  *	t4_get_regs_len - return the size of the chips register set
  *	@adapter: the adapter
@@ -666,7 +660,8 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x11fc, 0x123c,
 		0x1300, 0x173c,
 		0x1800, 0x18fc,
-		0x3000, 0x30d8,
+		0x3000, 0x305c,
+		0x3068, 0x30d8,
 		0x30e0, 0x5924,
 		0x5960, 0x59d4,
 		0x5a00, 0x5af8,
@@ -729,7 +724,7 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x19238, 0x1924c,
 		0x193f8, 0x19474,
 		0x19490, 0x194f8,
-		0x19800, 0x19f30,
+		0x19800, 0x19f4c,
 		0x1a000, 0x1a06c,
 		0x1a0b0, 0x1a120,
 		0x1a128, 0x1a138,
@@ -878,7 +873,7 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x27780, 0x2778c,
 		0x27800, 0x27c38,
 		0x27c80, 0x27d7c,
-		0x27e00, 0x27e04
+		0x27e00, 0x27e04,
 	};
 
 	static const unsigned int t5_reg_ranges[] = {
@@ -888,7 +883,7 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x1280, 0x173c,
 		0x1800, 0x18fc,
 		0x3000, 0x3028,
-		0x3060, 0x30d8,
+		0x3068, 0x30d8,
 		0x30e0, 0x30fc,
 		0x3140, 0x357c,
 		0x35a8, 0x35cc,
@@ -900,7 +895,7 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x5940, 0x59dc,
 		0x59fc, 0x5a18,
 		0x5a60, 0x5a9c,
-		0x5b9c, 0x5bfc,
+		0x5b94, 0x5bfc,
 		0x6000, 0x6040,
 		0x6058, 0x614c,
 		0x7700, 0x7798,
@@ -1014,27 +1009,30 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x30800, 0x30834,
 		0x308c0, 0x30908,
 		0x30910, 0x309ac,
-		0x30a00, 0x30a04,
-		0x30a0c, 0x30a2c,
+		0x30a00, 0x30a2c,
 		0x30a44, 0x30a50,
 		0x30a74, 0x30c24,
+		0x30d00, 0x30d00,
 		0x30d08, 0x30d14,
 		0x30d1c, 0x30d20,
 		0x30d3c, 0x30d50,
 		0x31200, 0x3120c,
 		0x31220, 0x31220,
 		0x31240, 0x31240,
-		0x31600, 0x31600,
-		0x31608, 0x3160c,
+		0x31600, 0x3160c,
 		0x31a00, 0x31a1c,
-		0x31e04, 0x31e20,
+		0x31e00, 0x31e20,
 		0x31e38, 0x31e3c,
 		0x31e80, 0x31e80,
 		0x31e88, 0x31ea8,
 		0x31eb0, 0x31eb4,
 		0x31ec8, 0x31ed4,
 		0x31fb8, 0x32004,
-		0x32208, 0x3223c,
+		0x32200, 0x32200,
+		0x32208, 0x32240,
+		0x32248, 0x32280,
+		0x32288, 0x322c0,
+		0x322c8, 0x322fc,
 		0x32600, 0x32630,
 		0x32a00, 0x32abc,
 		0x32b00, 0x32b70,
@@ -1074,27 +1072,30 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x34800, 0x34834,
 		0x348c0, 0x34908,
 		0x34910, 0x349ac,
-		0x34a00, 0x34a04,
-		0x34a0c, 0x34a2c,
+		0x34a00, 0x34a2c,
 		0x34a44, 0x34a50,
 		0x34a74, 0x34c24,
+		0x34d00, 0x34d00,
 		0x34d08, 0x34d14,
 		0x34d1c, 0x34d20,
 		0x34d3c, 0x34d50,
 		0x35200, 0x3520c,
 		0x35220, 0x35220,
 		0x35240, 0x35240,
-		0x35600, 0x35600,
-		0x35608, 0x3560c,
+		0x35600, 0x3560c,
 		0x35a00, 0x35a1c,
-		0x35e04, 0x35e20,
+		0x35e00, 0x35e20,
 		0x35e38, 0x35e3c,
 		0x35e80, 0x35e80,
 		0x35e88, 0x35ea8,
 		0x35eb0, 0x35eb4,
 		0x35ec8, 0x35ed4,
 		0x35fb8, 0x36004,
-		0x36208, 0x3623c,
+		0x36200, 0x36200,
+		0x36208, 0x36240,
+		0x36248, 0x36280,
+		0x36288, 0x362c0,
+		0x362c8, 0x362fc,
 		0x36600, 0x36630,
 		0x36a00, 0x36abc,
 		0x36b00, 0x36b70,
@@ -1134,27 +1135,30 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x38800, 0x38834,
 		0x388c0, 0x38908,
 		0x38910, 0x389ac,
-		0x38a00, 0x38a04,
-		0x38a0c, 0x38a2c,
+		0x38a00, 0x38a2c,
 		0x38a44, 0x38a50,
 		0x38a74, 0x38c24,
+		0x38d00, 0x38d00,
 		0x38d08, 0x38d14,
 		0x38d1c, 0x38d20,
 		0x38d3c, 0x38d50,
 		0x39200, 0x3920c,
 		0x39220, 0x39220,
 		0x39240, 0x39240,
-		0x39600, 0x39600,
-		0x39608, 0x3960c,
+		0x39600, 0x3960c,
 		0x39a00, 0x39a1c,
-		0x39e04, 0x39e20,
+		0x39e00, 0x39e20,
 		0x39e38, 0x39e3c,
 		0x39e80, 0x39e80,
 		0x39e88, 0x39ea8,
 		0x39eb0, 0x39eb4,
 		0x39ec8, 0x39ed4,
 		0x39fb8, 0x3a004,
-		0x3a208, 0x3a23c,
+		0x3a200, 0x3a200,
+		0x3a208, 0x3a240,
+		0x3a248, 0x3a280,
+		0x3a288, 0x3a2c0,
+		0x3a2c8, 0x3a2fc,
 		0x3a600, 0x3a630,
 		0x3aa00, 0x3aabc,
 		0x3ab00, 0x3ab70,
@@ -1194,27 +1198,30 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x3c800, 0x3c834,
 		0x3c8c0, 0x3c908,
 		0x3c910, 0x3c9ac,
-		0x3ca00, 0x3ca04,
-		0x3ca0c, 0x3ca2c,
+		0x3ca00, 0x3ca2c,
 		0x3ca44, 0x3ca50,
 		0x3ca74, 0x3cc24,
+		0x3cd00, 0x3cd00,
 		0x3cd08, 0x3cd14,
 		0x3cd1c, 0x3cd20,
 		0x3cd3c, 0x3cd50,
 		0x3d200, 0x3d20c,
 		0x3d220, 0x3d220,
 		0x3d240, 0x3d240,
-		0x3d600, 0x3d600,
-		0x3d608, 0x3d60c,
+		0x3d600, 0x3d60c,
 		0x3da00, 0x3da1c,
-		0x3de04, 0x3de20,
+		0x3de00, 0x3de20,
 		0x3de38, 0x3de3c,
 		0x3de80, 0x3de80,
 		0x3de88, 0x3dea8,
 		0x3deb0, 0x3deb4,
 		0x3dec8, 0x3ded4,
 		0x3dfb8, 0x3e004,
-		0x3e208, 0x3e23c,
+		0x3e200, 0x3e200,
+		0x3e208, 0x3e240,
+		0x3e248, 0x3e280,
+		0x3e288, 0x3e2c0,
+		0x3e2c8, 0x3e2fc,
 		0x3e600, 0x3e630,
 		0x3ea00, 0x3eabc,
 		0x3eb00, 0x3eb70,
@@ -1247,7 +1254,7 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x3fcf0, 0x3fcfc,
 		0x40000, 0x4000c,
 		0x40040, 0x40068,
-		0x40080, 0x40144,
+		0x4007c, 0x40144,
 		0x40180, 0x4018c,
 		0x40200, 0x40298,
 		0x402ac, 0x4033c,
@@ -1275,7 +1282,7 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 		0x47800, 0x47814,
 		0x48000, 0x4800c,
 		0x48040, 0x48068,
-		0x48080, 0x48144,
+		0x4807c, 0x48144,
 		0x48180, 0x4818c,
 		0x48200, 0x48298,
 		0x482ac, 0x4833c,
@@ -1618,7 +1625,7 @@ int t4_read_flash(struct adapter *adapter, unsigned int addr,
 		if (ret)
 			return ret;
 		if (byte_oriented)
-			*data = (__force __u32) (htonl(*data));
+			*data = (__force __u32)(cpu_to_be32(*data));
 	}
 	return 0;
 }
@@ -1979,7 +1986,7 @@ int t4_load_fw(struct adapter *adap, const u8 *fw_data, unsigned int size)
 			"FW image size not multiple of 512 bytes\n");
 		return -EINVAL;
 	}
-	if (ntohs(hdr->len512) * 512 != size) {
+	if ((unsigned int)be16_to_cpu(hdr->len512) * 512 != size) {
 		dev_err(adap->pdev_dev,
 			"FW image size differs from size in FW header\n");
 		return -EINVAL;
@@ -1993,7 +2000,7 @@ int t4_load_fw(struct adapter *adap, const u8 *fw_data, unsigned int size)
 		return -EINVAL;
 
 	for (csum = 0, i = 0; i < size / sizeof(csum); i++)
-		csum += ntohl(p[i]);
+		csum += be32_to_cpu(p[i]);
 
 	if (csum != 0xffffffff) {
 		dev_err(adap->pdev_dev,
@@ -2012,7 +2019,7 @@ int t4_load_fw(struct adapter *adap, const u8 *fw_data, unsigned int size)
 	 * first page with a bad version.
 	 */
 	memcpy(first_page, fw_data, SF_PAGE_SIZE);
-	((struct fw_hdr *)first_page)->fw_ver = htonl(0xffffffff);
+	((struct fw_hdr *)first_page)->fw_ver = cpu_to_be32(0xffffffff);
 	ret = t4_write_flash(adap, fw_img_start, SF_PAGE_SIZE, first_page);
 	if (ret)
 		goto out;
@@ -2036,6 +2043,147 @@ out:
 	else
 		ret = t4_get_fw_version(adap, &adap->params.fw_vers);
 	return ret;
+}
+
+/**
+ *	t4_phy_fw_ver - return current PHY firmware version
+ *	@adap: the adapter
+ *	@phy_fw_ver: return value buffer for PHY firmware version
+ *
+ *	Returns the current version of external PHY firmware on the
+ *	adapter.
+ */
+int t4_phy_fw_ver(struct adapter *adap, int *phy_fw_ver)
+{
+	u32 param, val;
+	int ret;
+
+	param = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_DEV) |
+		 FW_PARAMS_PARAM_X_V(FW_PARAMS_PARAM_DEV_PHYFW) |
+		 FW_PARAMS_PARAM_Y_V(adap->params.portvec) |
+		 FW_PARAMS_PARAM_Z_V(FW_PARAMS_PARAM_DEV_PHYFW_VERSION));
+	ret = t4_query_params(adap, adap->mbox, adap->fn, 0, 1,
+			      &param, &val);
+	if (ret < 0)
+		return ret;
+	*phy_fw_ver = val;
+	return 0;
+}
+
+/**
+ *	t4_load_phy_fw - download port PHY firmware
+ *	@adap: the adapter
+ *	@win: the PCI-E Memory Window index to use for t4_memory_rw()
+ *	@win_lock: the lock to use to guard the memory copy
+ *	@phy_fw_version: function to check PHY firmware versions
+ *	@phy_fw_data: the PHY firmware image to write
+ *	@phy_fw_size: image size
+ *
+ *	Transfer the specified PHY firmware to the adapter.  If a non-NULL
+ *	@phy_fw_version is supplied, then it will be used to determine if
+ *	it's necessary to perform the transfer by comparing the version
+ *	of any existing adapter PHY firmware with that of the passed in
+ *	PHY firmware image.  If @win_lock is non-NULL then it will be used
+ *	around the call to t4_memory_rw() which transfers the PHY firmware
+ *	to the adapter.
+ *
+ *	A negative error number will be returned if an error occurs.  If
+ *	version number support is available and there's no need to upgrade
+ *	the firmware, 0 will be returned.  If firmware is successfully
+ *	transferred to the adapter, 1 will be retured.
+ *
+ *	NOTE: some adapters only have local RAM to store the PHY firmware.  As
+ *	a result, a RESET of the adapter would cause that RAM to lose its
+ *	contents.  Thus, loading PHY firmware on such adapters must happen
+ *	after any FW_RESET_CMDs ...
+ */
+int t4_load_phy_fw(struct adapter *adap,
+		   int win, spinlock_t *win_lock,
+		   int (*phy_fw_version)(const u8 *, size_t),
+		   const u8 *phy_fw_data, size_t phy_fw_size)
+{
+	unsigned long mtype = 0, maddr = 0;
+	u32 param, val;
+	int cur_phy_fw_ver = 0, new_phy_fw_vers = 0;
+	int ret;
+
+	/* If we have version number support, then check to see if the adapter
+	 * already has up-to-date PHY firmware loaded.
+	 */
+	 if (phy_fw_version) {
+		new_phy_fw_vers = phy_fw_version(phy_fw_data, phy_fw_size);
+		ret = t4_phy_fw_ver(adap, &cur_phy_fw_ver);
+		if (ret < 0)
+			return ret;
+
+		if (cur_phy_fw_ver >= new_phy_fw_vers) {
+			CH_WARN(adap, "PHY Firmware already up-to-date, "
+				"version %#x\n", cur_phy_fw_ver);
+			return 0;
+		}
+	}
+
+	/* Ask the firmware where it wants us to copy the PHY firmware image.
+	 * The size of the file requires a special version of the READ coommand
+	 * which will pass the file size via the values field in PARAMS_CMD and
+	 * retrieve the return value from firmware and place it in the same
+	 * buffer values
+	 */
+	param = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_DEV) |
+		 FW_PARAMS_PARAM_X_V(FW_PARAMS_PARAM_DEV_PHYFW) |
+		 FW_PARAMS_PARAM_Y_V(adap->params.portvec) |
+		 FW_PARAMS_PARAM_Z_V(FW_PARAMS_PARAM_DEV_PHYFW_DOWNLOAD));
+	val = phy_fw_size;
+	ret = t4_query_params_rw(adap, adap->mbox, adap->fn, 0, 1,
+				 &param, &val, 1);
+	if (ret < 0)
+		return ret;
+	mtype = val >> 8;
+	maddr = (val & 0xff) << 16;
+
+	/* Copy the supplied PHY Firmware image to the adapter memory location
+	 * allocated by the adapter firmware.
+	 */
+	if (win_lock)
+		spin_lock_bh(win_lock);
+	ret = t4_memory_rw(adap, win, mtype, maddr,
+			   phy_fw_size, (__be32 *)phy_fw_data,
+			   T4_MEMORY_WRITE);
+	if (win_lock)
+		spin_unlock_bh(win_lock);
+	if (ret)
+		return ret;
+
+	/* Tell the firmware that the PHY firmware image has been written to
+	 * RAM and it can now start copying it over to the PHYs.  The chip
+	 * firmware will RESET the affected PHYs as part of this operation
+	 * leaving them running the new PHY firmware image.
+	 */
+	param = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_DEV) |
+		 FW_PARAMS_PARAM_X_V(FW_PARAMS_PARAM_DEV_PHYFW) |
+		 FW_PARAMS_PARAM_Y_V(adap->params.portvec) |
+		 FW_PARAMS_PARAM_Z_V(FW_PARAMS_PARAM_DEV_PHYFW_DOWNLOAD));
+	ret = t4_set_params_timeout(adap, adap->mbox, adap->fn, 0, 1,
+				    &param, &val, 30000);
+
+	/* If we have version number support, then check to see that the new
+	 * firmware got loaded properly.
+	 */
+	if (phy_fw_version) {
+		ret = t4_phy_fw_ver(adap, &cur_phy_fw_ver);
+		if (ret < 0)
+			return ret;
+
+		if (cur_phy_fw_ver != new_phy_fw_vers) {
+			CH_WARN(adap, "PHY Firmware did not update: "
+				"version on adapter %#x, "
+				"version flashed %#x\n",
+				cur_phy_fw_ver, new_phy_fw_vers);
+			return -ENXIO;
+		}
+	}
+
+	return 1;
 }
 
 /**
@@ -2107,19 +2255,22 @@ int t4_link_start(struct adapter *adap, unsigned int mbox, unsigned int port,
 		fc |= FW_PORT_CAP_FC_TX;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_portid = htonl(FW_CMD_OP_V(FW_PORT_CMD) | FW_CMD_REQUEST_F |
-			       FW_CMD_EXEC_F | FW_PORT_CMD_PORTID_V(port));
-	c.action_to_len16 = htonl(FW_PORT_CMD_ACTION_V(FW_PORT_ACTION_L1_CFG) |
-				  FW_LEN16(c));
+	c.op_to_portid = cpu_to_be32(FW_CMD_OP_V(FW_PORT_CMD) |
+				     FW_CMD_REQUEST_F | FW_CMD_EXEC_F |
+				     FW_PORT_CMD_PORTID_V(port));
+	c.action_to_len16 =
+		cpu_to_be32(FW_PORT_CMD_ACTION_V(FW_PORT_ACTION_L1_CFG) |
+			    FW_LEN16(c));
 
 	if (!(lc->supported & FW_PORT_CAP_ANEG)) {
-		c.u.l1cfg.rcap = htonl((lc->supported & ADVERT_MASK) | fc);
+		c.u.l1cfg.rcap = cpu_to_be32((lc->supported & ADVERT_MASK) |
+					     fc);
 		lc->fc = lc->requested_fc & (PAUSE_RX | PAUSE_TX);
 	} else if (lc->autoneg == AUTONEG_DISABLE) {
-		c.u.l1cfg.rcap = htonl(lc->requested_speed | fc | mdi);
+		c.u.l1cfg.rcap = cpu_to_be32(lc->requested_speed | fc | mdi);
 		lc->fc = lc->requested_fc & (PAUSE_RX | PAUSE_TX);
 	} else
-		c.u.l1cfg.rcap = htonl(lc->advertising | fc | mdi);
+		c.u.l1cfg.rcap = cpu_to_be32(lc->advertising | fc | mdi);
 
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
@@ -2137,11 +2288,13 @@ int t4_restart_aneg(struct adapter *adap, unsigned int mbox, unsigned int port)
 	struct fw_port_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_portid = htonl(FW_CMD_OP_V(FW_PORT_CMD) | FW_CMD_REQUEST_F |
-			       FW_CMD_EXEC_F | FW_PORT_CMD_PORTID_V(port));
-	c.action_to_len16 = htonl(FW_PORT_CMD_ACTION_V(FW_PORT_ACTION_L1_CFG) |
-				  FW_LEN16(c));
-	c.u.l1cfg.rcap = htonl(FW_PORT_CAP_ANEG);
+	c.op_to_portid = cpu_to_be32(FW_CMD_OP_V(FW_PORT_CMD) |
+				     FW_CMD_REQUEST_F | FW_CMD_EXEC_F |
+				     FW_PORT_CMD_PORTID_V(port));
+	c.action_to_len16 =
+		cpu_to_be32(FW_PORT_CMD_ACTION_V(FW_PORT_ACTION_L1_CFG) |
+			    FW_LEN16(c));
+	c.u.l1cfg.rcap = cpu_to_be32(FW_PORT_CAP_ANEG);
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -2945,18 +3098,18 @@ int t4_config_rss_range(struct adapter *adapter, int mbox, unsigned int viid,
 	struct fw_rss_ind_tbl_cmd cmd;
 
 	memset(&cmd, 0, sizeof(cmd));
-	cmd.op_to_viid = htonl(FW_CMD_OP_V(FW_RSS_IND_TBL_CMD) |
+	cmd.op_to_viid = cpu_to_be32(FW_CMD_OP_V(FW_RSS_IND_TBL_CMD) |
 			       FW_CMD_REQUEST_F | FW_CMD_WRITE_F |
 			       FW_RSS_IND_TBL_CMD_VIID_V(viid));
-	cmd.retval_len16 = htonl(FW_LEN16(cmd));
+	cmd.retval_len16 = cpu_to_be32(FW_LEN16(cmd));
 
 	/* each fw_rss_ind_tbl_cmd takes up to 32 entries */
 	while (n > 0) {
 		int nq = min(n, 32);
 		__be32 *qp = &cmd.iq0_to_iq2;
 
-		cmd.niqid = htons(nq);
-		cmd.startidx = htons(start);
+		cmd.niqid = cpu_to_be16(nq);
+		cmd.startidx = cpu_to_be16(start);
 
 		start += nq;
 		n -= nq;
@@ -2974,7 +3127,7 @@ int t4_config_rss_range(struct adapter *adapter, int mbox, unsigned int viid,
 			if (++rsp >= rsp_end)
 				rsp = rspq;
 
-			*qp++ = htonl(v);
+			*qp++ = cpu_to_be32(v);
 			nq -= 3;
 		}
 
@@ -3000,15 +3153,16 @@ int t4_config_glbl_rss(struct adapter *adapter, int mbox, unsigned int mode,
 	struct fw_rss_glb_config_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_write = htonl(FW_CMD_OP_V(FW_RSS_GLB_CONFIG_CMD) |
-			      FW_CMD_REQUEST_F | FW_CMD_WRITE_F);
-	c.retval_len16 = htonl(FW_LEN16(c));
+	c.op_to_write = cpu_to_be32(FW_CMD_OP_V(FW_RSS_GLB_CONFIG_CMD) |
+				    FW_CMD_REQUEST_F | FW_CMD_WRITE_F);
+	c.retval_len16 = cpu_to_be32(FW_LEN16(c));
 	if (mode == FW_RSS_GLB_CONFIG_CMD_MODE_MANUAL) {
-		c.u.manual.mode_pkd = htonl(FW_RSS_GLB_CONFIG_CMD_MODE_V(mode));
+		c.u.manual.mode_pkd =
+			cpu_to_be32(FW_RSS_GLB_CONFIG_CMD_MODE_V(mode));
 	} else if (mode == FW_RSS_GLB_CONFIG_CMD_MODE_BASICVIRTUAL) {
 		c.u.basicvirtual.mode_pkd =
-			htonl(FW_RSS_GLB_CONFIG_CMD_MODE_V(mode));
-		c.u.basicvirtual.synmapen_to_hashtoeplitz = htonl(flags);
+			cpu_to_be32(FW_RSS_GLB_CONFIG_CMD_MODE_V(mode));
+		c.u.basicvirtual.synmapen_to_hashtoeplitz = cpu_to_be32(flags);
 	} else
 		return -EINVAL;
 	return t4_wr_mbox(adapter, mbox, &c, sizeof(c), NULL);
@@ -3669,33 +3823,38 @@ int t4_wol_pat_enable(struct adapter *adap, unsigned int port, unsigned int map,
 void t4_mk_filtdelwr(unsigned int ftid, struct fw_filter_wr *wr, int qid)
 {
 	memset(wr, 0, sizeof(*wr));
-	wr->op_pkd = htonl(FW_WR_OP_V(FW_FILTER_WR));
-	wr->len16_pkd = htonl(FW_WR_LEN16_V(sizeof(*wr) / 16));
-	wr->tid_to_iq = htonl(FW_FILTER_WR_TID_V(ftid) |
-			FW_FILTER_WR_NOREPLY_V(qid < 0));
-	wr->del_filter_to_l2tix = htonl(FW_FILTER_WR_DEL_FILTER_F);
+	wr->op_pkd = cpu_to_be32(FW_WR_OP_V(FW_FILTER_WR));
+	wr->len16_pkd = cpu_to_be32(FW_WR_LEN16_V(sizeof(*wr) / 16));
+	wr->tid_to_iq = cpu_to_be32(FW_FILTER_WR_TID_V(ftid) |
+				    FW_FILTER_WR_NOREPLY_V(qid < 0));
+	wr->del_filter_to_l2tix = cpu_to_be32(FW_FILTER_WR_DEL_FILTER_F);
 	if (qid >= 0)
-		wr->rx_chan_rx_rpl_iq = htons(FW_FILTER_WR_RX_RPL_IQ_V(qid));
+		wr->rx_chan_rx_rpl_iq =
+			cpu_to_be16(FW_FILTER_WR_RX_RPL_IQ_V(qid));
 }
 
 #define INIT_CMD(var, cmd, rd_wr) do { \
-	(var).op_to_write = htonl(FW_CMD_OP_V(FW_##cmd##_CMD) | \
-				  FW_CMD_REQUEST_F | FW_CMD_##rd_wr##_F); \
-	(var).retval_len16 = htonl(FW_LEN16(var)); \
+	(var).op_to_write = cpu_to_be32(FW_CMD_OP_V(FW_##cmd##_CMD) | \
+					FW_CMD_REQUEST_F | \
+					FW_CMD_##rd_wr##_F); \
+	(var).retval_len16 = cpu_to_be32(FW_LEN16(var)); \
 } while (0)
 
 int t4_fwaddrspace_write(struct adapter *adap, unsigned int mbox,
 			  u32 addr, u32 val)
 {
+	u32 ldst_addrspace;
 	struct fw_ldst_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_addrspace = htonl(FW_CMD_OP_V(FW_LDST_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_WRITE_F |
-			    FW_LDST_CMD_ADDRSPACE_V(FW_LDST_ADDRSPC_FIRMWARE));
-	c.cycles_to_len16 = htonl(FW_LEN16(c));
-	c.u.addrval.addr = htonl(addr);
-	c.u.addrval.val = htonl(val);
+	ldst_addrspace = FW_LDST_CMD_ADDRSPACE_V(FW_LDST_ADDRSPC_FIRMWARE);
+	c.op_to_addrspace = cpu_to_be32(FW_CMD_OP_V(FW_LDST_CMD) |
+					FW_CMD_REQUEST_F |
+					FW_CMD_WRITE_F |
+					ldst_addrspace);
+	c.cycles_to_len16 = cpu_to_be32(FW_LEN16(c));
+	c.u.addrval.addr = cpu_to_be32(addr);
+	c.u.addrval.val = cpu_to_be32(val);
 
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
@@ -3715,19 +3874,22 @@ int t4_mdio_rd(struct adapter *adap, unsigned int mbox, unsigned int phy_addr,
 	       unsigned int mmd, unsigned int reg, u16 *valp)
 {
 	int ret;
+	u32 ldst_addrspace;
 	struct fw_ldst_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_addrspace = htonl(FW_CMD_OP_V(FW_LDST_CMD) | FW_CMD_REQUEST_F |
-		FW_CMD_READ_F | FW_LDST_CMD_ADDRSPACE_V(FW_LDST_ADDRSPC_MDIO));
-	c.cycles_to_len16 = htonl(FW_LEN16(c));
-	c.u.mdio.paddr_mmd = htons(FW_LDST_CMD_PADDR_V(phy_addr) |
-				   FW_LDST_CMD_MMD_V(mmd));
-	c.u.mdio.raddr = htons(reg);
+	ldst_addrspace = FW_LDST_CMD_ADDRSPACE_V(FW_LDST_ADDRSPC_MDIO);
+	c.op_to_addrspace = cpu_to_be32(FW_CMD_OP_V(FW_LDST_CMD) |
+					FW_CMD_REQUEST_F | FW_CMD_READ_F |
+					ldst_addrspace);
+	c.cycles_to_len16 = cpu_to_be32(FW_LEN16(c));
+	c.u.mdio.paddr_mmd = cpu_to_be16(FW_LDST_CMD_PADDR_V(phy_addr) |
+					 FW_LDST_CMD_MMD_V(mmd));
+	c.u.mdio.raddr = cpu_to_be16(reg);
 
 	ret = t4_wr_mbox(adap, mbox, &c, sizeof(c), &c);
 	if (ret == 0)
-		*valp = ntohs(c.u.mdio.rval);
+		*valp = be16_to_cpu(c.u.mdio.rval);
 	return ret;
 }
 
@@ -3745,16 +3907,19 @@ int t4_mdio_rd(struct adapter *adap, unsigned int mbox, unsigned int phy_addr,
 int t4_mdio_wr(struct adapter *adap, unsigned int mbox, unsigned int phy_addr,
 	       unsigned int mmd, unsigned int reg, u16 val)
 {
+	u32 ldst_addrspace;
 	struct fw_ldst_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_addrspace = htonl(FW_CMD_OP_V(FW_LDST_CMD) | FW_CMD_REQUEST_F |
-		FW_CMD_WRITE_F | FW_LDST_CMD_ADDRSPACE_V(FW_LDST_ADDRSPC_MDIO));
-	c.cycles_to_len16 = htonl(FW_LEN16(c));
-	c.u.mdio.paddr_mmd = htons(FW_LDST_CMD_PADDR_V(phy_addr) |
-				   FW_LDST_CMD_MMD_V(mmd));
-	c.u.mdio.raddr = htons(reg);
-	c.u.mdio.rval = htons(val);
+	ldst_addrspace = FW_LDST_CMD_ADDRSPACE_V(FW_LDST_ADDRSPC_MDIO);
+	c.op_to_addrspace = cpu_to_be32(FW_CMD_OP_V(FW_LDST_CMD) |
+					FW_CMD_REQUEST_F | FW_CMD_WRITE_F |
+					ldst_addrspace);
+	c.cycles_to_len16 = cpu_to_be32(FW_LEN16(c));
+	c.u.mdio.paddr_mmd = cpu_to_be16(FW_LDST_CMD_PADDR_V(phy_addr) |
+					 FW_LDST_CMD_MMD_V(mmd));
+	c.u.mdio.raddr = cpu_to_be16(reg);
+	c.u.mdio.rval = cpu_to_be16(val);
 
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
@@ -3888,11 +4053,11 @@ int t4_fw_hello(struct adapter *adap, unsigned int mbox, unsigned int evt_mbox,
 retry:
 	memset(&c, 0, sizeof(c));
 	INIT_CMD(c, HELLO, WRITE);
-	c.err_to_clearinit = htonl(
+	c.err_to_clearinit = cpu_to_be32(
 		FW_HELLO_CMD_MASTERDIS_V(master == MASTER_CANT) |
 		FW_HELLO_CMD_MASTERFORCE_V(master == MASTER_MUST) |
-		FW_HELLO_CMD_MBMASTER_V(master == MASTER_MUST ? mbox :
-				      FW_HELLO_CMD_MBMASTER_M) |
+		FW_HELLO_CMD_MBMASTER_V(master == MASTER_MUST ?
+					mbox : FW_HELLO_CMD_MBMASTER_M) |
 		FW_HELLO_CMD_MBASYNCNOT_V(evt_mbox) |
 		FW_HELLO_CMD_STAGE_V(fw_hello_cmd_stage_os) |
 		FW_HELLO_CMD_CLEARINIT_F);
@@ -3913,7 +4078,7 @@ retry:
 		return ret;
 	}
 
-	v = ntohl(c.err_to_clearinit);
+	v = be32_to_cpu(c.err_to_clearinit);
 	master_mbox = FW_HELLO_CMD_MBMASTER_G(v);
 	if (state) {
 		if (v & FW_HELLO_CMD_ERR_F)
@@ -4042,7 +4207,7 @@ int t4_fw_reset(struct adapter *adap, unsigned int mbox, int reset)
 
 	memset(&c, 0, sizeof(c));
 	INIT_CMD(c, RESET, WRITE);
-	c.val = htonl(reset);
+	c.val = cpu_to_be32(reset);
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -4075,8 +4240,8 @@ static int t4_fw_halt(struct adapter *adap, unsigned int mbox, int force)
 
 		memset(&c, 0, sizeof(c));
 		INIT_CMD(c, RESET, WRITE);
-		c.val = htonl(PIORST_F | PIORSTMODE_F);
-		c.halt_pkd = htonl(FW_RESET_CMD_HALT_F);
+		c.val = cpu_to_be32(PIORST_F | PIORSTMODE_F);
+		c.halt_pkd = cpu_to_be32(FW_RESET_CMD_HALT_F);
 		ret = t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 	}
 
@@ -4215,7 +4380,7 @@ int t4_fw_upgrade(struct adapter *adap, unsigned int mbox,
 	 * the newly loaded firmware will handle this right by checking
 	 * its header flags to see if it advertises the capability.
 	 */
-	reset = ((ntohl(fw_hdr->flags) & FW_HDR_FLAGS_RESET_HALT) == 0);
+	reset = ((be32_to_cpu(fw_hdr->flags) & FW_HDR_FLAGS_RESET_HALT) == 0);
 	return t4_fw_restart(adap, mbox, reset);
 }
 
@@ -4346,7 +4511,7 @@ int t4_fw_initialize(struct adapter *adap, unsigned int mbox)
 }
 
 /**
- *	t4_query_params - query FW or device parameters
+ *	t4_query_params_rw - query FW or device parameters
  *	@adap: the adapter
  *	@mbox: mailbox to use for the FW command
  *	@pf: the PF
@@ -4354,13 +4519,14 @@ int t4_fw_initialize(struct adapter *adap, unsigned int mbox)
  *	@nparams: the number of parameters
  *	@params: the parameter names
  *	@val: the parameter values
+ *	@rw: Write and read flag
  *
  *	Reads the value of FW or device parameters.  Up to 7 parameters can be
  *	queried at once.
  */
-int t4_query_params(struct adapter *adap, unsigned int mbox, unsigned int pf,
-		    unsigned int vf, unsigned int nparams, const u32 *params,
-		    u32 *val)
+int t4_query_params_rw(struct adapter *adap, unsigned int mbox, unsigned int pf,
+		       unsigned int vf, unsigned int nparams, const u32 *params,
+		       u32 *val, int rw)
 {
 	int i, ret;
 	struct fw_params_cmd c;
@@ -4370,22 +4536,35 @@ int t4_query_params(struct adapter *adap, unsigned int mbox, unsigned int pf,
 		return -EINVAL;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_vfn = htonl(FW_CMD_OP_V(FW_PARAMS_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_READ_F | FW_PARAMS_CMD_PFN_V(pf) |
-			    FW_PARAMS_CMD_VFN_V(vf));
-	c.retval_len16 = htonl(FW_LEN16(c));
-	for (i = 0; i < nparams; i++, p += 2)
-		*p = htonl(*params++);
+	c.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_PARAMS_CMD) |
+				  FW_CMD_REQUEST_F | FW_CMD_READ_F |
+				  FW_PARAMS_CMD_PFN_V(pf) |
+				  FW_PARAMS_CMD_VFN_V(vf));
+	c.retval_len16 = cpu_to_be32(FW_LEN16(c));
+
+	for (i = 0; i < nparams; i++) {
+		*p++ = cpu_to_be32(*params++);
+		if (rw)
+			*p = cpu_to_be32(*(val + i));
+		p++;
+	}
 
 	ret = t4_wr_mbox(adap, mbox, &c, sizeof(c), &c);
 	if (ret == 0)
 		for (i = 0, p = &c.param[0].val; i < nparams; i++, p += 2)
-			*val++ = ntohl(*p);
+			*val++ = be32_to_cpu(*p);
 	return ret;
 }
 
+int t4_query_params(struct adapter *adap, unsigned int mbox, unsigned int pf,
+		    unsigned int vf, unsigned int nparams, const u32 *params,
+		    u32 *val)
+{
+	return t4_query_params_rw(adap, mbox, pf, vf, nparams, params, val, 0);
+}
+
 /**
- *      t4_set_params_nosleep - sets FW or device parameters
+ *      t4_set_params_timeout - sets FW or device parameters
  *      @adap: the adapter
  *      @mbox: mailbox to use for the FW command
  *      @pf: the PF
@@ -4393,15 +4572,15 @@ int t4_query_params(struct adapter *adap, unsigned int mbox, unsigned int pf,
  *      @nparams: the number of parameters
  *      @params: the parameter names
  *      @val: the parameter values
+ *      @timeout: the timeout time
  *
- *	 Does not ever sleep
  *      Sets the value of FW or device parameters.  Up to 7 parameters can be
  *      specified at once.
  */
-int t4_set_params_nosleep(struct adapter *adap, unsigned int mbox,
+int t4_set_params_timeout(struct adapter *adap, unsigned int mbox,
 			  unsigned int pf, unsigned int vf,
 			  unsigned int nparams, const u32 *params,
-			  const u32 *val)
+			  const u32 *val, int timeout)
 {
 	struct fw_params_cmd c;
 	__be32 *p = &c.param[0].mnem;
@@ -4411,9 +4590,9 @@ int t4_set_params_nosleep(struct adapter *adap, unsigned int mbox,
 
 	memset(&c, 0, sizeof(c));
 	c.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_PARAMS_CMD) |
-				FW_CMD_REQUEST_F | FW_CMD_WRITE_F |
-				FW_PARAMS_CMD_PFN_V(pf) |
-				FW_PARAMS_CMD_VFN_V(vf));
+				  FW_CMD_REQUEST_F | FW_CMD_WRITE_F |
+				  FW_PARAMS_CMD_PFN_V(pf) |
+				  FW_PARAMS_CMD_VFN_V(vf));
 	c.retval_len16 = cpu_to_be32(FW_LEN16(c));
 
 	while (nparams--) {
@@ -4421,7 +4600,7 @@ int t4_set_params_nosleep(struct adapter *adap, unsigned int mbox,
 		*p++ = cpu_to_be32(*val++);
 	}
 
-	return t4_wr_mbox_ns(adap, mbox, &c, sizeof(c), NULL);
+	return t4_wr_mbox_timeout(adap, mbox, &c, sizeof(c), NULL, timeout);
 }
 
 /**
@@ -4441,23 +4620,8 @@ int t4_set_params(struct adapter *adap, unsigned int mbox, unsigned int pf,
 		  unsigned int vf, unsigned int nparams, const u32 *params,
 		  const u32 *val)
 {
-	struct fw_params_cmd c;
-	__be32 *p = &c.param[0].mnem;
-
-	if (nparams > 7)
-		return -EINVAL;
-
-	memset(&c, 0, sizeof(c));
-	c.op_to_vfn = htonl(FW_CMD_OP_V(FW_PARAMS_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_WRITE_F | FW_PARAMS_CMD_PFN_V(pf) |
-			    FW_PARAMS_CMD_VFN_V(vf));
-	c.retval_len16 = htonl(FW_LEN16(c));
-	while (nparams--) {
-		*p++ = htonl(*params++);
-		*p++ = htonl(*val++);
-	}
-
-	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
+	return t4_set_params_timeout(adap, mbox, pf, vf, nparams, params, val,
+				     FW_CMD_MAX_TIMEOUT);
 }
 
 /**
@@ -4490,20 +4654,21 @@ int t4_cfg_pfvf(struct adapter *adap, unsigned int mbox, unsigned int pf,
 	struct fw_pfvf_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_vfn = htonl(FW_CMD_OP_V(FW_PFVF_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_WRITE_F | FW_PFVF_CMD_PFN_V(pf) |
-			    FW_PFVF_CMD_VFN_V(vf));
-	c.retval_len16 = htonl(FW_LEN16(c));
-	c.niqflint_niq = htonl(FW_PFVF_CMD_NIQFLINT_V(rxqi) |
-			       FW_PFVF_CMD_NIQ_V(rxq));
-	c.type_to_neq = htonl(FW_PFVF_CMD_CMASK_V(cmask) |
-			       FW_PFVF_CMD_PMASK_V(pmask) |
-			       FW_PFVF_CMD_NEQ_V(txq));
-	c.tc_to_nexactf = htonl(FW_PFVF_CMD_TC_V(tc) | FW_PFVF_CMD_NVI_V(vi) |
-				FW_PFVF_CMD_NEXACTF_V(nexact));
-	c.r_caps_to_nethctrl = htonl(FW_PFVF_CMD_R_CAPS_V(rcaps) |
-				     FW_PFVF_CMD_WX_CAPS_V(wxcaps) |
-				     FW_PFVF_CMD_NETHCTRL_V(txq_eth_ctrl));
+	c.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_PFVF_CMD) | FW_CMD_REQUEST_F |
+				  FW_CMD_WRITE_F | FW_PFVF_CMD_PFN_V(pf) |
+				  FW_PFVF_CMD_VFN_V(vf));
+	c.retval_len16 = cpu_to_be32(FW_LEN16(c));
+	c.niqflint_niq = cpu_to_be32(FW_PFVF_CMD_NIQFLINT_V(rxqi) |
+				     FW_PFVF_CMD_NIQ_V(rxq));
+	c.type_to_neq = cpu_to_be32(FW_PFVF_CMD_CMASK_V(cmask) |
+				    FW_PFVF_CMD_PMASK_V(pmask) |
+				    FW_PFVF_CMD_NEQ_V(txq));
+	c.tc_to_nexactf = cpu_to_be32(FW_PFVF_CMD_TC_V(tc) |
+				      FW_PFVF_CMD_NVI_V(vi) |
+				      FW_PFVF_CMD_NEXACTF_V(nexact));
+	c.r_caps_to_nethctrl = cpu_to_be32(FW_PFVF_CMD_R_CAPS_V(rcaps) |
+					FW_PFVF_CMD_WX_CAPS_V(wxcaps) |
+					FW_PFVF_CMD_NETHCTRL_V(txq_eth_ctrl));
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -4532,10 +4697,10 @@ int t4_alloc_vi(struct adapter *adap, unsigned int mbox, unsigned int port,
 	struct fw_vi_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_vfn = htonl(FW_CMD_OP_V(FW_VI_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_WRITE_F | FW_CMD_EXEC_F |
-			    FW_VI_CMD_PFN_V(pf) | FW_VI_CMD_VFN_V(vf));
-	c.alloc_to_len16 = htonl(FW_VI_CMD_ALLOC_F | FW_LEN16(c));
+	c.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_VI_CMD) | FW_CMD_REQUEST_F |
+				  FW_CMD_WRITE_F | FW_CMD_EXEC_F |
+				  FW_VI_CMD_PFN_V(pf) | FW_VI_CMD_VFN_V(vf));
+	c.alloc_to_len16 = cpu_to_be32(FW_VI_CMD_ALLOC_F | FW_LEN16(c));
 	c.portid_pkd = FW_VI_CMD_PORTID_V(port);
 	c.nmac = nmac - 1;
 
@@ -4557,8 +4722,8 @@ int t4_alloc_vi(struct adapter *adap, unsigned int mbox, unsigned int port,
 		}
 	}
 	if (rss_size)
-		*rss_size = FW_VI_CMD_RSSSIZE_G(ntohs(c.rsssize_pkd));
-	return FW_VI_CMD_VIID_G(ntohs(c.type_viid));
+		*rss_size = FW_VI_CMD_RSSSIZE_G(be16_to_cpu(c.rsssize_pkd));
+	return FW_VI_CMD_VIID_G(be16_to_cpu(c.type_viid));
 }
 
 /**
@@ -4594,14 +4759,16 @@ int t4_set_rxmode(struct adapter *adap, unsigned int mbox, unsigned int viid,
 		vlanex = FW_VI_RXMODE_CMD_VLANEXEN_M;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_viid = htonl(FW_CMD_OP_V(FW_VI_RXMODE_CMD) | FW_CMD_REQUEST_F |
-			     FW_CMD_WRITE_F | FW_VI_RXMODE_CMD_VIID_V(viid));
-	c.retval_len16 = htonl(FW_LEN16(c));
-	c.mtu_to_vlanexen = htonl(FW_VI_RXMODE_CMD_MTU_V(mtu) |
-				  FW_VI_RXMODE_CMD_PROMISCEN_V(promisc) |
-				  FW_VI_RXMODE_CMD_ALLMULTIEN_V(all_multi) |
-				  FW_VI_RXMODE_CMD_BROADCASTEN_V(bcast) |
-				  FW_VI_RXMODE_CMD_VLANEXEN_V(vlanex));
+	c.op_to_viid = cpu_to_be32(FW_CMD_OP_V(FW_VI_RXMODE_CMD) |
+				   FW_CMD_REQUEST_F | FW_CMD_WRITE_F |
+				   FW_VI_RXMODE_CMD_VIID_V(viid));
+	c.retval_len16 = cpu_to_be32(FW_LEN16(c));
+	c.mtu_to_vlanexen =
+		cpu_to_be32(FW_VI_RXMODE_CMD_MTU_V(mtu) |
+			    FW_VI_RXMODE_CMD_PROMISCEN_V(promisc) |
+			    FW_VI_RXMODE_CMD_ALLMULTIEN_V(all_multi) |
+			    FW_VI_RXMODE_CMD_BROADCASTEN_V(bcast) |
+			    FW_VI_RXMODE_CMD_VLANEXEN_V(vlanex));
 	return t4_wr_mbox_meat(adap, mbox, &c, sizeof(c), NULL, sleep_ok);
 }
 
@@ -4642,15 +4809,17 @@ int t4_alloc_mac_filt(struct adapter *adap, unsigned int mbox,
 		return -EINVAL;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_viid = htonl(FW_CMD_OP_V(FW_VI_MAC_CMD) | FW_CMD_REQUEST_F |
-			     FW_CMD_WRITE_F | (free ? FW_CMD_EXEC_F : 0) |
-			     FW_VI_MAC_CMD_VIID_V(viid));
-	c.freemacs_to_len16 = htonl(FW_VI_MAC_CMD_FREEMACS_V(free) |
-				    FW_CMD_LEN16_V((naddr + 2) / 2));
+	c.op_to_viid = cpu_to_be32(FW_CMD_OP_V(FW_VI_MAC_CMD) |
+				   FW_CMD_REQUEST_F | FW_CMD_WRITE_F |
+				   (free ? FW_CMD_EXEC_F : 0) |
+				   FW_VI_MAC_CMD_VIID_V(viid));
+	c.freemacs_to_len16 = cpu_to_be32(FW_VI_MAC_CMD_FREEMACS_V(free) |
+					  FW_CMD_LEN16_V((naddr + 2) / 2));
 
 	for (i = 0, p = c.u.exact; i < naddr; i++, p++) {
-		p->valid_to_idx = htons(FW_VI_MAC_CMD_VALID_F |
-				      FW_VI_MAC_CMD_IDX_V(FW_VI_MAC_ADD_MAC));
+		p->valid_to_idx =
+			cpu_to_be16(FW_VI_MAC_CMD_VALID_F |
+				    FW_VI_MAC_CMD_IDX_V(FW_VI_MAC_ADD_MAC));
 		memcpy(p->macaddr, addr[i], sizeof(p->macaddr));
 	}
 
@@ -4659,7 +4828,7 @@ int t4_alloc_mac_filt(struct adapter *adap, unsigned int mbox,
 		return ret;
 
 	for (i = 0, p = c.u.exact; i < naddr; i++, p++) {
-		u16 index = FW_VI_MAC_CMD_IDX_G(ntohs(p->valid_to_idx));
+		u16 index = FW_VI_MAC_CMD_IDX_G(be16_to_cpu(p->valid_to_idx));
 
 		if (idx)
 			idx[i] = index >= max_naddr ? 0xffff : index;
@@ -4705,17 +4874,18 @@ int t4_change_mac(struct adapter *adap, unsigned int mbox, unsigned int viid,
 	mode = add_smt ? FW_VI_MAC_SMT_AND_MPSTCAM : FW_VI_MAC_MPS_TCAM_ENTRY;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_viid = htonl(FW_CMD_OP_V(FW_VI_MAC_CMD) | FW_CMD_REQUEST_F |
-			     FW_CMD_WRITE_F | FW_VI_MAC_CMD_VIID_V(viid));
-	c.freemacs_to_len16 = htonl(FW_CMD_LEN16_V(1));
-	p->valid_to_idx = htons(FW_VI_MAC_CMD_VALID_F |
-				FW_VI_MAC_CMD_SMAC_RESULT_V(mode) |
-				FW_VI_MAC_CMD_IDX_V(idx));
+	c.op_to_viid = cpu_to_be32(FW_CMD_OP_V(FW_VI_MAC_CMD) |
+				   FW_CMD_REQUEST_F | FW_CMD_WRITE_F |
+				   FW_VI_MAC_CMD_VIID_V(viid));
+	c.freemacs_to_len16 = cpu_to_be32(FW_CMD_LEN16_V(1));
+	p->valid_to_idx = cpu_to_be16(FW_VI_MAC_CMD_VALID_F |
+				      FW_VI_MAC_CMD_SMAC_RESULT_V(mode) |
+				      FW_VI_MAC_CMD_IDX_V(idx));
 	memcpy(p->macaddr, addr, sizeof(p->macaddr));
 
 	ret = t4_wr_mbox(adap, mbox, &c, sizeof(c), &c);
 	if (ret == 0) {
-		ret = FW_VI_MAC_CMD_IDX_G(ntohs(p->valid_to_idx));
+		ret = FW_VI_MAC_CMD_IDX_G(be16_to_cpu(p->valid_to_idx));
 		if (ret >= max_mac_addr)
 			ret = -ENOMEM;
 	}
@@ -4739,11 +4909,12 @@ int t4_set_addr_hash(struct adapter *adap, unsigned int mbox, unsigned int viid,
 	struct fw_vi_mac_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_viid = htonl(FW_CMD_OP_V(FW_VI_MAC_CMD) | FW_CMD_REQUEST_F |
-			     FW_CMD_WRITE_F | FW_VI_ENABLE_CMD_VIID_V(viid));
-	c.freemacs_to_len16 = htonl(FW_VI_MAC_CMD_HASHVECEN_F |
-				    FW_VI_MAC_CMD_HASHUNIEN_V(ucast) |
-				    FW_CMD_LEN16_V(1));
+	c.op_to_viid = cpu_to_be32(FW_CMD_OP_V(FW_VI_MAC_CMD) |
+				   FW_CMD_REQUEST_F | FW_CMD_WRITE_F |
+				   FW_VI_ENABLE_CMD_VIID_V(viid));
+	c.freemacs_to_len16 = cpu_to_be32(FW_VI_MAC_CMD_HASHVECEN_F |
+					  FW_VI_MAC_CMD_HASHUNIEN_V(ucast) |
+					  FW_CMD_LEN16_V(1));
 	c.u.hash.hashvec = cpu_to_be64(vec);
 	return t4_wr_mbox_meat(adap, mbox, &c, sizeof(c), NULL, sleep_ok);
 }
@@ -4766,12 +4937,13 @@ int t4_enable_vi_params(struct adapter *adap, unsigned int mbox,
 	struct fw_vi_enable_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_viid = htonl(FW_CMD_OP_V(FW_VI_ENABLE_CMD) | FW_CMD_REQUEST_F |
-			     FW_CMD_EXEC_F | FW_VI_ENABLE_CMD_VIID_V(viid));
-
-	c.ien_to_len16 = htonl(FW_VI_ENABLE_CMD_IEN_V(rx_en) |
-			       FW_VI_ENABLE_CMD_EEN_V(tx_en) | FW_LEN16(c) |
-			       FW_VI_ENABLE_CMD_DCB_INFO_V(dcb_en));
+	c.op_to_viid = cpu_to_be32(FW_CMD_OP_V(FW_VI_ENABLE_CMD) |
+				   FW_CMD_REQUEST_F | FW_CMD_EXEC_F |
+				   FW_VI_ENABLE_CMD_VIID_V(viid));
+	c.ien_to_len16 = cpu_to_be32(FW_VI_ENABLE_CMD_IEN_V(rx_en) |
+				     FW_VI_ENABLE_CMD_EEN_V(tx_en) |
+				     FW_VI_ENABLE_CMD_DCB_INFO_V(dcb_en) |
+				     FW_LEN16(c));
 	return t4_wr_mbox_ns(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -4806,10 +4978,11 @@ int t4_identify_port(struct adapter *adap, unsigned int mbox, unsigned int viid,
 	struct fw_vi_enable_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_viid = htonl(FW_CMD_OP_V(FW_VI_ENABLE_CMD) | FW_CMD_REQUEST_F |
-			     FW_CMD_EXEC_F | FW_VI_ENABLE_CMD_VIID_V(viid));
-	c.ien_to_len16 = htonl(FW_VI_ENABLE_CMD_LED_F | FW_LEN16(c));
-	c.blinkdur = htons(nblinks);
+	c.op_to_viid = cpu_to_be32(FW_CMD_OP_V(FW_VI_ENABLE_CMD) |
+				   FW_CMD_REQUEST_F | FW_CMD_EXEC_F |
+				   FW_VI_ENABLE_CMD_VIID_V(viid));
+	c.ien_to_len16 = cpu_to_be32(FW_VI_ENABLE_CMD_LED_F | FW_LEN16(c));
+	c.blinkdur = cpu_to_be16(nblinks);
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -4833,14 +5006,14 @@ int t4_iq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
 	struct fw_iq_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_vfn = htonl(FW_CMD_OP_V(FW_IQ_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_EXEC_F | FW_IQ_CMD_PFN_V(pf) |
-			    FW_IQ_CMD_VFN_V(vf));
-	c.alloc_to_len16 = htonl(FW_IQ_CMD_FREE_F | FW_LEN16(c));
-	c.type_to_iqandstindex = htonl(FW_IQ_CMD_TYPE_V(iqtype));
-	c.iqid = htons(iqid);
-	c.fl0id = htons(fl0id);
-	c.fl1id = htons(fl1id);
+	c.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_IQ_CMD) | FW_CMD_REQUEST_F |
+				  FW_CMD_EXEC_F | FW_IQ_CMD_PFN_V(pf) |
+				  FW_IQ_CMD_VFN_V(vf));
+	c.alloc_to_len16 = cpu_to_be32(FW_IQ_CMD_FREE_F | FW_LEN16(c));
+	c.type_to_iqandstindex = cpu_to_be32(FW_IQ_CMD_TYPE_V(iqtype));
+	c.iqid = cpu_to_be16(iqid);
+	c.fl0id = cpu_to_be16(fl0id);
+	c.fl1id = cpu_to_be16(fl1id);
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -4860,11 +5033,12 @@ int t4_eth_eq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
 	struct fw_eq_eth_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_vfn = htonl(FW_CMD_OP_V(FW_EQ_ETH_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_EXEC_F | FW_EQ_ETH_CMD_PFN_V(pf) |
-			    FW_EQ_ETH_CMD_VFN_V(vf));
-	c.alloc_to_len16 = htonl(FW_EQ_ETH_CMD_FREE_F | FW_LEN16(c));
-	c.eqid_pkd = htonl(FW_EQ_ETH_CMD_EQID_V(eqid));
+	c.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_EQ_ETH_CMD) |
+				  FW_CMD_REQUEST_F | FW_CMD_EXEC_F |
+				  FW_EQ_ETH_CMD_PFN_V(pf) |
+				  FW_EQ_ETH_CMD_VFN_V(vf));
+	c.alloc_to_len16 = cpu_to_be32(FW_EQ_ETH_CMD_FREE_F | FW_LEN16(c));
+	c.eqid_pkd = cpu_to_be32(FW_EQ_ETH_CMD_EQID_V(eqid));
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -4884,11 +5058,12 @@ int t4_ctrl_eq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
 	struct fw_eq_ctrl_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_vfn = htonl(FW_CMD_OP_V(FW_EQ_CTRL_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_EXEC_F | FW_EQ_CTRL_CMD_PFN_V(pf) |
-			    FW_EQ_CTRL_CMD_VFN_V(vf));
-	c.alloc_to_len16 = htonl(FW_EQ_CTRL_CMD_FREE_F | FW_LEN16(c));
-	c.cmpliqid_eqid = htonl(FW_EQ_CTRL_CMD_EQID_V(eqid));
+	c.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_EQ_CTRL_CMD) |
+				  FW_CMD_REQUEST_F | FW_CMD_EXEC_F |
+				  FW_EQ_CTRL_CMD_PFN_V(pf) |
+				  FW_EQ_CTRL_CMD_VFN_V(vf));
+	c.alloc_to_len16 = cpu_to_be32(FW_EQ_CTRL_CMD_FREE_F | FW_LEN16(c));
+	c.cmpliqid_eqid = cpu_to_be32(FW_EQ_CTRL_CMD_EQID_V(eqid));
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -4908,11 +5083,12 @@ int t4_ofld_eq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
 	struct fw_eq_ofld_cmd c;
 
 	memset(&c, 0, sizeof(c));
-	c.op_to_vfn = htonl(FW_CMD_OP_V(FW_EQ_OFLD_CMD) | FW_CMD_REQUEST_F |
-			    FW_CMD_EXEC_F | FW_EQ_OFLD_CMD_PFN_V(pf) |
-			    FW_EQ_OFLD_CMD_VFN_V(vf));
-	c.alloc_to_len16 = htonl(FW_EQ_OFLD_CMD_FREE_F | FW_LEN16(c));
-	c.eqid_pkd = htonl(FW_EQ_OFLD_CMD_EQID_V(eqid));
+	c.op_to_vfn = cpu_to_be32(FW_CMD_OP_V(FW_EQ_OFLD_CMD) |
+				  FW_CMD_REQUEST_F | FW_CMD_EXEC_F |
+				  FW_EQ_OFLD_CMD_PFN_V(pf) |
+				  FW_EQ_OFLD_CMD_VFN_V(vf));
+	c.alloc_to_len16 = cpu_to_be32(FW_EQ_OFLD_CMD_FREE_F | FW_LEN16(c));
+	c.eqid_pkd = cpu_to_be32(FW_EQ_OFLD_CMD_EQID_V(eqid));
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
 }
 
@@ -4930,11 +5106,11 @@ int t4_handle_fw_rpl(struct adapter *adap, const __be64 *rpl)
 	if (opcode == FW_PORT_CMD) {    /* link/module state change message */
 		int speed = 0, fc = 0;
 		const struct fw_port_cmd *p = (void *)rpl;
-		int chan = FW_PORT_CMD_PORTID_G(ntohl(p->op_to_portid));
+		int chan = FW_PORT_CMD_PORTID_G(be32_to_cpu(p->op_to_portid));
 		int port = adap->chan_map[chan];
 		struct port_info *pi = adap2pinfo(adap, port);
 		struct link_config *lc = &pi->link_cfg;
-		u32 stat = ntohl(p->u.info.lstatus_to_modtype);
+		u32 stat = be32_to_cpu(p->u.info.lstatus_to_modtype);
 		int link_ok = (stat & FW_PORT_CMD_LSTATUS_F) != 0;
 		u32 mod = FW_PORT_CMD_MODTYPE_G(stat);
 
@@ -5248,18 +5424,19 @@ int t4_init_devlog_params(struct adapter *adap)
 	/* Otherwise, ask the firmware for it's Device Log Parameters.
 	 */
 	memset(&devlog_cmd, 0, sizeof(devlog_cmd));
-	devlog_cmd.op_to_write = htonl(FW_CMD_OP_V(FW_DEVLOG_CMD) |
-				       FW_CMD_REQUEST_F | FW_CMD_READ_F);
-	devlog_cmd.retval_len16 = htonl(FW_LEN16(devlog_cmd));
+	devlog_cmd.op_to_write = cpu_to_be32(FW_CMD_OP_V(FW_DEVLOG_CMD) |
+					     FW_CMD_REQUEST_F | FW_CMD_READ_F);
+	devlog_cmd.retval_len16 = cpu_to_be32(FW_LEN16(devlog_cmd));
 	ret = t4_wr_mbox(adap, adap->mbox, &devlog_cmd, sizeof(devlog_cmd),
 			 &devlog_cmd);
 	if (ret)
 		return ret;
 
-	devlog_meminfo = ntohl(devlog_cmd.memtype_devlog_memaddr16_devlog);
+	devlog_meminfo =
+		be32_to_cpu(devlog_cmd.memtype_devlog_memaddr16_devlog);
 	dparams->memtype = FW_DEVLOG_CMD_MEMTYPE_DEVLOG_G(devlog_meminfo);
 	dparams->start = FW_DEVLOG_CMD_MEMADDR16_DEVLOG_G(devlog_meminfo) << 4;
-	dparams->size = ntohl(devlog_cmd.memsize_devlog);
+	dparams->size = be32_to_cpu(devlog_cmd.memsize_devlog);
 
 	return 0;
 }
@@ -5408,14 +5585,15 @@ int t4_init_rss_mode(struct adapter *adap, int mbox)
 	for_each_port(adap, i) {
 		struct port_info *p = adap2pinfo(adap, i);
 
-		rvc.op_to_viid = htonl(FW_CMD_OP_V(FW_RSS_VI_CONFIG_CMD) |
-				       FW_CMD_REQUEST_F | FW_CMD_READ_F |
-				       FW_RSS_VI_CONFIG_CMD_VIID_V(p->viid));
-		rvc.retval_len16 = htonl(FW_LEN16(rvc));
+		rvc.op_to_viid =
+			cpu_to_be32(FW_CMD_OP_V(FW_RSS_VI_CONFIG_CMD) |
+				    FW_CMD_REQUEST_F | FW_CMD_READ_F |
+				    FW_RSS_VI_CONFIG_CMD_VIID_V(p->viid));
+		rvc.retval_len16 = cpu_to_be32(FW_LEN16(rvc));
 		ret = t4_wr_mbox(adap, mbox, &rvc, sizeof(rvc), &rvc);
 		if (ret)
 			return ret;
-		p->rss_mode = ntohl(rvc.u.basicvirtual.defaultq_to_udpen);
+		p->rss_mode = be32_to_cpu(rvc.u.basicvirtual.defaultq_to_udpen);
 	}
 	return 0;
 }
@@ -5437,10 +5615,10 @@ int t4_port_init(struct adapter *adap, int mbox, int pf, int vf)
 		while ((adap->params.portvec & (1 << j)) == 0)
 			j++;
 
-		c.op_to_portid = htonl(FW_CMD_OP_V(FW_PORT_CMD) |
-				       FW_CMD_REQUEST_F | FW_CMD_READ_F |
-				       FW_PORT_CMD_PORTID_V(j));
-		c.action_to_len16 = htonl(
+		c.op_to_portid = cpu_to_be32(FW_CMD_OP_V(FW_PORT_CMD) |
+					     FW_CMD_REQUEST_F | FW_CMD_READ_F |
+					     FW_PORT_CMD_PORTID_V(j));
+		c.action_to_len16 = cpu_to_be32(
 			FW_PORT_CMD_ACTION_V(FW_PORT_ACTION_GET_PORT_INFO) |
 			FW_LEN16(c));
 		ret = t4_wr_mbox(adap, mbox, &c, sizeof(c), &c);
@@ -5458,22 +5636,23 @@ int t4_port_init(struct adapter *adap, int mbox, int pf, int vf)
 		memcpy(adap->port[i]->dev_addr, addr, ETH_ALEN);
 		adap->port[i]->dev_port = j;
 
-		ret = ntohl(c.u.info.lstatus_to_modtype);
+		ret = be32_to_cpu(c.u.info.lstatus_to_modtype);
 		p->mdio_addr = (ret & FW_PORT_CMD_MDIOCAP_F) ?
 			FW_PORT_CMD_MDIOADDR_G(ret) : -1;
 		p->port_type = FW_PORT_CMD_PTYPE_G(ret);
 		p->mod_type = FW_PORT_MOD_TYPE_NA;
 
-		rvc.op_to_viid = htonl(FW_CMD_OP_V(FW_RSS_VI_CONFIG_CMD) |
-				       FW_CMD_REQUEST_F | FW_CMD_READ_F |
-				       FW_RSS_VI_CONFIG_CMD_VIID(p->viid));
-		rvc.retval_len16 = htonl(FW_LEN16(rvc));
+		rvc.op_to_viid =
+			cpu_to_be32(FW_CMD_OP_V(FW_RSS_VI_CONFIG_CMD) |
+				    FW_CMD_REQUEST_F | FW_CMD_READ_F |
+				    FW_RSS_VI_CONFIG_CMD_VIID(p->viid));
+		rvc.retval_len16 = cpu_to_be32(FW_LEN16(rvc));
 		ret = t4_wr_mbox(adap, mbox, &rvc, sizeof(rvc), &rvc);
 		if (ret)
 			return ret;
-		p->rss_mode = ntohl(rvc.u.basicvirtual.defaultq_to_udpen);
+		p->rss_mode = be32_to_cpu(rvc.u.basicvirtual.defaultq_to_udpen);
 
-		init_link_config(&p->link_cfg, ntohs(c.u.info.pcap));
+		init_link_config(&p->link_cfg, be16_to_cpu(c.u.info.pcap));
 		j++;
 	}
 	return 0;
