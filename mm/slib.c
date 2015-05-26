@@ -189,6 +189,10 @@ void *vmalloc_node(unsigned long size, int node)
 void vmalloc_sync_all(void)
 {
 }
+void __percpu *__alloc_percpu_gfp(size_t size, size_t align, gfp_t gfp)
+{
+	return kzalloc(size, GFP_KERNEL);
+}
 void *__alloc_percpu(size_t size, size_t align)
 {
 	return kzalloc(size, GFP_KERNEL);
