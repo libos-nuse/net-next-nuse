@@ -111,7 +111,11 @@ int dirty_background_ratio = 10;
 unsigned int dirty_expire_interval = 30 * 100;
 unsigned int dirty_writeback_interval = 5 * 100;
 unsigned long dirty_background_bytes = 0;
+
+#if 0
 int percpu_pagelist_fraction = 0;
+#endif
+
 int panic_timeout = 0;
 int panic_on_oops = 0;
 int printk_delay_msec = 0;
@@ -122,7 +126,11 @@ DEFINE_RATELIMIT_STATE(printk_ratelimit_state, 5 * HZ, 10);
 int pid_max = PID_MAX_DEFAULT;
 int pid_max_min = RESERVED_PIDS + 1;
 int pid_max_max = PID_MAX_LIMIT;
+
+#if 0
 int min_free_kbytes = 1024;
+#endif
+
 int max_threads = 100;
 int laptop_mode = 0;
 

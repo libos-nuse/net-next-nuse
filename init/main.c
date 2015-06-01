@@ -782,10 +782,14 @@ int __init_or_module do_one_initcall(initcall_t fn)
 	if (initcall_blacklisted(fn))
 		return -EPERM;
 
+#ifndef  CONFIG_INIT_DEBUG_ALWAYS
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
 	else
 		ret = fn();
+#else
+	ret = do_one_initcall_debug(fn);
+#endif
 
 	msgbuf[0] = 0;
 

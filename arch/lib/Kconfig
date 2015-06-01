@@ -61,9 +61,6 @@ config BASE_FULL
 config SELECT_MEMORY_MODEL
        def_bool n
 
-config FLAT_NODE_MEM_MAP
-       def_bool n
-
 config PAGEFLAGS_EXTENDED
        def_bool n
 
@@ -122,3 +119,15 @@ source "lib/Kconfig"
 
 config SLIB
        def_bool y
+
+config INIT_DEBUG_ALWAYS
+	def_bool y
+
+config HAVE_MEMBLOCK
+	def_bool y
+
+config DEBUG_INFO
+	def_bool y
+
+config FLAT_NODE_MEM_MAP
+	def_bool y

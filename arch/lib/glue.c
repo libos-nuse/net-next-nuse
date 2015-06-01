@@ -37,9 +37,15 @@ unsigned long avenrun[3];
 /* defined in mm/page_alloc.c, used in net/xfrm/xfrm_hash.c */
 int hashdist = HASHDIST_DEFAULT;
 /* defined in mm/page_alloc.c */
-struct pglist_data __refdata contig_page_data;
+//struct pglist_data __refdata contig_page_data;
 /* defined in linux/mmzone.h mm/memory.c */
 struct page *mem_map = 0;
+unsigned long max_mapnr;
+unsigned long highest_memmap_pfn __read_mostly;
+
+/* vmscan */
+unsigned long vm_total_pages;
+
 /* used during boot. */
 struct tvec_base boot_tvec_bases;
 /* used by sysinfo in kernel/timer.c */

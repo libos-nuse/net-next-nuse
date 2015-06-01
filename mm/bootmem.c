@@ -48,7 +48,7 @@ static int __init bootmem_debug_setup(char *buf)
 early_param("bootmem_debug", bootmem_debug_setup);
 
 #define bdebug(fmt, args...) ({				\
-	if (unlikely(bootmem_debug))			\
+	if (unlikely(!bootmem_debug))		\
 		printk(KERN_INFO			\
 			"bootmem::%s " fmt,		\
 			__func__, ## args);		\
@@ -75,7 +75,7 @@ unsigned long __init bootmem_bootmap_pages(unsigned long pages)
 /*
  * link bdata in order
  */
-static void __init link_bootmem(bootmem_data_t *bdata)
+void __init link_bootmem(bootmem_data_t *bdata)
 {
 	bootmem_data_t *ent;
 
@@ -173,6 +173,8 @@ static unsigned long __init free_all_bootmem_core(bootmem_data_t *bdata)
 {
 	struct page *page;
 	unsigned long *map, start, end, pages, count = 0;
+
+	printk("In %s node_bootmem_map %p\n", __func__, bdata->node_bootmem_map);	
 
 	if (!bdata->node_bootmem_map)
 		return 0;
@@ -276,11 +278,13 @@ unsigned long __init free_all_bootmem(void)
 
 	reset_all_zones_managed_pages();
 
+
 	list_for_each_entry(bdata, &bdata_list, list)
 		total_pages += free_all_bootmem_core(bdata);
 
 	totalram_pages += total_pages;
-
+	printk("I am %s\n", __func__);
+	
 	return total_pages;
 }
 

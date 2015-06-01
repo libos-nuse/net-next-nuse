@@ -13,7 +13,10 @@ typedef struct {
 #define ATOMIC64_INIT(i) { (i) }
 
 #define atomic64_read(v)        (*(volatile long *)&(v)->counter)
-void atomic64_add(long i, atomic64_t *v);
+static inline void atomic64_add(long i, atomic64_t *v)
+{
+	v->counter += i;
+}
 static inline void atomic64_sub(long i, atomic64_t *v)
 {
 	v->counter -= i;
