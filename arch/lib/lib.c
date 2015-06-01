@@ -174,6 +174,7 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
         lib_printf("GOGO init tim\n");
 	init_timers();
         lib_printf("GOGO rcu\n");
+	init_memory_system();
 	rcu_init();
 
         lib_printf("GOGO \n");

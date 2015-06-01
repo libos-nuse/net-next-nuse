@@ -11,8 +11,16 @@
 #include <linux/mman.h>
 #include <linux/ratelimit.h>
 #include <linux/proc_fs.h>
+#include <linux/sched/sysctl.h>
 #include "sim-assert.h"
 #include "sim-types.h"
+
+int mmap_min_addr_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	lib_assert(false);
+	return 0;
+}
 
 int drop_caches_sysctl_handler(struct ctl_table *table, int write,
 			       void *buffer, size_t *length, loff_t *ppos)
@@ -93,9 +101,6 @@ int sched_rt_handler(struct ctl_table *table, int write,
 
 int sysctl_overcommit_memory = OVERCOMMIT_GUESS;
 int sysctl_overcommit_ratio = 50;
-int sysctl_panic_on_oom = 0;
-int sysctl_oom_dump_tasks = 0;
-int sysctl_oom_kill_allocating_task = 0;
 int sysctl_nr_trim_pages = 0;
 int sysctl_drop_caches = 0;
 int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES - 1] = { 32 };
@@ -111,7 +116,10 @@ int dirty_background_ratio = 10;
 unsigned int dirty_expire_interval = 30 * 100;
 unsigned int dirty_writeback_interval = 5 * 100;
 unsigned long dirty_background_bytes = 0;
-int percpu_pagelist_fraction = 0;
+
+int sysctl_max_map_count __read_mostly = DEFAULT_MAX_MAP_COUNT;
+unsigned long dac_mmap_min_addr = 4096;
+
 int panic_timeout = 0;
 int panic_on_oops = 0;
 int printk_delay_msec = 0;
@@ -122,7 +130,7 @@ DEFINE_RATELIMIT_STATE(printk_ratelimit_state, 5 * HZ, 10);
 int pid_max = PID_MAX_DEFAULT;
 int pid_max_min = RESERVED_PIDS + 1;
 int pid_max_max = PID_MAX_LIMIT;
-int min_free_kbytes = 1024;
+
 int max_threads = 100;
 int laptop_mode = 0;
 

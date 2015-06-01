@@ -98,10 +98,11 @@ rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
 hrtimer.o
 kernel/sched/_to_keep=wait.o completion.o
-kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
+kernel/rcu_to_keep=rcu/srcu.o rcu/update.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
-mm/_to_keep=util.o list_lru.o slib.o
+mm/_to_keep=util.o list_lru.o slib.o page_alloc.o memblock.o mmzone.o slib_env.o \
+nobootmem.o highmem.o oom_kill.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o rng.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o syscore.o
@@ -129,7 +130,7 @@ quiet_cmd_objsmk = OBJS-MK   $@
 	done > $@
 
 $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/Makefile
-	+$(call if_changed,objsmk)
+	+$(call if_changed,objsmk);
 
 quiet_cmd_linker = GEN     $@
       cmd_linker = ld -shared --verbose | ./$^ > $@

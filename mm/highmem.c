@@ -34,6 +34,10 @@
 DEFINE_PER_CPU(int, __kmap_atomic_idx);
 #endif
 
+#ifdef CONFIG_LIB
+#define cache_is_vivt() 0
+#endif
+
 /*
  * Virtual_count is not a pure "count".
  *  0 means that it is not mapped, and has not been mapped
