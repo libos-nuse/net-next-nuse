@@ -15,6 +15,9 @@
 #define PAGE_SIZE		(_AC(1,UL) << PAGE_SHIFT)
 #define PAGE_MASK		(~((1 << PAGE_SHIFT) - 1))
 
+#define WANT_PAGE_VIRTUAL 1
+
+
 #ifndef __ASSEMBLY__
 
 #ifndef CONFIG_MMU
