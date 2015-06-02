@@ -6,6 +6,7 @@
 #include <asm/atomic.h>
 #include "slib_env.h"
 
+struct meminfo meminfo;
 
 static inline void
 free_memmap(unsigned long start_pfn, unsigned long end_pfn)
@@ -189,15 +190,14 @@ int __init arm_add_memory(u64 start, u64 size)
 	else
 		size -= aligned_start - start;
 
-
 	if (aligned_start < PHYS_OFFSET) {
 		if (aligned_start + size <= PHYS_OFFSET) {
-			pr_info("Ignoring memory below PHYS_OFFSET: 0x%08llx-0x%08llx\n",
+			pr_info("Ignoring memory below PHYS_OFFSET1: 0x%08llx-0x%08llx\n",
 				aligned_start, aligned_start + size);
 			return -EINVAL;
 		}
 
-		pr_info("Ignoring memory below PHYS_OFFSET: 0x%08llx-0x%08llx\n",
+		pr_info("Ignoring memory below PHYS_OFFSET2: 0x%08llx-0x%08llx\n",
 			aligned_start, (u64)PHYS_OFFSET);
 
 		size -= PHYS_OFFSET - aligned_start;
@@ -206,6 +206,8 @@ int __init arm_add_memory(u64 start, u64 size)
 
 	start = aligned_start;
 	size = size & ~(phys_addr_t)(PAGE_SIZE - 1);
+
+	printk("I am %s start:%llu, size:%llu\n", __func__, start, size);
 
 	/*
 	 * Check whether this memory region has non-zero size or
@@ -218,14 +220,79 @@ int __init arm_add_memory(u64 start, u64 size)
 	return 0;
 }
 
+static void __init find_limits(unsigned long *min, unsigned long *max_low,
+			       unsigned long *max_high)
+{
+	struct meminfo *mi = &meminfo;
+	int i;
+
+	/* This assumes the meminfo array is properly sorted */
+	*min = bank_pfn_start(&mi->bank[0]);
+	for_each_bank (i, mi)
+		if (mi->bank[i].highmem)
+				break;
+	*max_low = bank_pfn_end(&mi->bank[i - 1]);
+	*max_high = bank_pfn_end(&mi->bank[mi->nr_banks - 1]);
+}
+
+static void __init arm_bootmem_init(unsigned long start_pfn,
+	unsigned long end_pfn)
+{
+	struct memblock_region *reg;
+	unsigned int boot_pages;
+	phys_addr_t bitmap;
+	pg_data_t *pgdat;
+
+	/*
+	 * Allocate the bootmem bitmap page.  This must be in a region
+	 * of memory which has already been mapped.
+	 */
+	boot_pages = bootmem_bootmap_pages(end_pfn - start_pfn);
+
+	bitmap = memblock_alloc_base(boot_pages << PAGE_SHIFT, L1_CACHE_BYTES,
+				__pfn_to_phys(end_pfn));
+
+	/*
+	 * Initialise the bootmem allocator, handing the
+	 * memory banks over to bootmem.
+	 */
+	node_set_online(0);
+	pgdat = NODE_DATA(0);
+	init_bootmem_node(pgdat, __phys_to_pfn(bitmap), start_pfn, end_pfn);
+
+	/* Free the lowmem regions from memblock into bootmem. */
+	for_each_memblock(memory, reg) {
+		unsigned long start = memblock_region_memory_base_pfn(reg);
+		unsigned long end = memblock_region_memory_end_pfn(reg);
+
+		if (end >= end_pfn)
+			end = end_pfn;
+		if (start >= end)
+			break;
+
+		free_bootmem(__pfn_to_phys(start), (end - start) << PAGE_SHIFT);
+	}
+
+	/* Reserve the lowmem memblock reserved regions in bootmem. */
+	for_each_memblock(reserved, reg) {
+		unsigned long start = memblock_region_reserved_base_pfn(reg);
+		unsigned long end = memblock_region_reserved_end_pfn(reg);
+
+		if (end >= end_pfn)
+			end = end_pfn;
+		if (start >= end)
+			break;
+		reserve_bootmem(__pfn_to_phys(start),
+			        (end - start) << PAGE_SHIFT, BOOTMEM_DEFAULT);
+	}
+}
+
+
 void __init bootmem_init(void)
 {
 	unsigned long min, max_low, max_high;
 
-	min = 0;
-	max_low = 194560;
-	max_high = 524288;
-
+	find_limits(&min, &max_low, &max_high);
 
 	zone_sizes_init(min, max_low, max_high);
 
@@ -246,10 +313,13 @@ void __init paging_init(void)
 }
 
 
-
 void __init setup_arch(char **cmd)
 {
-	arm_add_memory(0, 1024 * 1024 * 1024 * 1);
+	int ret;
+	ret = arm_add_memory(0, 1024 * 1024 * 1024 * 1);
+	if (ret)
+		printk("arm_add_memory failed in %s\n", __func__);
+
 	arm_memblock_init();
 	paging_init();
 }
@@ -260,7 +330,6 @@ void __init setup_arch(char **cmd)
  */
 static void __init mm_init(void)
 {
-	link_bootmem(NODE_DATA(0)->bdata);
 	mem_init();
 }
 
@@ -275,9 +344,10 @@ void __init init_memory_system(void)
 void test(void)
 {
 	pg_data_t *pgdat = NODE_DATA(nid);
-	printk("I am printk: %p, %p, %d, %p\n", pgdat->node_zones, 
-						pgdat->node_zonelists, 
-						pgdat->nr_zones,
-						pgdat->bdata);
+	alloc_pages(GFP_KERNEL, 1);
+	
+	//printk("I am printk: %p, %p, %d\n", pgdat->node_zones, 
+	//					pgdat->node_zonelists, 
+	//					pgdat->nr_zones);
 }
 

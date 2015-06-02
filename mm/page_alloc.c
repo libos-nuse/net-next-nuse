@@ -62,7 +62,6 @@
 #include <linux/sched/rt.h>
 #include <linux/page_owner.h>
 
-
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -2868,10 +2867,12 @@ static void print_buddy_freelist(void)
 				printk(KERN_INFO "%lu %d %d %d\n",pfn, order, t, i);
 				i++;
 			}
+
+			printk(KERN_INFO "Totoal free page: %d\n", i);
 		}
 	}
 out:
-	printk(KERN_INFO "Totoal free page: %d\n", i);
+	printk(KERN_INFO "Totoal free page2: %d\n", i);
 }
 
 
@@ -2901,7 +2902,6 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 
 	print_buddy_freelist();
 	
-
 	gfp_mask &= gfp_allowed_mask;
 
 	lockdep_trace_alloc(gfp_mask);
@@ -2918,11 +2918,15 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 	 * valid zone. It's possible to have an empty zonelist as a result
 	 * of __GFP_THISNODE and a memoryless node
 	 */
-	if (unlikely(!zonelist->_zonerefs->zone))
+	if (unlikely(!zonelist->_zonerefs->zone)) {
+		printk(KERN_INFO "I am %s\n", __func__);
 		return NULL;
+	}
 
 	if (IS_ENABLED(CONFIG_CMA) && ac.migratetype == MIGRATE_MOVABLE)
 		alloc_flags |= ALLOC_CMA;
+
+	printk(KERN_INFO "I am %s\n", __func__);
 
 retry_cpuset:
 	cpuset_mems_cookie = read_mems_allowed_begin();
@@ -2967,7 +2971,7 @@ out:
 		goto retry_cpuset;
 
 
-	printk(KERN_INFO "I am %s\n", __func__);
+	printk(KERN_INFO "Done: I am %s %p\n", __func__, page);
 
 	return page;
 }
@@ -5173,7 +5177,7 @@ static void __paginginit free_area_init_core(struct pglist_data *pgdat,
 
 static void __init_refok alloc_node_mem_map(struct pglist_data *pgdat)
 {
-	printk("I am %s %d\n", __func__, pgdat->node_spanned_pages);
+	printk("I am %s %lu\n", __func__, pgdat->node_spanned_pages);
 
 	/* Skip empty nodes */
 	if (!pgdat->node_spanned_pages)

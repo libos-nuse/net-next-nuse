@@ -37,9 +37,6 @@ typedef struct bootmem_data {
 extern bootmem_data_t bootmem_node_data[];
 #endif
 
-
-extern void link_bootmem(bootmem_data_t *bdata);
-
 extern unsigned long bootmem_bootmap_pages(unsigned long);
 
 extern unsigned long init_bootmem_node(pg_data_t *pgdat,

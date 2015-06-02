@@ -18,6 +18,7 @@
 #include <linux/init_task.h>
 #include <linux/sched/rt.h>
 #include <linux/backing-dev.h>
+#include <linux/file.h>
 #include <stdarg.h>
 #include "sim-assert.h"
 #include "sim.h"
@@ -42,6 +43,7 @@ int hashdist = HASHDIST_DEFAULT;
 struct page *mem_map = 0;
 unsigned long max_mapnr;
 unsigned long highest_memmap_pfn __read_mostly;
+int randomize_va_space = 0;
 
 /* vmscan */
 unsigned long vm_total_pages;
@@ -69,6 +71,11 @@ unsigned long sysctl_overcommit_kbytes __read_mostly;
 DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
 static DECLARE_BITMAP(cpu_possible_bits, CONFIG_NR_CPUS) __read_mostly;
 const struct cpumask *const cpu_possible_mask = to_cpumask(cpu_possible_bits);
+
+
+/* arm/mmu.c */
+pgprot_t pgprot_kernel;
+
 
 struct backing_dev_info noop_backing_dev_info = {
 	.name		= "noop",
@@ -293,3 +300,12 @@ void on_each_cpu_mask(const struct cpumask *mask,
 		      smp_call_func_t func, void *info, bool wait)
 {
 }
+
+unsigned long
+arch_get_unmapped_area(struct file *filp, unsigned long addr,
+		unsigned long len, unsigned long pgoff, unsigned long flags)
+{
+	lib_assert(false);
+	return 0;
+}
+

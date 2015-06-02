@@ -33,4 +33,9 @@ static inline bool test_and_clear_restore_sigmask(void)
 	return true;
 }
 
+
+#define THREAD_SIZE_ORDER	1
+#define THREAD_SIZE		(PAGE_SIZE << THREAD_SIZE_ORDER)
+#define THREAD_START_SP		(THREAD_SIZE - 8)
+
 #endif /* _ASM_SIM_THREAD_INFO_H */
