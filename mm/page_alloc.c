@@ -117,6 +117,37 @@ unsigned long totalram_pages __read_mostly;
 #endif
 
 
+static void print_buddy_freelist(void)
+{
+	struct zone *zone;
+	unsigned int order, t;
+	struct list_head *curr;
+	unsigned long pfn;
+	int i = 0;
+
+	for_each_zone(zone) {
+		printk(KERN_INFO "I am zone %s %lu\n", zone->name, zone->present_pages);
+		if (zone->present_pages == 0)
+			goto out;
+	
+		for_each_migratetype_order(order, t) {
+			list_for_each(curr, &zone->free_area[order].free_list[t]) {
+				pfn = page_to_pfn(list_entry(curr, struct page, lru));
+
+				printk(KERN_INFO "%lu %d %d %d\n",pfn, order, t, i);
+				i++;
+			}
+
+		}
+	}
+out:
+	printk(KERN_INFO "Totoal free page2: %d\n", i);
+}
+
+
+
+
+
 unsigned long totalreserve_pages __read_mostly;
 unsigned long totalcma_pages __read_mostly;
 /*
@@ -932,7 +963,10 @@ static inline void expand(struct zone *zone, struct page *page,
 			set_page_guard(zone, &page[size], high, migratetype);
 			continue;
 		}
+
+
 		list_add(&page[size].lru, &area->free_list[migratetype]);
+		printk("I am %s, pfn: %lu\n", __func__, page_to_pfn(&page[size]));
 		area->nr_free++;
 		set_page_order(&page[size], high);
 	}
@@ -985,8 +1019,9 @@ static int prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
 	kernel_map_pages(page, 1 << order, 1);
 	kasan_alloc_pages(page, order);
 
-	if (gfp_flags & __GFP_ZERO)
+	if (gfp_flags & __GFP_ZERO) {
 		prep_zero_page(page, order, gfp_flags);
+	}
 
 	if (order && (gfp_flags & __GFP_COMP))
 		prep_compound_page(page, order);
@@ -1022,9 +1057,13 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 		if (list_empty(&area->free_list[migratetype]))
 			continue;
 
+		printk("I am %s: mt: %d order:%d\n", __func__, migratetype, order);
 		page = list_entry(area->free_list[migratetype].next,
 							struct page, lru);
+		printk("I am %s: pfn %lu lru:%p\n", __func__, page_to_pfn(page), &page->lru);
+		printk("next:%p, prev:%p\n", (&page->lru)->next, (&page->lru)->prev);
 		list_del(&page->lru);
+		printk("I am %s, %d\n", __func__, __LINE__);
 		rmv_page_order(page);
 		area->nr_free--;
 		expand(zone, page, order, current_order, area, migratetype);
@@ -1303,6 +1342,7 @@ static struct page *__rmqueue(struct zone *zone, unsigned int order,
 	struct page *page;
 
 retry_reserve:
+	printk("I am %s: %d\n", __func__, __LINE__);
 	page = __rmqueue_smallest(zone, order, migratetype);
 
 	if (unlikely(!page) && migratetype != MIGRATE_RESERVE) {
@@ -1323,6 +1363,7 @@ retry_reserve:
 		}
 	}
 
+	printk("I am %s: %d\n", __func__, __LINE__);
 	trace_mm_page_alloc_zone_locked(page, order, migratetype);
 	return page;
 }
@@ -1358,6 +1399,7 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 		else
 			list_add_tail(&page->lru, list);
 		list = &page->lru;
+
 		if (is_migrate_cma(get_freepage_migratetype(page)))
 			__mod_zone_page_state(zone, NR_FREE_CMA_PAGES,
 					      -(1 << order));
@@ -1723,6 +1765,7 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 		pcp = &this_cpu_ptr(zone->pageset)->pcp;
 		list = &pcp->lists[migratetype];
 		if (list_empty(list)) {
+			printk("I am %s: %d\n", __func__, __LINE__);
 			pcp->count += rmqueue_bulk(zone, 0,
 					pcp->batch, list,
 					migratetype, cold);
@@ -1738,6 +1781,7 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 		list_del(&page->lru);
 		pcp->count--;
 	} else {
+
 		if (unlikely(gfp_flags & __GFP_NOFAIL)) {
 			/*
 			 * __GFP_NOFAIL is not to be used in new code.
@@ -1760,11 +1804,15 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 					  get_freepage_migratetype(page));
 	}
 
+
+	printk("I am %s: %d\n", __func__, __LINE__);
 	__mod_zone_page_state(zone, NR_ALLOC_BATCH, -(1 << order));
 	if (atomic_long_read(&zone->vm_stat[NR_ALLOC_BATCH]) <= 0 &&
 	    !test_bit(ZONE_FAIR_DEPLETED, &zone->flags))
 		set_bit(ZONE_FAIR_DEPLETED, &zone->flags);
 
+	printk("I am %s: %d\n", __func__, __LINE__);
+	printk("I am %s: pfn: %lu\n", __func__, page_to_pfn(page));
 	__count_zone_vm_events(PGALLOC, zone, 1 << order);
 	zone_statistics(preferred_zone, zone, gfp_flags);
 	local_irq_restore(flags);
@@ -2232,13 +2280,22 @@ zonelist_scan:
 		}
 
 try_this_zone:
+
+		printk("I am %s: %d\n", __func__, __LINE__);
 		page = buffered_rmqueue(ac->preferred_zone, zone, order,
 						gfp_mask, ac->migratetype);
+		printk("I am %s: %d\n", __func__, __LINE__);
+		printk("page:%lu\n", page_to_pfn(page));
 		if (page) {
+			printk("I am %s: %d\n", __func__, __LINE__);
 			if (prep_new_page(page, order, gfp_mask, alloc_flags))
 				goto try_this_zone;
+
+			printk("I am %s: %d\n", __func__, __LINE__);
 			return page;
 		}
+
+
 this_zone_full:
 		if (IS_ENABLED(CONFIG_NUMA) && zlc_active)
 			zlc_mark_zone_full(zonelist, z);
@@ -2270,6 +2327,9 @@ this_zone_full:
 
 	if (zonelist_rescan)
 		goto zonelist_scan;
+
+
+	printk("I am %s: %d\n", __func__, __LINE__);
 
 	return NULL;
 }
@@ -2846,38 +2906,11 @@ got_pg:
 	return page;
 }
 
-static void print_buddy_freelist(void)
-{
-	struct zone *zone;
-	unsigned int order, t;
-	struct list_head *curr;
-	unsigned long pfn;
-	int i = 0;
-
-
-	for_each_zone(zone) {
-		printk(KERN_INFO "I am zone %s %lu\n", zone->name, zone->present_pages);
-		if (zone->present_pages == 0)
-			goto out;
-	
-		for_each_migratetype_order(order, t) {
-			list_for_each(curr, &zone->free_area[order].free_list[t]) {
-				pfn = page_to_pfn(list_entry(curr, struct page, lru));
-
-				printk(KERN_INFO "%lu %d %d %d\n",pfn, order, t, i);
-				i++;
-			}
-
-			printk(KERN_INFO "Totoal free page: %d\n", i);
-		}
-	}
-out:
-	printk(KERN_INFO "Totoal free page2: %d\n", i);
-}
-
 
 
 static int mem_initialized;
+
+extern char *total_ram;
 
 /*
  * This is the 'heart' of the zoned buddy allocator.
@@ -2897,10 +2930,11 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 		.migratetype = gfpflags_to_migratetype(gfp_mask),
 	};
 
-	if (mem_initialized == 0)
+	if (mem_initialized == 0) {
 		init_memory_system();
-
-	print_buddy_freelist();
+		print_buddy_freelist();
+		mem_initialized = 1;
+	}
 	
 	gfp_mask &= gfp_allowed_mask;
 
@@ -2911,22 +2945,22 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 	if (should_fail_alloc_page(gfp_mask, order))
 		return NULL;
 
-	printk(KERN_INFO "I am %s\n", __func__);
 
+	printk(KERN_INFO "I am %s line:%d\n", __func__, __LINE__);
 	/*
 	 * Check the zones suitable for the gfp_mask contain at least one
 	 * valid zone. It's possible to have an empty zonelist as a result
 	 * of __GFP_THISNODE and a memoryless node
 	 */
 	if (unlikely(!zonelist->_zonerefs->zone)) {
-		printk(KERN_INFO "I am %s\n", __func__);
+		printk(KERN_INFO "I am %s line:%d\n", __func__, __LINE__);
 		return NULL;
 	}
 
 	if (IS_ENABLED(CONFIG_CMA) && ac.migratetype == MIGRATE_MOVABLE)
 		alloc_flags |= ALLOC_CMA;
 
-	printk(KERN_INFO "I am %s\n", __func__);
+	printk(KERN_INFO "I am %s line:%d\n", __func__, __LINE__);
 
 retry_cpuset:
 	cpuset_mems_cookie = read_mems_allowed_begin();
@@ -2937,13 +2971,20 @@ retry_cpuset:
 	preferred_zoneref = first_zones_zonelist(ac.zonelist, ac.high_zoneidx,
 				ac.nodemask ? : &cpuset_current_mems_allowed,
 				&ac.preferred_zone);
+
+	printk(KERN_INFO "I am %s line:%d\n", __func__, __LINE__);
 	if (!ac.preferred_zone)
 		goto out;
+
+	printk(KERN_INFO "I am %s line:%d\n", __func__, __LINE__);
 	ac.classzone_idx = zonelist_zone_idx(preferred_zoneref);
 
 	/* First allocation attempt */
 	alloc_mask = gfp_mask|__GFP_HARDWALL;
 	page = get_page_from_freelist(alloc_mask, order, alloc_flags, &ac);
+
+	printk(KERN_INFO "I am %s line:%d\n", __func__, __LINE__);
+
 	if (unlikely(!page)) {
 		/*
 		 * Runtime PM, block IO and its error handling path
@@ -2970,8 +3011,11 @@ out:
 	if (unlikely(!page && read_mems_allowed_retry(cpuset_mems_cookie)))
 		goto retry_cpuset;
 
+	printk(KERN_INFO "Done: I am %s %lu\n", __func__, page_to_pfn(page));
+	printk(KERN_INFO "Done: I am %s %lx\n", __func__, page_to_pfn(page));
+	page->virtual = (void *)total_ram + (page_to_pfn(page) << PAGE_SHIFT);
 
-	printk(KERN_INFO "Done: I am %s %p\n", __func__, page);
+	print_buddy_freelist();
 
 	return page;
 }
@@ -2984,7 +3028,7 @@ EXPORT_SYMBOL(__alloc_pages_nodemask);
 unsigned long __get_free_pages(gfp_t gfp_mask, unsigned int order)
 {
 	struct page *page;
-
+	printk("I am %s\n", __func__);
 	/*
 	 * __get_free_pages() returns a 32-bit address, which cannot represent
 	 * a highmem page
@@ -2994,6 +3038,7 @@ unsigned long __get_free_pages(gfp_t gfp_mask, unsigned int order)
 	page = alloc_pages(gfp_mask, order);
 	if (!page)
 		return 0;
+	printk("I am %s\n", __func__);
 	return (unsigned long) page_address(page);
 }
 EXPORT_SYMBOL(__get_free_pages);
@@ -3001,6 +3046,8 @@ EXPORT_SYMBOL(__get_free_pages);
 
 unsigned long get_zeroed_page(gfp_t gfp_mask)
 {
+
+	printk("I am %s\n", __func__);
 	return __get_free_pages(gfp_mask | __GFP_ZERO, 0);
 }
 EXPORT_SYMBOL(get_zeroed_page);
@@ -3017,9 +3064,11 @@ void __free_pages(struct page *page, unsigned int order)
 
 EXPORT_SYMBOL(__free_pages);
 
-
+#if 0
 void free_pages(unsigned long addr, unsigned int order)
 {
+	printk("I am %s\n", __func__);
+
 	if (addr != 0) {
 		VM_BUG_ON(!virt_addr_valid((void *)addr));
 		__free_pages(virt_to_page((void *)addr), order);
@@ -3027,7 +3076,19 @@ void free_pages(unsigned long addr, unsigned int order)
 }
 
 EXPORT_SYMBOL(free_pages);
+#else
+void free_pages(unsigned long addr, unsigned int order)
+{
+	unsigned long pfn = addr - (unsigned long) total_ram;
+	pfn = pfn >> PAGE_SHIFT;
 
+	if (addr != 0) {
+		__free_pages(pfn_to_page(pfn), order);
+	}
+}
+
+EXPORT_SYMBOL(free_pages);
+#endif
 
 
 /*
@@ -3210,6 +3271,8 @@ void *alloc_pages_exact(size_t size, gfp_t gfp_mask)
 {
 	unsigned int order = get_order(size);
 	unsigned long addr;
+
+	printk("I am %s\n", __func__);
 
 	addr = __get_free_pages(gfp_mask, order);
 	return make_alloc_exact(addr, order, size);
@@ -4357,6 +4420,11 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 		highest_memmap_pfn = end_pfn - 1;
 
 	z = &NODE_DATA(nid)->node_zones[zone];
+
+	printk("I am %s zone name: %s, start pfn: %lu, end_pfn:%lu\n", 
+				__func__, z->name, start_pfn, end_pfn);
+
+
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
 		/*
 		 * There can be holes in boot-time mem_map[]s
@@ -4371,6 +4439,7 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 		}
 		page = pfn_to_page(pfn);
 		set_page_links(page, zone, nid, pfn);
+
 		mminit_verify_page_links(page, zone, nid, pfn);
 		init_page_count(page);
 		page_mapcount_reset(page);
@@ -4396,6 +4465,7 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 			set_pageblock_migratetype(page, MIGRATE_MOVABLE);
 
 		INIT_LIST_HEAD(&page->lru);
+
 #ifdef WANT_PAGE_VIRTUAL
 		/* The shift won't overflow because ZONE_NORMAL is below 4G. */
 		if (!is_highmem_idx(zone))
@@ -5157,6 +5227,8 @@ static void __paginginit free_area_init_core(struct pglist_data *pgdat,
 		zone_seqlock_init(zone);
 		zone->zone_pgdat = pgdat;
 		zone_pcp_init(zone);
+
+		printk("I am %s size:%lu\n", __func__, size);
 
 		/* For bootup, initialized properly in watermark setup */
 		mod_zone_page_state(zone, NR_ALLOC_BATCH, zone->managed_pages);

@@ -1,7 +1,6 @@
 #ifndef _ASM_HIGHMEM_H
 #define _ASM_HIGHMEM_H
 
-#if 1
 #include <asm/kmap_types.h>
 
 #define PKMAP_BASE		(PAGE_OFFSET - PMD_SIZE)
@@ -74,4 +73,3 @@ extern struct page *kmap_atomic_to_page(const void *ptr);
 
 #endif
 
-#endif

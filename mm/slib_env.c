@@ -4,9 +4,22 @@
 #include <linux/memblock.h>
 #include <linux/bootmem.h>
 #include <asm/atomic.h>
+#include <asm/memory.h>
+#include <asm/cachetype.h>
+
+#include <linux/slib_def.h>
 #include "slib_env.h"
+#include "sim.h"
+#include "sim-assert.h"
+
 
 struct meminfo meminfo;
+static void * __initdata vmalloc_min =
+	(void *)(VMALLOC_END - (240 << 20) - VMALLOC_OFFSET);
+
+phys_addr_t arm_lowmem_limit __initdata = 0;
+
+unsigned int cacheid __read_mostly;
 
 static inline void
 free_memmap(unsigned long start_pfn, unsigned long end_pfn)
@@ -90,10 +103,19 @@ static void __init free_highpages(void)
 	unsigned long max_low = max_low_pfn;
 	struct memblock_region *mem, *res;
 
+	printk("max_low_pfn:%lu\n", max_low_pfn);
+	printk("min_low_pfn:%lu\n", min_low_pfn);
+	printk("max_pfn:%lu\n", max_pfn);
+
+
 	/* set highmem page free */
 	for_each_memblock(memory, mem) {
 		unsigned long start = memblock_region_memory_base_pfn(mem);
 		unsigned long end = memblock_region_memory_end_pfn(mem);
+
+		printk("start:%lu\n", start);
+		printk("end:%lu\n", end);
+
 
 		/* Ignore complete lowmem entries */
 		if (end <= max_low)
@@ -156,19 +178,47 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max_low,
 	unsigned long max_high)
 {
 	unsigned long zone_size[MAX_NR_ZONES], zhole_size[MAX_NR_ZONES];
-	int i;
+	struct memblock_region *reg;
 
 	/*
 	 * initialise the zones.
 	 */
 	memset(zone_size, 0, sizeof(zone_size));
-	memset(zhole_size, 0, sizeof(zhole_size));
 
-	zone_size[0] = 194560;
-	zone_size[1] = 329728;
+	/*
+	 * The memory size has already been determined.  If we need
+	 * to do anything fancy with the allocation of this memory
+	 * to the zones, now is the time to do it.
+	 */
+	zone_size[0] = max_low - min;
+#ifdef CONFIG_HIGHMEM
+	zone_size[ZONE_HIGHMEM] = max_high - max_low;
+#endif
+
+	/*
+	 * Calculate the size of the holes.
+	 *  holes = node_size - sum(bank_sizes)
+	 */
+	memcpy(zhole_size, zone_size, sizeof(zhole_size));
+	for_each_memblock(memory, reg) {
+		unsigned long start = memblock_region_memory_base_pfn(reg);
+		unsigned long end = memblock_region_memory_end_pfn(reg);
+
+		if (start < max_low) {
+			unsigned long low_end = min(end, max_low);
+			zhole_size[0] -= low_end - start;
+		}
+#ifdef CONFIG_HIGHMEM
+		if (end > max_low) {
+			unsigned long high_start = max(start, max_low);
+			zhole_size[ZONE_HIGHMEM] -= end - high_start;
+		}
+#endif
+	}
 
 	free_area_init_node(0, zone_size, min, zhole_size);
 }
+
 
 void __init arm_memblock_init(void)
 {
@@ -220,20 +270,16 @@ int __init arm_add_memory(u64 start, u64 size)
 	return 0;
 }
 
+
 static void __init find_limits(unsigned long *min, unsigned long *max_low,
 			       unsigned long *max_high)
 {
-	struct meminfo *mi = &meminfo;
-	int i;
-
-	/* This assumes the meminfo array is properly sorted */
-	*min = bank_pfn_start(&mi->bank[0]);
-	for_each_bank (i, mi)
-		if (mi->bank[i].highmem)
-				break;
-	*max_low = bank_pfn_end(&mi->bank[i - 1]);
-	*max_high = bank_pfn_end(&mi->bank[mi->nr_banks - 1]);
+	*max_low = PFN_DOWN(memblock_get_current_limit());
+	*min = PFN_UP(memblock_start_of_DRAM());
+	*max_high = PFN_DOWN(memblock_end_of_DRAM());
 }
+
+
 
 static void __init arm_bootmem_init(unsigned long start_pfn,
 	unsigned long end_pfn)
@@ -294,6 +340,11 @@ void __init bootmem_init(void)
 
 	find_limits(&min, &max_low, &max_high);
 
+	printk("min:%lu\n", min);
+	printk("max_low:%lu\n", max_low);
+	printk("max_high:%lu\n", max_high);
+
+
 	zone_sizes_init(min, max_low, max_high);
 
 	/*
@@ -313,6 +364,90 @@ void __init paging_init(void)
 }
 
 
+void __init sanity_check_meminfo(void)
+{
+	phys_addr_t memblock_limit = 0;
+	int highmem = 0;
+	phys_addr_t vmalloc_limit = __pa(vmalloc_min - 1) + 1;
+	struct memblock_region *reg;
+
+	for_each_memblock(memory, reg) {
+		phys_addr_t block_start = reg->base;
+		phys_addr_t block_end = reg->base + reg->size;
+		phys_addr_t size_limit = reg->size;
+
+		if (reg->base >= vmalloc_limit)
+			highmem = 1;
+		else
+			size_limit = vmalloc_limit - reg->base;
+
+		if (!IS_ENABLED(CONFIG_HIGHMEM) || cache_is_vipt_aliasing()) {
+
+			if (highmem) {
+				pr_notice("Ignoring RAM at %pa-%pa (!CONFIG_HIGHMEM)\n",
+					  &block_start, &block_end);
+				memblock_remove(reg->base, reg->size);
+				continue;
+			}
+
+			if (reg->size > size_limit) {
+				phys_addr_t overlap_size = reg->size - size_limit;
+
+				pr_notice("Truncating RAM at %pa-%pa to -%pa",
+					  &block_start, &block_end, &vmalloc_limit);
+				memblock_remove(vmalloc_limit, overlap_size);
+				block_end = vmalloc_limit;
+			}
+		}
+
+		if (!highmem) {
+			if (block_end > arm_lowmem_limit) {
+				if (reg->size > size_limit)
+					arm_lowmem_limit = vmalloc_limit;
+				else
+					arm_lowmem_limit = block_end;
+			}
+
+			/*
+			 * Find the first non-section-aligned page, and point
+			 * memblock_limit at it. This relies on rounding the
+			 * limit down to be section-aligned, which happens at
+			 * the end of this function.
+			 *
+			 * With this algorithm, the start or end of almost any
+			 * bank can be non-section-aligned. The only exception
+			 * is that the start of the bank 0 must be section-
+			 * aligned, since otherwise memory would need to be
+			 * allocated when mapping the start of bank 0, which
+			 * occurs before any free memory is mapped.
+			 */
+			if (!memblock_limit) {
+				if (!IS_ALIGNED(block_start, SECTION_SIZE))
+					memblock_limit = block_start;
+				else if (!IS_ALIGNED(block_end, SECTION_SIZE))
+					memblock_limit = arm_lowmem_limit;
+			}
+
+		}
+	}
+
+	high_memory = __va(arm_lowmem_limit - 1) + 1;
+
+	/*
+	 * Round the memblock limit down to a section size.  This
+	 * helps to ensure that we will allocate memory from the
+	 * last full section, which should be mapped.
+	 */
+	if (memblock_limit)
+		memblock_limit = round_down(memblock_limit, SECTION_SIZE);
+	if (!memblock_limit)
+		memblock_limit = arm_lowmem_limit;
+
+	memblock_set_current_limit(memblock_limit);
+}
+
+char *total_ram = NULL;
+
 void __init setup_arch(char **cmd)
 {
 	int ret;
@@ -320,10 +455,25 @@ void __init setup_arch(char **cmd)
 	if (ret)
 		printk("arm_add_memory failed in %s\n", __func__);
 
+	total_ram = lib_malloc(1024 * 1024 * 1024 * 1);	
+	if (total_ram == NULL)
+		printk("Alloc memory failed in %s\n", __func__);
+
+	sanity_check_meminfo();
 	arm_memblock_init();
 	paging_init();
 }
 
+
+void *kmap_atomic(struct page *page)
+{
+	return (void *)total_ram + (page_to_pfn(page) << PAGE_SHIFT);
+}
+
+void __kunmap_atomic(void *kvaddr)
+{
+
+}
 
 /*
  * Set up kernel memory allocators

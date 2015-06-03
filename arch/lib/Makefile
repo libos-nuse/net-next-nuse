@@ -156,7 +156,7 @@ define cmd_lib_bounds
 	 echo "#define GENERATED_BOUNDS_H"; \
 	 echo ""; \
 	 echo "#define NR_PAGEFLAGS (__NR_PAGEFLAGS)"; \
-	 echo "#define MAX_NR_ZONES (__MAX_NR_ZONES)"; \
+	 echo "#define MAX_NR_ZONES 3"; \
 	 echo ""; \
 	 echo "#endif /* GENERATED_BOUNDS_H */") > $@
 endef
