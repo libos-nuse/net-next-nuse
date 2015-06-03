@@ -164,6 +164,10 @@ struct page *kmap_to_page(void *vaddr)
 }
 EXPORT_SYMBOL(kmap_to_page);
 
+#if 1
+#define cache_is_vivt() 0
+#endif
+
 static void flush_all_zero_pkmaps(void)
 {
 	int i;
