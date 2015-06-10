@@ -714,8 +714,13 @@ static int mlx4_cmd_wait(struct mlx4_dev *dev, u64 in_param, u64 *out_param,
 					 msecs_to_jiffies(timeout))) {
 		mlx4_warn(dev, "command 0x%x timed out (go bit not cleared)\n",
 			  op);
-		err = -EIO;
-		goto out_reset;
+		if (op == MLX4_CMD_NOP) {
+			err = -EBUSY;
+			goto out;
+		} else {
+			err = -EIO;
+			goto out_reset;
+		}
 	}
 
 	err = context->result;
@@ -2912,7 +2917,7 @@ int mlx4_set_vf_mac(struct mlx4_dev *dev, int port, int vf, u64 mac)
 	port = mlx4_slaves_closest_port(dev, slave, port);
 	s_info = &priv->mfunc.master.vf_admin[slave].vport[port];
 	s_info->mac = mac;
-	mlx4_info(dev, "default mac on vf %d port %d to %llX will take afect only after vf restart\n",
+	mlx4_info(dev, "default mac on vf %d port %d to %llX will take effect only after vf restart\n",
 		  vf, port, s_info->mac);
 	return 0;
 }

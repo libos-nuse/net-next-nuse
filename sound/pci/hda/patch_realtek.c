@@ -884,6 +884,7 @@ static struct alc_codec_rename_pci_table rename_pci_tbl[] = {
 	{ 0x10ec0275, 0x1028, 0, "ALC3260" },
 	{ 0x10ec0899, 0x1028, 0, "ALC3861" },
 	{ 0x10ec0298, 0x1028, 0, "ALC3266" },
+	{ 0x10ec0256, 0x1028, 0, "ALC3246" },
 	{ 0x10ec0670, 0x1025, 0, "ALC669X" },
 	{ 0x10ec0676, 0x1025, 0, "ALC679X" },
 	{ 0x10ec0282, 0x1043, 0, "ALC3229" },
@@ -2167,6 +2168,7 @@ static const struct hda_fixup alc882_fixups[] = {
 static const struct snd_pci_quirk alc882_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x1025, 0x006c, "Acer Aspire 9810", ALC883_FIXUP_ACER_EAPD),
 	SND_PCI_QUIRK(0x1025, 0x0090, "Acer Aspire", ALC883_FIXUP_ACER_EAPD),
+	SND_PCI_QUIRK(0x1025, 0x0107, "Acer Aspire", ALC883_FIXUP_ACER_EAPD),
 	SND_PCI_QUIRK(0x1025, 0x010a, "Acer Ferrari 5000", ALC883_FIXUP_ACER_EAPD),
 	SND_PCI_QUIRK(0x1025, 0x0110, "Acer Aspire", ALC883_FIXUP_ACER_EAPD),
 	SND_PCI_QUIRK(0x1025, 0x0112, "Acer Aspire 9303", ALC883_FIXUP_ACER_EAPD),
@@ -4227,6 +4229,11 @@ static void alc_fixup_headset_mode_alc662(struct hda_codec *codec,
 	if (action == HDA_FIXUP_ACT_PRE_PROBE) {
 		spec->parse_flags |= HDA_PINCFG_HEADSET_MIC;
 		spec->gen.hp_mic = 1; /* Mic-in is same pin as headphone */
+
+		/* Disable boost for mic-in permanently. (This code is only called
+		   from quirks that guarantee that the headphone is at NID 0x1b.) */
+		snd_hda_codec_write(codec, 0x1b, 0, AC_VERB_SET_AMP_GAIN_MUTE, 0x7000);
+		snd_hda_override_wcaps(codec, 0x1b, get_wcaps(codec, 0x1b) & ~AC_WCAP_IN_AMP);
 	} else
 		alc_fixup_headset_mode(codec, fix, action);
 }
@@ -5370,6 +5377,13 @@ static const struct snd_hda_pin_quirk alc269_pin_fixup_tbl[] = {
 		{0x17, 0x40000000},
 		{0x1d, 0x40700001},
 		{0x21, 0x02211040}),
+	SND_HDA_PIN_QUIRK(0x10ec0256, 0x1028, "Dell", ALC255_FIXUP_DELL1_MIC_NO_PRESENCE,
+		ALC255_STANDARD_PINS,
+		{0x12, 0x90a60160},
+		{0x14, 0x90170120},
+		{0x17, 0x40000000},
+		{0x1d, 0x40700001},
+		{0x21, 0x02211030}),
 	SND_HDA_PIN_QUIRK(0x10ec0256, 0x1028, "Dell", ALC255_FIXUP_DELL1_MIC_NO_PRESENCE,
 		ALC256_STANDARD_PINS,
 		{0x13, 0x40000000}),

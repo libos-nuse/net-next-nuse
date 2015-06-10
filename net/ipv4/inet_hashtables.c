@@ -18,6 +18,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
+#include <linux/vmalloc.h>
 
 #include <net/inet_connection_sock.h>
 #include <net/inet_hashtables.h>
@@ -393,9 +394,10 @@ not_unique:
 	return -EADDRNOTAVAIL;
 }
 
-static inline u32 inet_sk_port_offset(const struct sock *sk)
+static u32 inet_sk_port_offset(const struct sock *sk)
 {
 	const struct inet_sock *inet = inet_sk(sk);
+
 	return secure_ipv4_port_ephemeral(inet->inet_rcv_saddr,
 					  inet->inet_daddr,
 					  inet->inet_dport);
@@ -501,8 +503,14 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 		inet_get_local_port_range(net, &low, &high);
 		remaining = (high - low) + 1;
 
+		/* By starting with offset being an even number,
+		 * we tend to leave about 50% of ports for other uses,
+		 * like bind(0).
+		 */
+		offset &= ~1;
+
 		local_bh_disable();
-		for (i = 1; i <= remaining; i++) {
+		for (i = 0; i < remaining; i++) {
 			port = low + (i + offset) % remaining;
 			if (inet_is_local_reserved_port(net, port))
 				continue;
@@ -546,7 +554,7 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 		return -EADDRNOTAVAIL;
 
 ok:
-		hint += i;
+		hint += (i + 2) & ~1;
 
 		/* Head lock still held and bh's disabled */
 		inet_bind_hash(sk, tb, port);
@@ -593,7 +601,11 @@ out:
 int inet_hash_connect(struct inet_timewait_death_row *death_row,
 		      struct sock *sk)
 {
-	return __inet_hash_connect(death_row, sk, inet_sk_port_offset(sk),
+	u32 port_offset = 0;
+
+	if (!inet_sk(sk)->inet_num)
+		port_offset = inet_sk_port_offset(sk);
+	return __inet_hash_connect(death_row, sk, port_offset,
 				   __inet_check_established);
 }
 EXPORT_SYMBOL_GPL(inet_hash_connect);
@@ -609,3 +621,33 @@ void inet_hashinfo_init(struct inet_hashinfo *h)
 		}
 }
 EXPORT_SYMBOL_GPL(inet_hashinfo_init);
+
+int inet_ehash_locks_alloc(struct inet_hashinfo *hashinfo)
+{
+	unsigned int i, nblocks = 1;
+
+	if (sizeof(spinlock_t) != 0) {
+		/* allocate 2 cache lines or at least one spinlock per cpu */
+		nblocks = max_t(unsigned int,
+				2 * L1_CACHE_BYTES / sizeof(spinlock_t),
+				1);
+		nblocks = roundup_pow_of_two(nblocks * num_possible_cpus());
+
+		/* no more locks than number of hash buckets */
+		nblocks = min(nblocks, hashinfo->ehash_mask + 1);
+
+		hashinfo->ehash_locks =	kmalloc_array(nblocks, sizeof(spinlock_t),
+						      GFP_KERNEL | __GFP_NOWARN);
+		if (!hashinfo->ehash_locks)
+			hashinfo->ehash_locks = vmalloc(nblocks * sizeof(spinlock_t));
+
+		if (!hashinfo->ehash_locks)
+			return -ENOMEM;
+
+		for (i = 0; i < nblocks; i++)
+			spin_lock_init(&hashinfo->ehash_locks[i]);
+	}
+	hashinfo->ehash_locks_mask = nblocks - 1;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(inet_ehash_locks_alloc);

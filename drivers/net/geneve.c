@@ -44,7 +44,9 @@ struct geneve_dev {
 	struct net	   *net;	/* netns for packet i/o */
 	struct net_device  *dev;	/* netdev for geneve tunnel */
 	struct geneve_sock *sock;	/* socket used for geneve tunnel */
-	u8 vni[3];			/* virtual network ID for tunnel */
+	u8                 vni[3];	/* virtual network ID for tunnel */
+	u8                 ttl;		/* TTL override */
+	u8                 tos;		/* TOS override */
 	struct sockaddr_in remote;	/* IPv4 address for link partner */
 	struct list_head   next;	/* geneve's per namespace list */
 };
@@ -184,7 +186,7 @@ static netdev_tx_t geneve_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct flowi4 fl4;
 	int err;
 	__be16 sport;
-	__u8 tos, ttl = 0;
+	__u8 tos, ttl;
 
 	iip = ip_hdr(skb);
 
@@ -193,7 +195,12 @@ static netdev_tx_t geneve_xmit(struct sk_buff *skb, struct net_device *dev)
 	/* TODO: port min/max limits should be configurable */
 	sport = udp_flow_src_port(dev_net(dev), skb, 0, 0, true);
 
+	tos = geneve->tos;
+	if (tos == 1)
+		tos = ip_tunnel_get_dsfield(iip, skb);
+
 	memset(&fl4, 0, sizeof(fl4));
+	fl4.flowi4_tos = RT_TOS(tos);
 	fl4.daddr = geneve->remote.sin_addr.s_addr;
 	rt = ip_route_output_key(geneve->net, &fl4);
 	if (IS_ERR(rt)) {
@@ -207,11 +214,10 @@ static netdev_tx_t geneve_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto rt_tx_error;
 	}
 
-	/* TODO: tos and ttl should be configurable */
+	tos = ip_tunnel_ecn_encap(tos, iip, skb);
 
-	tos = ip_tunnel_ecn_encap(0, iip, skb);
-
-	if (IN_MULTICAST(ntohl(fl4.daddr)))
+	ttl = geneve->ttl;
+	if (!ttl && IN_MULTICAST(ntohl(fl4.daddr)))
 		ttl = 1;
 
 	ttl = ttl ? : ip4_dst_hoplimit(&rt->dst);
@@ -297,6 +303,8 @@ static void geneve_setup(struct net_device *dev)
 static const struct nla_policy geneve_policy[IFLA_GENEVE_MAX + 1] = {
 	[IFLA_GENEVE_ID]		= { .type = NLA_U32 },
 	[IFLA_GENEVE_REMOTE]		= { .len = FIELD_SIZEOF(struct iphdr, daddr) },
+	[IFLA_GENEVE_TTL]		= { .type = NLA_U8 },
+	[IFLA_GENEVE_TOS]		= { .type = NLA_U8 },
 };
 
 static int geneve_validate(struct nlattr *tb[], struct nlattr *data[])
@@ -364,6 +372,12 @@ static int geneve_newlink(struct net *net, struct net_device *dev,
 	if (err)
 		return err;
 
+	if (data[IFLA_GENEVE_TTL])
+		geneve->ttl = nla_get_u8(data[IFLA_GENEVE_TTL]);
+
+	if (data[IFLA_GENEVE_TOS])
+		geneve->tos = nla_get_u8(data[IFLA_GENEVE_TOS]);
+
 	list_add(&geneve->next, &gn->geneve_list);
 
 	hlist_add_head_rcu(&geneve->hlist, &gn->vni_list[hash]);
@@ -386,6 +400,8 @@ static size_t geneve_get_size(const struct net_device *dev)
 {
 	return nla_total_size(sizeof(__u32)) +	/* IFLA_GENEVE_ID */
 		nla_total_size(sizeof(struct in_addr)) + /* IFLA_GENEVE_REMOTE */
+		nla_total_size(sizeof(__u8)) +  /* IFLA_GENEVE_TTL */
+		nla_total_size(sizeof(__u8)) +  /* IFLA_GENEVE_TOS */
 		0;
 }
 
@@ -400,6 +416,10 @@ static int geneve_fill_info(struct sk_buff *skb, const struct net_device *dev)
 
 	if (nla_put_in_addr(skb, IFLA_GENEVE_REMOTE,
 			    geneve->remote.sin_addr.s_addr))
+		goto nla_put_failure;
+
+	if (nla_put_u8(skb, IFLA_GENEVE_TTL, geneve->ttl) ||
+	    nla_put_u8(skb, IFLA_GENEVE_TOS, geneve->tos))
 		goto nla_put_failure;
 
 	return 0;

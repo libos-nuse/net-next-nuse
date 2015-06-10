@@ -133,7 +133,7 @@ u32 eth_get_headlen(void *data, unsigned int len)
 	/* parse any remaining L2/L3 headers, check for L4 */
 	if (!skb_flow_dissect_flow_keys_buf(&keys, data, eth->h_proto,
 					    sizeof(*eth), len))
-		return max_t(u32, keys.basic.thoff, sizeof(*eth));
+		return max_t(u32, keys.control.thoff, sizeof(*eth));
 
 	/* parse for any L4 headers */
 	return min_t(u32, __skb_get_poff(NULL, data, &keys, len), len);
@@ -470,6 +470,7 @@ EXPORT_SYMBOL(eth_gro_complete);
 
 static struct packet_offload eth_packet_offload __read_mostly = {
 	.type = cpu_to_be16(ETH_P_TEB),
+	.priority = 10,
 	.callbacks = {
 		.gro_receive = eth_gro_receive,
 		.gro_complete = eth_gro_complete,
