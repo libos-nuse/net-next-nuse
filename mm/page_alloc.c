@@ -112,7 +112,7 @@ EXPORT_SYMBOL(node_states);
 /* Protect totalram_pages and zone->managed_pages */
 static DEFINE_SPINLOCK(managed_page_count_lock);
 
-#if 0
+#ifndef CONFIG_LIB
 unsigned long totalram_pages __read_mostly;
 #endif
 
@@ -207,7 +207,7 @@ int pageblock_order __read_mostly;
 static void __free_pages_ok(struct page *page, unsigned int order);
 
 
-#if 0
+#ifndef CONFIG_LIB
 /*
  * results with 256, 32 in the lowmem_reserve sysctl:
  *	1G machine -> (16M dma, 800M-16M normal, 1G-800M high)
@@ -2881,11 +2881,9 @@ got_pg:
 	return page;
 }
 
-
-
-static int mem_initialized;
-
+#ifdef CONFIG_LIB
 extern char *total_ram;
+#endif
 
 /*
  * This is the 'heart' of the zoned buddy allocator.
@@ -2905,12 +2903,6 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 		.migratetype = gfpflags_to_migratetype(gfp_mask),
 	};
 
-	if (mem_initialized == 0) {
-		init_memory_system();
-		print_buddy_freelist();
-		mem_initialized = 1;
-	}
-	
 	gfp_mask &= gfp_allowed_mask;
 
 	lockdep_trace_alloc(gfp_mask);
@@ -2977,7 +2969,7 @@ out:
 	if (unlikely(!page && read_mems_allowed_retry(cpuset_mems_cookie)))
 		goto retry_cpuset;
 
-#if 1
+#ifdef CONFIG_LIB
 	printk(KERN_INFO "Done: I am %s %lu\n", __func__, page_to_pfn(page));
 	page->virtual = (void *)total_ram + (page_to_pfn(page) << PAGE_SHIFT);
 #endif
@@ -3025,7 +3017,7 @@ void __free_pages(struct page *page, unsigned int order)
 
 EXPORT_SYMBOL(__free_pages);
 
-#if 0
+#ifndef CONFIG_LIB
 void free_pages(unsigned long addr, unsigned int order)
 {
 	printk("I am %s\n", __func__);
@@ -3318,7 +3310,7 @@ static unsigned long nr_free_zone_pages(int offset)
  * nr_free_buffer_pages() counts the number of pages which are beyond the high
  * watermark within ZONE_DMA and ZONE_NORMAL.
  */
-#if 0
+#ifndef CONFIG_LIB
 unsigned long nr_free_buffer_pages(void)
 {
 	return nr_free_zone_pages(gfp_zone(GFP_USER));
@@ -3351,7 +3343,7 @@ static inline void show_node(struct zone *zone)
 		printk("Node %d ", zone_to_nid(zone));
 }
 
-#if 0
+#ifndef CONFIG_LIB
 void si_meminfo(struct sysinfo *val)
 {
 	val->totalram = totalram_pages;
@@ -5752,7 +5744,7 @@ void free_highmem_page(struct page *page)
 }
 #endif
 
-#if 0
+#ifndef CONFIG_LIB
 
 void __init mem_init_print_info(const char *str)
 {
@@ -6107,7 +6099,7 @@ int __meminit init_per_zone_wmark_min(void)
 				new_min_free_kbytes, user_min_free_kbytes);
 	}
 
-#if 0
+#ifndef CONFIG_LIB
 	setup_per_zone_wmarks();
 	refresh_zone_stat_thresholds();
 	setup_per_zone_lowmem_reserve();
@@ -6117,7 +6109,7 @@ int __meminit init_per_zone_wmark_min(void)
 }
 module_init(init_per_zone_wmark_min)
 
-#if 0
+#ifndef CONFIG_LIB
 
 /*
  * min_free_kbytes_sysctl_handler - just a wrapper around proc_dointvec() so
@@ -6176,7 +6168,7 @@ int sysctl_min_slab_ratio_sysctl_handler(struct ctl_table *table, int write,
 }
 #endif
 
-#if 0
+#ifndef CONFIG_LIB
 /*
  * lowmem_reserve_ratio_sysctl_handler - just a wrapper around
  *	proc_dointvec() so that we can call setup_per_zone_lowmem_reserve()
@@ -6242,7 +6234,7 @@ out:
 
 #endif 
 
-#if 0
+#ifndef CONFIG_LIB
 int hashdist = HASHDIST_DEFAULT;
 
 #endif 
@@ -6258,7 +6250,7 @@ static int __init set_hashdist(char *str)
 __setup("hashdist=", set_hashdist);
 #endif
 
-#if 0
+#ifndef CONFIG_LIB
 
 /*
  * allocate a large system hash table from bootmem
