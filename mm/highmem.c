@@ -164,7 +164,7 @@ struct page *kmap_to_page(void *vaddr)
 }
 EXPORT_SYMBOL(kmap_to_page);
 
-#if 1
+#ifdef CONFIG_LIB
 #define cache_is_vivt() 0
 #endif
 

@@ -33,6 +33,8 @@ struct kernel_param;
 struct super_block;
 struct tvec_base {};
 
+struct mm_struct init_mm;
+
 /* defined in sched.c, used in net/sched/em_meta.c */
 unsigned long avenrun[3];
 /* defined in mm/page_alloc.c, used in net/xfrm/xfrm_hash.c */
