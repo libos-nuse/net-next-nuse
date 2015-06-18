@@ -63,6 +63,7 @@
 #define smp_wmb()	dmb(ishst)
 #endif
 
+#ifndef CONFIG_LIB
 #define smp_store_release(p, v)						\
 do {									\
 	compiletime_assert_atomic_type(*p);				\
@@ -77,6 +78,23 @@ do {									\
 	smp_mb();							\
 	___p1;								\
 })
+
+#else
+#define smp_store_release(p, v)						\
+do {									\
+	smp_mb();							\
+	ACCESS_ONCE(*p) = (v);						\
+} while (0)
+
+#define smp_load_acquire(p)						\
+({									\
+	typeof(*p) ___p1 = ACCESS_ONCE(*p);				\
+	smp_mb();							\
+	___p1;								\
+})
+
+#endif
+
 
 #define read_barrier_depends()		do { } while(0)
 #define smp_read_barrier_depends()	do { } while(0)
