@@ -96,7 +96,7 @@ comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o
 kernel/time/_to_keep=time.o
-kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
+kernel/rcu_to_keep=rcu/srcu.o rcu/update.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
 mm/_to_keep=util.o list_lru.o slib.o page_alloc.o memblock.o mmzone.o slib_env.o \
@@ -128,7 +128,8 @@ quiet_cmd_objsmk = OBJS-MK   $@
 	done > $@
 
 $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/Makefile
-	+$(call if_changed,objsmk)
+	+$(call if_changed,objsmk); \
+	echo $(srctree)
 
 quiet_cmd_linker = GEN     $@
       cmd_linker = ld -shared --verbose | ./$^ > $@
