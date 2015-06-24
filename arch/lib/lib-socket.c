@@ -242,46 +242,6 @@ int lib_sock_getsockopt(struct SimSocket *socket, int level, int optname,
 	return err;
 }
 
-int lib_sock_canrecv(struct SimSocket *socket)
-{
-	struct socket *sock = (struct socket *)socket;
-	struct inet_connection_sock *icsk;
-
-	switch (sock->sk->sk_state) {
-	case TCP_CLOSE:
-		if (SOCK_STREAM == sock->sk->sk_type)
-			return 1;
-	case TCP_ESTABLISHED:
-		return sock->sk->sk_receive_queue.qlen > 0;
-	case TCP_SYN_SENT:
-	case TCP_SYN_RECV:
-	case TCP_LAST_ACK:
-	case TCP_CLOSING:
-		return 0;
-	case TCP_FIN_WAIT1:
-	case TCP_FIN_WAIT2:
-	case TCP_TIME_WAIT:
-	case TCP_CLOSE_WAIT:
-		return 1;
-	case TCP_LISTEN:
-	{
-		icsk = inet_csk(sock->sk);
-		return !reqsk_queue_empty(&icsk->icsk_accept_queue);
-	}
-
-	default:
-		break;
-	}
-
-	return 0;
-}
-int lib_sock_cansend(struct SimSocket *socket)
-{
-	struct socket *sock = (struct socket *)socket;
-
-	return sock_writeable(sock->sk);
-}
-
 /**
  * Struct used to pass pool table context between DCE and Kernel and back from
  * Kernel to DCE
