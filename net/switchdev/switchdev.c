@@ -103,7 +103,9 @@ static void switchdev_port_attr_set_work(struct work_struct *work)
 
 	rtnl_lock();
 	err = switchdev_port_attr_set(asw->dev, &asw->attr);
-	BUG_ON(err);
+	if (err && err != -EOPNOTSUPP)
+		netdev_err(asw->dev, "failed (err=%d) to set attribute (id=%d)\n",
+			   err, asw->attr.id);
 	rtnl_unlock();
 
 	dev_put(asw->dev);
@@ -182,7 +184,8 @@ int switchdev_port_attr_set(struct net_device *dev, struct switchdev_attr *attr)
 
 	attr->trans = SWITCHDEV_TRANS_COMMIT;
 	err = __switchdev_port_attr_set(dev, attr);
-	BUG_ON(err);
+	WARN(err, "%s: Commit of attribute (id=%d) failed.\n",
+	     dev->name, attr->id);
 
 	return err;
 }
@@ -389,6 +392,126 @@ int call_switchdev_notifiers(unsigned long val, struct net_device *dev,
 }
 EXPORT_SYMBOL_GPL(call_switchdev_notifiers);
 
+struct switchdev_vlan_dump {
+	struct switchdev_obj obj;
+	struct sk_buff *skb;
+	u32 filter_mask;
+	u16 flags;
+	u16 begin;
+	u16 end;
+};
+
+static int switchdev_port_vlan_dump_put(struct net_device *dev,
+					struct switchdev_vlan_dump *dump)
+{
+	struct bridge_vlan_info vinfo;
+
+	vinfo.flags = dump->flags;
+
+	if (dump->begin == 0 && dump->end == 0) {
+		return 0;
+	} else if (dump->begin == dump->end) {
+		vinfo.vid = dump->begin;
+		if (nla_put(dump->skb, IFLA_BRIDGE_VLAN_INFO,
+			    sizeof(vinfo), &vinfo))
+			return -EMSGSIZE;
+	} else {
+		vinfo.vid = dump->begin;
+		vinfo.flags |= BRIDGE_VLAN_INFO_RANGE_BEGIN;
+		if (nla_put(dump->skb, IFLA_BRIDGE_VLAN_INFO,
+			    sizeof(vinfo), &vinfo))
+			return -EMSGSIZE;
+		vinfo.vid = dump->end;
+		vinfo.flags &= ~BRIDGE_VLAN_INFO_RANGE_BEGIN;
+		vinfo.flags |= BRIDGE_VLAN_INFO_RANGE_END;
+		if (nla_put(dump->skb, IFLA_BRIDGE_VLAN_INFO,
+			    sizeof(vinfo), &vinfo))
+			return -EMSGSIZE;
+	}
+
+	return 0;
+}
+
+static int switchdev_port_vlan_dump_cb(struct net_device *dev,
+				       struct switchdev_obj *obj)
+{
+	struct switchdev_vlan_dump *dump =
+		container_of(obj, struct switchdev_vlan_dump, obj);
+	struct switchdev_obj_vlan *vlan = &dump->obj.u.vlan;
+	int err = 0;
+
+	if (vlan->vid_begin > vlan->vid_end)
+		return -EINVAL;
+
+	if (dump->filter_mask & RTEXT_FILTER_BRVLAN) {
+		dump->flags = vlan->flags;
+		for (dump->begin = dump->end = vlan->vid_begin;
+		     dump->begin <= vlan->vid_end;
+		     dump->begin++, dump->end++) {
+			err = switchdev_port_vlan_dump_put(dev, dump);
+			if (err)
+				return err;
+		}
+	} else if (dump->filter_mask & RTEXT_FILTER_BRVLAN_COMPRESSED) {
+		if (dump->begin > vlan->vid_begin &&
+		    dump->begin >= vlan->vid_end) {
+			if ((dump->begin - 1) == vlan->vid_end &&
+			    dump->flags == vlan->flags) {
+				/* prepend */
+				dump->begin = vlan->vid_begin;
+			} else {
+				err = switchdev_port_vlan_dump_put(dev, dump);
+				dump->flags = vlan->flags;
+				dump->begin = vlan->vid_begin;
+				dump->end = vlan->vid_end;
+			}
+		} else if (dump->end <= vlan->vid_begin &&
+		           dump->end < vlan->vid_end) {
+			if ((dump->end  + 1) == vlan->vid_begin &&
+			    dump->flags == vlan->flags) {
+				/* append */
+				dump->end = vlan->vid_end;
+			} else {
+				err = switchdev_port_vlan_dump_put(dev, dump);
+				dump->flags = vlan->flags;
+				dump->begin = vlan->vid_begin;
+				dump->end = vlan->vid_end;
+			}
+		} else {
+			err = -EINVAL;
+		}
+	}
+
+	return err;
+}
+
+static int switchdev_port_vlan_fill(struct sk_buff *skb, struct net_device *dev,
+				    u32 filter_mask)
+{
+	struct switchdev_vlan_dump dump = {
+		.obj = {
+			.id = SWITCHDEV_OBJ_PORT_VLAN,
+			.cb = switchdev_port_vlan_dump_cb,
+		},
+		.skb = skb,
+		.filter_mask = filter_mask,
+	};
+	int err = 0;
+
+	if ((filter_mask & RTEXT_FILTER_BRVLAN) ||
+	    (filter_mask & RTEXT_FILTER_BRVLAN_COMPRESSED)) {
+		err = switchdev_port_obj_dump(dev, &dump.obj);
+		if (err)
+			goto err_out;
+		if (filter_mask & RTEXT_FILTER_BRVLAN_COMPRESSED)
+			/* last one */
+			err = switchdev_port_vlan_dump_put(dev, &dump);
+	}
+
+err_out:
+	return err == -EOPNOTSUPP ? 0 : err;
+}
+
 /**
  *	switchdev_port_bridge_getlink - Get bridge port attributes
  *
@@ -409,11 +532,12 @@ int switchdev_port_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	int err;
 
 	err = switchdev_port_attr_get(dev, &attr);
-	if (err)
+	if (err && err != -EOPNOTSUPP)
 		return err;
 
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev, mode,
-				       attr.u.brport_flags, mask, nlflags);
+				       attr.u.brport_flags, mask, nlflags,
+				       filter_mask, switchdev_port_vlan_fill);
 }
 EXPORT_SYMBOL_GPL(switchdev_port_bridge_getlink);
 
@@ -508,23 +632,23 @@ static int switchdev_port_br_afspec(struct net_device *dev,
 		vinfo = nla_data(attr);
 		vlan->flags = vinfo->flags;
 		if (vinfo->flags & BRIDGE_VLAN_INFO_RANGE_BEGIN) {
-			if (vlan->vid_start)
+			if (vlan->vid_begin)
 				return -EINVAL;
-			vlan->vid_start = vinfo->vid;
+			vlan->vid_begin = vinfo->vid;
 		} else if (vinfo->flags & BRIDGE_VLAN_INFO_RANGE_END) {
-			if (!vlan->vid_start)
+			if (!vlan->vid_begin)
 				return -EINVAL;
 			vlan->vid_end = vinfo->vid;
-			if (vlan->vid_end <= vlan->vid_start)
+			if (vlan->vid_end <= vlan->vid_begin)
 				return -EINVAL;
 			err = f(dev, &obj);
 			if (err)
 				return err;
 			memset(vlan, 0, sizeof(*vlan));
 		} else {
-			if (vlan->vid_start)
+			if (vlan->vid_begin)
 				return -EINVAL;
-			vlan->vid_start = vinfo->vid;
+			vlan->vid_begin = vinfo->vid;
 			vlan->vid_end = vinfo->vid;
 			err = f(dev, &obj);
 			if (err)
@@ -654,7 +778,6 @@ struct switchdev_fdb_dump {
 	struct switchdev_obj obj;
 	struct sk_buff *skb;
 	struct netlink_callback *cb;
-	struct net_device *filter_dev;
 	int idx;
 };
 
@@ -667,12 +790,8 @@ static int switchdev_port_fdb_dump_cb(struct net_device *dev,
 	u32 seq = dump->cb->nlh->nlmsg_seq;
 	struct nlmsghdr *nlh;
 	struct ndmsg *ndm;
-	struct net_device *master = netdev_master_upper_dev_get(dev);
 
 	if (dump->idx < dump->cb->args[0])
-		goto skip;
-
-	if (master && dump->filter_dev != master)
 		goto skip;
 
 	nlh = nlmsg_put(dump->skb, portid, seq, RTM_NEWNEIGH,
@@ -728,7 +847,6 @@ int switchdev_port_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb,
 		},
 		.skb = skb,
 		.cb = cb,
-		.filter_dev = filter_dev,
 		.idx = idx,
 	};
 	int err;
@@ -853,7 +971,7 @@ int switchdev_fib_ipv4_add(u32 dst, int dst_len, struct fib_info *fi,
 	if (!err)
 		fi->fib_flags |= RTNH_F_OFFLOAD;
 
-	return err;
+	return err == -EOPNOTSUPP ? 0 : err;
 }
 EXPORT_SYMBOL_GPL(switchdev_fib_ipv4_add);
 
@@ -898,7 +1016,7 @@ int switchdev_fib_ipv4_del(u32 dst, int dst_len, struct fib_info *fi,
 	if (!err)
 		fi->fib_flags &= ~RTNH_F_OFFLOAD;
 
-	return err;
+	return err == -EOPNOTSUPP ? 0 : err;
 }
 EXPORT_SYMBOL_GPL(switchdev_fib_ipv4_del);
 

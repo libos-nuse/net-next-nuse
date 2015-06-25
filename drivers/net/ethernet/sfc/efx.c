@@ -1332,7 +1332,7 @@ static unsigned int efx_wanted_parallelism(struct efx_nic *efx)
 			if (!cpumask_test_cpu(cpu, thread_mask)) {
 				++count;
 				cpumask_or(thread_mask, thread_mask,
-					   topology_thread_cpumask(cpu));
+					   topology_sibling_cpumask(cpu));
 			}
 		}
 
@@ -2920,6 +2920,7 @@ static void efx_pci_remove(struct pci_dev *pci_dev)
 	efx_dissociate(efx);
 	dev_close(efx->net_dev);
 	efx_disable_interrupts(efx);
+	efx->state = STATE_UNINIT;
 	rtnl_unlock();
 
 	if (efx->type->sriov_fini)

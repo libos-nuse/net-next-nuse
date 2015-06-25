@@ -28,6 +28,8 @@ static size_t bond_get_slave_size(const struct net_device *bond_dev,
 		nla_total_size(MAX_ADDR_LEN) +	/* IFLA_BOND_SLAVE_PERM_HWADDR */
 		nla_total_size(sizeof(u16)) +	/* IFLA_BOND_SLAVE_QUEUE_ID */
 		nla_total_size(sizeof(u16)) +	/* IFLA_BOND_SLAVE_AD_AGGREGATOR_ID */
+		nla_total_size(sizeof(u8)) +	/* IFLA_BOND_SLAVE_AD_ACTOR_OPER_PORT_STATE */
+		nla_total_size(sizeof(u16)) +	/* IFLA_BOND_SLAVE_AD_PARTNER_OPER_PORT_STATE */
 		0;
 }
 
@@ -56,12 +58,23 @@ static int bond_fill_slave_info(struct sk_buff *skb,
 
 	if (BOND_MODE(slave->bond) == BOND_MODE_8023AD) {
 		const struct aggregator *agg;
+		const struct port *ad_port;
 
+		ad_port = &SLAVE_AD_INFO(slave)->port;
 		agg = SLAVE_AD_INFO(slave)->port.aggregator;
-		if (agg)
+		if (agg) {
 			if (nla_put_u16(skb, IFLA_BOND_SLAVE_AD_AGGREGATOR_ID,
 					agg->aggregator_identifier))
 				goto nla_put_failure;
+			if (nla_put_u8(skb,
+				       IFLA_BOND_SLAVE_AD_ACTOR_OPER_PORT_STATE,
+				       ad_port->actor_oper_port_state))
+				goto nla_put_failure;
+			if (nla_put_u16(skb,
+					IFLA_BOND_SLAVE_AD_PARTNER_OPER_PORT_STATE,
+					ad_port->partner_oper.port_state))
+				goto nla_put_failure;
+		}
 	}
 
 	return 0;
@@ -588,19 +601,20 @@ static int bond_fill_info(struct sk_buff *skb,
 	if (BOND_MODE(bond) == BOND_MODE_8023AD) {
 		struct ad_info info;
 
-		if (nla_put_u16(skb, IFLA_BOND_AD_ACTOR_SYS_PRIO,
-				bond->params.ad_actor_sys_prio))
-			goto nla_put_failure;
+		if (capable(CAP_NET_ADMIN)) {
+			if (nla_put_u16(skb, IFLA_BOND_AD_ACTOR_SYS_PRIO,
+					bond->params.ad_actor_sys_prio))
+				goto nla_put_failure;
 
-		if (nla_put_u16(skb, IFLA_BOND_AD_USER_PORT_KEY,
-				bond->params.ad_user_port_key))
-			goto nla_put_failure;
+			if (nla_put_u16(skb, IFLA_BOND_AD_USER_PORT_KEY,
+					bond->params.ad_user_port_key))
+				goto nla_put_failure;
 
-		if (nla_put(skb, IFLA_BOND_AD_ACTOR_SYSTEM,
-			    sizeof(bond->params.ad_actor_system),
-			    &bond->params.ad_actor_system))
-			goto nla_put_failure;
-
+			if (nla_put(skb, IFLA_BOND_AD_ACTOR_SYSTEM,
+				    sizeof(bond->params.ad_actor_system),
+				    &bond->params.ad_actor_system))
+				goto nla_put_failure;
+		}
 		if (!bond_3ad_get_active_agg_info(bond, &info)) {
 			struct nlattr *nest;
 
