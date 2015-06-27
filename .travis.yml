@@ -11,3 +11,5 @@ script:
   # disable DPDK build for a while
   - make clean ARCH=lib V=1 && make library ARCH=lib V=1
   - ./tools/testing/libos/nuse-test.sh
+  - make clean ARCH=lib V=1 && make library ARCH=lib OPT=no V=1
+  - ./tools/testing/libos/nuse-test.sh
