@@ -19,7 +19,7 @@ testbin: bake check_pkgs
 	cd buildtop ; \
 	../bake/bake.py download ; \
 	../bake/bake.py update ; \
-	../bake/bake.py build
+	../bake/bake.py build $(BAKEBUILD_PARAMS)
 
 test:
 	@./dce-test.sh ADD_PARAM=$(ADD_PARAM)

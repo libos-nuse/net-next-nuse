@@ -1298,7 +1298,9 @@ static void efx_fini_io(struct efx_nic *efx)
 		efx->membase_phys = 0;
 	}
 
-	pci_disable_device(efx->pci_dev);
+	/* Don't disable bus-mastering if VFs are assigned */
+	if (!pci_vfs_assigned(efx->pci_dev))
+		pci_disable_device(efx->pci_dev);
 }
 
 void efx_set_default_rx_indir_table(struct efx_nic *efx)
@@ -2282,6 +2284,7 @@ static const struct net_device_ops efx_netdev_ops = {
 	.ndo_set_vf_spoofchk	= efx_sriov_set_vf_spoofchk,
 	.ndo_get_vf_config	= efx_sriov_get_vf_config,
 	.ndo_set_vf_link_state  = efx_sriov_set_vf_link_state,
+	.ndo_get_phys_port_id   = efx_sriov_get_phys_port_id,
 #endif
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller = efx_netpoll,
@@ -2325,6 +2328,28 @@ show_phy_type(struct device *dev, struct device_attribute *attr, char *buf)
 	return sprintf(buf, "%d\n", efx->phy_type);
 }
 static DEVICE_ATTR(phy_type, 0444, show_phy_type, NULL);
+
+#ifdef CONFIG_SFC_MCDI_LOGGING
+static ssize_t show_mcdi_log(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	struct efx_nic *efx = pci_get_drvdata(to_pci_dev(dev));
+	struct efx_mcdi_iface *mcdi = efx_mcdi(efx);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", mcdi->logging_enabled);
+}
+static ssize_t set_mcdi_log(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t count)
+{
+	struct efx_nic *efx = pci_get_drvdata(to_pci_dev(dev));
+	struct efx_mcdi_iface *mcdi = efx_mcdi(efx);
+	bool enable = count > 0 && *buf != '0';
+
+	mcdi->logging_enabled = enable;
+	return count;
+}
+static DEVICE_ATTR(mcdi_logging, 0644, show_mcdi_log, set_mcdi_log);
+#endif
 
 static int efx_register_netdev(struct efx_nic *efx)
 {
@@ -2383,9 +2408,21 @@ static int efx_register_netdev(struct efx_nic *efx)
 			  "failed to init net dev attributes\n");
 		goto fail_registered;
 	}
+#ifdef CONFIG_SFC_MCDI_LOGGING
+	rc = device_create_file(&efx->pci_dev->dev, &dev_attr_mcdi_logging);
+	if (rc) {
+		netif_err(efx, drv, efx->net_dev,
+			  "failed to init net dev attributes\n");
+		goto fail_attr_mcdi_logging;
+	}
+#endif
 
 	return 0;
 
+#ifdef CONFIG_SFC_MCDI_LOGGING
+fail_attr_mcdi_logging:
+	device_remove_file(&efx->pci_dev->dev, &dev_attr_phy_type);
+#endif
 fail_registered:
 	rtnl_lock();
 	efx_dissociate(efx);
@@ -2404,13 +2441,14 @@ static void efx_unregister_netdev(struct efx_nic *efx)
 
 	BUG_ON(netdev_priv(efx->net_dev) != efx);
 
-	strlcpy(efx->name, pci_name(efx->pci_dev), sizeof(efx->name));
-	device_remove_file(&efx->pci_dev->dev, &dev_attr_phy_type);
-
-	rtnl_lock();
-	unregister_netdevice(efx->net_dev);
-	efx->state = STATE_UNINIT;
-	rtnl_unlock();
+	if (efx_dev_registered(efx)) {
+		strlcpy(efx->name, pci_name(efx->pci_dev), sizeof(efx->name));
+#ifdef CONFIG_SFC_MCDI_LOGGING
+		device_remove_file(&efx->pci_dev->dev, &dev_attr_mcdi_logging);
+#endif
+		device_remove_file(&efx->pci_dev->dev, &dev_attr_phy_type);
+		unregister_netdev(efx->net_dev);
+	}
 }
 
 /**************************************************************************
@@ -2866,7 +2904,8 @@ static void efx_pci_remove_main(struct efx_nic *efx)
 }
 
 /* Final NIC shutdown
- * This is called only at module unload (or hotplug removal).
+ * This is called only at module unload (or hotplug removal).  A PF can call
+ * this on its VFs to ensure they are unbound first.
  */
 static void efx_pci_remove(struct pci_dev *pci_dev)
 {

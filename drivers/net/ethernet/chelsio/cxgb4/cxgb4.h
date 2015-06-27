@@ -46,17 +46,19 @@
 #include <linux/spinlock.h>
 #include <linux/timer.h>
 #include <linux/vmalloc.h>
+#include <linux/etherdevice.h>
 #include <asm/io.h>
 #include "cxgb4_uld.h"
 
 #define CH_WARN(adap, fmt, ...) dev_warn(adap->pdev_dev, fmt, ## __VA_ARGS__)
 
 enum {
-	MAX_NPORTS = 4,     /* max # of ports */
-	SERNUM_LEN = 24,    /* Serial # length */
-	EC_LEN     = 16,    /* E/C length */
-	ID_LEN     = 16,    /* ID length */
-	PN_LEN     = 16,    /* Part Number length */
+	MAX_NPORTS	= 4,     /* max # of ports */
+	SERNUM_LEN	= 24,    /* Serial # length */
+	EC_LEN		= 16,    /* E/C length */
+	ID_LEN		= 16,    /* ID length */
+	PN_LEN		= 16,    /* Part Number length */
+	MACADDR_LEN	= 12,    /* MAC Address length */
 };
 
 enum {
@@ -198,23 +200,45 @@ struct lb_port_stats {
 };
 
 struct tp_tcp_stats {
-	u32 tcpOutRsts;
-	u64 tcpInSegs;
-	u64 tcpOutSegs;
-	u64 tcpRetransSegs;
+	u32 tcp_out_rsts;
+	u64 tcp_in_segs;
+	u64 tcp_out_segs;
+	u64 tcp_retrans_segs;
+};
+
+struct tp_usm_stats {
+	u32 frames;
+	u32 drops;
+	u64 octets;
+};
+
+struct tp_fcoe_stats {
+	u32 frames_ddp;
+	u32 frames_drop;
+	u64 octets_ddp;
 };
 
 struct tp_err_stats {
-	u32 macInErrs[4];
-	u32 hdrInErrs[4];
-	u32 tcpInErrs[4];
-	u32 tnlCongDrops[4];
-	u32 ofldChanDrops[4];
-	u32 tnlTxDrops[4];
-	u32 ofldVlanDrops[4];
-	u32 tcp6InErrs[4];
-	u32 ofldNoNeigh;
-	u32 ofldCongDefer;
+	u32 mac_in_errs[4];
+	u32 hdr_in_errs[4];
+	u32 tcp_in_errs[4];
+	u32 tnl_cong_drops[4];
+	u32 ofld_chan_drops[4];
+	u32 tnl_tx_drops[4];
+	u32 ofld_vlan_drops[4];
+	u32 tcp6_in_errs[4];
+	u32 ofld_no_neigh;
+	u32 ofld_cong_defer;
+};
+
+struct tp_cpl_stats {
+	u32 req[4];
+	u32 rsp[4];
+};
+
+struct tp_rdma_stats {
+	u32 rqe_dfr_pkt;
+	u32 rqe_dfr_mod;
 };
 
 struct sge_params {
@@ -224,7 +248,6 @@ struct sge_params {
 };
 
 struct tp_params {
-	unsigned int ntxchan;        /* # of Tx channels */
 	unsigned int tre;            /* log2 of core clocks per TP tick */
 	unsigned int la_mask;        /* what events are recorded by TP LA */
 	unsigned short tx_modq_map;  /* TX modulation scheduler queue to */
@@ -259,6 +282,7 @@ struct vpd_params {
 	u8 sn[SERNUM_LEN + 1];
 	u8 id[ID_LEN + 1];
 	u8 pn[PN_LEN + 1];
+	u8 na[MACADDR_LEN + 1];
 };
 
 struct pci_params {
@@ -273,6 +297,7 @@ struct pci_params {
 
 #define CHELSIO_T4		0x4
 #define CHELSIO_T5		0x5
+#define CHELSIO_T6		0x6
 
 enum chip_type {
 	T4_A1 = CHELSIO_CHIP_CODE(CHELSIO_T4, 1),
@@ -284,12 +309,25 @@ enum chip_type {
 	T5_A1 = CHELSIO_CHIP_CODE(CHELSIO_T5, 1),
 	T5_FIRST_REV	= T5_A0,
 	T5_LAST_REV	= T5_A1,
+
+	T6_A0 = CHELSIO_CHIP_CODE(CHELSIO_T6, 0),
+	T6_FIRST_REV    = T6_A0,
+	T6_LAST_REV     = T6_A0,
 };
 
 struct devlog_params {
 	u32 memtype;                    /* which memory (EDC0, EDC1, MC) */
 	u32 start;                      /* start of log in firmware memory */
 	u32 size;                       /* size of log */
+};
+
+/* Stores chip specific parameters */
+struct arch_specific_params {
+	u8 nchan;
+	u16 mps_rplc_size;
+	u16 vfcount;
+	u32 sge_fl_db;
+	u16 mps_tcam_size;
 };
 
 struct adapter_params {
@@ -317,6 +355,7 @@ struct adapter_params {
 	unsigned char nports;             /* # of ethernet ports */
 	unsigned char portvec;
 	enum chip_type chip;               /* chip code */
+	struct arch_specific_params arch;  /* chip specific params */
 	unsigned char offload;
 
 	unsigned char bypass;
@@ -432,6 +471,7 @@ struct port_info {
 	u8     rss_mode;
 	struct link_config link_cfg;
 	u16   *rss;
+	struct port_stats stats_base;
 #ifdef CONFIG_CHELSIO_T4_DCB
 	struct port_dcb_info dcb;     /* Data Center Bridging support */
 #endif
@@ -650,6 +690,7 @@ struct sge {
 	struct sge_rspq **ingr_map; /* qid->queue ingress queue map */
 	unsigned long *starving_fl;
 	unsigned long *txq_maperr;
+	unsigned long *blocked_fl;
 	struct timer_list rx_timer; /* refills starving FLs */
 	struct timer_list tx_timer; /* checks Tx queues */
 };
@@ -671,6 +712,12 @@ struct l2t_data;
 
 #endif
 
+struct doorbell_stats {
+	u32 db_drop;
+	u32 db_empty;
+	u32 db_full;
+};
+
 struct adapter {
 	void __iomem *regs;
 	void __iomem *bar2;
@@ -678,7 +725,7 @@ struct adapter {
 	struct pci_dev *pdev;
 	struct device *pdev_dev;
 	unsigned int mbox;
-	unsigned int fn;
+	unsigned int pf;
 	unsigned int flags;
 	enum chip_type chip;
 
@@ -688,13 +735,12 @@ struct adapter {
 	struct cxgb4_virt_res vres;
 	unsigned int swintr;
 
-	unsigned int wol;
-
 	struct {
 		unsigned short vec;
 		char desc[IFNAMSIZ + 10];
 	} msix_info[MAX_INGQ + 1];
 
+	struct doorbell_stats db_stats;
 	struct sge sge;
 
 	struct net_device *port[MAX_NPORTS];
@@ -849,6 +895,16 @@ enum {
 	VLAN_REWRITE
 };
 
+static inline int is_offload(const struct adapter *adap)
+{
+	return adap->params.offload;
+}
+
+static inline int is_t6(enum chip_type chip)
+{
+	return CHELSIO_CHIP_VERSION(chip) == CHELSIO_T6;
+}
+
 static inline int is_t5(enum chip_type chip)
 {
 	return CHELSIO_CHIP_VERSION(chip) == CHELSIO_T5;
@@ -890,6 +946,22 @@ static inline u64 t4_read_reg64(struct adapter *adap, u32 reg_addr)
 static inline void t4_write_reg64(struct adapter *adap, u32 reg_addr, u64 val)
 {
 	writeq(val, adap->regs + reg_addr);
+}
+
+/**
+ * t4_set_hw_addr - store a port's MAC address in SW
+ * @adapter: the adapter
+ * @port_idx: the port index
+ * @hw_addr: the Ethernet address
+ *
+ * Store the Ethernet address of the given port in SW.  Called by the common
+ * code when it retrieves a port's Ethernet address from EEPROM.
+ */
+static inline void t4_set_hw_addr(struct adapter *adapter, int port_idx,
+				  u8 hw_addr[])
+{
+	ether_addr_copy(adapter->port[port_idx]->dev_addr, hw_addr);
+	ether_addr_copy(adapter->port[port_idx]->perm_addr, hw_addr);
 }
 
 /**
@@ -1176,7 +1248,7 @@ void t4_intr_disable(struct adapter *adapter);
 int t4_slow_intr_handler(struct adapter *adapter);
 
 int t4_wait_dev_ready(void __iomem *regs);
-int t4_link_start(struct adapter *adap, unsigned int mbox, unsigned int port,
+int t4_link_l1cfg(struct adapter *adap, unsigned int mbox, unsigned int port,
 		  struct link_config *lc);
 int t4_restart_aneg(struct adapter *adap, unsigned int mbox, unsigned int port);
 
@@ -1198,7 +1270,8 @@ unsigned int t4_get_regs_len(struct adapter *adapter);
 void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size);
 
 int t4_seeprom_wp(struct adapter *adapter, bool enable);
-int get_vpd_params(struct adapter *adapter, struct vpd_params *p);
+int t4_get_raw_vpd_params(struct adapter *adapter, struct vpd_params *p);
+int t4_get_vpd_params(struct adapter *adapter, struct vpd_params *p);
 int t4_read_flash(struct adapter *adapter, unsigned int addr,
 		  unsigned int nwords, u32 *data, int byte_oriented);
 int t4_load_fw(struct adapter *adapter, const u8 *fw_data, unsigned int size);
@@ -1220,7 +1293,7 @@ int t4_prep_fw(struct adapter *adap, struct fw_info *fw_info,
 int t4_prep_adapter(struct adapter *adapter);
 
 enum t4_bar2_qtype { T4_BAR2_QTYPE_EGRESS, T4_BAR2_QTYPE_INGRESS };
-int cxgb4_t4_bar2_sge_qregs(struct adapter *adapter,
+int t4_bar2_sge_qregs(struct adapter *adapter,
 		      unsigned int qid,
 		      enum t4_bar2_qtype qtype,
 		      u64 *pbar2_qoffset,
@@ -1267,13 +1340,23 @@ int t4_cim_read_la(struct adapter *adap, u32 *la_buf, unsigned int *wrptr);
 void t4_read_cimq_cfg(struct adapter *adap, u16 *base, u16 *size, u16 *thres);
 const char *t4_get_port_type_description(enum fw_port_type port_type);
 void t4_get_port_stats(struct adapter *adap, int idx, struct port_stats *p);
+void t4_get_port_stats_offset(struct adapter *adap, int idx,
+			      struct port_stats *stats,
+			      struct port_stats *offset);
+void t4_get_lb_stats(struct adapter *adap, int idx, struct lb_port_stats *p);
 void t4_read_mtu_tbl(struct adapter *adap, u16 *mtus, u8 *mtu_log);
 void t4_read_cong_tbl(struct adapter *adap, u16 incr[NMTUS][NCCTRL_WIN]);
 void t4_tp_wr_bits_indirect(struct adapter *adap, unsigned int addr,
 			    unsigned int mask, unsigned int val);
 void t4_tp_read_la(struct adapter *adap, u64 *la_buf, unsigned int *wrptr);
+void t4_tp_get_err_stats(struct adapter *adap, struct tp_err_stats *st);
+void t4_tp_get_cpl_stats(struct adapter *adap, struct tp_cpl_stats *st);
+void t4_tp_get_rdma_stats(struct adapter *adap, struct tp_rdma_stats *st);
+void t4_get_usm_stats(struct adapter *adap, struct tp_usm_stats *st);
 void t4_tp_get_tcp_stats(struct adapter *adap, struct tp_tcp_stats *v4,
 			 struct tp_tcp_stats *v6);
+void t4_get_fcoe_stats(struct adapter *adap, unsigned int idx,
+		       struct tp_fcoe_stats *st);
 void t4_load_mtus(struct adapter *adap, const unsigned short *mtus,
 		  const unsigned short *alpha, const unsigned short *beta);
 
@@ -1315,6 +1398,9 @@ int t4_cfg_pfvf(struct adapter *adap, unsigned int mbox, unsigned int pf,
 int t4_alloc_vi(struct adapter *adap, unsigned int mbox, unsigned int port,
 		unsigned int pf, unsigned int vf, unsigned int nmac, u8 *mac,
 		unsigned int *rss_size);
+int t4_free_vi(struct adapter *adap, unsigned int mbox,
+	       unsigned int pf, unsigned int vf,
+	       unsigned int viid);
 int t4_set_rxmode(struct adapter *adap, unsigned int mbox, unsigned int viid,
 		int mtu, int promisc, int all_multi, int bcast, int vlanex,
 		bool sleep_ok);
@@ -1344,6 +1430,7 @@ int t4_ctrl_eq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
 		    unsigned int vf, unsigned int eqid);
 int t4_ofld_eq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
 		    unsigned int vf, unsigned int eqid);
+int t4_sge_ctxt_flush(struct adapter *adap, unsigned int mbox);
 int t4_handle_fw_rpl(struct adapter *adap, const __be64 *rpl);
 void t4_db_full(struct adapter *adapter);
 void t4_db_dropped(struct adapter *adapter);

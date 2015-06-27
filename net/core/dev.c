@@ -469,10 +469,14 @@ EXPORT_SYMBOL(dev_remove_pack);
  */
 void dev_add_offload(struct packet_offload *po)
 {
-	struct list_head *head = &offload_base;
+	struct packet_offload *elem;
 
 	spin_lock(&offload_lock);
-	list_add_rcu(&po->list, head);
+	list_for_each_entry(elem, &offload_base, list) {
+		if (po->priority < elem->priority)
+			break;
+	}
+	list_add_rcu(&po->list, elem->list.prev);
 	spin_unlock(&offload_lock);
 }
 EXPORT_SYMBOL(dev_add_offload);
@@ -1719,15 +1723,8 @@ EXPORT_SYMBOL_GPL(is_skb_forwardable);
 
 int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
 {
-	if (skb_shinfo(skb)->tx_flags & SKBTX_DEV_ZEROCOPY) {
-		if (skb_copy_ubufs(skb, GFP_ATOMIC)) {
-			atomic_long_inc(&dev->rx_dropped);
-			kfree_skb(skb);
-			return NET_RX_DROP;
-		}
-	}
-
-	if (unlikely(!is_skb_forwardable(dev, skb))) {
+	if (skb_orphan_frags(skb, GFP_ATOMIC) ||
+	    unlikely(!is_skb_forwardable(dev, skb))) {
 		atomic_long_inc(&dev->rx_dropped);
 		kfree_skb(skb);
 		return NET_RX_DROP;

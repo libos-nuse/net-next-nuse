@@ -488,7 +488,8 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		inet->inet_saddr = 0;  /* Use device */
 
 	/* Make sure we are allowed to bind here. */
-	if (sk->sk_prot->get_port(sk, snum)) {
+	if ((snum || !inet->bind_address_no_port) &&
+	    sk->sk_prot->get_port(sk, snum)) {
 		inet->inet_saddr = inet->inet_rcv_saddr = 0;
 		err = -EADDRINUSE;
 		goto out_release_sock;
@@ -1595,7 +1596,7 @@ static __net_init int inet_init_net(struct net *net)
 	 */
 	seqlock_init(&net->ipv4.ip_local_ports.lock);
 	net->ipv4.ip_local_ports.range[0] =  32768;
-	net->ipv4.ip_local_ports.range[1] =  61000;
+	net->ipv4.ip_local_ports.range[1] =  60999;
 
 	seqlock_init(&net->ipv4.ping_group_range.lock);
 	/*

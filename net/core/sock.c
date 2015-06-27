@@ -354,15 +354,12 @@ void sk_clear_memalloc(struct sock *sk)
 
 	/*
 	 * SOCK_MEMALLOC is allowed to ignore rmem limits to ensure forward
-	 * progress of swapping. However, if SOCK_MEMALLOC is cleared while
-	 * it has rmem allocations there is a risk that the user of the
-	 * socket cannot make forward progress due to exceeding the rmem
-	 * limits. By rights, sk_clear_memalloc() should only be called
-	 * on sockets being torn down but warn and reset the accounting if
-	 * that assumption breaks.
+	 * progress of swapping. SOCK_MEMALLOC may be cleared while
+	 * it has rmem allocations due to the last swapfile being deactivated
+	 * but there is a risk that the socket is unusable due to exceeding
+	 * the rmem limits. Reclaim the reserves and obey rmem limits again.
 	 */
-	if (WARN_ON(sk->sk_forward_alloc))
-		sk_mem_reclaim(sk);
+	sk_mem_reclaim(sk);
 }
 EXPORT_SYMBOL_GPL(sk_clear_memalloc);
 
@@ -1581,6 +1578,8 @@ EXPORT_SYMBOL_GPL(sk_clone_lock);
 
 void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 {
+	u32 max_segs = 1;
+
 	__sk_dst_set(sk, dst);
 	sk->sk_route_caps = dst->dev->features;
 	if (sk->sk_route_caps & NETIF_F_GSO)
@@ -1592,9 +1591,10 @@ void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 		} else {
 			sk->sk_route_caps |= NETIF_F_SG | NETIF_F_HW_CSUM;
 			sk->sk_gso_max_size = dst->dev->gso_max_size;
-			sk->sk_gso_max_segs = dst->dev->gso_max_segs;
+			max_segs = max_t(u32, dst->dev->gso_max_segs, 1);
 		}
 	}
+	sk->sk_gso_max_segs = max_segs;
 }
 EXPORT_SYMBOL_GPL(sk_setup_caps);
 
@@ -1869,7 +1869,7 @@ bool skb_page_frag_refill(unsigned int sz, struct page_frag *pfrag, gfp_t gfp)
 
 	pfrag->offset = 0;
 	if (SKB_FRAG_PAGE_ORDER) {
-		pfrag->page = alloc_pages(gfp | __GFP_COMP |
+		pfrag->page = alloc_pages((gfp & ~__GFP_WAIT) | __GFP_COMP |
 					  __GFP_NOWARN | __GFP_NORETRY,
 					  SKB_FRAG_PAGE_ORDER);
 		if (likely(pfrag->page)) {

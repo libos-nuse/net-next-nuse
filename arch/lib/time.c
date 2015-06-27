@@ -71,21 +71,23 @@ ktime_t ktime_get_with_offset(enum tk_offsets offs)
 /*
  * Divide a ktime value by a nanosecond value
  */
-u64 __ktime_divns(const ktime_t kt, s64 div)
+s64 __ktime_divns(const ktime_t kt, s64 div)
 {
-	u64 dclc;
 	int sft = 0;
+	s64 dclc;
+	u64 tmp;
 
 	dclc = ktime_to_ns(kt);
+	tmp = dclc < 0 ? -dclc : dclc;
+
 	/* Make sure the divisor is less than 2^32: */
 	while (div >> 32) {
 		sft++;
 		div >>= 1;
 	}
-	dclc >>= sft;
-	do_div(dclc, (unsigned long)div);
-
-	return dclc;
+	tmp >>= sft;
+	do_div(tmp, (unsigned long) div);
+	return dclc < 0 ? -tmp : tmp;
 }
 #endif /* BITS_PER_LONG >= 64 */
 
