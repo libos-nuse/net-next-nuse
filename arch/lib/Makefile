@@ -96,10 +96,11 @@ comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o
 kernel/time/_to_keep=time.o
-kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
+kernel/rcu_to_keep=rcu/srcu.o rcu/update.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
-mm/_to_keep=util.o list_lru.o slib.o
+mm/_to_keep=util.o list_lru.o slib.o page_alloc.o memblock.o mmzone.o slib_env.o \
+nobootmem.o highmem.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o
@@ -127,7 +128,8 @@ quiet_cmd_objsmk = OBJS-MK   $@
 	done > $@
 
 $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/Makefile
-	+$(call if_changed,objsmk)
+	+$(call if_changed,objsmk); \
+	echo $(srctree)
 
 quiet_cmd_linker = GEN     $@
       cmd_linker = ld -shared --verbose | ./$^ > $@
@@ -155,7 +157,7 @@ define cmd_lib_bounds
 	 echo "#define GENERATED_BOUNDS_H"; \
 	 echo ""; \
 	 echo "#define NR_PAGEFLAGS (__NR_PAGEFLAGS)"; \
-	 echo "#define MAX_NR_ZONES (__MAX_NR_ZONES)"; \
+	 echo "#define MAX_NR_ZONES 3"; \
 	 echo ""; \
 	 echo "#endif /* GENERATED_BOUNDS_H */") > $@
 endef
