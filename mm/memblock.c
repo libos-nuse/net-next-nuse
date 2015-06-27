@@ -50,7 +50,7 @@ struct memblock memblock __initdata_memblock = {
 	.current_limit		= MEMBLOCK_ALLOC_ANYWHERE,
 };
 
-int memblock_debug __initdata_memblock;
+int memblock_debug __initdata_memblock = 1;
 #ifdef CONFIG_MOVABLE_NODE
 bool movable_node_enabled __initdata_memblock = false;
 #endif

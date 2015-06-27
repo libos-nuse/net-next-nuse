@@ -9,7 +9,7 @@ struct thread_struct {};
 
 # define current_text_addr() ({ __label__ _l; _l: &&_l; })
 
-#define TASK_SIZE ((~(long)0))
+//#define TASK_SIZE ((~(long)0))
 
 #define thread_saved_pc(x) (unsigned long)0
 #define task_pt_regs(t) NULL

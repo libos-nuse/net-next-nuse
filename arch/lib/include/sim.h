@@ -14,6 +14,8 @@
 
 #include "sim-types.h"
 
+extern void init_memory_system(void);
+
 /* API called from within linux kernel. Forwards to SimImported. */
 int lib_vprintf(const char *str, va_list args);
 void *lib_malloc(unsigned long size);

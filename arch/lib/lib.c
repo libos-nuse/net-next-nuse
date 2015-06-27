@@ -168,6 +168,8 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 
 	pr_notice("%s", linux_banner);
 
+	init_memory_system();
+
 	rcu_init();
 
 	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
