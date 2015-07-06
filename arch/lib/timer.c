@@ -8,8 +8,43 @@
 
 #include <linux/timer.h>
 #include <linux/interrupt.h>
+#include <linux/hash.h>
+#include <linux/hashtable.h>
+
 #include "sim-assert.h"
 #include "sim.h"
+
+static DEFINE_HASHTABLE(lib_timers_hashtable, 9);
+struct lib_timer {
+	struct timer_list *timer;
+	struct hlist_node t_hash;
+	void *event;
+};
+
+static int hash(struct timer_list *timer)
+{
+	return hash_32(hash32_ptr(timer), HASH_BITS(lib_timers_hashtable));
+}
+
+static struct lib_timer *__lib_timers_find(struct hlist_head *head,
+					   struct timer_list *timer)
+{
+	struct lib_timer *l_timer;
+
+	hlist_for_each_entry(l_timer, head, t_hash) {
+		if (l_timer->timer == timer)
+			return l_timer;
+	}
+	return NULL;
+}
+
+static struct lib_timer *lib_timer_find(struct timer_list *timer)
+{
+	struct hlist_head *head;
+
+	head = &lib_timers_hashtable[hash(timer)];
+	return __lib_timers_find(head, timer);
+}
 
 /**
  * init_timer_key - initialize a timer
@@ -34,33 +69,32 @@ void init_timer_key(struct timer_list *timer,
 	 * and, finally, we never care about the base field either.
 	 *
 	 * So, for now, we have a timer which is marked as "not started"
-	 * thanks to its entry.next field set to NULL (timer_pending
+	 * thanks to its entry.pprev field set to NULL (timer_pending
 	 * will return 0)
 	 */
-	timer->entry.next = NULL;
-	timer->base = 0;
+	timer->entry.pprev = NULL;
 }
 
-struct list_head g_expired_events = LIST_HEAD_INIT(g_expired_events);
-struct list_head g_pending_events = LIST_HEAD_INIT(g_pending_events);
+struct hlist_head g_expired_events;
+struct hlist_head g_pending_events;
 
 static void run_timer_softirq(struct softirq_action *h)
 {
-	while (!list_empty(&g_expired_events)) {
-		struct timer_list *timer = list_first_entry(&g_expired_events,
-							    struct timer_list,
-							    entry);
+	while (!hlist_empty(&g_expired_events)) {
+		struct timer_list *timer =
+			hlist_entry((&g_expired_events)->first,
+				    struct timer_list, entry);
 		void (*fn)(unsigned long);
 		unsigned long data;
+		struct lib_timer *l_timer = lib_timer_find(timer);
 
 		fn = timer->function;
 		data = timer->data;
-		lib_assert(timer->base == 0);
-		if (timer->entry.prev != LIST_POISON2) {
-			list_del(&timer->entry);
-			timer->entry.next = NULL;
-			fn(data);
-		}
+		lib_assert(l_timer->event == 0);
+
+		hlist_del(&timer->entry);
+		timer->entry.pprev = NULL;
+		fn(data);
 	}
 }
 
@@ -76,13 +110,20 @@ static void ensure_softirq_opened(void)
 static void timer_trampoline(void *context)
 {
 	struct timer_list *timer;
+	struct lib_timer *l_timer;
 
 	ensure_softirq_opened();
 	timer = context;
-	timer->base = 0;
-	if (timer->entry.prev != LIST_POISON2)
-		list_del(&timer->entry);
-	list_add_tail(&timer->entry, &g_expired_events);
+
+	l_timer = lib_timer_find(timer);
+	if (l_timer)
+		l_timer->event = NULL;
+
+	if (timer->entry.pprev != 0)
+		hlist_del(&timer->entry);
+
+	timer->entry.pprev = NULL;
+	hlist_add_head(&timer->entry, &g_expired_events);
 	raise_softirq(TIMER_SOFTIRQ);
 }
 /**
@@ -102,6 +143,7 @@ static void timer_trampoline(void *context)
 void add_timer(struct timer_list *timer)
 {
 	__u64 delay_ns = 0;
+	struct hlist_head *head;
 
 	lib_assert(!timer_pending(timer));
 	if (timer->expires <= jiffies)
@@ -111,11 +153,21 @@ void add_timer(struct timer_list *timer)
 			((__u64)timer->expires *
 			 (1000000000 / HZ)) - lib_current_ns();
 	void *event = lib_event_schedule_ns(delay_ns, &timer_trampoline, timer);
-	/* store the external event in the base field */
+
+	/* store the external event in the hash table */
 	/* to be able to retrieve it from del_timer */
-	timer->base = event;
+	head = &lib_timers_hashtable[hash(timer)];
+	if (!__lib_timers_find(head, timer)) {
+		struct lib_timer *l_timer;
+
+		l_timer = lib_malloc(sizeof(struct lib_timer));
+		l_timer->timer = timer;
+		l_timer->event = event;
+		hlist_add_head(&l_timer->t_hash, head);
+	}
+
 	/* finally, store timer in list of pending events. */
-	list_add_tail(&timer->entry, &g_pending_events);
+	hlist_add_head(&timer->entry, &g_pending_events);
 }
 /**
  * del_timer - deactive a timer.
@@ -131,18 +183,23 @@ void add_timer(struct timer_list *timer)
 int del_timer(struct timer_list *timer)
 {
 	int retval;
+	struct lib_timer *l_timer;
 
-	if (timer->entry.next == 0)
+	if (timer->entry.pprev == 0)
 		return 0;
-	if (timer->base != 0) {
-		lib_event_cancel(timer->base);
+
+	l_timer = lib_timer_find(timer);
+	if (l_timer != NULL && l_timer->event != NULL) {
+		lib_event_cancel(l_timer->event);
+		hlist_del(&l_timer->t_hash);
+		lib_free(l_timer);
 		retval = 1;
-	} else
+	} else {
 		retval = 0;
-	if (timer->entry.prev != LIST_POISON2) {
-		list_del(&timer->entry);
 	}
-	timer->entry.next = NULL;
+
+	hlist_del(&timer->entry);
+	timer->entry.pprev = NULL;
 	return retval;
 }
 

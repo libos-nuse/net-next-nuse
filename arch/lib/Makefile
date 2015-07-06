@@ -22,7 +22,7 @@ ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
 
 # auto generated files
 AUTOGENS=include/generated/compile.h include/generated/bounds.h \
-	kernel/time/timeconst.h lib/crc32table.h $(ARCH_DIR)/linker.lds
+	include/generated/timeconst.h lib/crc32table.h $(ARCH_DIR)/linker.lds
 
 # sources and objects
 LIB_SRC=\
@@ -135,8 +135,8 @@ $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	$(call if_changed,linker)
 
 # calll kernel/time/Makefile
-kernel/time/timeconst.h: $(srctree)/.config
-	$(Q) $(MAKE) $(build)=kernel/time $@
+include/generated/timeconst.h: $(srctree)/.config
+	$(Q) $(MAKE) $(build)=. $@
 
 # call lib/Makefile
 lib/crc32table.h:
