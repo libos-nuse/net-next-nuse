@@ -115,10 +115,6 @@ bool queue_work_on(int cpu, struct workqueue_struct *wq,
 	return ret;
 }
 
-void flush_scheduled_work(void)
-{
-	flush_entry(system_wq, system_wq->list.prev);
-}
 bool flush_work(struct work_struct *work)
 {
 	return flush_entry(system_wq, &work->entry);
