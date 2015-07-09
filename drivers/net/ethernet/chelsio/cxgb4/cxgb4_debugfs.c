@@ -151,6 +151,45 @@ static int cim_la_show_3in1(struct seq_file *seq, void *v, int idx)
 	return 0;
 }
 
+static int cim_la_show_t6(struct seq_file *seq, void *v, int idx)
+{
+	if (v == SEQ_START_TOKEN) {
+		seq_puts(seq, "Status   Inst    Data      PC     LS0Stat  "
+			 "LS0Addr  LS0Data  LS1Stat  LS1Addr  LS1Data\n");
+	} else {
+		const u32 *p = v;
+
+		seq_printf(seq, "  %02x   %04x%04x %04x%04x %04x%04x %08x %08x %08x %08x %08x %08x\n",
+			   (p[9] >> 16) & 0xff,       /* Status */
+			   p[9] & 0xffff, p[8] >> 16, /* Inst */
+			   p[8] & 0xffff, p[7] >> 16, /* Data */
+			   p[7] & 0xffff, p[6] >> 16, /* PC */
+			   p[2], p[1], p[0],      /* LS0 Stat, Addr and Data */
+			   p[5], p[4], p[3]);     /* LS1 Stat, Addr and Data */
+	}
+	return 0;
+}
+
+static int cim_la_show_pc_t6(struct seq_file *seq, void *v, int idx)
+{
+	if (v == SEQ_START_TOKEN) {
+		seq_puts(seq, "Status   Inst    Data      PC\n");
+	} else {
+		const u32 *p = v;
+
+		seq_printf(seq, "  %02x   %08x %08x %08x\n",
+			   p[3] & 0xff, p[2], p[1], p[0]);
+		seq_printf(seq, "  %02x   %02x%06x %02x%06x %02x%06x\n",
+			   (p[6] >> 8) & 0xff, p[6] & 0xff, p[5] >> 8,
+			   p[5] & 0xff, p[4] >> 8, p[4] & 0xff, p[3] >> 8);
+		seq_printf(seq, "  %02x   %04x%04x %04x%04x %04x%04x\n",
+			   (p[9] >> 16) & 0xff, p[9] & 0xffff, p[8] >> 16,
+			   p[8] & 0xffff, p[7] >> 16, p[7] & 0xffff,
+			   p[6] >> 16);
+	}
+	return 0;
+}
+
 static int cim_la_open(struct inode *inode, struct file *file)
 {
 	int ret;
@@ -162,9 +201,18 @@ static int cim_la_open(struct inode *inode, struct file *file)
 	if (ret)
 		return ret;
 
-	p = seq_open_tab(file, adap->params.cim_la_size / 8, 8 * sizeof(u32), 1,
-			 cfg & UPDBGLACAPTPCONLY_F ?
-			 cim_la_show_3in1 : cim_la_show);
+	if (is_t6(adap->params.chip)) {
+		/* +1 to account for integer division of CIMLA_SIZE/10 */
+		p = seq_open_tab(file, (adap->params.cim_la_size / 10) + 1,
+				 10 * sizeof(u32), 1,
+				 cfg & UPDBGLACAPTPCONLY_F ?
+					cim_la_show_pc_t6 : cim_la_show_t6);
+	} else {
+		p = seq_open_tab(file, adap->params.cim_la_size / 8,
+				 8 * sizeof(u32), 1,
+				 cfg & UPDBGLACAPTPCONLY_F ? cim_la_show_3in1 :
+							     cim_la_show);
+	}
 	if (!p)
 		return -ENOMEM;
 
@@ -952,16 +1000,23 @@ static int devlog_show(struct seq_file *seq, void *v)
 		 * eventually have to put a format interpreter in here ...
 		 */
 		seq_printf(seq, "%10d  %15llu  %8s  %8s  ",
-			   e->seqno, e->timestamp,
+			   be32_to_cpu(e->seqno),
+			   be64_to_cpu(e->timestamp),
 			   (e->level < ARRAY_SIZE(devlog_level_strings)
 			    ? devlog_level_strings[e->level]
 			    : "UNKNOWN"),
 			   (e->facility < ARRAY_SIZE(devlog_facility_strings)
 			    ? devlog_facility_strings[e->facility]
 			    : "UNKNOWN"));
-		seq_printf(seq, e->fmt, e->params[0], e->params[1],
-			   e->params[2], e->params[3], e->params[4],
-			   e->params[5], e->params[6], e->params[7]);
+		seq_printf(seq, e->fmt,
+			   be32_to_cpu(e->params[0]),
+			   be32_to_cpu(e->params[1]),
+			   be32_to_cpu(e->params[2]),
+			   be32_to_cpu(e->params[3]),
+			   be32_to_cpu(e->params[4]),
+			   be32_to_cpu(e->params[5]),
+			   be32_to_cpu(e->params[6]),
+			   be32_to_cpu(e->params[7]));
 	}
 	return 0;
 }
@@ -1043,23 +1098,17 @@ static int devlog_open(struct inode *inode, struct file *file)
 		return ret;
 	}
 
-	/* Translate log multi-byte integral elements into host native format
-	 * and determine where the first entry in the log is.
+	/* Find the earliest (lowest Sequence Number) log entry in the
+	 * circular Device Log.
 	 */
 	for (fseqno = ~((u32)0), index = 0; index < dinfo->nentries; index++) {
 		struct fw_devlog_e *e = &dinfo->log[index];
-		int i;
 		__u32 seqno;
 
 		if (e->timestamp == 0)
 			continue;
 
-		e->timestamp = (__force __be64)be64_to_cpu(e->timestamp);
 		seqno = be32_to_cpu(e->seqno);
-		for (i = 0; i < 8; i++)
-			e->params[i] =
-				(__force __be32)be32_to_cpu(e->params[i]);
-
 		if (seqno < fseqno) {
 			fseqno = seqno;
 			dinfo->first = index;
