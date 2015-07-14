@@ -191,7 +191,9 @@ int del_timer(struct timer_list *timer)
 	l_timer = lib_timer_find(timer);
 	if (l_timer != NULL && l_timer->event != NULL) {
 		lib_event_cancel(l_timer->event);
-		hlist_del(&l_timer->t_hash);
+
+		if (l_timer->t_hash.next != LIST_POISON1)
+			hlist_del(&l_timer->t_hash);
 		lib_free(l_timer);
 		retval = 1;
 	} else {
