@@ -185,22 +185,24 @@ int del_timer(struct timer_list *timer)
 	int retval;
 	struct lib_timer *l_timer;
 
-	if (timer->entry.pprev == 0)
+	if (timer->entry.pprev == NULL)
 		return 0;
 
 	l_timer = lib_timer_find(timer);
 	if (l_timer != NULL && l_timer->event != NULL) {
 		lib_event_cancel(l_timer->event);
 
-		if (l_timer->t_hash.next != LIST_POISON1)
+		if (l_timer->t_hash.next != LIST_POISON1) {
 			hlist_del(&l_timer->t_hash);
-		lib_free(l_timer);
+			lib_free(l_timer);
+		}
 		retval = 1;
 	} else {
 		retval = 0;
 	}
 
-	hlist_del(&timer->entry);
+	if (timer->entry.next != LIST_POISON1)
+		hlist_del(&timer->entry);
 	timer->entry.pprev = NULL;
 	return retval;
 }
