@@ -1,10 +1,21 @@
 language: c
+addons:
+  apt:
+    packages:
+      - gdb
+      - bc
+      - linux-headers-generic
+
+sudo: required
+
 install:
-    - sudo apt-get update
-    - sudo apt-get install bc
-    - sudo apt-get -y install linux-headers-generic
+    - ulimit -c
 compiler:
   - gcc
+
+before_script:
+  - ulimit -c unlimited -S
+
 script:
   - sudo ln -sf $(ls /lib/modules | sed 1q) /lib/modules/$(uname -r)
   - make defconfig ARCH=lib V=1
