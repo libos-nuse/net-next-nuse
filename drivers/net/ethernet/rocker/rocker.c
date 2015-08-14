@@ -202,6 +202,7 @@ enum {
 	ROCKER_CTRL_IPV4_MCAST,
 	ROCKER_CTRL_IPV6_MCAST,
 	ROCKER_CTRL_DFLT_BRIDGING,
+	ROCKER_CTRL_DFLT_OVS,
 	ROCKER_CTRL_MAX,
 };
 
@@ -321,9 +322,21 @@ static u16 rocker_port_vlan_to_vid(const struct rocker_port *rocker_port,
 	return ntohs(vlan_id);
 }
 
+static bool rocker_port_is_slave(const struct rocker_port *rocker_port,
+				   const char *kind)
+{
+	return rocker_port->bridge_dev &&
+		!strcmp(rocker_port->bridge_dev->rtnl_link_ops->kind, kind);
+}
+
 static bool rocker_port_is_bridged(const struct rocker_port *rocker_port)
 {
-	return !!rocker_port->bridge_dev;
+	return rocker_port_is_slave(rocker_port, "bridge");
+}
+
+static bool rocker_port_is_ovsed(const struct rocker_port *rocker_port)
+{
+	return rocker_port_is_slave(rocker_port, "openvswitch");
 }
 
 #define ROCKER_OP_FLAG_REMOVE		BIT(0)
@@ -3275,6 +3288,12 @@ static struct rocker_ctrl {
 		.bridge = true,
 		.copy_to_cpu = true,
 	},
+	[ROCKER_CTRL_DFLT_OVS] = {
+		/* pass all pkts up to CPU */
+		.eth_dst = zero_mac,
+		.eth_dst_mask = zero_mac,
+		.acl = true,
+	},
 };
 
 static int rocker_port_ctrl_vlan_acl(struct rocker_port *rocker_port,
@@ -3787,11 +3806,14 @@ static int rocker_port_stp_update(struct rocker_port *rocker_port,
 		break;
 	case BR_STATE_LEARNING:
 	case BR_STATE_FORWARDING:
-		want[ROCKER_CTRL_LINK_LOCAL_MCAST] = true;
+		if (!rocker_port_is_ovsed(rocker_port))
+			want[ROCKER_CTRL_LINK_LOCAL_MCAST] = true;
 		want[ROCKER_CTRL_IPV4_MCAST] = true;
 		want[ROCKER_CTRL_IPV6_MCAST] = true;
 		if (rocker_port_is_bridged(rocker_port))
 			want[ROCKER_CTRL_DFLT_BRIDGING] = true;
+		else if (rocker_port_is_ovsed(rocker_port))
+			want[ROCKER_CTRL_DFLT_OVS] = true;
 		else
 			want[ROCKER_CTRL_LOCAL_ARP] = true;
 		break;
@@ -4015,7 +4037,8 @@ static int rocker_port_open(struct net_device *dev)
 
 	napi_enable(&rocker_port->napi_tx);
 	napi_enable(&rocker_port->napi_rx);
-	rocker_port_set_enable(rocker_port, true);
+	if (!dev->proto_down)
+		rocker_port_set_enable(rocker_port, true);
 	netif_start_queue(dev);
 	return 0;
 
@@ -4134,8 +4157,11 @@ static netdev_tx_t rocker_port_xmit(struct sk_buff *skb, struct net_device *dev)
 					  skb->data, skb_headlen(skb));
 	if (err)
 		goto nest_cancel;
-	if (skb_shinfo(skb)->nr_frags > ROCKER_TX_FRAGS_MAX)
-		goto nest_cancel;
+	if (skb_shinfo(skb)->nr_frags > ROCKER_TX_FRAGS_MAX) {
+		err = skb_linearize(skb);
+		if (err)
+			goto unmap_frags;
+	}
 
 	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
 		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
@@ -4227,6 +4253,27 @@ static int rocker_port_get_phys_port_name(struct net_device *dev,
 	return err ? -EOPNOTSUPP : 0;
 }
 
+static int rocker_port_change_proto_down(struct net_device *dev,
+					 bool proto_down)
+{
+	struct rocker_port *rocker_port = netdev_priv(dev);
+
+	if (rocker_port->dev->flags & IFF_UP)
+		rocker_port_set_enable(rocker_port, !proto_down);
+	rocker_port->dev->proto_down = proto_down;
+	return 0;
+}
+
+static void rocker_port_neigh_destroy(struct neighbour *n)
+{
+	struct rocker_port *rocker_port = netdev_priv(n->dev);
+	int flags = ROCKER_OP_FLAG_REMOVE | ROCKER_OP_FLAG_NOWAIT;
+	__be32 ip_addr = *(__be32 *)n->primary_key;
+
+	rocker_port_ipv4_neigh(rocker_port, SWITCHDEV_TRANS_NONE,
+			       flags, ip_addr, n->ha);
+}
+
 static const struct net_device_ops rocker_port_netdev_ops = {
 	.ndo_open			= rocker_port_open,
 	.ndo_stop			= rocker_port_stop,
@@ -4240,6 +4287,8 @@ static const struct net_device_ops rocker_port_netdev_ops = {
 	.ndo_fdb_del			= switchdev_port_fdb_del,
 	.ndo_fdb_dump			= switchdev_port_fdb_dump,
 	.ndo_get_phys_port_name		= rocker_port_get_phys_port_name,
+	.ndo_change_proto_down		= rocker_port_change_proto_down,
+	.ndo_neigh_destroy		= rocker_port_neigh_destroy,
 };
 
 /********************
@@ -4506,6 +4555,7 @@ static int rocker_port_fdb_dump(const struct rocker_port *rocker_port,
 		if (found->key.pport != rocker_port->pport)
 			continue;
 		fdb->addr = found->key.addr;
+		fdb->ndm_state = NUD_REACHABLE;
 		fdb->vid = rocker_port_vlan_to_vid(rocker_port,
 						   found->key.vlan_id);
 		err = obj->cb(rocker_port->dev, obj);
@@ -4787,6 +4837,7 @@ static int rocker_port_rx_proc(const struct rocker *rocker,
 	const struct rocker_tlv *attrs[ROCKER_TLV_RX_MAX + 1];
 	struct sk_buff *skb = rocker_desc_cookie_ptr_get(desc_info);
 	size_t rx_len;
+	u16 rx_flags = 0;
 
 	if (!skb)
 		return -ENOENT;
@@ -4794,12 +4845,17 @@ static int rocker_port_rx_proc(const struct rocker *rocker,
 	rocker_tlv_parse_desc(attrs, ROCKER_TLV_RX_MAX, desc_info);
 	if (!attrs[ROCKER_TLV_RX_FRAG_LEN])
 		return -EINVAL;
+	if (attrs[ROCKER_TLV_RX_FLAGS])
+		rx_flags = rocker_tlv_get_u16(attrs[ROCKER_TLV_RX_FLAGS]);
 
 	rocker_dma_rx_ring_skb_unmap(rocker, attrs);
 
 	rx_len = rocker_tlv_get_u16(attrs[ROCKER_TLV_RX_FRAG_LEN]);
 	skb_put(skb, rx_len);
 	skb->protocol = eth_type_trans(skb, rocker_port->dev);
+
+	if (rx_flags & ROCKER_RX_FLAGS_FWD_OFFLOAD)
+		skb->offload_fwd_mark = rocker_port->dev->offload_fwd_mark;
 
 	rocker_port->dev->stats.rx_packets++;
 	rocker_port->dev->stats.rx_bytes += skb->len;
@@ -4882,6 +4938,7 @@ static void rocker_remove_ports(const struct rocker *rocker)
 		rocker_port_ig_tbl(rocker_port, SWITCHDEV_TRANS_NONE,
 				   ROCKER_OP_FLAG_REMOVE);
 		unregister_netdev(rocker_port->dev);
+		free_netdev(rocker_port->dev);
 	}
 	kfree(rocker->ports);
 }
@@ -4929,7 +4986,7 @@ static int rocker_probe_port(struct rocker *rocker, unsigned int port_number)
 		       NAPI_POLL_WEIGHT);
 	rocker_carrier_init(rocker_port);
 
-	dev->features |= NETIF_F_NETNS_LOCAL;
+	dev->features |= NETIF_F_NETNS_LOCAL | NETIF_F_SG;
 
 	err = register_netdev(dev);
 	if (err) {
@@ -4938,11 +4995,13 @@ static int rocker_probe_port(struct rocker *rocker, unsigned int port_number)
 	}
 	rocker->ports[port_number] = rocker_port;
 
+	switchdev_port_fwd_mark_set(rocker_port->dev, NULL, false);
+
 	rocker_port_set_learning(rocker_port, SWITCHDEV_TRANS_NONE);
 
 	err = rocker_port_ig_tbl(rocker_port, SWITCHDEV_TRANS_NONE, 0);
 	if (err) {
-		dev_err(&pdev->dev, "install ig port table failed\n");
+		netdev_err(rocker_port->dev, "install ig port table failed\n");
 		goto err_port_ig_tbl;
 	}
 
@@ -4962,6 +5021,7 @@ err_untagged_vlan:
 	rocker_port_ig_tbl(rocker_port, SWITCHDEV_TRANS_NONE,
 			   ROCKER_OP_FLAG_REMOVE);
 err_port_ig_tbl:
+	rocker->ports[port_number] = NULL;
 	unregister_netdev(dev);
 err_register_netdev:
 	free_netdev(dev);
@@ -5134,7 +5194,8 @@ static int rocker_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_probe_ports;
 	}
 
-	dev_info(&pdev->dev, "Rocker switch with id %016llx\n", rocker->hw.id);
+	dev_info(&pdev->dev, "Rocker switch with id %*phN\n",
+		 (int)sizeof(rocker->hw.id), &rocker->hw.id);
 
 	return 0;
 
@@ -5217,6 +5278,7 @@ static int rocker_port_bridge_join(struct rocker_port *rocker_port,
 		rocker_port_internal_vlan_id_get(rocker_port, bridge->ifindex);
 
 	rocker_port->bridge_dev = bridge;
+	switchdev_port_fwd_mark_set(rocker_port->dev, bridge, true);
 
 	return rocker_port_vlan_add(rocker_port, SWITCHDEV_TRANS_NONE,
 				    untagged_vid, 0);
@@ -5237,6 +5299,8 @@ static int rocker_port_bridge_leave(struct rocker_port *rocker_port)
 		rocker_port_internal_vlan_id_get(rocker_port,
 						 rocker_port->dev->ifindex);
 
+	switchdev_port_fwd_mark_set(rocker_port->dev, rocker_port->bridge_dev,
+				    false);
 	rocker_port->bridge_dev = NULL;
 
 	err = rocker_port_vlan_add(rocker_port, SWITCHDEV_TRANS_NONE,
@@ -5251,23 +5315,39 @@ static int rocker_port_bridge_leave(struct rocker_port *rocker_port)
 	return err;
 }
 
+
+static int rocker_port_ovs_changed(struct rocker_port *rocker_port,
+				   struct net_device *master)
+{
+	int err;
+
+	rocker_port->bridge_dev = master;
+
+	err = rocker_port_fwd_disable(rocker_port, SWITCHDEV_TRANS_NONE, 0);
+	if (err)
+		return err;
+	err = rocker_port_fwd_enable(rocker_port, SWITCHDEV_TRANS_NONE, 0);
+
+	return err;
+}
+
 static int rocker_port_master_changed(struct net_device *dev)
 {
 	struct rocker_port *rocker_port = netdev_priv(dev);
 	struct net_device *master = netdev_master_upper_dev_get(dev);
 	int err = 0;
 
-	/* There are currently three cases handled here:
-	 * 1. Joining a bridge
-	 * 2. Leaving a previously joined bridge
-	 * 3. Other, e.g. being added to or removed from a bond or openvswitch,
-	 *    in which case nothing is done
-	 */
-	if (master && master->rtnl_link_ops &&
-	    !strcmp(master->rtnl_link_ops->kind, "bridge"))
-		err = rocker_port_bridge_join(rocker_port, master);
-	else if (rocker_port_is_bridged(rocker_port))
+	/* N.B: Do nothing if the type of master is not supported */
+	if (master && master->rtnl_link_ops) {
+		if (!strcmp(master->rtnl_link_ops->kind, "bridge"))
+			err = rocker_port_bridge_join(rocker_port, master);
+		else if (!strcmp(master->rtnl_link_ops->kind, "openvswitch"))
+			err = rocker_port_ovs_changed(rocker_port, master);
+	} else if (rocker_port_is_bridged(rocker_port)) {
 		err = rocker_port_bridge_leave(rocker_port);
+	} else if (rocker_port_is_ovsed(rocker_port)) {
+		err = rocker_port_ovs_changed(rocker_port, NULL);
+	}
 
 	return err;
 }

@@ -195,6 +195,7 @@ static struct ipv6_devconf ipv6_devconf __read_mostly = {
 	.max_addresses		= IPV6_MAX_ADDRESSES,
 	.accept_ra_defrtr	= 1,
 	.accept_ra_from_local	= 0,
+	.accept_ra_min_hop_limit= 1,
 	.accept_ra_pinfo	= 1,
 #ifdef CONFIG_IPV6_ROUTER_PREF
 	.accept_ra_rtr_pref	= 1,
@@ -211,7 +212,9 @@ static struct ipv6_devconf ipv6_devconf __read_mostly = {
 	.accept_ra_mtu		= 1,
 	.stable_secret		= {
 		.initialized = false,
-	}
+	},
+	.use_oif_addrs_only	= 0,
+	.ignore_routes_with_linkdown = 0,
 };
 
 static struct ipv6_devconf ipv6_devconf_dflt __read_mostly = {
@@ -236,6 +239,7 @@ static struct ipv6_devconf ipv6_devconf_dflt __read_mostly = {
 	.max_addresses		= IPV6_MAX_ADDRESSES,
 	.accept_ra_defrtr	= 1,
 	.accept_ra_from_local	= 0,
+	.accept_ra_min_hop_limit= 1,
 	.accept_ra_pinfo	= 1,
 #ifdef CONFIG_IPV6_ROUTER_PREF
 	.accept_ra_rtr_pref	= 1,
@@ -253,6 +257,8 @@ static struct ipv6_devconf ipv6_devconf_dflt __read_mostly = {
 	.stable_secret		= {
 		.initialized = false,
 	},
+	.use_oif_addrs_only	= 0,
+	.ignore_routes_with_linkdown = 0,
 };
 
 /* Check if a valid qdisc is available */
@@ -468,6 +474,9 @@ static int inet6_netconf_msgsize_devconf(int type)
 	if (type == -1 || type == NETCONFA_PROXY_NEIGH)
 		size += nla_total_size(4);
 
+	if (type == -1 || type == NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN)
+		size += nla_total_size(4);
+
 	return size;
 }
 
@@ -502,6 +511,11 @@ static int inet6_netconf_fill_devconf(struct sk_buff *skb, int ifindex,
 #endif
 	if ((type == -1 || type == NETCONFA_PROXY_NEIGH) &&
 	    nla_put_s32(skb, NETCONFA_PROXY_NEIGH, devconf->proxy_ndp) < 0)
+		goto nla_put_failure;
+
+	if ((type == -1 || type == NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN) &&
+	    nla_put_s32(skb, NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN,
+			devconf->ignore_routes_with_linkdown) < 0)
 		goto nla_put_failure;
 
 	nlmsg_end(skb, nlh);
@@ -540,6 +554,7 @@ static const struct nla_policy devconf_ipv6_policy[NETCONFA_MAX+1] = {
 	[NETCONFA_IFINDEX]	= { .len = sizeof(int) },
 	[NETCONFA_FORWARDING]	= { .len = sizeof(int) },
 	[NETCONFA_PROXY_NEIGH]	= { .len = sizeof(int) },
+	[NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN]	= { .len = sizeof(int) },
 };
 
 static int inet6_netconf_get_devconf(struct sk_buff *in_skb,
@@ -762,6 +777,63 @@ static int addrconf_fixup_forwarding(struct ctl_table *table, int *p, int newf)
 		rt6_purge_dflt_routers(net);
 	return 1;
 }
+
+static void addrconf_linkdown_change(struct net *net, __s32 newf)
+{
+	struct net_device *dev;
+	struct inet6_dev *idev;
+
+	for_each_netdev(net, dev) {
+		idev = __in6_dev_get(dev);
+		if (idev) {
+			int changed = (!idev->cnf.ignore_routes_with_linkdown) ^ (!newf);
+
+			idev->cnf.ignore_routes_with_linkdown = newf;
+			if (changed)
+				inet6_netconf_notify_devconf(dev_net(dev),
+							     NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN,
+							     dev->ifindex,
+							     &idev->cnf);
+		}
+	}
+}
+
+static int addrconf_fixup_linkdown(struct ctl_table *table, int *p, int newf)
+{
+	struct net *net;
+	int old;
+
+	if (!rtnl_trylock())
+		return restart_syscall();
+
+	net = (struct net *)table->extra2;
+	old = *p;
+	*p = newf;
+
+	if (p == &net->ipv6.devconf_dflt->ignore_routes_with_linkdown) {
+		if ((!newf) ^ (!old))
+			inet6_netconf_notify_devconf(net,
+						     NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN,
+						     NETCONFA_IFINDEX_DEFAULT,
+						     net->ipv6.devconf_dflt);
+		rtnl_unlock();
+		return 0;
+	}
+
+	if (p == &net->ipv6.devconf_all->ignore_routes_with_linkdown) {
+		net->ipv6.devconf_dflt->ignore_routes_with_linkdown = newf;
+		addrconf_linkdown_change(net, newf);
+		if ((!newf) ^ (!old))
+			inet6_netconf_notify_devconf(net,
+						     NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN,
+						     NETCONFA_IFINDEX_ALL,
+						     net->ipv6.devconf_all);
+	}
+	rtnl_unlock();
+
+	return 1;
+}
+
 #endif
 
 /* Nobody refers to this ifaddr, destroy it */
@@ -1360,8 +1432,6 @@ out:
 
 static int __ipv6_dev_get_saddr(struct net *net,
 				struct ipv6_saddr_dst *dst,
-				unsigned int prefs,
-				const struct in6_addr *saddr,
 				struct inet6_dev *idev,
 				struct ipv6_saddr_score *scores,
 				int hiscore_idx)
@@ -1474,24 +1544,29 @@ int ipv6_dev_get_saddr(struct net *net, const struct net_device *dst_dev,
 	 *    include addresses assigned to interfaces
 	 *    belonging to the same site as the outgoing
 	 *    interface.)
+	 *  - "It is RECOMMENDED that the candidate source addresses
+	 *    be the set of unicast addresses assigned to the
+	 *    interface that will be used to send to the destination
+	 *    (the 'outgoing' interface)." (RFC 6724)
 	 */
 	if (dst_dev) {
+		idev = __in6_dev_get(dst_dev);
 		if ((dst_type & IPV6_ADDR_MULTICAST) ||
-		    dst.scope <= IPV6_ADDR_SCOPE_LINKLOCAL) {
-			idev = __in6_dev_get(dst_dev);
+		    dst.scope <= IPV6_ADDR_SCOPE_LINKLOCAL ||
+		    (idev && idev->cnf.use_oif_addrs_only)) {
 			use_oif_addr = true;
 		}
 	}
 
 	if (use_oif_addr) {
 		if (idev)
-			hiscore_idx = __ipv6_dev_get_saddr(net, &dst, prefs, saddr, idev, scores, hiscore_idx);
+			hiscore_idx = __ipv6_dev_get_saddr(net, &dst, idev, scores, hiscore_idx);
 	} else {
 		for_each_netdev_rcu(net, dev) {
 			idev = __in6_dev_get(dev);
 			if (!idev)
 				continue;
-			hiscore_idx = __ipv6_dev_get_saddr(net, &dst, prefs, saddr, idev, scores, hiscore_idx);
+			hiscore_idx = __ipv6_dev_get_saddr(net, &dst, idev, scores, hiscore_idx);
 		}
 	}
 	rcu_read_unlock();
@@ -4583,6 +4658,7 @@ static inline void ipv6_store_devconf(struct ipv6_devconf *cnf,
 	array[DEVCONF_MAX_DESYNC_FACTOR] = cnf->max_desync_factor;
 	array[DEVCONF_MAX_ADDRESSES] = cnf->max_addresses;
 	array[DEVCONF_ACCEPT_RA_DEFRTR] = cnf->accept_ra_defrtr;
+	array[DEVCONF_ACCEPT_RA_MIN_HOP_LIMIT] = cnf->accept_ra_min_hop_limit;
 	array[DEVCONF_ACCEPT_RA_PINFO] = cnf->accept_ra_pinfo;
 #ifdef CONFIG_IPV6_ROUTER_PREF
 	array[DEVCONF_ACCEPT_RA_RTR_PREF] = cnf->accept_ra_rtr_pref;
@@ -4608,7 +4684,9 @@ static inline void ipv6_store_devconf(struct ipv6_devconf *cnf,
 	array[DEVCONF_SUPPRESS_FRAG_NDISC] = cnf->suppress_frag_ndisc;
 	array[DEVCONF_ACCEPT_RA_FROM_LOCAL] = cnf->accept_ra_from_local;
 	array[DEVCONF_ACCEPT_RA_MTU] = cnf->accept_ra_mtu;
+	array[DEVCONF_IGNORE_ROUTES_WITH_LINKDOWN] = cnf->ignore_routes_with_linkdown;
 	/* we omit DEVCONF_STABLE_SECRET for now */
+	array[DEVCONF_USE_OIF_ADDRS_ONLY] = cnf->use_oif_addrs_only;
 }
 
 static inline size_t inet6_ifla6_size(void)
@@ -4628,6 +4706,7 @@ static inline size_t inet6_if_nlmsg_size(void)
 	       + nla_total_size(MAX_ADDR_LEN) /* IFLA_ADDRESS */
 	       + nla_total_size(4) /* IFLA_MTU */
 	       + nla_total_size(4) /* IFLA_LINK */
+	       + nla_total_size(1) /* IFLA_OPERSTATE */
 	       + nla_total_size(inet6_ifla6_size()); /* IFLA_PROTINFO */
 }
 
@@ -4884,7 +4963,9 @@ static int inet6_fill_ifinfo(struct sk_buff *skb, struct inet6_dev *idev,
 	     nla_put(skb, IFLA_ADDRESS, dev->addr_len, dev->dev_addr)) ||
 	    nla_put_u32(skb, IFLA_MTU, dev->mtu) ||
 	    (dev->ifindex != dev_get_iflink(dev) &&
-	     nla_put_u32(skb, IFLA_LINK, dev_get_iflink(dev))))
+	     nla_put_u32(skb, IFLA_LINK, dev_get_iflink(dev))) ||
+	    nla_put_u8(skb, IFLA_OPERSTATE,
+		       netif_running(dev) ? dev->operstate : IF_OPER_DOWN))
 		goto nla_put_failure;
 	protoinfo = nla_nest_start(skb, IFLA_PROTINFO);
 	if (!protoinfo)
@@ -5329,6 +5410,34 @@ out:
 	return err;
 }
 
+static
+int addrconf_sysctl_ignore_routes_with_linkdown(struct ctl_table *ctl,
+						int write,
+						void __user *buffer,
+						size_t *lenp,
+						loff_t *ppos)
+{
+	int *valp = ctl->data;
+	int val = *valp;
+	loff_t pos = *ppos;
+	struct ctl_table lctl;
+	int ret;
+
+	/* ctl->data points to idev->cnf.ignore_routes_when_linkdown
+	 * we should not modify it until we get the rtnl lock.
+	 */
+	lctl = *ctl;
+	lctl.data = &val;
+
+	ret = proc_dointvec(&lctl, write, buffer, lenp, ppos);
+
+	if (write)
+		ret = addrconf_fixup_linkdown(ctl, valp, val);
+	if (ret)
+		*ppos = pos;
+	return ret;
+}
+
 static struct addrconf_sysctl_table
 {
 	struct ctl_table_header *sysctl_header;
@@ -5479,6 +5588,13 @@ static struct addrconf_sysctl_table
 			.proc_handler	= proc_dointvec,
 		},
 		{
+			.procname	= "accept_ra_min_hop_limit",
+			.data		= &ipv6_devconf.accept_ra_min_hop_limit,
+			.maxlen		= sizeof(int),
+			.mode		= 0644,
+			.proc_handler	= proc_dointvec,
+		},
+		{
 			.procname	= "accept_ra_pinfo",
 			.data		= &ipv6_devconf.accept_ra_pinfo,
 			.maxlen		= sizeof(int),
@@ -5606,6 +5722,20 @@ static struct addrconf_sysctl_table
 			.maxlen		= IPV6_MAX_STRLEN,
 			.mode		= 0600,
 			.proc_handler	= addrconf_sysctl_stable_secret,
+		},
+		{
+			.procname       = "use_oif_addrs_only",
+			.data           = &ipv6_devconf.use_oif_addrs_only,
+			.maxlen         = sizeof(int),
+			.mode           = 0644,
+			.proc_handler   = proc_dointvec,
+		},
+		{
+			.procname	= "ignore_routes_with_linkdown",
+			.data		= &ipv6_devconf.ignore_routes_with_linkdown,
+			.maxlen		= sizeof(int),
+			.mode		= 0644,
+			.proc_handler	= addrconf_sysctl_ignore_routes_with_linkdown,
 		},
 		{
 			/* sentinel */

@@ -696,9 +696,20 @@ static int bcm_sf2_sw_setup(struct dsa_switch *ds)
 	}
 
 	/* Include the pseudo-PHY address and the broadcast PHY address to
-	 * divert reads towards our workaround
+	 * divert reads towards our workaround. This is only required for
+	 * 7445D0, since 7445E0 disconnects the internal switch pseudo-PHY such
+	 * that we can use the regular SWITCH_MDIO master controller instead.
+	 *
+	 * By default, DSA initializes ds->phys_mii_mask to ds->phys_port_mask
+	 * to have a 1:1 mapping between Port address and PHY address in order
+	 * to utilize the slave_mii_bus instance to read from Port PHYs. This is
+	 * not what we want here, so we initialize phys_mii_mask 0 to always
+	 * utilize the "master" MDIO bus backed by the "mdio-unimac" driver.
 	 */
-	ds->phys_mii_mask |= ((1 << BRCM_PSEUDO_PHY_ADDR) | (1 << 0));
+	if (of_machine_is_compatible("brcm,bcm7445d0"))
+		ds->phys_mii_mask |= ((1 << BRCM_PSEUDO_PHY_ADDR) | (1 << 0));
+	else
+		ds->phys_mii_mask = 0;
 
 	rev = reg_readl(priv, REG_SWITCH_REVISION);
 	priv->hw_params.top_rev = (rev >> SWITCH_TOP_REV_SHIFT) &
@@ -890,15 +901,11 @@ static void bcm_sf2_sw_fixed_link_update(struct dsa_switch *ds, int port,
 					 struct fixed_phy_status *status)
 {
 	struct bcm_sf2_priv *priv = ds_to_priv(ds);
-	u32 duplex, pause, speed;
+	u32 duplex, pause;
 	u32 reg;
 
 	duplex = core_readl(priv, CORE_DUPSTS);
 	pause = core_readl(priv, CORE_PAUSESTS);
-	speed = core_readl(priv, CORE_SPDSTS);
-
-	speed >>= (port * SPDSTS_SHIFT);
-	speed &= SPDSTS_MASK;
 
 	status->link = 0;
 
@@ -932,18 +939,6 @@ static void bcm_sf2_sw_fixed_link_update(struct dsa_switch *ds, int port,
 	else
 		reg &= ~LINK_STS;
 	core_writel(priv, reg, CORE_STS_OVERRIDE_GMIIP_PORT(port));
-
-	switch (speed) {
-	case SPDSTS_10:
-		status->speed = SPEED_10;
-		break;
-	case SPDSTS_100:
-		status->speed = SPEED_100;
-		break;
-	case SPDSTS_1000:
-		status->speed = SPEED_1000;
-		break;
-	}
 
 	if ((pause & (1 << port)) &&
 	    (pause & (1 << (port + PAUSESTS_TX_PAUSE_SHIFT)))) {
