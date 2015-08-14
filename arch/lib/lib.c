@@ -174,7 +174,7 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	devices_init();
 	/* in lib/idr.c (called normally by init/main.c) */
 	idr_init_cache();
-	vfs_caches_init(totalram_pages);
+	vfs_caches_init();
 
 	lib_proc_net_initialize();
 
