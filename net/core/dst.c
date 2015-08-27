@@ -20,6 +20,7 @@
 #include <net/net_namespace.h>
 #include <linux/sched.h>
 #include <linux/prefetch.h>
+#include <net/lwtunnel.h>
 
 #include <net/dst.h>
 #include <net/dst_metadata.h>
@@ -184,6 +185,7 @@ void dst_init(struct dst_entry *dst, struct dst_ops *ops,
 #ifdef CONFIG_IP_ROUTE_CLASSID
 	dst->tclassid = 0;
 #endif
+	dst->lwtstate = NULL;
 	atomic_set(&dst->__refcnt, initial_ref);
 	dst->__use = 0;
 	dst->lastuse = jiffies;
@@ -259,6 +261,8 @@ again:
 		dst->ops->destroy(dst);
 	if (dst->dev)
 		dev_put(dst->dev);
+
+	lwtstate_put(dst->lwtstate);
 
 	if (dst->flags & DST_METADATA)
 		kfree(dst);

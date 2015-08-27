@@ -72,7 +72,8 @@ int lwtunnel_encap_del_ops(const struct lwtunnel_encap_ops *ops,
 EXPORT_SYMBOL(lwtunnel_encap_del_ops);
 
 int lwtunnel_build_state(struct net_device *dev, u16 encap_type,
-			 struct nlattr *encap, struct lwtunnel_state **lws)
+			 struct nlattr *encap, unsigned int family,
+			 const void *cfg, struct lwtunnel_state **lws)
 {
 	const struct lwtunnel_encap_ops *ops;
 	int ret = -EINVAL;
@@ -85,7 +86,7 @@ int lwtunnel_build_state(struct net_device *dev, u16 encap_type,
 	rcu_read_lock();
 	ops = rcu_dereference(lwtun_encaps[encap_type]);
 	if (likely(ops && ops->build_state))
-		ret = ops->build_state(dev, encap, lws);
+		ret = ops->build_state(dev, encap, family, cfg, lws);
 	rcu_read_unlock();
 
 	return ret;
@@ -179,14 +180,16 @@ int lwtunnel_cmp_encap(struct lwtunnel_state *a, struct lwtunnel_state *b)
 }
 EXPORT_SYMBOL(lwtunnel_cmp_encap);
 
-int __lwtunnel_output(struct sock *sk, struct sk_buff *skb,
-		      struct lwtunnel_state *lwtstate)
+int lwtunnel_output(struct sock *sk, struct sk_buff *skb)
 {
+	struct dst_entry *dst = skb_dst(skb);
 	const struct lwtunnel_encap_ops *ops;
+	struct lwtunnel_state *lwtstate;
 	int ret = -EINVAL;
 
-	if (!lwtstate)
+	if (!dst)
 		goto drop;
+	lwtstate = dst->lwtstate;
 
 	if (lwtstate->type == LWTUNNEL_ENCAP_NONE ||
 	    lwtstate->type > LWTUNNEL_ENCAP_MAX)
@@ -209,35 +212,38 @@ drop:
 
 	return ret;
 }
-
-int lwtunnel_output6(struct sock *sk, struct sk_buff *skb)
-{
-	struct rt6_info *rt = (struct rt6_info *)skb_dst(skb);
-	struct lwtunnel_state *lwtstate = NULL;
-
-	if (rt) {
-		lwtstate = rt->rt6i_lwtstate;
-		skb->dev = rt->dst.dev;
-	}
-
-	skb->protocol = htons(ETH_P_IPV6);
-
-	return __lwtunnel_output(sk, skb, lwtstate);
-}
-EXPORT_SYMBOL(lwtunnel_output6);
-
-int lwtunnel_output(struct sock *sk, struct sk_buff *skb)
-{
-	struct rtable *rt = (struct rtable *)skb_dst(skb);
-	struct lwtunnel_state *lwtstate = NULL;
-
-	if (rt) {
-		lwtstate = rt->rt_lwtstate;
-		skb->dev = rt->dst.dev;
-	}
-
-	skb->protocol = htons(ETH_P_IP);
-
-	return __lwtunnel_output(sk, skb, lwtstate);
-}
 EXPORT_SYMBOL(lwtunnel_output);
+
+int lwtunnel_input(struct sk_buff *skb)
+{
+	struct dst_entry *dst = skb_dst(skb);
+	const struct lwtunnel_encap_ops *ops;
+	struct lwtunnel_state *lwtstate;
+	int ret = -EINVAL;
+
+	if (!dst)
+		goto drop;
+	lwtstate = dst->lwtstate;
+
+	if (lwtstate->type == LWTUNNEL_ENCAP_NONE ||
+	    lwtstate->type > LWTUNNEL_ENCAP_MAX)
+		return 0;
+
+	ret = -EOPNOTSUPP;
+	rcu_read_lock();
+	ops = rcu_dereference(lwtun_encaps[lwtstate->type]);
+	if (likely(ops && ops->input))
+		ret = ops->input(skb);
+	rcu_read_unlock();
+
+	if (ret == -EOPNOTSUPP)
+		goto drop;
+
+	return ret;
+
+drop:
+	kfree_skb(skb);
+
+	return ret;
+}
+EXPORT_SYMBOL(lwtunnel_input);

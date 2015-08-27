@@ -511,7 +511,8 @@ static int fib_get_nhs(struct fib_info *fi, struct rtnexthop *rtnh,
 					dev = __dev_get_by_index(net, cfg->fc_oif);
 				ret = lwtunnel_build_state(dev, nla_get_u16(
 							   nla_entype),
-							   nla, &lwtstate);
+							   nla,  AF_INET, cfg,
+							   &lwtstate);
 				if (ret)
 					goto errout;
 				nexthop_nh->nh_lwtstate =
@@ -533,25 +534,28 @@ errout:
 
 #endif
 
-int fib_encap_match(struct net *net, u16 encap_type,
-		    struct nlattr *encap,
-		    int oif, const struct fib_nh *nh)
+static int fib_encap_match(struct net *net, u16 encap_type,
+			   struct nlattr *encap,
+			   int oif, const struct fib_nh *nh,
+			   const struct fib_config *cfg)
 {
 	struct lwtunnel_state *lwtstate;
 	struct net_device *dev = NULL;
-	int ret;
+	int ret, result = 0;
 
 	if (encap_type == LWTUNNEL_ENCAP_NONE)
 		return 0;
 
 	if (oif)
 		dev = __dev_get_by_index(net, oif);
-	ret = lwtunnel_build_state(dev, encap_type,
-				   encap, &lwtstate);
-	if (!ret)
-		return lwtunnel_cmp_encap(lwtstate, nh->nh_lwtstate);
+	ret = lwtunnel_build_state(dev, encap_type, encap,
+				   AF_INET, cfg, &lwtstate);
+	if (!ret) {
+		result = lwtunnel_cmp_encap(lwtstate, nh->nh_lwtstate);
+		lwtstate_free(lwtstate);
+	}
 
-	return 0;
+	return result;
 }
 
 int fib_nh_match(struct fib_config *cfg, struct fib_info *fi)
@@ -569,7 +573,7 @@ int fib_nh_match(struct fib_config *cfg, struct fib_info *fi)
 		if (cfg->fc_encap) {
 			if (fib_encap_match(net, cfg->fc_encap_type,
 					    cfg->fc_encap, cfg->fc_oif,
-					    fi->fib_nh))
+					    fi->fib_nh, cfg))
 			    return 1;
 		}
 		if ((!cfg->fc_oif || cfg->fc_oif == fi->fib_nh->nh_oif) &&
@@ -661,7 +665,7 @@ int fib_nh_match(struct fib_config *cfg, struct fib_info *fi)
 static int fib_check_nh(struct fib_config *cfg, struct fib_info *fi,
 			struct fib_nh *nh)
 {
-	int err;
+	int err = 0;
 	struct net *net;
 	struct net_device *dev;
 
@@ -708,10 +712,18 @@ static int fib_check_nh(struct fib_config *cfg, struct fib_info *fi,
 
 			if (tbl)
 				err = fib_table_lookup(tbl, &fl4, &res,
-						   FIB_LOOKUP_IGNORE_LINKSTATE);
-			else
+						       FIB_LOOKUP_IGNORE_LINKSTATE |
+						       FIB_LOOKUP_NOREF);
+
+			/* on error or if no table given do full lookup. This
+			 * is needed for example when nexthops are in the local
+			 * table rather than the given table
+			 */
+			if (!tbl || err) {
 				err = fib_lookup(net, &fl4, &res,
 						 FIB_LOOKUP_IGNORE_LINKSTATE);
+			}
+
 			if (err) {
 				rcu_read_unlock();
 				return err;
@@ -995,7 +1007,8 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 			if (cfg->fc_oif)
 				dev = __dev_get_by_index(net, cfg->fc_oif);
 			err = lwtunnel_build_state(dev, cfg->fc_encap_type,
-						   cfg->fc_encap, &lwtstate);
+						   cfg->fc_encap, AF_INET, cfg,
+						   &lwtstate);
 			if (err)
 				goto failure;
 

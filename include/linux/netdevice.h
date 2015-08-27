@@ -1262,6 +1262,8 @@ struct net_device_ops {
  * @IFF_LIVE_ADDR_CHANGE: device supports hardware address
  *	change when it's running
  * @IFF_MACVLAN: Macvlan device
+ * @IFF_VRF_MASTER: device is a VRF master
+ * @IFF_NO_QUEUE: device can run without qdisc attached
  */
 enum netdev_priv_flags {
 	IFF_802_1Q_VLAN			= 1<<0,
@@ -1290,6 +1292,7 @@ enum netdev_priv_flags {
 	IFF_IPVLAN_MASTER		= 1<<23,
 	IFF_IPVLAN_SLAVE		= 1<<24,
 	IFF_VRF_MASTER			= 1<<25,
+	IFF_NO_QUEUE			= 1<<26,
 };
 
 #define IFF_802_1Q_VLAN			IFF_802_1Q_VLAN
@@ -1318,6 +1321,7 @@ enum netdev_priv_flags {
 #define IFF_IPVLAN_MASTER		IFF_IPVLAN_MASTER
 #define IFF_IPVLAN_SLAVE		IFF_IPVLAN_SLAVE
 #define IFF_VRF_MASTER			IFF_VRF_MASTER
+#define IFF_NO_QUEUE			IFF_NO_QUEUE
 
 /**
  *	struct net_device - The DEVICE structure.
@@ -2307,8 +2311,7 @@ __sum16 __skb_gro_checksum_complete(struct sk_buff *skb);
 
 static inline bool skb_at_gro_remcsum_start(struct sk_buff *skb)
 {
-	return (NAPI_GRO_CB(skb)->gro_remcsum_start - skb_headroom(skb) ==
-		skb_gro_offset(skb));
+	return (NAPI_GRO_CB(skb)->gro_remcsum_start == skb_gro_offset(skb));
 }
 
 static inline bool __skb_gro_checksum_validate_needed(struct sk_buff *skb,
@@ -2404,37 +2407,58 @@ static inline void skb_gro_remcsum_init(struct gro_remcsum *grc)
 	grc->delta = 0;
 }
 
-static inline void skb_gro_remcsum_process(struct sk_buff *skb, void *ptr,
-					   int start, int offset,
-					   struct gro_remcsum *grc,
-					   bool nopartial)
+static inline void *skb_gro_remcsum_process(struct sk_buff *skb, void *ptr,
+					    unsigned int off, size_t hdrlen,
+					    int start, int offset,
+					    struct gro_remcsum *grc,
+					    bool nopartial)
 {
 	__wsum delta;
+	size_t plen = hdrlen + max_t(size_t, offset + sizeof(u16), start);
 
 	BUG_ON(!NAPI_GRO_CB(skb)->csum_valid);
 
 	if (!nopartial) {
-		NAPI_GRO_CB(skb)->gro_remcsum_start =
-		    ((unsigned char *)ptr + start) - skb->head;
-		return;
+		NAPI_GRO_CB(skb)->gro_remcsum_start = off + hdrlen + start;
+		return ptr;
 	}
 
-	delta = remcsum_adjust(ptr, NAPI_GRO_CB(skb)->csum, start, offset);
+	ptr = skb_gro_header_fast(skb, off);
+	if (skb_gro_header_hard(skb, off + plen)) {
+		ptr = skb_gro_header_slow(skb, off + plen, off);
+		if (!ptr)
+			return NULL;
+	}
+
+	delta = remcsum_adjust(ptr + hdrlen, NAPI_GRO_CB(skb)->csum,
+			       start, offset);
 
 	/* Adjust skb->csum since we changed the packet */
 	NAPI_GRO_CB(skb)->csum = csum_add(NAPI_GRO_CB(skb)->csum, delta);
 
-	grc->offset = (ptr + offset) - (void *)skb->head;
+	grc->offset = off + hdrlen + offset;
 	grc->delta = delta;
+
+	return ptr;
 }
 
 static inline void skb_gro_remcsum_cleanup(struct sk_buff *skb,
 					   struct gro_remcsum *grc)
 {
+	void *ptr;
+	size_t plen = grc->offset + sizeof(u16);
+
 	if (!grc->delta)
 		return;
 
-	remcsum_unadjust((__sum16 *)(skb->head + grc->offset), grc->delta);
+	ptr = skb_gro_header_fast(skb, grc->offset);
+	if (skb_gro_header_hard(skb, grc->offset + sizeof(u16))) {
+		ptr = skb_gro_header_slow(skb, plen, grc->offset);
+		if (!ptr)
+			return;
+	}
+
+	remcsum_unadjust((__sum16 *)ptr, grc->delta);
 }
 
 static inline int dev_hard_header(struct sk_buff *skb, struct net_device *dev,
@@ -3819,12 +3843,22 @@ static inline bool netif_is_vrf(const struct net_device *dev)
 
 static inline bool netif_index_is_vrf(struct net *net, int ifindex)
 {
-	struct net_device *dev = dev_get_by_index_rcu(net, ifindex);
 	bool rc = false;
 
+#if IS_ENABLED(CONFIG_NET_VRF)
+	struct net_device *dev;
+
+	if (ifindex == 0)
+		return false;
+
+	rcu_read_lock();
+
+	dev = dev_get_by_index_rcu(net, ifindex);
 	if (dev)
 		rc = netif_is_vrf(dev);
 
+	rcu_read_unlock();
+#endif
 	return rc;
 }
 
