@@ -95,15 +95,15 @@ struct net_bridge_fdb_entry
 	struct hlist_node		hlist;
 	struct net_bridge_port		*dst;
 
-	struct rcu_head			rcu;
 	unsigned long			updated;
 	unsigned long			used;
 	mac_addr			addr;
+	__u16				vlan_id;
 	unsigned char			is_local:1,
 					is_static:1,
 					added_by_user:1,
 					added_by_external_learn:1;
-	__u16				vlan_id;
+	struct rcu_head			rcu;
 };
 
 struct net_bridge_port_group {
@@ -616,6 +616,7 @@ bool br_vlan_find(struct net_bridge *br, u16 vid);
 void br_recalculate_fwd_mask(struct net_bridge *br);
 int __br_vlan_filter_toggle(struct net_bridge *br, unsigned long val);
 int br_vlan_filter_toggle(struct net_bridge *br, unsigned long val);
+int __br_vlan_set_proto(struct net_bridge *br, __be16 proto);
 int br_vlan_set_proto(struct net_bridge *br, unsigned long val);
 int br_vlan_init(struct net_bridge *br);
 int br_vlan_set_default_pvid(struct net_bridge *br, unsigned long val);

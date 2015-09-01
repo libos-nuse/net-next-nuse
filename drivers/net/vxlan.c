@@ -1264,37 +1264,14 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	if (vxlan_collect_metadata(vs)) {
-		tun_dst = metadata_dst_alloc(sizeof(*md), GFP_ATOMIC);
+		tun_dst = udp_tun_rx_dst(skb, vxlan_get_sk_family(vs), TUNNEL_KEY,
+					 cpu_to_be64(vni >> 8), sizeof(*md));
+
 		if (!tun_dst)
 			goto drop;
 
 		info = &tun_dst->u.tun_info;
-		if (vxlan_get_sk_family(vs) == AF_INET) {
-			const struct iphdr *iph = ip_hdr(skb);
-
-			info->key.u.ipv4.src = iph->saddr;
-			info->key.u.ipv4.dst = iph->daddr;
-			info->key.tos = iph->tos;
-			info->key.ttl = iph->ttl;
-		} else {
-			const struct ipv6hdr *ip6h = ipv6_hdr(skb);
-
-			info->key.u.ipv6.src = ip6h->saddr;
-			info->key.u.ipv6.dst = ip6h->daddr;
-			info->key.tos = ipv6_get_dsfield(ip6h);
-			info->key.ttl = ip6h->hop_limit;
-		}
-
-		info->key.tp_src = udp_hdr(skb)->source;
-		info->key.tp_dst = udp_hdr(skb)->dest;
-
-		info->mode = IP_TUNNEL_INFO_RX;
-		info->key.tun_flags = TUNNEL_KEY;
-		info->key.tun_id = cpu_to_be64(vni >> 8);
-		if (udp_hdr(skb)->check != 0)
-			info->key.tun_flags |= TUNNEL_CSUM;
-
-		md = ip_tunnel_info_opts(info, sizeof(*md));
+		md = ip_tunnel_info_opts(info);
 	} else {
 		memset(md, 0, sizeof(*md));
 	}
@@ -1926,6 +1903,8 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 				  dev->name);
 			goto drop;
 		}
+		if (family != ip_tunnel_info_af(info))
+			goto drop;
 
 		dst_port = info->key.tp_dst ? : vxlan->cfg.dst_port;
 		vni = be64_to_cpu(info->key.tun_id);
@@ -1969,7 +1948,7 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 		tos = info->key.tos;
 
 		if (info->options_len)
-			md = ip_tunnel_info_opts(info, sizeof(*md));
+			md = ip_tunnel_info_opts(info);
 	} else {
 		md->gbp = skb->mark;
 	}
@@ -2136,7 +2115,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	if (vxlan->flags & VXLAN_F_COLLECT_METADATA &&
-	    info && info->mode == IP_TUNNEL_INFO_TX) {
+	    info && info->mode & IP_TUNNEL_INFO_TX) {
 		vxlan_xmit_one(skb, dev, NULL, false);
 		return NETDEV_TX_OK;
 	}
@@ -2279,6 +2258,8 @@ static int vxlan_open(struct net_device *dev)
 
 	if (vxlan_addr_multicast(&vxlan->default_dst.remote_ip)) {
 		ret = vxlan_igmp_join(vxlan);
+		if (ret == -EADDRINUSE)
+			ret = 0;
 		if (ret) {
 			vxlan_sock_release(vs);
 			return ret;
@@ -2549,6 +2530,7 @@ static struct socket *vxlan_create_sock(struct net *net, bool ipv6,
 		udp_conf.family = AF_INET6;
 		udp_conf.use_udp6_rx_checksums =
 		    !(flags & VXLAN_F_UDP_ZERO_CSUM6_RX);
+		udp_conf.ipv6_v6only = 1;
 	} else {
 		udp_conf.family = AF_INET;
 	}

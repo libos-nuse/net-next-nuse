@@ -207,6 +207,12 @@ static inline void dst_metric_set(struct dst_entry *dst, int metric, u32 val)
 		p[metric-1] = val;
 }
 
+/* Kernel-internal feature bits that are unallocated in user space. */
+#define DST_FEATURE_ECN_CA	(1 << 31)
+
+#define DST_FEATURE_MASK	(DST_FEATURE_ECN_CA)
+#define DST_FEATURE_ECN_MASK	(DST_FEATURE_ECN_CA | RTAX_FEATURE_ECN)
+
 static inline u32
 dst_feature(const struct dst_entry *dst, u32 feature)
 {
@@ -289,11 +295,16 @@ static inline void skb_dst_drop(struct sk_buff *skb)
 	}
 }
 
-static inline void skb_dst_copy(struct sk_buff *nskb, const struct sk_buff *oskb)
+static inline void __skb_dst_copy(struct sk_buff *nskb, unsigned long refdst)
 {
-	nskb->_skb_refdst = oskb->_skb_refdst;
+	nskb->_skb_refdst = refdst;
 	if (!(nskb->_skb_refdst & SKB_DST_NOREF))
 		dst_clone(skb_dst(nskb));
+}
+
+static inline void skb_dst_copy(struct sk_buff *nskb, const struct sk_buff *oskb)
+{
+	__skb_dst_copy(nskb, oskb->_skb_refdst);
 }
 
 /**

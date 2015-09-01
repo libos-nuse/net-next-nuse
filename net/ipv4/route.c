@@ -838,6 +838,7 @@ void ip_rt_send_redirect(struct sk_buff *skb)
 	struct inet_peer *peer;
 	struct net *net;
 	int log_martians;
+	int vif;
 
 	rcu_read_lock();
 	in_dev = __in_dev_get_rcu(rt->dst.dev);
@@ -846,10 +847,11 @@ void ip_rt_send_redirect(struct sk_buff *skb)
 		return;
 	}
 	log_martians = IN_DEV_LOG_MARTIANS(in_dev);
+	vif = vrf_master_ifindex_rcu(rt->dst.dev);
 	rcu_read_unlock();
 
 	net = dev_net(rt->dst.dev);
-	peer = inet_getpeer_v4(net->ipv4.peers, ip_hdr(skb)->saddr, 1);
+	peer = inet_getpeer_v4(net->ipv4.peers, ip_hdr(skb)->saddr, vif, 1);
 	if (!peer) {
 		icmp_send(skb, ICMP_REDIRECT, ICMP_REDIR_HOST,
 			  rt_nexthop(rt, ip_hdr(skb)->daddr));
@@ -938,7 +940,8 @@ static int ip_error(struct sk_buff *skb)
 		break;
 	}
 
-	peer = inet_getpeer_v4(net->ipv4.peers, ip_hdr(skb)->saddr, 1);
+	peer = inet_getpeer_v4(net->ipv4.peers, ip_hdr(skb)->saddr,
+			       vrf_master_ifindex(skb->dev), 1);
 
 	send = true;
 	if (peer) {
@@ -1693,7 +1696,7 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	 */
 
 	tun_info = skb_tunnel_info(skb);
-	if (tun_info && tun_info->mode == IP_TUNNEL_INFO_RX)
+	if (tun_info && !(tun_info->mode & IP_TUNNEL_INFO_TX))
 		fl4.flowi4_tun_key.tun_id = tun_info->key.tun_id;
 	else
 		fl4.flowi4_tun_key.tun_id = 0;
