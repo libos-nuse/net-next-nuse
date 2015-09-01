@@ -65,6 +65,8 @@
 
 #define INIT_HCA_TPT_MW_ENABLE          (1 << 7)
 
+#define MLX4_QUERY_IF_STAT_RESET	BIT(31)
+
 enum {
 	MLX4_HCR_BASE		= 0x80680,
 	MLX4_HCR_SIZE		= 0x0001c,
@@ -785,6 +787,9 @@ struct mlx4_set_port_general_context {
 	u8 pprx;
 	u8 pfcrx;
 	u16 reserved4;
+	u32 reserved5;
+	u8 phv_en;
+	u8 reserved6[3];
 };
 
 struct mlx4_set_port_rqp_calc_context {
@@ -874,6 +879,7 @@ struct mlx4_priv {
 	struct mlx4_qp_table	qp_table;
 	struct mlx4_mcg_table	mcg_table;
 	struct mlx4_bitmap	counters_bitmap;
+	int			def_counter[MLX4_MAX_PORTS];
 
 	struct mlx4_catas_err	catas_err;
 
@@ -1007,6 +1013,8 @@ int __mlx4_write_mtt(struct mlx4_dev *dev, struct mlx4_mtt *mtt,
 		     int start_index, int npages, u64 *page_list);
 int __mlx4_counter_alloc(struct mlx4_dev *dev, u32 *idx);
 void __mlx4_counter_free(struct mlx4_dev *dev, u32 idx);
+int mlx4_calc_vf_counters(struct mlx4_dev *dev, int slave, int port,
+			  struct mlx4_counter *data);
 int __mlx4_xrcd_alloc(struct mlx4_dev *dev, u32 *xrcdn);
 void __mlx4_xrcd_free(struct mlx4_dev *dev, u32 xrcdn);
 

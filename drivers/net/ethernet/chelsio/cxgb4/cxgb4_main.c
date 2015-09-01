@@ -1150,10 +1150,7 @@ void *t4_alloc_mem(size_t size)
  */
 void t4_free_mem(void *addr)
 {
-	if (is_vmalloc_addr(addr))
-		vfree(addr);
-	else
-		kfree(addr);
+	kvfree(addr);
 }
 
 /* Send a Work Request to write the filter at a specified index.  We construct
@@ -1551,7 +1548,7 @@ int cxgb4_alloc_sftid(struct tid_info *t, int family, void *data)
 		t->stid_tab[stid].data = data;
 		stid -= t->nstids;
 		stid += t->sftid_base;
-		t->stids_in_use++;
+		t->sftids_in_use++;
 	}
 	spin_unlock_bh(&t->stid_lock);
 	return stid;
@@ -1576,10 +1573,14 @@ void cxgb4_free_stid(struct tid_info *t, unsigned int stid, int family)
 	else
 		bitmap_release_region(t->stid_bmap, stid, 2);
 	t->stid_tab[stid].data = NULL;
-	if (family == PF_INET)
-		t->stids_in_use--;
-	else
-		t->stids_in_use -= 4;
+	if (stid < t->nstids) {
+		if (family == PF_INET)
+			t->stids_in_use--;
+		else
+			t->stids_in_use -= 4;
+	} else {
+		t->sftids_in_use--;
+	}
 	spin_unlock_bh(&t->stid_lock);
 }
 EXPORT_SYMBOL(cxgb4_free_stid);
@@ -1657,20 +1658,25 @@ static void process_tid_release_list(struct work_struct *work)
  */
 void cxgb4_remove_tid(struct tid_info *t, unsigned int chan, unsigned int tid)
 {
-	void *old;
 	struct sk_buff *skb;
 	struct adapter *adap = container_of(t, struct adapter, tids);
 
-	old = t->tid_tab[tid];
+	WARN_ON(tid >= t->ntids);
+
+	if (t->tid_tab[tid]) {
+		t->tid_tab[tid] = NULL;
+		if (t->hash_base && (tid >= t->hash_base))
+			atomic_dec(&t->hash_tids_in_use);
+		else
+			atomic_dec(&t->tids_in_use);
+	}
+
 	skb = alloc_skb(sizeof(struct cpl_tid_release), GFP_ATOMIC);
 	if (likely(skb)) {
-		t->tid_tab[tid] = NULL;
 		mk_tid_release(skb, chan, tid);
 		t4_ofld_send(adap, skb);
 	} else
 		cxgb4_queue_tid_release(t, chan, tid);
-	if (old)
-		atomic_dec(&t->tids_in_use);
 }
 EXPORT_SYMBOL(cxgb4_remove_tid);
 
@@ -1705,9 +1711,11 @@ static int tid_init(struct tid_info *t)
 	spin_lock_init(&t->atid_lock);
 
 	t->stids_in_use = 0;
+	t->sftids_in_use = 0;
 	t->afree = NULL;
 	t->atids_in_use = 0;
 	atomic_set(&t->tids_in_use, 0);
+	atomic_set(&t->hash_tids_in_use, 0);
 
 	/* Setup the free list for atid_tab and clear the stid bitmap. */
 	if (natids) {
@@ -2147,6 +2155,7 @@ EXPORT_SYMBOL(cxgb4_read_sge_timestamp);
 int cxgb4_bar2_sge_qregs(struct net_device *dev,
 			 unsigned int qid,
 			 enum cxgb4_bar2_qtype qtype,
+			 int user,
 			 u64 *pbar2_qoffset,
 			 unsigned int *pbar2_qid)
 {
@@ -2155,6 +2164,7 @@ int cxgb4_bar2_sge_qregs(struct net_device *dev,
 				 (qtype == CXGB4_BAR2_QTYPE_EGRESS
 				  ? T4_BAR2_QTYPE_EGRESS
 				  : T4_BAR2_QTYPE_INGRESS),
+				 user,
 				 pbar2_qoffset,
 				 pbar2_qid);
 }
@@ -2357,7 +2367,7 @@ static void process_db_drop(struct work_struct *work)
 		int ret;
 
 		ret = t4_bar2_sge_qregs(adap, qid, T4_BAR2_QTYPE_EGRESS,
-					&bar2_qoffset, &bar2_qid);
+					0, &bar2_qoffset, &bar2_qid);
 		if (ret)
 			dev_err(adap->pdev_dev, "doorbell drop recovery: "
 				"qid=%d, pidx_inc=%d\n", qid, pidx_inc);
@@ -4552,6 +4562,32 @@ static void free_some_resources(struct adapter *adapter)
 		   NETIF_F_IPV6_CSUM | NETIF_F_HIGHDMA)
 #define SEGMENT_SIZE 128
 
+static int get_chip_type(struct pci_dev *pdev, u32 pl_rev)
+{
+	int ver, chip;
+	u16 device_id;
+
+	/* Retrieve adapter's device ID */
+	pci_read_config_word(pdev, PCI_DEVICE_ID, &device_id);
+	ver = device_id >> 12;
+	switch (ver) {
+	case CHELSIO_T4:
+		chip |= CHELSIO_CHIP_CODE(CHELSIO_T4, pl_rev);
+		break;
+	case CHELSIO_T5:
+		chip |= CHELSIO_CHIP_CODE(CHELSIO_T5, pl_rev);
+		break;
+	case CHELSIO_T6:
+		chip |= CHELSIO_CHIP_CODE(CHELSIO_T6, pl_rev);
+		break;
+	default:
+		dev_err(&pdev->dev, "Device %d is not supported\n",
+			device_id);
+		return -EINVAL;
+	}
+	return chip;
+}
+
 static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	int func, i, err, s_qpp, qpp, num_seg;
@@ -4559,6 +4595,8 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	bool highdma = false;
 	struct adapter *adapter = NULL;
 	void __iomem *regs;
+	u32 whoami, pl_rev;
+	enum chip_type chip;
 
 	printk_once(KERN_INFO "%s - version %s\n", DRV_DESC, DRV_VERSION);
 
@@ -4587,7 +4625,11 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto out_unmap_bar0;
 
 	/* We control everything through one PF */
-	func = SOURCEPF_G(readl(regs + PL_WHOAMI_A));
+	whoami = readl(regs + PL_WHOAMI_A);
+	pl_rev = REV_G(readl(regs + PL_REV_A));
+	chip = get_chip_type(pdev, pl_rev);
+	func = CHELSIO_CHIP_VERSION(chip) <= CHELSIO_T5 ?
+		SOURCEPF_G(whoami) : T6_SOURCEPF_G(whoami);
 	if (func != ent->driver_data) {
 		iounmap(regs);
 		pci_disable_device(pdev);
@@ -4758,7 +4800,7 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 */
 	cfg_queues(adapter);
 
-	adapter->l2t = t4_init_l2t();
+	adapter->l2t = t4_init_l2t(adapter->l2t_start, adapter->l2t_end);
 	if (!adapter->l2t) {
 		/* We tolerate a lack of L2T, giving up some functionality */
 		dev_warn(&pdev->dev, "could not allocate L2T, continuing\n");
@@ -4781,6 +4823,22 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		dev_warn(&pdev->dev, "could not allocate TID table, "
 			 "continuing\n");
 		adapter->params.offload = 0;
+	}
+
+	if (is_offload(adapter)) {
+		if (t4_read_reg(adapter, LE_DB_CONFIG_A) & HASHEN_F) {
+			u32 hash_base, hash_reg;
+
+			if (chip <= CHELSIO_T5) {
+				hash_reg = LE_DB_TID_HASHBASE_A;
+				hash_base = t4_read_reg(adapter, hash_reg);
+				adapter->tids.hash_base = hash_base / 4;
+			} else {
+				hash_reg = T6_LE_DB_HASH_TID_BASE_A;
+				hash_base = t4_read_reg(adapter, hash_reg);
+				adapter->tids.hash_base = hash_base;
+			}
+		}
 	}
 
 	/* See what interrupts we'll be using */

@@ -209,8 +209,9 @@ void br_transmit_config(struct net_bridge_port *p)
 		br_send_config_bpdu(p, &bpdu);
 		p->topology_change_ack = 0;
 		p->config_pending = 0;
-		mod_timer(&p->hold_timer,
-			  round_jiffies(jiffies + BR_HOLD_TIME));
+		if (p->br->stp_enabled == BR_KERNEL_STP)
+			mod_timer(&p->hold_timer,
+				  round_jiffies(jiffies + BR_HOLD_TIME));
 	}
 }
 
@@ -428,7 +429,6 @@ static void br_make_forwarding(struct net_bridge_port *p)
 	else
 		br_set_state(p, BR_STATE_LEARNING);
 
-	br_multicast_enable_port(p);
 	br_log_state(p);
 	br_ifinfo_notify(RTM_NEWLINK, p);
 
@@ -462,6 +462,12 @@ void br_port_state_selection(struct net_bridge *br)
 			}
 		}
 
+		if (p->state != BR_STATE_BLOCKING)
+			br_multicast_enable_port(p);
+		/* Multicast is not disabled for the port when it goes in
+		 * blocking state because the timers will expire and stop by
+		 * themselves without sending more queries.
+		 */
 		if (p->state == BR_STATE_FORWARDING)
 			++liveports;
 	}

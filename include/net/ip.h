@@ -161,6 +161,7 @@ static inline __u8 get_rtconn_flags(struct ipcm_cookie* ipc, struct sock* sk)
 }
 
 /* datagram.c */
+int __ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
 int ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
 
 void ip4_datagram_release_cb(struct sock *sk);
@@ -367,22 +368,6 @@ static inline void iph_to_flow_copy_v4addrs(struct flow_keys *flow,
 			      sizeof(flow->addrs.v4addrs.src));
 	memcpy(&flow->addrs.v4addrs, &iph->saddr, sizeof(flow->addrs.v4addrs));
 	flow->control.addr_type = FLOW_DISSECTOR_KEY_IPV4_ADDRS;
-}
-
-static inline void inet_set_txhash(struct sock *sk)
-{
-	struct inet_sock *inet = inet_sk(sk);
-	struct flow_keys keys;
-
-	memset(&keys, 0, sizeof(keys));
-
-	keys.addrs.v4addrs.src = inet->inet_saddr;
-	keys.addrs.v4addrs.dst = inet->inet_daddr;
-	keys.control.addr_type = FLOW_DISSECTOR_KEY_IPV4_ADDRS;
-	keys.ports.src = inet->inet_sport;
-	keys.ports.dst = inet->inet_dport;
-
-	sk->sk_txhash = flow_hash_from_keys(&keys);
 }
 
 static inline __wsum inet_gro_compute_pseudo(struct sk_buff *skb, int proto)

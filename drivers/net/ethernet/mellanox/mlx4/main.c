@@ -405,6 +405,21 @@ static int mlx4_dev_cap(struct mlx4_dev *dev, struct mlx4_dev_cap *dev_cap)
 	dev->caps.max_gso_sz	     = dev_cap->max_gso_sz;
 	dev->caps.max_rss_tbl_sz     = dev_cap->max_rss_tbl_sz;
 
+	if (dev->caps.flags2 & MLX4_DEV_CAP_FLAG2_PHV_EN) {
+		struct mlx4_init_hca_param hca_param;
+
+		memset(&hca_param, 0, sizeof(hca_param));
+		err = mlx4_QUERY_HCA(dev, &hca_param);
+		/* Turn off PHV_EN flag in case phv_check_en is set.
+		 * phv_check_en is a HW check that parse the packet and verify
+		 * phv bit was reported correctly in the wqe. To allow QinQ
+		 * PHV_EN flag should be set and phv_check_en must be cleared
+		 * otherwise QinQ packets will be drop by the HW.
+		 */
+		if (err || hca_param.phv_check_en)
+			dev->caps.flags2 &= ~MLX4_DEV_CAP_FLAG2_PHV_EN;
+	}
+
 	/* Sense port always allowed on supported devices for ConnectX-1 and -2 */
 	if (mlx4_priv(dev)->pci_dev_data & MLX4_PCI_DEV_FORCE_SENSE_PORT)
 		dev->caps.flags |= MLX4_DEV_CAP_FLAG_SENSE_SUPPORT;
@@ -479,7 +494,15 @@ static int mlx4_dev_cap(struct mlx4_dev *dev, struct mlx4_dev_cap *dev_cap)
 		}
 	}
 
-	dev->caps.max_counters = 1 << ilog2(dev_cap->max_counters);
+	if (mlx4_is_master(dev) && (dev->caps.num_ports == 2) &&
+	    (port_type_array[0] == MLX4_PORT_TYPE_IB) &&
+	    (port_type_array[1] == MLX4_PORT_TYPE_ETH)) {
+		mlx4_warn(dev,
+			  "Granular QoS per VF not supported with IB/Eth configuration\n");
+		dev->caps.flags2 &= ~MLX4_DEV_CAP_FLAG2_QOS_VPP;
+	}
+
+	dev->caps.max_counters = dev_cap->max_counters;
 
 	dev->caps.reserved_qps_cnt[MLX4_QP_REGION_FW] = dev_cap->reserved_qps;
 	dev->caps.reserved_qps_cnt[MLX4_QP_REGION_ETH_ADDR] =
@@ -1674,6 +1697,25 @@ static int map_internal_clock(struct mlx4_dev *dev)
 	return 0;
 }
 
+int mlx4_get_internal_clock_params(struct mlx4_dev *dev,
+				   struct mlx4_clock_params *params)
+{
+	struct mlx4_priv *priv = mlx4_priv(dev);
+
+	if (mlx4_is_slave(dev))
+		return -ENOTSUPP;
+
+	if (!params)
+		return -EINVAL;
+
+	params->bar = priv->fw.clock_bar;
+	params->offset = priv->fw.clock_offset;
+	params->size = MLX4_CLOCK_SIZE;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mlx4_get_internal_clock_params);
+
 static void unmap_internal_clock(struct mlx4_dev *dev)
 {
 	struct mlx4_priv *priv = mlx4_priv(dev);
@@ -2193,18 +2235,76 @@ err_free_icm:
 static int mlx4_init_counters_table(struct mlx4_dev *dev)
 {
 	struct mlx4_priv *priv = mlx4_priv(dev);
-	int nent;
+	int nent_pow2;
 
 	if (!(dev->caps.flags & MLX4_DEV_CAP_FLAG_COUNTERS))
 		return -ENOENT;
 
-	nent = dev->caps.max_counters;
-	return mlx4_bitmap_init(&priv->counters_bitmap, nent, nent - 1, 0, 0);
+	if (!dev->caps.max_counters)
+		return -ENOSPC;
+
+	nent_pow2 = roundup_pow_of_two(dev->caps.max_counters);
+	/* reserve last counter index for sink counter */
+	return mlx4_bitmap_init(&priv->counters_bitmap, nent_pow2,
+				nent_pow2 - 1, 0,
+				nent_pow2 - dev->caps.max_counters + 1);
 }
 
 static void mlx4_cleanup_counters_table(struct mlx4_dev *dev)
 {
+	if (!(dev->caps.flags & MLX4_DEV_CAP_FLAG_COUNTERS))
+		return;
+
+	if (!dev->caps.max_counters)
+		return;
+
 	mlx4_bitmap_cleanup(&mlx4_priv(dev)->counters_bitmap);
+}
+
+static void mlx4_cleanup_default_counters(struct mlx4_dev *dev)
+{
+	struct mlx4_priv *priv = mlx4_priv(dev);
+	int port;
+
+	for (port = 0; port < dev->caps.num_ports; port++)
+		if (priv->def_counter[port] != -1)
+			mlx4_counter_free(dev,  priv->def_counter[port]);
+}
+
+static int mlx4_allocate_default_counters(struct mlx4_dev *dev)
+{
+	struct mlx4_priv *priv = mlx4_priv(dev);
+	int port, err = 0;
+	u32 idx;
+
+	for (port = 0; port < dev->caps.num_ports; port++)
+		priv->def_counter[port] = -1;
+
+	for (port = 0; port < dev->caps.num_ports; port++) {
+		err = mlx4_counter_alloc(dev, &idx);
+
+		if (!err || err == -ENOSPC) {
+			priv->def_counter[port] = idx;
+		} else if (err == -ENOENT) {
+			err = 0;
+			continue;
+		} else if (mlx4_is_slave(dev) && err == -EINVAL) {
+			priv->def_counter[port] = MLX4_SINK_COUNTER_INDEX(dev);
+			mlx4_warn(dev, "can't allocate counter from old PF driver, using index %d\n",
+				  MLX4_SINK_COUNTER_INDEX(dev));
+			err = 0;
+		} else {
+			mlx4_err(dev, "%s: failed to allocate default counter port %d err %d\n",
+				 __func__, port + 1, err);
+			mlx4_cleanup_default_counters(dev);
+			return err;
+		}
+
+		mlx4_dbg(dev, "%s: default counter index %d for port %d\n",
+			 __func__, priv->def_counter[port], port + 1);
+	}
+
+	return err;
 }
 
 int __mlx4_counter_alloc(struct mlx4_dev *dev, u32 *idx)
@@ -2215,8 +2315,10 @@ int __mlx4_counter_alloc(struct mlx4_dev *dev, u32 *idx)
 		return -ENOENT;
 
 	*idx = mlx4_bitmap_alloc(&priv->counters_bitmap);
-	if (*idx == -1)
-		return -ENOMEM;
+	if (*idx == -1) {
+		*idx = MLX4_SINK_COUNTER_INDEX(dev);
+		return -ENOSPC;
+	}
 
 	return 0;
 }
@@ -2239,8 +2341,35 @@ int mlx4_counter_alloc(struct mlx4_dev *dev, u32 *idx)
 }
 EXPORT_SYMBOL_GPL(mlx4_counter_alloc);
 
+static int __mlx4_clear_if_stat(struct mlx4_dev *dev,
+				u8 counter_index)
+{
+	struct mlx4_cmd_mailbox *if_stat_mailbox;
+	int err;
+	u32 if_stat_in_mod = (counter_index & 0xff) | MLX4_QUERY_IF_STAT_RESET;
+
+	if_stat_mailbox = mlx4_alloc_cmd_mailbox(dev);
+	if (IS_ERR(if_stat_mailbox))
+		return PTR_ERR(if_stat_mailbox);
+
+	err = mlx4_cmd_box(dev, 0, if_stat_mailbox->dma, if_stat_in_mod, 0,
+			   MLX4_CMD_QUERY_IF_STAT, MLX4_CMD_TIME_CLASS_C,
+			   MLX4_CMD_NATIVE);
+
+	mlx4_free_cmd_mailbox(dev, if_stat_mailbox);
+	return err;
+}
+
 void __mlx4_counter_free(struct mlx4_dev *dev, u32 idx)
 {
+	if (!(dev->caps.flags & MLX4_DEV_CAP_FLAG_COUNTERS))
+		return;
+
+	if (idx == MLX4_SINK_COUNTER_INDEX(dev))
+		return;
+
+	__mlx4_clear_if_stat(dev, idx);
+
 	mlx4_bitmap_free(&mlx4_priv(dev)->counters_bitmap, idx, MLX4_USE_RR);
 	return;
 }
@@ -2259,6 +2388,14 @@ void mlx4_counter_free(struct mlx4_dev *dev, u32 idx)
 	__mlx4_counter_free(dev, idx);
 }
 EXPORT_SYMBOL_GPL(mlx4_counter_free);
+
+int mlx4_get_default_counter_index(struct mlx4_dev *dev, int port)
+{
+	struct mlx4_priv *priv = mlx4_priv(dev);
+
+	return priv->def_counter[port - 1];
+}
+EXPORT_SYMBOL_GPL(mlx4_get_default_counter_index);
 
 void mlx4_set_admin_guid(struct mlx4_dev *dev, __be64 guid, int entry, int port)
 {
@@ -2395,10 +2532,18 @@ static int mlx4_setup_hca(struct mlx4_dev *dev)
 		goto err_srq_table_free;
 	}
 
-	err = mlx4_init_counters_table(dev);
-	if (err && err != -ENOENT) {
-		mlx4_err(dev, "Failed to initialize counters table, aborting\n");
-		goto err_qp_table_free;
+	if (!mlx4_is_slave(dev)) {
+		err = mlx4_init_counters_table(dev);
+		if (err && err != -ENOENT) {
+			mlx4_err(dev, "Failed to initialize counters table, aborting\n");
+			goto err_qp_table_free;
+		}
+	}
+
+	err = mlx4_allocate_default_counters(dev);
+	if (err) {
+		mlx4_err(dev, "Failed to allocate default counters, aborting\n");
+		goto err_counters_table_free;
 	}
 
 	if (!mlx4_is_slave(dev)) {
@@ -2432,15 +2577,19 @@ static int mlx4_setup_hca(struct mlx4_dev *dev)
 			if (err) {
 				mlx4_err(dev, "Failed to set port %d, aborting\n",
 					 port);
-				goto err_counters_table_free;
+				goto err_default_countes_free;
 			}
 		}
 	}
 
 	return 0;
 
+err_default_countes_free:
+	mlx4_cleanup_default_counters(dev);
+
 err_counters_table_free:
-	mlx4_cleanup_counters_table(dev);
+	if (!mlx4_is_slave(dev))
+		mlx4_cleanup_counters_table(dev);
 
 err_qp_table_free:
 	mlx4_cleanup_qp_table(dev);
@@ -2778,6 +2927,8 @@ static u64 mlx4_enable_sriov(struct mlx4_dev *dev, struct pci_dev *pdev,
 {
 	u64 dev_flags = dev->flags;
 	int err = 0;
+	int fw_enabled_sriov_vfs = min(pci_sriov_get_totalvfs(pdev),
+					MLX4_MAX_NUM_VF);
 
 	if (reset_flow) {
 		dev->dev_vfs = kcalloc(total_vfs, sizeof(*dev->dev_vfs),
@@ -2803,6 +2954,12 @@ static u64 mlx4_enable_sriov(struct mlx4_dev *dev, struct pci_dev *pdev,
 	}
 
 	if (!(dev->flags &  MLX4_FLAG_SRIOV)) {
+		if (total_vfs > fw_enabled_sriov_vfs) {
+			mlx4_err(dev, "requested vfs (%d) > available vfs (%d). Continuing without SR_IOV\n",
+				 total_vfs, fw_enabled_sriov_vfs);
+			err = -ENOMEM;
+			goto disable_sriov;
+		}
 		mlx4_warn(dev, "Enabling SR-IOV with %d VFs\n", total_vfs);
 		err = pci_enable_sriov(pdev, total_vfs);
 	}
@@ -3173,7 +3330,9 @@ err_port:
 	for (--port; port >= 1; --port)
 		mlx4_cleanup_port_info(&priv->port[port]);
 
-	mlx4_cleanup_counters_table(dev);
+	mlx4_cleanup_default_counters(dev);
+	if (!mlx4_is_slave(dev))
+		mlx4_cleanup_counters_table(dev);
 	mlx4_cleanup_qp_table(dev);
 	mlx4_cleanup_srq_table(dev);
 	mlx4_cleanup_cq_table(dev);
@@ -3282,20 +3441,20 @@ static int __mlx4_init_one(struct pci_dev *pdev, int pci_dev_data,
 			goto err_disable_pdev;
 		}
 	}
-	if (total_vfs >= MLX4_MAX_NUM_VF) {
+	if (total_vfs > MLX4_MAX_NUM_VF) {
 		dev_err(&pdev->dev,
-			"Requested more VF's (%d) than allowed (%d)\n",
-			total_vfs, MLX4_MAX_NUM_VF - 1);
+			"Requested more VF's (%d) than allowed by hw (%d)\n",
+			total_vfs, MLX4_MAX_NUM_VF);
 		err = -EINVAL;
 		goto err_disable_pdev;
 	}
 
 	for (i = 0; i < MLX4_MAX_PORTS; i++) {
-		if (nvfs[i] + nvfs[2] >= MLX4_MAX_NUM_VF_P_PORT) {
+		if (nvfs[i] + nvfs[2] > MLX4_MAX_NUM_VF_P_PORT) {
 			dev_err(&pdev->dev,
-				"Requested more VF's (%d) for port (%d) than allowed (%d)\n",
+				"Requested more VF's (%d) for port (%d) than allowed by driver (%d)\n",
 				nvfs[i] + nvfs[2], i + 1,
-				MLX4_MAX_NUM_VF_P_PORT - 1);
+				MLX4_MAX_NUM_VF_P_PORT);
 			err = -EINVAL;
 			goto err_disable_pdev;
 		}
@@ -3471,7 +3630,9 @@ static void mlx4_unload_one(struct pci_dev *pdev)
 		mlx4_free_resource_tracker(dev,
 					   RES_TR_FREE_SLAVES_ONLY);
 
-	mlx4_cleanup_counters_table(dev);
+	mlx4_cleanup_default_counters(dev);
+	if (!mlx4_is_slave(dev))
+		mlx4_cleanup_counters_table(dev);
 	mlx4_cleanup_qp_table(dev);
 	mlx4_cleanup_srq_table(dev);
 	mlx4_cleanup_cq_table(dev);

@@ -5361,6 +5361,10 @@ static void b43_supported_bands(struct b43_wldev *dev, bool *have_2ghz_phy,
 		*have_5ghz_phy = true;
 		return;
 	case 0x4321: /* BCM4306 */
+		/* There are 14e4:4321 PCI devs with 2.4 GHz BCM4321 (N-PHY) */
+		if (dev->phy.type != B43_PHYTYPE_G)
+			break;
+		/* fall through */
 	case 0x4313: /* BCM4311 */
 	case 0x431a: /* BCM4318 */
 	case 0x432a: /* BCM4321 */
@@ -5605,8 +5609,8 @@ static struct b43_wl *b43_wireless_init(struct b43_bus_dev *dev)
 	wl = hw_to_b43_wl(hw);
 
 	/* fill hw info */
-	hw->flags = IEEE80211_HW_RX_INCLUDES_FCS |
-		    IEEE80211_HW_SIGNAL_DBM;
+	ieee80211_hw_set(hw, RX_INCLUDES_FCS);
+	ieee80211_hw_set(hw, SIGNAL_DBM);
 
 	hw->wiphy->interface_modes =
 		BIT(NL80211_IFTYPE_AP) |

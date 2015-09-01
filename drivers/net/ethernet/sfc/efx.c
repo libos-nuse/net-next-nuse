@@ -245,10 +245,16 @@ static int efx_check_disabled(struct efx_nic *efx)
  */
 static int efx_process_channel(struct efx_channel *channel, int budget)
 {
+	struct efx_tx_queue *tx_queue;
 	int spent;
 
 	if (unlikely(!channel->enabled))
 		return 0;
+
+	efx_for_each_channel_tx_queue(tx_queue, channel) {
+		tx_queue->pkts_compl = 0;
+		tx_queue->bytes_compl = 0;
+	}
 
 	spent = efx_nic_process_eventq(channel, budget);
 	if (spent && efx_channel_has_rx_queue(channel)) {
@@ -257,6 +263,14 @@ static int efx_process_channel(struct efx_channel *channel, int budget)
 
 		efx_rx_flush_packet(channel);
 		efx_fast_push_rx_descriptors(rx_queue, true);
+	}
+
+	/* Update BQL */
+	efx_for_each_channel_tx_queue(tx_queue, channel) {
+		if (tx_queue->bytes_compl) {
+			netdev_tx_completed_queue(tx_queue->core_txq,
+				tx_queue->pkts_compl, tx_queue->bytes_compl);
+		}
 	}
 
 	return spent;
@@ -1332,7 +1346,7 @@ static unsigned int efx_wanted_parallelism(struct efx_nic *efx)
 			if (!cpumask_test_cpu(cpu, thread_mask)) {
 				++count;
 				cpumask_or(thread_mask, thread_mask,
-					   topology_thread_cpumask(cpu));
+					   topology_sibling_cpumask(cpu));
 			}
 		}
 
@@ -2920,6 +2934,7 @@ static void efx_pci_remove(struct pci_dev *pci_dev)
 	efx_dissociate(efx);
 	dev_close(efx->net_dev);
 	efx_disable_interrupts(efx);
+	efx->state = STATE_UNINIT;
 	rtnl_unlock();
 
 	if (efx->type->sriov_fini)

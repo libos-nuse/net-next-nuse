@@ -14,7 +14,10 @@
 #include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/property.h>
+#include <linux/etherdevice.h>
+#include <linux/phy.h>
 
 /**
  * device_add_property_set - Add a collection of properties to a device object.
@@ -128,9 +131,9 @@ EXPORT_SYMBOL_GPL(device_property_present);
 bool fwnode_property_present(struct fwnode_handle *fwnode, const char *propname)
 {
 	if (is_of_node(fwnode))
-		return of_property_read_bool(of_node(fwnode), propname);
+		return of_property_read_bool(to_of_node(fwnode), propname);
 	else if (is_acpi_node(fwnode))
-		return !acpi_dev_prop_get(acpi_node(fwnode), propname, NULL);
+		return !acpi_dev_prop_get(to_acpi_node(fwnode), propname, NULL);
 
 	return !!pset_prop_get(to_pset(fwnode), propname);
 }
@@ -285,10 +288,10 @@ EXPORT_SYMBOL_GPL(device_property_read_string);
 ({ \
 	int _ret_; \
 	if (is_of_node(_fwnode_)) \
-		_ret_ = OF_DEV_PROP_READ_ARRAY(of_node(_fwnode_), _propname_, \
+		_ret_ = OF_DEV_PROP_READ_ARRAY(to_of_node(_fwnode_), _propname_, \
 					       _type_, _val_, _nval_); \
 	else if (is_acpi_node(_fwnode_)) \
-		_ret_ = acpi_dev_prop_read(acpi_node(_fwnode_), _propname_, \
+		_ret_ = acpi_dev_prop_read(to_acpi_node(_fwnode_), _propname_, \
 					   _proptype_, _val_, _nval_); \
 	else \
 		_ret_ = pset_prop_read_array(to_pset(_fwnode_), _propname_, \
@@ -424,11 +427,11 @@ int fwnode_property_read_string_array(struct fwnode_handle *fwnode,
 {
 	if (is_of_node(fwnode))
 		return val ?
-			of_property_read_string_array(of_node(fwnode), propname,
-						      val, nval) :
-			of_property_count_strings(of_node(fwnode), propname);
+			of_property_read_string_array(to_of_node(fwnode),
+						      propname, val, nval) :
+			of_property_count_strings(to_of_node(fwnode), propname);
 	else if (is_acpi_node(fwnode))
-		return acpi_dev_prop_read(acpi_node(fwnode), propname,
+		return acpi_dev_prop_read(to_acpi_node(fwnode), propname,
 					  DEV_PROP_STRING, val, nval);
 
 	return pset_prop_read_array(to_pset(fwnode), propname,
@@ -455,9 +458,9 @@ int fwnode_property_read_string(struct fwnode_handle *fwnode,
 				const char *propname, const char **val)
 {
 	if (is_of_node(fwnode))
-		return of_property_read_string(of_node(fwnode), propname, val);
+		return of_property_read_string(to_of_node(fwnode), propname, val);
 	else if (is_acpi_node(fwnode))
-		return acpi_dev_prop_read(acpi_node(fwnode), propname,
+		return acpi_dev_prop_read(to_acpi_node(fwnode), propname,
 					  DEV_PROP_STRING, val, 1);
 
 	return -ENXIO;
@@ -475,13 +478,13 @@ struct fwnode_handle *device_get_next_child_node(struct device *dev,
 	if (IS_ENABLED(CONFIG_OF) && dev->of_node) {
 		struct device_node *node;
 
-		node = of_get_next_available_child(dev->of_node, of_node(child));
+		node = of_get_next_available_child(dev->of_node, to_of_node(child));
 		if (node)
 			return &node->fwnode;
 	} else if (IS_ENABLED(CONFIG_ACPI)) {
 		struct acpi_device *node;
 
-		node = acpi_get_next_child(dev, acpi_node(child));
+		node = acpi_get_next_child(dev, to_acpi_node(child));
 		if (node)
 			return acpi_fwnode_handle(node);
 	}
@@ -500,7 +503,7 @@ EXPORT_SYMBOL_GPL(device_get_next_child_node);
 void fwnode_handle_put(struct fwnode_handle *fwnode)
 {
 	if (is_of_node(fwnode))
-		of_node_put(of_node(fwnode));
+		of_node_put(to_of_node(fwnode));
 }
 EXPORT_SYMBOL_GPL(fwnode_handle_put);
 
@@ -519,3 +522,87 @@ unsigned int device_get_child_node_count(struct device *dev)
 	return count;
 }
 EXPORT_SYMBOL_GPL(device_get_child_node_count);
+
+bool device_dma_is_coherent(struct device *dev)
+{
+	bool coherent = false;
+
+	if (IS_ENABLED(CONFIG_OF) && dev->of_node)
+		coherent = of_dma_is_coherent(dev->of_node);
+	else
+		acpi_check_dma(ACPI_COMPANION(dev), &coherent);
+
+	return coherent;
+}
+EXPORT_SYMBOL_GPL(device_dma_is_coherent);
+
+/**
+ * device_get_phy_mode - Get phy mode for given device_node
+ * @dev:	Pointer to the given device
+ *
+ * The function gets phy interface string from property 'phy-mode' or
+ * 'phy-connection-type', and return its index in phy_modes table, or errno in
+ * error case.
+ */
+int device_get_phy_mode(struct device *dev)
+{
+	const char *pm;
+	int err, i;
+
+	err = device_property_read_string(dev, "phy-mode", &pm);
+	if (err < 0)
+		err = device_property_read_string(dev,
+						  "phy-connection-type", &pm);
+	if (err < 0)
+		return err;
+
+	for (i = 0; i < PHY_INTERFACE_MODE_MAX; i++)
+		if (!strcasecmp(pm, phy_modes(i)))
+			return i;
+
+	return -ENODEV;
+}
+EXPORT_SYMBOL_GPL(device_get_phy_mode);
+
+static void *device_get_mac_addr(struct device *dev,
+				 const char *name, char *addr,
+				 int alen)
+{
+	int ret = device_property_read_u8_array(dev, name, addr, alen);
+
+	if (ret == 0 && is_valid_ether_addr(addr))
+		return addr;
+	return NULL;
+}
+
+/**
+ * Search the device tree for the best MAC address to use.  'mac-address' is
+ * checked first, because that is supposed to contain to "most recent" MAC
+ * address. If that isn't set, then 'local-mac-address' is checked next,
+ * because that is the default address.  If that isn't set, then the obsolete
+ * 'address' is checked, just in case we're using an old device tree.
+ *
+ * Note that the 'address' property is supposed to contain a virtual address of
+ * the register set, but some DTS files have redefined that property to be the
+ * MAC address.
+ *
+ * All-zero MAC addresses are rejected, because those could be properties that
+ * exist in the device tree, but were not set by U-Boot.  For example, the
+ * DTS could define 'mac-address' and 'local-mac-address', with zero MAC
+ * addresses.  Some older U-Boots only initialized 'local-mac-address'.  In
+ * this case, the real MAC is in 'local-mac-address', and 'mac-address' exists
+ * but is all zeros.
+*/
+void *device_get_mac_address(struct device *dev, char *addr, int alen)
+{
+	addr = device_get_mac_addr(dev, "mac-address", addr, alen);
+	if (addr)
+		return addr;
+
+	addr = device_get_mac_addr(dev, "local-mac-address", addr, alen);
+	if (addr)
+		return addr;
+
+	return device_get_mac_addr(dev, "address", addr, alen);
+}
+EXPORT_SYMBOL(device_get_mac_address);

@@ -1082,6 +1082,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	struct trie *t = (struct trie *)tb->tb_data;
 	struct fib_alias *fa, *new_fa;
 	struct key_vector *l, *tp;
+	unsigned int nlflags = 0;
 	struct fib_info *fi;
 	u8 plen = cfg->fc_dst_len;
 	u8 slen = KEYLENGTH - plen;
@@ -1170,6 +1171,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 			new_fa->fa_state = state & ~FA_S_ACCESSED;
 			new_fa->fa_slen = fa->fa_slen;
 			new_fa->tb_id = tb->tb_id;
+			new_fa->fa_default = -1;
 
 			err = switchdev_fib_ipv4_add(key, plen, fi,
 						     new_fa->fa_tos,
@@ -1201,7 +1203,9 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 		if (fa_match)
 			goto out;
 
-		if (!(cfg->fc_nlflags & NLM_F_APPEND))
+		if (cfg->fc_nlflags & NLM_F_APPEND)
+			nlflags = NLM_F_APPEND;
+		else
 			fa = fa_first;
 	}
 	err = -ENOENT;
@@ -1219,6 +1223,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	new_fa->fa_state = 0;
 	new_fa->fa_slen = slen;
 	new_fa->tb_id = tb->tb_id;
+	new_fa->fa_default = -1;
 
 	/* (Optionally) offload fib entry to switch hardware. */
 	err = switchdev_fib_ipv4_add(key, plen, fi, tos, cfg->fc_type,
@@ -1238,7 +1243,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 
 	rt_cache_flush(cfg->fc_nlinfo.nl_net);
 	rtmsg_fib(RTM_NEWROUTE, htonl(key), new_fa, plen, new_fa->tb_id,
-		  &cfg->fc_nlinfo, 0);
+		  &cfg->fc_nlinfo, nlflags);
 succeeded:
 	return 0;
 
@@ -1409,11 +1414,20 @@ found:
 			continue;
 		for (nhsel = 0; nhsel < fi->fib_nhs; nhsel++) {
 			const struct fib_nh *nh = &fi->fib_nh[nhsel];
+			struct in_device *in_dev = __in_dev_get_rcu(nh->nh_dev);
 
 			if (nh->nh_flags & RTNH_F_DEAD)
 				continue;
-			if (flp->flowi4_oif && flp->flowi4_oif != nh->nh_oif)
+			if (in_dev &&
+			    IN_DEV_IGNORE_ROUTES_WITH_LINKDOWN(in_dev) &&
+			    nh->nh_flags & RTNH_F_LINKDOWN &&
+			    !(fib_flags & FIB_LOOKUP_IGNORE_LINKSTATE))
 				continue;
+			if (!(flp->flowi4_flags & FLOWI_FLAG_VRFSRC)) {
+				if (flp->flowi4_oif &&
+				    flp->flowi4_oif != nh->nh_oif)
+					continue;
+			}
 
 			if (!(fib_flags & FIB_LOOKUP_NOREF))
 				atomic_inc(&fi->fib_clntref);
@@ -1782,8 +1796,6 @@ void fib_table_flush_external(struct fib_table *tb)
 		if (hlist_empty(&n->leaf)) {
 			put_child_root(pn, n->key, NULL);
 			node_free(n);
-		} else {
-			leaf_pull_suffix(pn, n);
 		}
 	}
 }
@@ -1853,8 +1865,6 @@ int fib_table_flush(struct fib_table *tb)
 		if (hlist_empty(&n->leaf)) {
 			put_child_root(pn, n->key, NULL);
 			node_free(n);
-		} else {
-			leaf_pull_suffix(pn, n);
 		}
 	}
 
@@ -1981,7 +1991,6 @@ struct fib_table *fib_trie_table(u32 id, struct fib_table *alias)
 		return NULL;
 
 	tb->tb_id = id;
-	tb->tb_default = -1;
 	tb->tb_num_default = 0;
 	tb->tb_data = (alias ? alias->__data : tb->__data);
 

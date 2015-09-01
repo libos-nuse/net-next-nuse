@@ -780,7 +780,7 @@ ssize_t tcp_splice_read(struct socket *sock, loff_t *ppos,
 				ret = -EAGAIN;
 				break;
 			}
-			sk_wait_data(sk, &timeo);
+			sk_wait_data(sk, &timeo, NULL);
 			if (signal_pending(current)) {
 				ret = sock_intr_errno(timeo);
 				break;
@@ -1575,7 +1575,7 @@ int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 	int target;		/* Read at least this many bytes */
 	long timeo;
 	struct task_struct *user_recv = NULL;
-	struct sk_buff *skb;
+	struct sk_buff *skb, *last;
 	u32 urg_hole = 0;
 
 	if (unlikely(flags & MSG_ERRQUEUE))
@@ -1635,7 +1635,9 @@ int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 
 		/* Next get a buffer. */
 
+		last = skb_peek_tail(&sk->sk_receive_queue);
 		skb_queue_walk(&sk->sk_receive_queue, skb) {
+			last = skb;
 			/* Now that we have two receive queues this
 			 * shouldn't happen.
 			 */
@@ -1754,8 +1756,9 @@ int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 			/* Do not sleep, just process backlog. */
 			release_sock(sk);
 			lock_sock(sk);
-		} else
-			sk_wait_data(sk, &timeo);
+		} else {
+			sk_wait_data(sk, &timeo, last);
+		}
 
 		if (user_recv) {
 			int chunk;
@@ -2573,10 +2576,13 @@ static int do_tcp_setsockopt(struct sock *sk, int level,
 
 	case TCP_FASTOPEN:
 		if (val >= 0 && ((1 << sk->sk_state) & (TCPF_CLOSE |
-		    TCPF_LISTEN)))
+		    TCPF_LISTEN))) {
+			tcp_fastopen_init_key_once(true);
+
 			err = fastopen_init_queue(sk, val);
-		else
+		} else {
 			err = -EINVAL;
+		}
 		break;
 	case TCP_TIMESTAMP:
 		if (!tp->repair)
@@ -2624,13 +2630,15 @@ EXPORT_SYMBOL(compat_tcp_setsockopt);
 /* Return information about state of tcp endpoint in API format. */
 void tcp_get_info(struct sock *sk, struct tcp_info *info)
 {
-	const struct tcp_sock *tp = tcp_sk(sk);
+	const struct tcp_sock *tp = tcp_sk(sk); /* iff sk_type == SOCK_STREAM */
 	const struct inet_connection_sock *icsk = inet_csk(sk);
 	u32 now = tcp_time_stamp;
 	unsigned int start;
 	u32 rate;
 
 	memset(info, 0, sizeof(*info));
+	if (sk->sk_type != SOCK_STREAM)
+		return;
 
 	info->tcpi_state = sk->sk_state;
 	info->tcpi_ca_state = icsk->icsk_ca_state;

@@ -104,15 +104,10 @@ int hrtimer_cancel(struct hrtimer *timer)
 	lib_assert(ret >= 0);
 	return ret;
 }
-int
-hrtimer_start(struct hrtimer *timer, ktime_t tim, const enum hrtimer_mode mode)
-{
-	return __hrtimer_start_range_ns(timer, tim, 0, mode, 1);
-}
-int hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
+void hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
 			   unsigned long delta_ns, const enum hrtimer_mode mode)
 {
-	return __hrtimer_start_range_ns(timer, tim, delta_ns, mode, 1);
+	__hrtimer_start_range_ns(timer, tim, delta_ns, mode, 1);
 }
 
 int hrtimer_get_res(const clockid_t which_clock, struct timespec *tp)

@@ -277,7 +277,6 @@ struct cg_proto;
   *	@sk_incoming_cpu: record cpu processing incoming packets
   *	@sk_txhash: computed flow hash for use on transmit
   *	@sk_filter: socket filtering instructions
-  *	@sk_protinfo: private area, net family specific, when not using slab
   *	@sk_timer: sock cleanup timer
   *	@sk_stamp: time stamp of last packet received
   *	@sk_tsflags: SO_TIMESTAMPING socket options
@@ -416,7 +415,6 @@ struct sock {
 	const struct cred	*sk_peer_cred;
 	long			sk_rcvtimeo;
 	long			sk_sndtimeo;
-	void			*sk_protinfo;
 	struct timer_list	sk_timer;
 	ktime_t			sk_stamp;
 	u16			sk_tsflags;
@@ -431,7 +429,9 @@ struct sock {
 	void			*sk_security;
 #endif
 	__u32			sk_mark;
+#ifdef CONFIG_CGROUP_NET_CLASSID
 	u32			sk_classid;
+#endif
 	struct cg_proto		*sk_cgrp;
 	void			(*sk_state_change)(struct sock *sk);
 	void			(*sk_data_ready)(struct sock *sk);
@@ -904,7 +904,7 @@ void sk_stream_kill_queues(struct sock *sk);
 void sk_set_memalloc(struct sock *sk);
 void sk_clear_memalloc(struct sock *sk);
 
-int sk_wait_data(struct sock *sk, long *timeo);
+int sk_wait_data(struct sock *sk, long *timeo, const struct sk_buff *skb);
 
 struct request_sock_ops;
 struct timewait_sock_ops;
@@ -926,7 +926,6 @@ static inline void sk_prot_clear_nulls(struct sock *sk, int size)
 
 /* Networking protocol blocks we attach to sockets.
  * socket layer -> transport layer interface
- * transport -> network interface is defined by struct inet_proto
  */
 struct proto {
 	void			(*close)(struct sock *sk,
@@ -1518,6 +1517,7 @@ static inline void unlock_sock_fast(struct sock *sk, bool slow)
 struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 		      struct proto *prot, int kern);
 void sk_free(struct sock *sk);
+void sk_destruct(struct sock *sk);
 struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority);
 
 struct sk_buff *sock_wmalloc(struct sock *sk, unsigned long size, int force,
@@ -1687,6 +1687,20 @@ static inline void sock_graft(struct sock *sk, struct socket *parent)
 kuid_t sock_i_uid(struct sock *sk);
 unsigned long sock_i_ino(struct sock *sk);
 
+static inline void sk_set_txhash(struct sock *sk)
+{
+	sk->sk_txhash = prandom_u32();
+
+	if (unlikely(!sk->sk_txhash))
+		sk->sk_txhash = 1;
+}
+
+static inline void sk_rethink_txhash(struct sock *sk)
+{
+	if (sk->sk_txhash)
+		sk_set_txhash(sk);
+}
+
 static inline struct dst_entry *
 __sk_dst_get(struct sock *sk)
 {
@@ -1710,6 +1724,8 @@ sk_dst_get(struct sock *sk)
 static inline void dst_negative_advice(struct sock *sk)
 {
 	struct dst_entry *ndst, *dst = __sk_dst_get(sk);
+
+	sk_rethink_txhash(sk);
 
 	if (dst && dst->ops->negative_advice) {
 		ndst = dst->ops->negative_advice(dst);

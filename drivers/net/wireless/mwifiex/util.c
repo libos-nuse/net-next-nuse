@@ -329,7 +329,7 @@ mwifiex_parse_mgmt_packet(struct mwifiex_private *priv, u8 *payload, u16 len,
 			  struct rxpd *rx_pd)
 {
 	u16 stype;
-	u8 category, action_code;
+	u8 category, action_code, *addr2;
 	struct ieee80211_hdr *ieee_hdr = (void *)payload;
 
 	stype = (le16_to_cpu(ieee_hdr->frame_control) & IEEE80211_FCTL_STYPE);
@@ -337,21 +337,35 @@ mwifiex_parse_mgmt_packet(struct mwifiex_private *priv, u8 *payload, u16 len,
 	switch (stype) {
 	case IEEE80211_STYPE_ACTION:
 		category = *(payload + sizeof(struct ieee80211_hdr));
-		action_code = *(payload + sizeof(struct ieee80211_hdr) + 1);
-		if (category == WLAN_CATEGORY_PUBLIC &&
-		    action_code == WLAN_PUB_ACTION_TDLS_DISCOVER_RES) {
+		switch (category) {
+		case WLAN_CATEGORY_PUBLIC:
+			action_code = *(payload + sizeof(struct ieee80211_hdr)
+					+ 1);
+			if (action_code == WLAN_PUB_ACTION_TDLS_DISCOVER_RES) {
+				addr2 = ieee_hdr->addr2;
+				mwifiex_dbg(priv->adapter, INFO,
+					    "TDLS discovery response %pM nf=%d, snr=%d\n",
+					    addr2, rx_pd->nf, rx_pd->snr);
+				mwifiex_auto_tdls_update_peer_signal(priv,
+								     addr2,
+								     rx_pd->snr,
+								     rx_pd->nf);
+			}
+			break;
+		case WLAN_CATEGORY_BACK:
+			/*we dont indicate BACK action frames to cfg80211*/
 			mwifiex_dbg(priv->adapter, INFO,
-				    "TDLS discovery response %pM nf=%d, snr=%d\n",
-				    ieee_hdr->addr2, rx_pd->nf, rx_pd->snr);
-			mwifiex_auto_tdls_update_peer_signal(priv,
-							     ieee_hdr->addr2,
-							     rx_pd->snr,
-							     rx_pd->nf);
+				    "drop BACK action frames");
+			return -1;
+		default:
+			mwifiex_dbg(priv->adapter, INFO,
+				    "unknown public action frame category %d\n",
+				    category);
 		}
-		break;
 	default:
 		mwifiex_dbg(priv->adapter, INFO,
-			    "unknown mgmt frame subtype %#x\n", stype);
+		    "unknown mgmt frame subtype %#x\n", stype);
+		return 0;
 	}
 
 	return 0;
@@ -387,8 +401,9 @@ mwifiex_process_mgmt_packet(struct mwifiex_private *priv,
 
 	ieee_hdr = (void *)skb->data;
 	if (ieee80211_is_mgmt(ieee_hdr->frame_control)) {
-		mwifiex_parse_mgmt_packet(priv, (u8 *)ieee_hdr,
-					  pkt_len, rx_pd);
+		if (mwifiex_parse_mgmt_packet(priv, (u8 *)ieee_hdr,
+					      pkt_len, rx_pd))
+			return -1;
 	}
 	/* Remove address4 */
 	memmove(skb->data + sizeof(struct ieee80211_hdr_3addr),
@@ -416,11 +431,24 @@ mwifiex_process_mgmt_packet(struct mwifiex_private *priv,
  */
 int mwifiex_recv_packet(struct mwifiex_private *priv, struct sk_buff *skb)
 {
+	struct mwifiex_sta_node *src_node;
+	struct ethhdr *p_ethhdr;
+
 	if (!skb)
 		return -1;
 
 	priv->stats.rx_bytes += skb->len;
 	priv->stats.rx_packets++;
+
+	if (GET_BSS_ROLE(priv) == MWIFIEX_BSS_ROLE_UAP) {
+		p_ethhdr = (void *)skb->data;
+		src_node = mwifiex_get_sta_entry(priv, p_ethhdr->h_source);
+		if (src_node) {
+			src_node->stats.last_rx = jiffies;
+			src_node->stats.rx_bytes += skb->len;
+			src_node->stats.rx_packets++;
+		}
+	}
 
 	skb->dev = priv->netdev;
 	skb->protocol = eth_type_trans(skb, priv->netdev);
@@ -501,6 +529,65 @@ mwifiex_get_sta_entry(struct mwifiex_private *priv, const u8 *mac)
 	}
 
 	return NULL;
+}
+
+static struct mwifiex_sta_node *
+mwifiex_get_tdls_sta_entry(struct mwifiex_private *priv, u8 status)
+{
+	struct mwifiex_sta_node *node;
+
+	list_for_each_entry(node, &priv->sta_list, list) {
+		if (node->tdls_status == status)
+			return node;
+	}
+
+	return NULL;
+}
+
+/* If tdls channel switching is on-going, tx data traffic should be
+ * blocked until the switching stage completed.
+ */
+u8 mwifiex_is_tdls_chan_switching(struct mwifiex_private *priv)
+{
+	struct mwifiex_sta_node *sta_ptr;
+
+	if (!priv || !ISSUPP_TDLS_ENABLED(priv->adapter->fw_cap_info))
+		return false;
+
+	sta_ptr = mwifiex_get_tdls_sta_entry(priv, TDLS_CHAN_SWITCHING);
+	if (sta_ptr)
+		return true;
+
+	return false;
+}
+
+u8 mwifiex_is_tdls_off_chan(struct mwifiex_private *priv)
+{
+	struct mwifiex_sta_node *sta_ptr;
+
+	if (!priv || !ISSUPP_TDLS_ENABLED(priv->adapter->fw_cap_info))
+		return false;
+
+	sta_ptr = mwifiex_get_tdls_sta_entry(priv, TDLS_IN_OFF_CHAN);
+	if (sta_ptr)
+		return true;
+
+	return false;
+}
+
+/* If tdls channel switching is on-going or tdls operate on off-channel,
+ * cmd path should be blocked until tdls switched to base-channel.
+ */
+u8 mwifiex_is_send_cmd_allowed(struct mwifiex_private *priv)
+{
+	if (!priv || !ISSUPP_TDLS_ENABLED(priv->adapter->fw_cap_info))
+		return true;
+
+	if (mwifiex_is_tdls_chan_switching(priv) ||
+	    mwifiex_is_tdls_off_chan(priv))
+		return false;
+
+	return true;
 }
 
 /* This function will add a sta_node entry to associated station list

@@ -22,7 +22,7 @@ ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
 
 # auto generated files
 AUTOGENS=include/generated/compile.h include/generated/bounds.h \
-	kernel/time/timeconst.h lib/crc32table.h $(ARCH_DIR)/linker.lds
+	include/generated/timeconst.h lib/crc32table.h $(ARCH_DIR)/linker.lds
 
 # sources and objects
 LIB_SRC=\
@@ -137,8 +137,8 @@ $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	$(call if_changed,linker)
 
 # calll kernel/time/Makefile
-kernel/time/timeconst.h: $(srctree)/.config
-	$(Q) $(MAKE) $(build)=kernel/time $@
+include/generated/timeconst.h: $(srctree)/.config
+	$(Q) $(MAKE) $(build)=. $@
 
 # call lib/Makefile
 lib/crc32table.h:
@@ -171,9 +171,19 @@ KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
 export OBJS KERNEL_LIB COV covl_yes covl_no
 
+# objcopy trick is taken from rumpkernel
+EXP_SYMRENAME=rump|RUMP|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_GLOBAL_OFFSET_TABLE'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
+
 quiet_cmd_cc = CC      $@
       cmd_cc = 	mkdir -p $(dir $@);	\
-		$(CC) $(CFLAGS) -c $< -o $@
+		$(CC) $(CFLAGS) -c $< -o $@; \
+		${NM} -go $@ | awk ' \
+		$$NF!~/^'${_PQ}'(${EXP_SYMRENAME})/ \
+		{s=$$NF;sub(/^'${_PQ}'/, "&rumpns_", s); print $$NF, s}'\
+		| sort | uniq  > $@.renametab; \
+		objcopy --preserve-dates --redefine-syms $@.renametab $@; \
+		rm -f $@.renametab
+
 quiet_cmd_linkko = KO   $@
       cmd_linkko = $(CC) -shared -o $@ -nostdlib $^
 quiet_cmd_builtin = BUILTIN   $@

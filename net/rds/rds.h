@@ -128,7 +128,20 @@ struct rds_connection {
 
 	/* Protocol version */
 	unsigned int		c_version;
+	possible_net_t		c_net;
 };
+
+static inline
+struct net *rds_conn_net(struct rds_connection *conn)
+{
+	return read_pnet(&conn->c_net);
+}
+
+static inline
+void rds_conn_net_set(struct rds_connection *conn, struct net *net)
+{
+	write_pnet(&conn->c_net, net);
+}
 
 #define RDS_FLAG_CONG_BITMAP	0x01
 #define RDS_FLAG_ACK_REQUIRED	0x02
@@ -363,6 +376,8 @@ struct rds_message {
 			unsigned int		op_active:1;
 			unsigned int		op_nents;
 			unsigned int		op_count;
+			unsigned int		op_dmasg;
+			unsigned int		op_dmaoff;
 			struct scatterlist	*op_sg;
 		} data;
 	};
@@ -415,7 +430,7 @@ struct rds_transport {
 	unsigned int		t_prefer_loopback:1;
 	unsigned int		t_type;
 
-	int (*laddr_check)(__be32 addr);
+	int (*laddr_check)(struct net *net, __be32 addr);
 	int (*conn_alloc)(struct rds_connection *conn, gfp_t gfp);
 	void (*conn_free)(void *data);
 	int (*conn_connect)(struct rds_connection *conn);
@@ -570,7 +585,6 @@ struct rds_statistics {
 };
 
 /* af_rds.c */
-char *rds_str_array(char **array, size_t elements, size_t index);
 void rds_sock_addref(struct rds_sock *rs);
 void rds_sock_put(struct rds_sock *rs);
 void rds_wake_sk_sleep(struct rds_sock *rs);
@@ -607,9 +621,11 @@ struct rds_message *rds_cong_update_alloc(struct rds_connection *conn);
 /* conn.c */
 int rds_conn_init(void);
 void rds_conn_exit(void);
-struct rds_connection *rds_conn_create(__be32 laddr, __be32 faddr,
+struct rds_connection *rds_conn_create(struct net *net,
+				       __be32 laddr, __be32 faddr,
 				       struct rds_transport *trans, gfp_t gfp);
-struct rds_connection *rds_conn_create_outgoing(__be32 laddr, __be32 faddr,
+struct rds_connection *rds_conn_create_outgoing(struct net *net,
+						__be32 laddr, __be32 faddr,
 			       struct rds_transport *trans, gfp_t gfp);
 void rds_conn_shutdown(struct rds_connection *conn);
 void rds_conn_destroy(struct rds_connection *conn);
@@ -794,7 +810,7 @@ void rds_connect_complete(struct rds_connection *conn);
 /* transport.c */
 int rds_trans_register(struct rds_transport *trans);
 void rds_trans_unregister(struct rds_transport *trans);
-struct rds_transport *rds_trans_get_preferred(__be32 addr);
+struct rds_transport *rds_trans_get_preferred(struct net *net, __be32 addr);
 void rds_trans_put(struct rds_transport *trans);
 unsigned int rds_trans_stats_info_copy(struct rds_info_iterator *iter,
 				       unsigned int avail);

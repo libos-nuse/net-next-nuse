@@ -12,6 +12,8 @@ hostprogs-y += tracex2
 hostprogs-y += tracex3
 hostprogs-y += tracex4
 hostprogs-y += tracex5
+hostprogs-y += tracex6
+hostprogs-y += lathist
 
 test_verifier-objs := test_verifier.o libbpf.o
 test_maps-objs := test_maps.o libbpf.o
@@ -24,6 +26,8 @@ tracex2-objs := bpf_load.o libbpf.o tracex2_user.o
 tracex3-objs := bpf_load.o libbpf.o tracex3_user.o
 tracex4-objs := bpf_load.o libbpf.o tracex4_user.o
 tracex5-objs := bpf_load.o libbpf.o tracex5_user.o
+tracex6-objs := bpf_load.o libbpf.o tracex6_user.o
+lathist-objs := bpf_load.o libbpf.o lathist_user.o
 
 # Tell kbuild to always build the programs
 always := $(hostprogs-y)
@@ -35,7 +39,9 @@ always += tracex2_kern.o
 always += tracex3_kern.o
 always += tracex4_kern.o
 always += tracex5_kern.o
+always += tracex6_kern.o
 always += tcbpf1_kern.o
+always += lathist_kern.o
 
 HOSTCFLAGS += -I$(objtree)/usr/include
 
@@ -48,6 +54,8 @@ HOSTLOADLIBES_tracex2 += -lelf
 HOSTLOADLIBES_tracex3 += -lelf
 HOSTLOADLIBES_tracex4 += -lelf -lrt
 HOSTLOADLIBES_tracex5 += -lelf
+HOSTLOADLIBES_tracex6 += -lelf
+HOSTLOADLIBES_lathist += -lelf
 
 # point this to your LLVM backend with bpf support
 LLC=$(srctree)/tools/bpf/llvm/bld/Debug+Asserts/bin/llc

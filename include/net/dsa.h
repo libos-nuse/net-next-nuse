@@ -296,12 +296,28 @@ struct dsa_switch_driver {
 				     u32 br_port_mask);
 	int	(*port_stp_update)(struct dsa_switch *ds, int port,
 				   u8 state);
-	int	(*fdb_add)(struct dsa_switch *ds, int port,
-			   const unsigned char *addr, u16 vid);
-	int	(*fdb_del)(struct dsa_switch *ds, int port,
-			   const unsigned char *addr, u16 vid);
-	int	(*fdb_getnext)(struct dsa_switch *ds, int port,
-			       unsigned char *addr, bool *is_static);
+
+	/*
+	 * VLAN support
+	 */
+	int	(*port_pvid_get)(struct dsa_switch *ds, int port, u16 *pvid);
+	int	(*port_pvid_set)(struct dsa_switch *ds, int port, u16 pvid);
+	int	(*port_vlan_add)(struct dsa_switch *ds, int port, u16 vid,
+				 bool untagged);
+	int	(*port_vlan_del)(struct dsa_switch *ds, int port, u16 vid);
+	int	(*vlan_getnext)(struct dsa_switch *ds, u16 *vid,
+				unsigned long *ports, unsigned long *untagged);
+
+	/*
+	 * Forwarding database
+	 */
+	int	(*port_fdb_add)(struct dsa_switch *ds, int port,
+				const unsigned char *addr, u16 vid);
+	int	(*port_fdb_del)(struct dsa_switch *ds, int port,
+				const unsigned char *addr, u16 vid);
+	int	(*port_fdb_getnext)(struct dsa_switch *ds, int port,
+				    unsigned char *addr, u16 *vid,
+				    bool *is_static);
 };
 
 void register_switch_driver(struct dsa_switch_driver *type);

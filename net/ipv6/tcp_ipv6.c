@@ -120,7 +120,6 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 	struct ipv6_pinfo *np = inet6_sk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct in6_addr *saddr = NULL, *final_p, final;
-	struct rt6_info *rt;
 	struct flowi6 fl6;
 	struct dst_entry *dst;
 	int addr_type;
@@ -258,7 +257,6 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 	sk->sk_gso_type = SKB_GSO_TCPV6;
 	__ip6_dst_store(sk, dst, NULL, NULL);
 
-	rt = (struct rt6_info *) dst;
 	if (tcp_death_row.sysctl_tw_recycle &&
 	    !tp->rx_opt.ts_recent_stamp &&
 	    ipv6_addr_equal(&fl6.daddr, &sk->sk_v6_daddr))
@@ -278,7 +276,7 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 	if (err)
 		goto late_failure;
 
-	ip6_set_txhash(sk);
+	sk_set_txhash(sk);
 
 	if (!tp->write_seq && likely(!tp->repair))
 		tp->write_seq = secure_tcpv6_sequence_number(np->saddr.s6_addr32,
@@ -945,7 +943,7 @@ static struct sock *tcp_v6_hnd_req(struct sock *sk, struct sk_buff *skb)
 				   &ipv6_hdr(skb)->daddr, tcp_v6_iif(skb));
 	if (req) {
 		nsk = tcp_check_req(sk, skb, req, false);
-		if (!nsk)
+		if (!nsk || nsk == sk)
 			reqsk_put(req);
 		return nsk;
 	}
@@ -1092,7 +1090,7 @@ static struct sock *tcp_v6_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
 	newsk->sk_v6_rcv_saddr = ireq->ir_v6_loc_addr;
 	newsk->sk_bound_dev_if = ireq->ir_iif;
 
-	ip6_set_txhash(newsk);
+	sk_set_txhash(newsk);
 
 	/* Now IPv6 options...
 
@@ -1483,8 +1481,7 @@ do_time_wait:
 					    ntohs(th->dest), tcp_v6_iif(skb));
 		if (sk2) {
 			struct inet_timewait_sock *tw = inet_twsk(sk);
-			inet_twsk_deschedule(tw);
-			inet_twsk_put(tw);
+			inet_twsk_deschedule_put(tw);
 			sk = sk2;
 			tcp_v6_restore_cb(skb);
 			goto process;

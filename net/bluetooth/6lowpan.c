@@ -856,20 +856,8 @@ static int setup_netdev(struct l2cap_chan *chan, struct lowpan_dev **dev)
 	set_dev_addr(netdev, &chan->src, chan->src_type);
 
 	netdev->netdev_ops = &netdev_ops;
-	SET_NETDEV_DEV(netdev, &chan->conn->hcon->dev);
+	SET_NETDEV_DEV(netdev, &chan->conn->hcon->hdev->dev);
 	SET_NETDEV_DEVTYPE(netdev, &bt_type);
-
-	err = register_netdev(netdev);
-	if (err < 0) {
-		BT_INFO("register_netdev failed %d", err);
-		free_netdev(netdev);
-		goto out;
-	}
-
-	BT_DBG("ifindex %d peer bdaddr %pMR type %d my addr %pMR type %d",
-	       netdev->ifindex, &chan->dst, chan->dst_type,
-	       &chan->src, chan->src_type);
-	set_bit(__LINK_STATE_PRESENT, &netdev->state);
 
 	*dev = netdev_priv(netdev);
 	(*dev)->netdev = netdev;
@@ -880,6 +868,21 @@ static int setup_netdev(struct l2cap_chan *chan, struct lowpan_dev **dev)
 	INIT_LIST_HEAD(&(*dev)->list);
 	list_add_rcu(&(*dev)->list, &bt_6lowpan_devices);
 	spin_unlock(&devices_lock);
+
+	err = register_netdev(netdev);
+	if (err < 0) {
+		BT_INFO("register_netdev failed %d", err);
+		spin_lock(&devices_lock);
+		list_del_rcu(&(*dev)->list);
+		spin_unlock(&devices_lock);
+		free_netdev(netdev);
+		goto out;
+	}
+
+	BT_DBG("ifindex %d peer bdaddr %pMR type %d my addr %pMR type %d",
+	       netdev->ifindex, &chan->dst, chan->dst_type,
+	       &chan->src, chan->src_type);
+	set_bit(__LINK_STATE_PRESENT, &netdev->state);
 
 	return 0;
 
@@ -928,7 +931,7 @@ static void delete_netdev(struct work_struct *work)
 
 	unregister_netdev(entry->netdev);
 
-	/* The entry pointer is deleted in device_event() */
+	/* The entry pointer is deleted by the netdev destructor. */
 }
 
 static void chan_close_cb(struct l2cap_chan *chan)
@@ -937,7 +940,7 @@ static void chan_close_cb(struct l2cap_chan *chan)
 	struct lowpan_dev *dev = NULL;
 	struct lowpan_peer *peer;
 	int err = -ENOENT;
-	bool last = false, removed = true;
+	bool last = false, remove = true;
 
 	BT_DBG("chan %p conn %p", chan, chan->conn);
 
@@ -948,7 +951,7 @@ static void chan_close_cb(struct l2cap_chan *chan)
 		/* If conn is set, then the netdev is also there and we should
 		 * not remove it.
 		 */
-		removed = false;
+		remove = false;
 	}
 
 	spin_lock(&devices_lock);
@@ -977,7 +980,7 @@ static void chan_close_cb(struct l2cap_chan *chan)
 
 		ifdown(dev->netdev);
 
-		if (!removed) {
+		if (remove) {
 			INIT_WORK(&entry->delete_netdev, delete_netdev);
 			schedule_work(&entry->delete_netdev);
 		}
@@ -1208,8 +1211,6 @@ static void disconnect_all_peers(void)
 
 		list_del_rcu(&peer->list);
 		kfree_rcu(peer, rcu);
-
-		module_put(THIS_MODULE);
 	}
 	spin_unlock(&devices_lock);
 }
@@ -1418,7 +1419,6 @@ static int device_event(struct notifier_block *unused,
 				BT_DBG("Unregistered netdev %s %p",
 				       netdev->name, netdev);
 				list_del(&entry->list);
-				kfree(entry);
 				break;
 			}
 		}

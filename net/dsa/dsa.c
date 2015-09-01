@@ -574,7 +574,7 @@ static int dsa_of_probe(struct device *dev)
 {
 	struct device_node *np = dev->of_node;
 	struct device_node *child, *mdio, *ethernet, *port, *link;
-	struct mii_bus *mdio_bus;
+	struct mii_bus *mdio_bus, *mdio_bus_switch;
 	struct net_device *ethernet_dev;
 	struct dsa_platform_data *pd;
 	struct dsa_chip_data *cd;
@@ -630,11 +630,21 @@ static int dsa_of_probe(struct device *dev)
 			continue;
 
 		cd->sw_addr = be32_to_cpup(sw_addr);
-		if (cd->sw_addr > PHY_MAX_ADDR)
+		if (cd->sw_addr >= PHY_MAX_ADDR)
 			continue;
 
 		if (!of_property_read_u32(child, "eeprom-length", &eeprom_len))
 			cd->eeprom_len = eeprom_len;
+
+		mdio = of_parse_phandle(child, "mii-bus", 0);
+		if (mdio) {
+			mdio_bus_switch = of_mdio_find_bus(mdio);
+			if (!mdio_bus_switch) {
+				ret = -EPROBE_DEFER;
+				goto out_free_chip;
+			}
+			cd->host_dev = &mdio_bus_switch->dev;
+		}
 
 		for_each_available_child_of_node(child, port) {
 			port_reg = of_get_property(port, "reg", NULL);
@@ -642,6 +652,8 @@ static int dsa_of_probe(struct device *dev)
 				continue;
 
 			port_index = be32_to_cpup(port_reg);
+			if (port_index >= DSA_MAX_PORTS)
+				break;
 
 			port_name = of_get_property(port, "label", NULL);
 			if (!port_name)
@@ -666,8 +678,6 @@ static int dsa_of_probe(struct device *dev)
 					goto out_free_chip;
 			}
 
-			if (port_index == DSA_MAX_PORTS)
-				break;
 		}
 	}
 

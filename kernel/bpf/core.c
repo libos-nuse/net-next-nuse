@@ -177,6 +177,7 @@ noinline u64 __bpf_call_base(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
 {
 	return 0;
 }
+EXPORT_SYMBOL_GPL(__bpf_call_base);
 
 /**
  *	__bpf_prog_run - run eBPF program on a given context
@@ -449,11 +450,15 @@ select_insn:
 
 		tail_call_cnt++;
 
-		prog = READ_ONCE(array->prog[index]);
+		prog = READ_ONCE(array->ptrs[index]);
 		if (unlikely(!prog))
 			goto out;
 
-		ARG1 = BPF_R1;
+		/* ARG1 at this point is guaranteed to point to CTX from
+		 * the verifier side due to the fact that the tail call is
+		 * handeled like a helper, that is, bpf_tail_call_proto,
+		 * where arg1_type is ARG_PTR_TO_CTX.
+		 */
 		insn = prog->insnsi;
 		goto select_insn;
 out:
@@ -730,6 +735,13 @@ const struct bpf_func_proto bpf_map_delete_elem_proto __weak;
 const struct bpf_func_proto bpf_get_prandom_u32_proto __weak;
 const struct bpf_func_proto bpf_get_smp_processor_id_proto __weak;
 const struct bpf_func_proto bpf_ktime_get_ns_proto __weak;
+const struct bpf_func_proto bpf_get_current_pid_tgid_proto __weak;
+const struct bpf_func_proto bpf_get_current_uid_gid_proto __weak;
+const struct bpf_func_proto bpf_get_current_comm_proto __weak;
+const struct bpf_func_proto * __weak bpf_get_trace_printk_proto(void)
+{
+	return NULL;
+}
 
 /* Always built-in helper functions. */
 const struct bpf_func_proto bpf_tail_call_proto = {

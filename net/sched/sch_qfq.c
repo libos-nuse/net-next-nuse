@@ -186,7 +186,6 @@ struct qfq_sched {
 
 	u64			oldV, V;	/* Precise virtual times. */
 	struct qfq_aggregate	*in_serv_agg;   /* Aggregate being served. */
-	u32			num_active_agg; /* Num. of active aggregates */
 	u32			wsum;		/* weight sum */
 	u32			iwsum;		/* inverse weight sum */
 
@@ -339,8 +338,7 @@ static struct qfq_aggregate *qfq_choose_next_agg(struct qfq_sched *);
 
 static void qfq_destroy_agg(struct qfq_sched *q, struct qfq_aggregate *agg)
 {
-	if (!hlist_unhashed(&agg->nonfull_next))
-		hlist_del_init(&agg->nonfull_next);
+	hlist_del_init(&agg->nonfull_next);
 	q->wsum -= agg->class_weight;
 	if (q->wsum != 0)
 		q->iwsum = ONE_FP / q->wsum;

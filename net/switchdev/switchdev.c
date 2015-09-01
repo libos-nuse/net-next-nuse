@@ -103,7 +103,9 @@ static void switchdev_port_attr_set_work(struct work_struct *work)
 
 	rtnl_lock();
 	err = switchdev_port_attr_set(asw->dev, &asw->attr);
-	BUG_ON(err);
+	if (err && err != -EOPNOTSUPP)
+		netdev_err(asw->dev, "failed (err=%d) to set attribute (id=%d)\n",
+			   err, asw->attr.id);
 	rtnl_unlock();
 
 	dev_put(asw->dev);
@@ -169,8 +171,10 @@ int switchdev_port_attr_set(struct net_device *dev, struct switchdev_attr *attr)
 		 * released.
 		 */
 
-		attr->trans = SWITCHDEV_TRANS_ABORT;
-		__switchdev_port_attr_set(dev, attr);
+		if (err != -EOPNOTSUPP) {
+			attr->trans = SWITCHDEV_TRANS_ABORT;
+			__switchdev_port_attr_set(dev, attr);
+		}
 
 		return err;
 	}
@@ -182,7 +186,8 @@ int switchdev_port_attr_set(struct net_device *dev, struct switchdev_attr *attr)
 
 	attr->trans = SWITCHDEV_TRANS_COMMIT;
 	err = __switchdev_port_attr_set(dev, attr);
-	BUG_ON(err);
+	WARN(err, "%s: Commit of attribute (id=%d) failed.\n",
+	     dev->name, attr->id);
 
 	return err;
 }
@@ -246,8 +251,10 @@ int switchdev_port_obj_add(struct net_device *dev, struct switchdev_obj *obj)
 		 * released.
 		 */
 
-		obj->trans = SWITCHDEV_TRANS_ABORT;
-		__switchdev_port_obj_add(dev, obj);
+		if (err != -EOPNOTSUPP) {
+			obj->trans = SWITCHDEV_TRANS_ABORT;
+			__switchdev_port_obj_add(dev, obj);
+		}
 
 		return err;
 	}
@@ -389,6 +396,126 @@ int call_switchdev_notifiers(unsigned long val, struct net_device *dev,
 }
 EXPORT_SYMBOL_GPL(call_switchdev_notifiers);
 
+struct switchdev_vlan_dump {
+	struct switchdev_obj obj;
+	struct sk_buff *skb;
+	u32 filter_mask;
+	u16 flags;
+	u16 begin;
+	u16 end;
+};
+
+static int switchdev_port_vlan_dump_put(struct net_device *dev,
+					struct switchdev_vlan_dump *dump)
+{
+	struct bridge_vlan_info vinfo;
+
+	vinfo.flags = dump->flags;
+
+	if (dump->begin == 0 && dump->end == 0) {
+		return 0;
+	} else if (dump->begin == dump->end) {
+		vinfo.vid = dump->begin;
+		if (nla_put(dump->skb, IFLA_BRIDGE_VLAN_INFO,
+			    sizeof(vinfo), &vinfo))
+			return -EMSGSIZE;
+	} else {
+		vinfo.vid = dump->begin;
+		vinfo.flags |= BRIDGE_VLAN_INFO_RANGE_BEGIN;
+		if (nla_put(dump->skb, IFLA_BRIDGE_VLAN_INFO,
+			    sizeof(vinfo), &vinfo))
+			return -EMSGSIZE;
+		vinfo.vid = dump->end;
+		vinfo.flags &= ~BRIDGE_VLAN_INFO_RANGE_BEGIN;
+		vinfo.flags |= BRIDGE_VLAN_INFO_RANGE_END;
+		if (nla_put(dump->skb, IFLA_BRIDGE_VLAN_INFO,
+			    sizeof(vinfo), &vinfo))
+			return -EMSGSIZE;
+	}
+
+	return 0;
+}
+
+static int switchdev_port_vlan_dump_cb(struct net_device *dev,
+				       struct switchdev_obj *obj)
+{
+	struct switchdev_vlan_dump *dump =
+		container_of(obj, struct switchdev_vlan_dump, obj);
+	struct switchdev_obj_vlan *vlan = &dump->obj.u.vlan;
+	int err = 0;
+
+	if (vlan->vid_begin > vlan->vid_end)
+		return -EINVAL;
+
+	if (dump->filter_mask & RTEXT_FILTER_BRVLAN) {
+		dump->flags = vlan->flags;
+		for (dump->begin = dump->end = vlan->vid_begin;
+		     dump->begin <= vlan->vid_end;
+		     dump->begin++, dump->end++) {
+			err = switchdev_port_vlan_dump_put(dev, dump);
+			if (err)
+				return err;
+		}
+	} else if (dump->filter_mask & RTEXT_FILTER_BRVLAN_COMPRESSED) {
+		if (dump->begin > vlan->vid_begin &&
+		    dump->begin >= vlan->vid_end) {
+			if ((dump->begin - 1) == vlan->vid_end &&
+			    dump->flags == vlan->flags) {
+				/* prepend */
+				dump->begin = vlan->vid_begin;
+			} else {
+				err = switchdev_port_vlan_dump_put(dev, dump);
+				dump->flags = vlan->flags;
+				dump->begin = vlan->vid_begin;
+				dump->end = vlan->vid_end;
+			}
+		} else if (dump->end <= vlan->vid_begin &&
+		           dump->end < vlan->vid_end) {
+			if ((dump->end  + 1) == vlan->vid_begin &&
+			    dump->flags == vlan->flags) {
+				/* append */
+				dump->end = vlan->vid_end;
+			} else {
+				err = switchdev_port_vlan_dump_put(dev, dump);
+				dump->flags = vlan->flags;
+				dump->begin = vlan->vid_begin;
+				dump->end = vlan->vid_end;
+			}
+		} else {
+			err = -EINVAL;
+		}
+	}
+
+	return err;
+}
+
+static int switchdev_port_vlan_fill(struct sk_buff *skb, struct net_device *dev,
+				    u32 filter_mask)
+{
+	struct switchdev_vlan_dump dump = {
+		.obj = {
+			.id = SWITCHDEV_OBJ_PORT_VLAN,
+			.cb = switchdev_port_vlan_dump_cb,
+		},
+		.skb = skb,
+		.filter_mask = filter_mask,
+	};
+	int err = 0;
+
+	if ((filter_mask & RTEXT_FILTER_BRVLAN) ||
+	    (filter_mask & RTEXT_FILTER_BRVLAN_COMPRESSED)) {
+		err = switchdev_port_obj_dump(dev, &dump.obj);
+		if (err)
+			goto err_out;
+		if (filter_mask & RTEXT_FILTER_BRVLAN_COMPRESSED)
+			/* last one */
+			err = switchdev_port_vlan_dump_put(dev, &dump);
+	}
+
+err_out:
+	return err == -EOPNOTSUPP ? 0 : err;
+}
+
 /**
  *	switchdev_port_bridge_getlink - Get bridge port attributes
  *
@@ -409,11 +536,12 @@ int switchdev_port_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	int err;
 
 	err = switchdev_port_attr_get(dev, &attr);
-	if (err)
+	if (err && err != -EOPNOTSUPP)
 		return err;
 
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev, mode,
-				       attr.u.brport_flags, mask, nlflags);
+				       attr.u.brport_flags, mask, nlflags,
+				       filter_mask, switchdev_port_vlan_fill);
 }
 EXPORT_SYMBOL_GPL(switchdev_port_bridge_getlink);
 
@@ -508,23 +636,23 @@ static int switchdev_port_br_afspec(struct net_device *dev,
 		vinfo = nla_data(attr);
 		vlan->flags = vinfo->flags;
 		if (vinfo->flags & BRIDGE_VLAN_INFO_RANGE_BEGIN) {
-			if (vlan->vid_start)
+			if (vlan->vid_begin)
 				return -EINVAL;
-			vlan->vid_start = vinfo->vid;
+			vlan->vid_begin = vinfo->vid;
 		} else if (vinfo->flags & BRIDGE_VLAN_INFO_RANGE_END) {
-			if (!vlan->vid_start)
+			if (!vlan->vid_begin)
 				return -EINVAL;
 			vlan->vid_end = vinfo->vid;
-			if (vlan->vid_end <= vlan->vid_start)
+			if (vlan->vid_end <= vlan->vid_begin)
 				return -EINVAL;
 			err = f(dev, &obj);
 			if (err)
 				return err;
 			memset(vlan, 0, sizeof(*vlan));
 		} else {
-			if (vlan->vid_start)
+			if (vlan->vid_begin)
 				return -EINVAL;
-			vlan->vid_start = vinfo->vid;
+			vlan->vid_begin = vinfo->vid;
 			vlan->vid_end = vinfo->vid;
 			err = f(dev, &obj);
 			if (err)
@@ -654,7 +782,6 @@ struct switchdev_fdb_dump {
 	struct switchdev_obj obj;
 	struct sk_buff *skb;
 	struct netlink_callback *cb;
-	struct net_device *filter_dev;
 	int idx;
 };
 
@@ -667,12 +794,8 @@ static int switchdev_port_fdb_dump_cb(struct net_device *dev,
 	u32 seq = dump->cb->nlh->nlmsg_seq;
 	struct nlmsghdr *nlh;
 	struct ndmsg *ndm;
-	struct net_device *master = netdev_master_upper_dev_get(dev);
 
 	if (dump->idx < dump->cb->args[0])
-		goto skip;
-
-	if (master && dump->filter_dev != master)
 		goto skip;
 
 	nlh = nlmsg_put(dump->skb, portid, seq, RTM_NEWNEIGH,
@@ -687,7 +810,7 @@ static int switchdev_port_fdb_dump_cb(struct net_device *dev,
 	ndm->ndm_flags   = NTF_SELF;
 	ndm->ndm_type    = 0;
 	ndm->ndm_ifindex = dev->ifindex;
-	ndm->ndm_state   = NUD_REACHABLE;
+	ndm->ndm_state   = obj->u.fdb.ndm_state;
 
 	if (nla_put(dump->skb, NDA_LLADDR, ETH_ALEN, obj->u.fdb.addr))
 		goto nla_put_failure;
@@ -728,7 +851,6 @@ int switchdev_port_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb,
 		},
 		.skb = skb,
 		.cb = cb,
-		.filter_dev = filter_dev,
 		.idx = idx,
 	};
 	int err;
@@ -788,13 +910,9 @@ static struct net_device *switchdev_get_dev_by_nhs(struct fib_info *fi)
 		if (switchdev_port_attr_get(dev, &attr))
 			return NULL;
 
-		if (nhsel > 0) {
-			if (prev_attr.u.ppid.id_len != attr.u.ppid.id_len)
+		if (nhsel > 0 &&
+		    !netdev_phys_item_id_same(&prev_attr.u.ppid, &attr.u.ppid))
 				return NULL;
-			if (memcmp(prev_attr.u.ppid.id, attr.u.ppid.id,
-				   attr.u.ppid.id_len))
-				return NULL;
-		}
 
 		prev_attr = attr;
 	}
@@ -853,7 +971,7 @@ int switchdev_fib_ipv4_add(u32 dst, int dst_len, struct fib_info *fi,
 	if (!err)
 		fi->fib_flags |= RTNH_F_OFFLOAD;
 
-	return err;
+	return err == -EOPNOTSUPP ? 0 : err;
 }
 EXPORT_SYMBOL_GPL(switchdev_fib_ipv4_add);
 
@@ -898,7 +1016,7 @@ int switchdev_fib_ipv4_del(u32 dst, int dst_len, struct fib_info *fi,
 	if (!err)
 		fi->fib_flags &= ~RTNH_F_OFFLOAD;
 
-	return err;
+	return err == -EOPNOTSUPP ? 0 : err;
 }
 EXPORT_SYMBOL_GPL(switchdev_fib_ipv4_del);
 
@@ -921,3 +1039,106 @@ void switchdev_fib_ipv4_abort(struct fib_info *fi)
 	fi->fib_net->ipv4.fib_offload_disabled = true;
 }
 EXPORT_SYMBOL_GPL(switchdev_fib_ipv4_abort);
+
+static bool switchdev_port_same_parent_id(struct net_device *a,
+					  struct net_device *b)
+{
+	struct switchdev_attr a_attr = {
+		.id = SWITCHDEV_ATTR_PORT_PARENT_ID,
+		.flags = SWITCHDEV_F_NO_RECURSE,
+	};
+	struct switchdev_attr b_attr = {
+		.id = SWITCHDEV_ATTR_PORT_PARENT_ID,
+		.flags = SWITCHDEV_F_NO_RECURSE,
+	};
+
+	if (switchdev_port_attr_get(a, &a_attr) ||
+	    switchdev_port_attr_get(b, &b_attr))
+		return false;
+
+	return netdev_phys_item_id_same(&a_attr.u.ppid, &b_attr.u.ppid);
+}
+
+static u32 switchdev_port_fwd_mark_get(struct net_device *dev,
+				       struct net_device *group_dev)
+{
+	struct net_device *lower_dev;
+	struct list_head *iter;
+
+	netdev_for_each_lower_dev(group_dev, lower_dev, iter) {
+		if (lower_dev == dev)
+			continue;
+		if (switchdev_port_same_parent_id(dev, lower_dev))
+			return lower_dev->offload_fwd_mark;
+		return switchdev_port_fwd_mark_get(dev, lower_dev);
+	}
+
+	return dev->ifindex;
+}
+
+static void switchdev_port_fwd_mark_reset(struct net_device *group_dev,
+					  u32 old_mark, u32 *reset_mark)
+{
+	struct net_device *lower_dev;
+	struct list_head *iter;
+
+	netdev_for_each_lower_dev(group_dev, lower_dev, iter) {
+		if (lower_dev->offload_fwd_mark == old_mark) {
+			if (!*reset_mark)
+				*reset_mark = lower_dev->ifindex;
+			lower_dev->offload_fwd_mark = *reset_mark;
+		}
+		switchdev_port_fwd_mark_reset(lower_dev, old_mark, reset_mark);
+	}
+}
+
+/**
+ *	switchdev_port_fwd_mark_set - Set port offload forwarding mark
+ *
+ *	@dev: port device
+ *	@group_dev: containing device
+ *	@joining: true if dev is joining group; false if leaving group
+ *
+ *	An ungrouped port's offload mark is just its ifindex.  A grouped
+ *	port's (member of a bridge, for example) offload mark is the ifindex
+ *	of one of the ports in the group with the same parent (switch) ID.
+ *	Ports on the same device in the same group will have the same mark.
+ *
+ *	Example:
+ *
+ *		br0		ifindex=9
+ *		  sw1p1		ifindex=2	mark=2
+ *		  sw1p2		ifindex=3	mark=2
+ *		  sw2p1		ifindex=4	mark=5
+ *		  sw2p2		ifindex=5	mark=5
+ *
+ *	If sw2p2 leaves the bridge, we'll have:
+ *
+ *		br0		ifindex=9
+ *		  sw1p1		ifindex=2	mark=2
+ *		  sw1p2		ifindex=3	mark=2
+ *		  sw2p1		ifindex=4	mark=4
+ *		sw2p2		ifindex=5	mark=5
+ */
+void switchdev_port_fwd_mark_set(struct net_device *dev,
+				 struct net_device *group_dev,
+				 bool joining)
+{
+	u32 mark = dev->ifindex;
+	u32 reset_mark = 0;
+
+	if (group_dev && joining) {
+		mark = switchdev_port_fwd_mark_get(dev, group_dev);
+	} else if (group_dev && !joining) {
+		if (dev->offload_fwd_mark == mark)
+			/* Ohoh, this port was the mark reference port,
+			 * but it's leaving the group, so reset the
+			 * mark for the remaining ports in the group.
+			 */
+			switchdev_port_fwd_mark_reset(group_dev, mark,
+						      &reset_mark);
+	}
+
+	dev->offload_fwd_mark = mark;
+}
+EXPORT_SYMBOL_GPL(switchdev_port_fwd_mark_set);

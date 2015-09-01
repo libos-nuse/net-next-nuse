@@ -767,6 +767,11 @@ struct adapter {
 	bool tid_release_task_busy;
 
 	struct dentry *debugfs_root;
+	u32 use_bd;     /* Use SGE Back Door intfc for reading SGE Contexts */
+	u32 trace_rss;	/* 1 implies that different RSS flit per filter is
+			 * used per filter else if 0 default RSS flit is
+			 * used for all 4 filters.
+			 */
 
 	spinlock_t stats_lock;
 	spinlock_t win0_lock ____cacheline_aligned_in_smp;
@@ -1296,6 +1301,7 @@ enum t4_bar2_qtype { T4_BAR2_QTYPE_EGRESS, T4_BAR2_QTYPE_INGRESS };
 int t4_bar2_sge_qregs(struct adapter *adapter,
 		      unsigned int qid,
 		      enum t4_bar2_qtype qtype,
+		      int user,
 		      u64 *pbar2_qoffset,
 		      unsigned int *pbar2_qid);
 
@@ -1337,6 +1343,10 @@ int t4_cim_read(struct adapter *adap, unsigned int addr, unsigned int n,
 int t4_cim_write(struct adapter *adap, unsigned int addr, unsigned int n,
 		 const unsigned int *valp);
 int t4_cim_read_la(struct adapter *adap, u32 *la_buf, unsigned int *wrptr);
+void t4_cim_read_pif_la(struct adapter *adap, u32 *pif_req, u32 *pif_rsp,
+			unsigned int *pif_req_wrptr,
+			unsigned int *pif_rsp_wrptr);
+void t4_cim_read_ma_la(struct adapter *adap, u32 *ma_req, u32 *ma_rsp);
 void t4_read_cimq_cfg(struct adapter *adap, u16 *base, u16 *size, u16 *thres);
 const char *t4_get_port_type_description(enum fw_port_type port_type);
 void t4_get_port_stats(struct adapter *adap, int idx, struct port_stats *p);
@@ -1362,6 +1372,7 @@ void t4_load_mtus(struct adapter *adap, const unsigned short *mtus,
 
 void t4_ulprx_read_la(struct adapter *adap, u32 *la_buf);
 
+void t4_get_chan_txrate(struct adapter *adap, u64 *nic_rate, u64 *ofld_rate);
 void t4_mk_filtdelwr(unsigned int ftid, struct fw_filter_wr *wr, int qid);
 
 void t4_wol_magic_enable(struct adapter *adap, unsigned int port,
@@ -1434,6 +1445,10 @@ int t4_sge_ctxt_flush(struct adapter *adap, unsigned int mbox);
 int t4_handle_fw_rpl(struct adapter *adap, const __be64 *rpl);
 void t4_db_full(struct adapter *adapter);
 void t4_db_dropped(struct adapter *adapter);
+int t4_set_trace_filter(struct adapter *adapter, const struct trace_params *tp,
+			int filter_index, int enable);
+void t4_get_trace_filter(struct adapter *adapter, struct trace_params *tp,
+			 int filter_index, int *enabled);
 int t4_fwaddrspace_write(struct adapter *adap, unsigned int mbox,
 			 u32 addr, u32 val);
 void t4_sge_decode_idma_state(struct adapter *adapter, int state);

@@ -823,7 +823,7 @@ static void hci_cc_read_local_amp_info(struct hci_dev *hdev,
 	BT_DBG("%s status 0x%2.2x", hdev->name, rp->status);
 
 	if (rp->status)
-		goto a2mp_rsp;
+		return;
 
 	hdev->amp_status = rp->amp_status;
 	hdev->amp_total_bw = __le32_to_cpu(rp->total_bw);
@@ -835,46 +835,6 @@ static void hci_cc_read_local_amp_info(struct hci_dev *hdev,
 	hdev->amp_assoc_size = __le16_to_cpu(rp->max_assoc_size);
 	hdev->amp_be_flush_to = __le32_to_cpu(rp->be_flush_to);
 	hdev->amp_max_flush_to = __le32_to_cpu(rp->max_flush_to);
-
-a2mp_rsp:
-	a2mp_send_getinfo_rsp(hdev);
-}
-
-static void hci_cc_read_local_amp_assoc(struct hci_dev *hdev,
-					struct sk_buff *skb)
-{
-	struct hci_rp_read_local_amp_assoc *rp = (void *) skb->data;
-	struct amp_assoc *assoc = &hdev->loc_assoc;
-	size_t rem_len, frag_len;
-
-	BT_DBG("%s status 0x%2.2x", hdev->name, rp->status);
-
-	if (rp->status)
-		goto a2mp_rsp;
-
-	frag_len = skb->len - sizeof(*rp);
-	rem_len = __le16_to_cpu(rp->rem_len);
-
-	if (rem_len > frag_len) {
-		BT_DBG("frag_len %zu rem_len %zu", frag_len, rem_len);
-
-		memcpy(assoc->data + assoc->offset, rp->frag, frag_len);
-		assoc->offset += frag_len;
-
-		/* Read other fragments */
-		amp_read_loc_assoc_frag(hdev, rp->phy_handle);
-
-		return;
-	}
-
-	memcpy(assoc->data + assoc->offset, rp->frag, rem_len);
-	assoc->len = assoc->offset + rem_len;
-	assoc->offset = 0;
-
-a2mp_rsp:
-	/* Send A2MP Rsp when all fragments are received */
-	a2mp_send_getampassoc_rsp(hdev, rp->status);
-	a2mp_send_create_phy_link_req(hdev, rp->status);
 }
 
 static void hci_cc_read_inq_rsp_tx_power(struct hci_dev *hdev,
@@ -1409,20 +1369,6 @@ static void hci_cc_set_adv_param(struct hci_dev *hdev, struct sk_buff *skb)
 	hci_dev_unlock(hdev);
 }
 
-static void hci_cc_write_remote_amp_assoc(struct hci_dev *hdev,
-					  struct sk_buff *skb)
-{
-	struct hci_rp_write_remote_amp_assoc *rp = (void *) skb->data;
-
-	BT_DBG("%s status 0x%2.2x phy_handle 0x%2.2x",
-	       hdev->name, rp->status, rp->phy_handle);
-
-	if (rp->status)
-		return;
-
-	amp_write_rem_assoc_continue(hdev, rp->phy_handle);
-}
-
 static void hci_cc_read_rssi(struct hci_dev *hdev, struct sk_buff *skb)
 {
 	struct hci_rp_read_rssi *rp = (void *) skb->data;
@@ -1942,47 +1888,6 @@ static void hci_cs_disconnect(struct hci_dev *hdev, u8 status)
 				       conn->dst_type, status);
 
 	hci_dev_unlock(hdev);
-}
-
-static void hci_cs_create_phylink(struct hci_dev *hdev, u8 status)
-{
-	struct hci_cp_create_phy_link *cp;
-
-	BT_DBG("%s status 0x%2.2x", hdev->name, status);
-
-	cp = hci_sent_cmd_data(hdev, HCI_OP_CREATE_PHY_LINK);
-	if (!cp)
-		return;
-
-	hci_dev_lock(hdev);
-
-	if (status) {
-		struct hci_conn *hcon;
-
-		hcon = hci_conn_hash_lookup_handle(hdev, cp->phy_handle);
-		if (hcon)
-			hci_conn_del(hcon);
-	} else {
-		amp_write_remote_assoc(hdev, cp->phy_handle);
-	}
-
-	hci_dev_unlock(hdev);
-}
-
-static void hci_cs_accept_phylink(struct hci_dev *hdev, u8 status)
-{
-	struct hci_cp_accept_phy_link *cp;
-
-	BT_DBG("%s status 0x%2.2x", hdev->name, status);
-
-	if (status)
-		return;
-
-	cp = hci_sent_cmd_data(hdev, HCI_OP_ACCEPT_PHY_LINK);
-	if (!cp)
-		return;
-
-	amp_write_remote_assoc(hdev, cp->phy_handle);
 }
 
 static void hci_cs_le_create_conn(struct hci_dev *hdev, u8 status)
@@ -2603,6 +2508,63 @@ unlock:
 	hci_dev_unlock(hdev);
 }
 
+static void read_enc_key_size_complete(struct hci_dev *hdev, u8 status,
+				       u16 opcode, struct sk_buff *skb)
+{
+	const struct hci_rp_read_enc_key_size *rp;
+	struct hci_conn *conn;
+	u16 handle;
+
+	BT_DBG("%s status 0x%02x", hdev->name, status);
+
+	if (!skb || skb->len < sizeof(*rp)) {
+		BT_ERR("%s invalid HCI Read Encryption Key Size response",
+		       hdev->name);
+		return;
+	}
+
+	rp = (void *)skb->data;
+	handle = le16_to_cpu(rp->handle);
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, handle);
+	if (!conn)
+		goto unlock;
+
+	/* If we fail to read the encryption key size, assume maximum
+	 * (which is the same we do also when this HCI command isn't
+	 * supported.
+	 */
+	if (rp->status) {
+		BT_ERR("%s failed to read key size for handle %u", hdev->name,
+		       handle);
+		conn->enc_key_size = HCI_LINK_KEY_SIZE;
+	} else {
+		conn->enc_key_size = rp->key_size;
+	}
+
+	if (conn->state == BT_CONFIG) {
+		conn->state = BT_CONNECTED;
+		hci_connect_cfm(conn, 0);
+		hci_conn_drop(conn);
+	} else {
+		u8 encrypt;
+
+		if (!test_bit(HCI_CONN_ENCRYPT, &conn->flags))
+			encrypt = 0x00;
+		else if (test_bit(HCI_CONN_AES_CCM, &conn->flags))
+			encrypt = 0x02;
+		else
+			encrypt = 0x01;
+
+		hci_encrypt_cfm(conn, 0, encrypt);
+	}
+
+unlock:
+	hci_dev_unlock(hdev);
+}
+
 static void hci_encrypt_change_evt(struct hci_dev *hdev, struct sk_buff *skb)
 {
 	struct hci_ev_encrypt_change *ev = (void *) skb->data;
@@ -2650,21 +2612,50 @@ static void hci_encrypt_change_evt(struct hci_dev *hdev, struct sk_buff *skb)
 		goto unlock;
 	}
 
+	/* In Secure Connections Only mode, do not allow any connections
+	 * that are not encrypted with AES-CCM using a P-256 authenticated
+	 * combination key.
+	 */
+	if (hci_dev_test_flag(hdev, HCI_SC_ONLY) &&
+	    (!test_bit(HCI_CONN_AES_CCM, &conn->flags) ||
+	     conn->key_type != HCI_LK_AUTH_COMBINATION_P256)) {
+		hci_connect_cfm(conn, HCI_ERROR_AUTH_FAILURE);
+		hci_conn_drop(conn);
+		goto unlock;
+	}
+
+	/* Try reading the encryption key size for encrypted ACL links */
+	if (!ev->status && ev->encrypt && conn->type == ACL_LINK) {
+		struct hci_cp_read_enc_key_size cp;
+		struct hci_request req;
+
+		/* Only send HCI_Read_Encryption_Key_Size if the
+		 * controller really supports it. If it doesn't, assume
+		 * the default size (16).
+		 */
+		if (!(hdev->commands[20] & 0x10)) {
+			conn->enc_key_size = HCI_LINK_KEY_SIZE;
+			goto notify;
+		}
+
+		hci_req_init(&req, hdev);
+
+		cp.handle = cpu_to_le16(conn->handle);
+		hci_req_add(&req, HCI_OP_READ_ENC_KEY_SIZE, sizeof(cp), &cp);
+
+		if (hci_req_run_skb(&req, read_enc_key_size_complete)) {
+			BT_ERR("Sending HCI Read Encryption Key Size failed");
+			conn->enc_key_size = HCI_LINK_KEY_SIZE;
+			goto notify;
+		}
+
+		goto unlock;
+	}
+
+notify:
 	if (conn->state == BT_CONFIG) {
 		if (!ev->status)
 			conn->state = BT_CONNECTED;
-
-		/* In Secure Connections Only mode, do not allow any
-		 * connections that are not encrypted with AES-CCM
-		 * using a P-256 authenticated combination key.
-		 */
-		if (hci_dev_test_flag(hdev, HCI_SC_ONLY) &&
-		    (!test_bit(HCI_CONN_AES_CCM, &conn->flags) ||
-		     conn->key_type != HCI_LK_AUTH_COMBINATION_P256)) {
-			hci_connect_cfm(conn, HCI_ERROR_AUTH_FAILURE);
-			hci_conn_drop(conn);
-			goto unlock;
-		}
 
 		hci_connect_cfm(conn, ev->status);
 		hci_conn_drop(conn);
@@ -2912,10 +2903,6 @@ static void hci_cmd_complete_evt(struct hci_dev *hdev, struct sk_buff *skb,
 		hci_cc_read_clock(hdev, skb);
 		break;
 
-	case HCI_OP_READ_LOCAL_AMP_ASSOC:
-		hci_cc_read_local_amp_assoc(hdev, skb);
-		break;
-
 	case HCI_OP_READ_INQ_RSP_TX_POWER:
 		hci_cc_read_inq_rsp_tx_power(hdev, skb);
 		break;
@@ -3020,10 +3007,6 @@ static void hci_cmd_complete_evt(struct hci_dev *hdev, struct sk_buff *skb,
 		hci_cc_set_adv_param(hdev, skb);
 		break;
 
-	case HCI_OP_WRITE_REMOTE_AMP_ASSOC:
-		hci_cc_write_remote_amp_assoc(hdev, skb);
-		break;
-
 	case HCI_OP_READ_RSSI:
 		hci_cc_read_rssi(hdev, skb);
 		break;
@@ -3105,14 +3088,6 @@ static void hci_cmd_status_evt(struct hci_dev *hdev, struct sk_buff *skb,
 
 	case HCI_OP_SETUP_SYNC_CONN:
 		hci_cs_setup_sync_conn(hdev, ev->status);
-		break;
-
-	case HCI_OP_CREATE_PHY_LINK:
-		hci_cs_create_phylink(hdev, ev->status);
-		break;
-
-	case HCI_OP_ACCEPT_PHY_LINK:
-		hci_cs_accept_phylink(hdev, ev->status);
 		break;
 
 	case HCI_OP_SNIFF_MODE:
@@ -4313,6 +4288,23 @@ unlock:
 	hci_dev_unlock(hdev);
 }
 
+#if IS_ENABLED(CONFIG_BT_HS)
+static void hci_chan_selected_evt(struct hci_dev *hdev, struct sk_buff *skb)
+{
+	struct hci_ev_channel_selected *ev = (void *)skb->data;
+	struct hci_conn *hcon;
+
+	BT_DBG("%s handle 0x%2.2x", hdev->name, ev->phy_handle);
+
+	skb_pull(skb, sizeof(*ev));
+
+	hcon = hci_conn_hash_lookup_handle(hdev, ev->phy_handle);
+	if (!hcon)
+		return;
+
+	amp_read_loc_assoc_final_data(hdev, hcon);
+}
+
 static void hci_phy_link_complete_evt(struct hci_dev *hdev,
 				      struct sk_buff *skb)
 {
@@ -4436,6 +4428,7 @@ static void hci_disconn_phylink_complete_evt(struct hci_dev *hdev,
 
 	hci_dev_unlock(hdev);
 }
+#endif
 
 static void hci_le_conn_complete_evt(struct hci_dev *hdev, struct sk_buff *skb)
 {
@@ -4955,7 +4948,8 @@ static void hci_le_ltk_request_evt(struct hci_dev *hdev, struct sk_buff *skb)
 			goto not_found;
 	}
 
-	memcpy(cp.ltk, ltk->val, sizeof(ltk->val));
+	memcpy(cp.ltk, ltk->val, ltk->enc_size);
+	memset(cp.ltk + ltk->enc_size, 0, sizeof(cp.ltk) - ltk->enc_size);
 	cp.handle = cpu_to_le16(conn->handle);
 
 	conn->pending_sec_level = smp_ltk_sec_level(ltk);
@@ -5117,22 +5111,6 @@ static void hci_le_meta_evt(struct hci_dev *hdev, struct sk_buff *skb)
 	default:
 		break;
 	}
-}
-
-static void hci_chan_selected_evt(struct hci_dev *hdev, struct sk_buff *skb)
-{
-	struct hci_ev_channel_selected *ev = (void *) skb->data;
-	struct hci_conn *hcon;
-
-	BT_DBG("%s handle 0x%2.2x", hdev->name, ev->phy_handle);
-
-	skb_pull(skb, sizeof(*ev));
-
-	hcon = hci_conn_hash_lookup_handle(hdev, ev->phy_handle);
-	if (!hcon)
-		return;
-
-	amp_read_loc_assoc_final_data(hdev, hcon);
 }
 
 static bool hci_get_cmd_complete(struct hci_dev *hdev, u16 opcode,
@@ -5355,12 +5333,13 @@ void hci_event_packet(struct hci_dev *hdev, struct sk_buff *skb)
 		hci_le_meta_evt(hdev, skb);
 		break;
 
-	case HCI_EV_CHANNEL_SELECTED:
-		hci_chan_selected_evt(hdev, skb);
-		break;
-
 	case HCI_EV_REMOTE_OOB_DATA_REQUEST:
 		hci_remote_oob_data_request_evt(hdev, skb);
+		break;
+
+#if IS_ENABLED(CONFIG_BT_HS)
+	case HCI_EV_CHANNEL_SELECTED:
+		hci_chan_selected_evt(hdev, skb);
 		break;
 
 	case HCI_EV_PHY_LINK_COMPLETE:
@@ -5378,6 +5357,7 @@ void hci_event_packet(struct hci_dev *hdev, struct sk_buff *skb)
 	case HCI_EV_DISCONN_PHY_LINK_COMPLETE:
 		hci_disconn_phylink_complete_evt(hdev, skb);
 		break;
+#endif
 
 	case HCI_EV_NUM_COMP_BLOCKS:
 		hci_num_comp_blocks_evt(hdev, skb);

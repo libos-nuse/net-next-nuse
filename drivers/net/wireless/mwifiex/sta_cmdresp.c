@@ -599,6 +599,7 @@ static int mwifiex_ret_802_11_key_material_v1(struct mwifiex_private *priv,
 				    "info: key: GTK is set\n");
 			priv->wpa_is_gtk_set = true;
 			priv->scan_block = false;
+			priv->port_open = true;
 		}
 	}
 
@@ -629,6 +630,7 @@ static int mwifiex_ret_802_11_key_material_v2(struct mwifiex_private *priv,
 			mwifiex_dbg(priv->adapter, INFO, "info: key: GTK is set\n");
 			priv->wpa_is_gtk_set = true;
 			priv->scan_block = false;
+			priv->port_open = true;
 		}
 	}
 
@@ -958,6 +960,27 @@ static int mwifiex_ret_subsc_evt(struct mwifiex_private *priv,
 	return 0;
 }
 
+static int mwifiex_ret_uap_sta_list(struct mwifiex_private *priv,
+				    struct host_cmd_ds_command *resp)
+{
+	struct host_cmd_ds_sta_list *sta_list =
+		&resp->params.sta_list;
+	struct mwifiex_ie_types_sta_info *sta_info = (void *)&sta_list->tlv;
+	int i;
+	struct mwifiex_sta_node *sta_node;
+
+	for (i = 0; i < sta_list->sta_count; i++) {
+		sta_node = mwifiex_get_sta_entry(priv, sta_info->mac);
+		if (unlikely(!sta_node))
+			continue;
+
+		sta_node->stats.rssi = sta_info->rssi;
+		sta_info++;
+	}
+
+	return 0;
+}
+
 /* This function handles the command response of set_cfg_data */
 static int mwifiex_ret_cfg_data(struct mwifiex_private *priv,
 				struct host_cmd_ds_command *resp)
@@ -1148,6 +1171,9 @@ int mwifiex_process_sta_cmdresp(struct mwifiex_private *priv, u16 cmdresp_no,
 		break;
 	case HostCmd_CMD_UAP_SYS_CONFIG:
 		break;
+	case HOST_CMD_APCMD_STA_LIST:
+		ret = mwifiex_ret_uap_sta_list(priv, resp);
+		break;
 	case HostCmd_CMD_UAP_BSS_START:
 		adapter->tx_lock_flag = false;
 		adapter->pps_uapsd_mode = false;
@@ -1159,17 +1185,22 @@ int mwifiex_process_sta_cmdresp(struct mwifiex_private *priv, u16 cmdresp_no,
 		break;
 	case HostCmd_CMD_UAP_STA_DEAUTH:
 		break;
+	case HOST_CMD_APCMD_SYS_RESET:
+		break;
 	case HostCmd_CMD_MEF_CFG:
 		break;
 	case HostCmd_CMD_COALESCE_CFG:
 		break;
 	case HostCmd_CMD_TDLS_OPER:
 		ret = mwifiex_ret_tdls_oper(priv, resp);
+	case HostCmd_CMD_MC_POLICY:
 		break;
 	case HostCmd_CMD_CHAN_REPORT_REQUEST:
 		break;
 	case HostCmd_CMD_SDIO_SP_RX_AGGR_CFG:
 		ret = mwifiex_ret_sdio_rx_aggr_cfg(priv, resp);
+		break;
+	case HostCmd_CMD_TDLS_CONFIG:
 		break;
 	default:
 		mwifiex_dbg(adapter, ERROR,

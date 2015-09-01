@@ -21,6 +21,7 @@ static char proc_root_data[sizeof(struct proc_dir_entry) + 4];
 
 static struct proc_dir_entry *proc_root_sim  =
 	(struct proc_dir_entry *)proc_root_data;
+extern const struct inode_operations proc_link_inode_operations;
 
 void lib_proc_net_initialize(void)
 {
@@ -28,6 +29,7 @@ void lib_proc_net_initialize(void)
 	strcpy(proc_root_sim->name, "net");
 	proc_root_sim->mode = S_IFDIR | S_IRUGO | S_IXUGO;
 	proc_root_sim->subdir = RB_ROOT;
+	proc_root_sim->proc_iops = &proc_link_inode_operations;
 	init_net.proc_net = proc_root_sim;
 	init_net.proc_net_stat = proc_mkdir("stat", proc_root_sim);
 }

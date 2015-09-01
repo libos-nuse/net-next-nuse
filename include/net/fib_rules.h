@@ -19,6 +19,7 @@ struct fib_rule {
 	u8			action;
 	/* 3 bytes hole, try to use */
 	u32			target;
+	__be64			tun_id;
 	struct fib_rule __rcu	*ctarget;
 	struct net		*fr_net;
 
@@ -36,7 +37,8 @@ struct fib_lookup_arg {
 	void			*result;
 	struct fib_rule		*rule;
 	int			flags;
-#define FIB_LOOKUP_NOREF	1
+#define FIB_LOOKUP_NOREF		1
+#define FIB_LOOKUP_IGNORE_LINKSTATE	2
 };
 
 struct fib_rules_ops {

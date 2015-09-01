@@ -211,6 +211,8 @@ enum {
 	MLX4_DEV_CAP_FLAG2_ETS_CFG		= 1LL <<  26,
 	MLX4_DEV_CAP_FLAG2_PORT_BEACON		= 1LL <<  27,
 	MLX4_DEV_CAP_FLAG2_IGNORE_FCS		= 1LL <<  28,
+	MLX4_DEV_CAP_FLAG2_PHV_EN		= 1LL <<  29,
+	MLX4_DEV_CAP_FLAG2_SKIP_OUTER_VLAN	= 1LL <<  30,
 };
 
 enum {
@@ -581,6 +583,7 @@ struct mlx4_caps {
 	u64			phys_port_id[MLX4_MAX_PORTS + 1];
 	int			tunnel_offload_mode;
 	u8			rx_checksum_flags_port[MLX4_MAX_PORTS + 1];
+	u8			phv_bit[MLX4_MAX_PORTS + 1];
 	u8			alloc_res_qp_mask;
 	u32			dmfs_high_rate_qpn_base;
 	u32			dmfs_high_rate_qpn_range;
@@ -771,6 +774,14 @@ union mlx4_ext_av {
 	struct mlx4_eth_av	eth;
 };
 
+/* Counters should be saturate once they reach their maximum value */
+#define ASSIGN_32BIT_COUNTER(counter, value) do {	\
+	if ((value) > U32_MAX)				\
+		counter = cpu_to_be32(U32_MAX);		\
+	else						\
+		counter = cpu_to_be32(value);		\
+} while (0)
+
 struct mlx4_counter {
 	u8	reserved1[3];
 	u8	counter_mode;
@@ -827,6 +838,12 @@ struct mlx4_dev {
 	u64			regid_promisc_array[MLX4_MAX_PORTS + 1];
 	u64			regid_allmulti_array[MLX4_MAX_PORTS + 1];
 	struct mlx4_vf_dev     *dev_vfs;
+};
+
+struct mlx4_clock_params {
+	u64 offset;
+	u8 bar;
+	u8 size;
 };
 
 struct mlx4_eqe {
@@ -957,6 +974,7 @@ struct mlx4_mad_ifc {
 			((dev)->caps.flags & MLX4_DEV_CAP_FLAG_IBOE))
 
 #define MLX4_INVALID_SLAVE_ID	0xFF
+#define MLX4_SINK_COUNTER_INDEX(dev)	(dev->caps.max_counters - 1)
 
 void handle_port_mgmt_change_event(struct work_struct *work);
 
@@ -1317,6 +1335,8 @@ int mlx4_SET_PORT_BEACON(struct mlx4_dev *dev, u8 port, u16 time);
 int mlx4_SET_PORT_fcs_check(struct mlx4_dev *dev, u8 port,
 			    u8 ignore_fcs_value);
 int mlx4_SET_PORT_VXLAN(struct mlx4_dev *dev, u8 port, u8 steering, int enable);
+int set_phv_bit(struct mlx4_dev *dev, u8 port, int new_val);
+int get_phv_bit(struct mlx4_dev *dev, u8 port, int *phv);
 int mlx4_find_cached_mac(struct mlx4_dev *dev, u8 port, u64 mac, int *idx);
 int mlx4_find_cached_vlan(struct mlx4_dev *dev, u8 port, u16 vid, int *idx);
 int mlx4_register_vlan(struct mlx4_dev *dev, u8 port, u16 vlan, int *index);
@@ -1347,6 +1367,7 @@ int mlx4_wol_write(struct mlx4_dev *dev, u64 config, int port);
 
 int mlx4_counter_alloc(struct mlx4_dev *dev, u32 *idx);
 void mlx4_counter_free(struct mlx4_dev *dev, u32 idx);
+int mlx4_get_default_counter_index(struct mlx4_dev *dev, int port);
 
 void mlx4_set_admin_guid(struct mlx4_dev *dev, __be64 guid, int entry,
 			 int port);
@@ -1487,5 +1508,8 @@ struct mlx4_ptys_reg {
 int mlx4_ACCESS_PTYS_REG(struct mlx4_dev *dev,
 			 enum mlx4_access_reg_method method,
 			 struct mlx4_ptys_reg *ptys_reg);
+
+int mlx4_get_internal_clock_params(struct mlx4_dev *dev,
+				   struct mlx4_clock_params *params);
 
 #endif /* MLX4_DEVICE_H */

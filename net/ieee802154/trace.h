@@ -40,6 +40,28 @@
  *			rdev->ops traces		     *
  *************************************************************/
 
+DECLARE_EVENT_CLASS(wpan_phy_only_evt,
+	TP_PROTO(struct wpan_phy *wpan_phy),
+	TP_ARGS(wpan_phy),
+	TP_STRUCT__entry(
+		WPAN_PHY_ENTRY
+	),
+	TP_fast_assign(
+		WPAN_PHY_ASSIGN;
+	),
+	TP_printk(WPAN_PHY_PR_FMT, WPAN_PHY_PR_ARG)
+);
+
+DEFINE_EVENT(wpan_phy_only_evt, 802154_rdev_suspend,
+	TP_PROTO(struct wpan_phy *wpan_phy),
+	TP_ARGS(wpan_phy)
+);
+
+DEFINE_EVENT(wpan_phy_only_evt, 802154_rdev_resume,
+	TP_PROTO(struct wpan_phy *wpan_phy),
+	TP_ARGS(wpan_phy)
+);
+
 TRACE_EVENT(802154_rdev_add_virtual_intf,
 	TP_PROTO(struct wpan_phy *wpan_phy, char *name,
 		 enum nl802154_iftype type, __le64 extended_addr),
@@ -56,7 +78,7 @@ TRACE_EVENT(802154_rdev_add_virtual_intf,
 		__entry->type = type;
 		__entry->extended_addr = extended_addr;
 	),
-	TP_printk(WPAN_PHY_PR_FMT ", virtual intf name: %s, type: %d, ea %llx",
+	TP_printk(WPAN_PHY_PR_FMT ", virtual intf name: %s, type: %d, extended addr: 0x%llx",
 		  WPAN_PHY_PR_ARG, __get_str(vir_intf_name), __entry->type,
 		  __le64_to_cpu(__entry->extended_addr))
 );
@@ -104,7 +126,7 @@ TRACE_EVENT(802154_rdev_set_tx_power,
 		WPAN_PHY_ASSIGN;
 		__entry->power = power;
 	),
-	TP_printk(WPAN_PHY_PR_FMT ", power: %d", WPAN_PHY_PR_ARG,
+	TP_printk(WPAN_PHY_PR_FMT ", mbm: %d", WPAN_PHY_PR_ARG,
 		  __entry->power)
 );
 
@@ -134,7 +156,7 @@ TRACE_EVENT(802154_rdev_set_cca_ed_level,
 		WPAN_PHY_ASSIGN;
 		__entry->ed_level = ed_level;
 	),
-	TP_printk(WPAN_PHY_PR_FMT ", ed_level: %d", WPAN_PHY_PR_ARG,
+	TP_printk(WPAN_PHY_PR_FMT ", ed level: %d", WPAN_PHY_PR_ARG,
 		  __entry->ed_level)
 );
 
@@ -167,7 +189,7 @@ DEFINE_EVENT_PRINT(802154_le16_template, 802154_rdev_set_short_addr,
 	TP_PROTO(struct wpan_phy *wpan_phy, struct wpan_dev *wpan_dev,
 		 __le16 le16arg),
 	TP_ARGS(wpan_phy, wpan_dev, le16arg),
-	TP_printk(WPAN_PHY_PR_FMT ", " WPAN_DEV_PR_FMT ", sa: 0x%04x",
+	TP_printk(WPAN_PHY_PR_FMT ", " WPAN_DEV_PR_FMT ", short addr: 0x%04x",
 		  WPAN_PHY_PR_ARG, WPAN_DEV_PR_ARG,
 		  __le16_to_cpu(__entry->le16arg))
 );
@@ -190,7 +212,7 @@ TRACE_EVENT(802154_rdev_set_backoff_exponent,
 	),
 
 	TP_printk(WPAN_PHY_PR_FMT ", " WPAN_DEV_PR_FMT
-		  ", min be: %d, max_be: %d", WPAN_PHY_PR_ARG,
+		  ", min be: %d, max be: %d", WPAN_PHY_PR_ARG,
 		  WPAN_DEV_PR_ARG, __entry->min_be, __entry->max_be)
 );
 

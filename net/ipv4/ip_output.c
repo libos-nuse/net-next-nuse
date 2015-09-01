@@ -172,7 +172,7 @@ int ip_build_and_send_pkt(struct sk_buff *skb, struct sock *sk,
 }
 EXPORT_SYMBOL_GPL(ip_build_and_send_pkt);
 
-static inline int ip_finish_output2(struct sock *sk, struct sk_buff *skb)
+static int ip_finish_output2(struct sock *sk, struct sk_buff *skb)
 {
 	struct dst_entry *dst = skb_dst(skb);
 	struct rtable *rt = (struct rtable *)dst;
@@ -549,10 +549,6 @@ int ip_do_fragment(struct sock *sk, struct sk_buff *skb,
 
 	hlen = iph->ihl * 4;
 	mtu = mtu - hlen;	/* Size of data space */
-#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
-	if (skb->nf_bridge)
-		mtu -= nf_bridge_mtu_reduction(skb);
-#endif
 	IPCB(skb)->flags |= IPSKB_FRAG_COMPLETE;
 
 	/* When frag_list is given, use it. First, check its validity:
@@ -1546,6 +1542,7 @@ void ip_send_unicast_reply(struct sock *sk, struct sk_buff *skb,
 	struct net *net = sock_net(sk);
 	struct sk_buff *nskb;
 	int err;
+	int oif;
 
 	if (__ip_options_echo(&replyopts.opt.opt, skb, sopt))
 		return;
@@ -1563,7 +1560,11 @@ void ip_send_unicast_reply(struct sock *sk, struct sk_buff *skb,
 			daddr = replyopts.opt.opt.faddr;
 	}
 
-	flowi4_init_output(&fl4, arg->bound_dev_if,
+	oif = arg->bound_dev_if;
+	if (!oif && netif_index_is_vrf(net, skb->skb_iif))
+		oif = skb->skb_iif;
+
+	flowi4_init_output(&fl4, oif,
 			   IP4_REPLY_MARK(net, skb->mark),
 			   RT_TOS(arg->tos),
 			   RT_SCOPE_UNIVERSE, ip_hdr(skb)->protocol,

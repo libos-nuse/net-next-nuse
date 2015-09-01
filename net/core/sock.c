@@ -131,6 +131,7 @@
 #include <linux/ipsec.h>
 #include <net/cls_cgroup.h>
 #include <net/netprio_cgroup.h>
+#include <linux/sock_diag.h>
 
 #include <linux/filter.h>
 
@@ -1423,7 +1424,7 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 }
 EXPORT_SYMBOL(sk_alloc);
 
-static void __sk_free(struct sock *sk)
+void sk_destruct(struct sock *sk)
 {
 	struct sk_filter *filter;
 
@@ -1449,6 +1450,14 @@ static void __sk_free(struct sock *sk)
 	if (likely(sk->sk_net_refcnt))
 		put_net(sock_net(sk));
 	sk_prot_free(sk->sk_prot_creator, sk);
+}
+
+static void __sk_free(struct sock *sk)
+{
+	if (unlikely(sock_diag_has_destroy_listeners(sk) && sk->sk_net_refcnt))
+		sock_diag_broadcast_destroy(sk);
+	else
+		sk_destruct(sk);
 }
 
 void sk_free(struct sock *sk)
@@ -1488,7 +1497,8 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		sock_copy(newsk, sk);
 
 		/* SANITY */
-		get_net(sock_net(newsk));
+		if (likely(newsk->sk_net_refcnt))
+			get_net(sock_net(newsk));
 		sk_node_init(&newsk->sk_node);
 		sock_lock_init(newsk);
 		bh_lock_sock(newsk);
@@ -1958,20 +1968,21 @@ static void __release_sock(struct sock *sk)
  * sk_wait_data - wait for data to arrive at sk_receive_queue
  * @sk:    sock to wait on
  * @timeo: for how long
+ * @skb:   last skb seen on sk_receive_queue
  *
  * Now socket state including sk->sk_err is changed only under lock,
  * hence we may omit checks after joining wait queue.
  * We check receive queue before schedule() only as optimization;
  * it is very likely that release_sock() added new data.
  */
-int sk_wait_data(struct sock *sk, long *timeo)
+int sk_wait_data(struct sock *sk, long *timeo, const struct sk_buff *skb)
 {
 	int rc;
 	DEFINE_WAIT(wait);
 
 	prepare_to_wait(sk_sleep(sk), &wait, TASK_INTERRUPTIBLE);
 	set_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
-	rc = sk_wait_event(sk, timeo, !skb_queue_empty(&sk->sk_receive_queue));
+	rc = sk_wait_event(sk, timeo, skb_peek_tail(&sk->sk_receive_queue) != skb);
 	clear_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
 	finish_wait(sk_sleep(sk), &wait);
 	return rc;
@@ -2260,7 +2271,6 @@ static void sock_def_write_space(struct sock *sk)
 
 static void sock_def_destruct(struct sock *sk)
 {
-	kfree(sk->sk_protinfo);
 }
 
 void sk_send_sigurg(struct sock *sk)

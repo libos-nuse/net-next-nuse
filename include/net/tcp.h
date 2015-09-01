@@ -730,11 +730,14 @@ struct tcp_skb_cb {
 		/* Note : tcp_tw_isn is used in input path only
 		 *	  (isn chosen by tcp_timewait_state_process())
 		 *
-		 * 	  tcp_gso_segs is used in write queue only,
-		 *	  cf tcp_skb_pcount()
+		 * 	  tcp_gso_segs/size are used in write queue only,
+		 *	  cf tcp_skb_pcount()/tcp_skb_mss()
 		 */
 		__u32		tcp_tw_isn;
-		__u32		tcp_gso_segs;
+		struct {
+			u16	tcp_gso_segs;
+			u16	tcp_gso_size;
+		};
 	};
 	__u8		tcp_flags;	/* TCP header flags. (tcp[13])	*/
 
@@ -790,10 +793,10 @@ static inline void tcp_skb_pcount_add(struct sk_buff *skb, int segs)
 	TCP_SKB_CB(skb)->tcp_gso_segs += segs;
 }
 
-/* This is valid iff tcp_skb_pcount() > 1. */
+/* This is valid iff skb is in write queue and tcp_skb_pcount() > 1. */
 static inline int tcp_skb_mss(const struct sk_buff *skb)
 {
-	return skb_shinfo(skb)->gso_size;
+	return TCP_SKB_CB(skb)->tcp_gso_size;
 }
 
 /* Events passed to congestion control interface */
@@ -986,6 +989,11 @@ static inline unsigned int tcp_packets_in_flight(const struct tcp_sock *tp)
 
 #define TCP_INFINITE_SSTHRESH	0x7fffffff
 
+static inline bool tcp_in_slow_start(const struct tcp_sock *tp)
+{
+	return tp->snd_cwnd < tp->snd_ssthresh;
+}
+
 static inline bool tcp_in_initial_slowstart(const struct tcp_sock *tp)
 {
 	return tp->snd_ssthresh >= TCP_INFINITE_SSTHRESH;
@@ -1062,7 +1070,7 @@ static inline bool tcp_is_cwnd_limited(const struct sock *sk)
 	const struct tcp_sock *tp = tcp_sk(sk);
 
 	/* If in slow start, ensure cwnd grows to twice what was ACKed. */
-	if (tp->snd_cwnd <= tp->snd_ssthresh)
+	if (tcp_in_slow_start(tp))
 		return tp->snd_cwnd < 2 * tp->max_packets_out;
 
 	return tp->is_cwnd_limited;
