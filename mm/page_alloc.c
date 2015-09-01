@@ -6515,6 +6515,7 @@ out:
 	mutex_unlock(&pcp_batch_high_lock);
 	return ret;
 }
+#endif
 
 #ifdef CONFIG_NUMA
 int hashdist = HASHDIST_DEFAULT;
