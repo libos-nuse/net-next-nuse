@@ -1,3 +1,7 @@
+#ifndef SLIB_ENV_H
+#define SLIB_ENV_H
+
+
 #include <linux/const.h>
 #include <asm/sections.h>
 
@@ -49,7 +53,6 @@ extern struct meminfo meminfo;
 //pgprot_t pgprot_s2;
 //pgprot_t pgprot_s2_device;
 
-
 void __init init_memory_system(void);
 
-
+#endif
