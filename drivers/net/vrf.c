@@ -27,6 +27,7 @@
 #include <linux/hashtable.h>
 
 #include <linux/inetdevice.h>
+#include <net/arp.h>
 #include <net/ip.h>
 #include <net/ip_fib.h>
 #include <net/ip6_route.h>
@@ -97,6 +98,12 @@ static bool is_ip_rx_frame(struct sk_buff *skb)
 	return false;
 }
 
+static void vrf_tx_error(struct net_device *vrf_dev, struct sk_buff *skb)
+{
+	vrf_dev->stats.tx_errors++;
+	kfree_skb(skb);
+}
+
 /* note: already called with rcu_read_lock */
 static rx_handler_result_t vrf_handle_frame(struct sk_buff **pskb)
 {
@@ -149,7 +156,8 @@ static struct rtnl_link_stats64 *vrf_get_stats64(struct net_device *dev,
 static netdev_tx_t vrf_process_v6_outbound(struct sk_buff *skb,
 					   struct net_device *dev)
 {
-	return 0;
+	vrf_tx_error(dev, skb);
+	return NET_XMIT_DROP;
 }
 
 static int vrf_send_v4_prep(struct sk_buff *skb, struct flowi4 *fl4,
@@ -206,19 +214,22 @@ static netdev_tx_t vrf_process_v4_outbound(struct sk_buff *skb,
 out:
 	return ret;
 err:
-	vrf_dev->stats.tx_errors++;
-	kfree_skb(skb);
+	vrf_tx_error(vrf_dev, skb);
 	goto out;
 }
 
 static netdev_tx_t is_ip_tx_frame(struct sk_buff *skb, struct net_device *dev)
 {
+	/* strip the ethernet header added for pass through VRF device */
+	__skb_pull(skb, skb_network_offset(skb));
+
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
 		return vrf_process_v4_outbound(skb, dev);
 	case htons(ETH_P_IPV6):
 		return vrf_process_v6_outbound(skb, dev);
 	default:
+		vrf_tx_error(dev, skb);
 		return NET_XMIT_DROP;
 	}
 }
@@ -241,9 +252,47 @@ static netdev_tx_t vrf_xmit(struct sk_buff *skb, struct net_device *dev)
 	return ret;
 }
 
-static netdev_tx_t vrf_finish(struct sock *sk, struct sk_buff *skb)
+/* modelled after ip_finish_output2 */
+static int vrf_finish_output(struct sock *sk, struct sk_buff *skb)
 {
-	return dev_queue_xmit(skb);
+	struct dst_entry *dst = skb_dst(skb);
+	struct rtable *rt = (struct rtable *)dst;
+	struct net_device *dev = dst->dev;
+	unsigned int hh_len = LL_RESERVED_SPACE(dev);
+	struct neighbour *neigh;
+	u32 nexthop;
+	int ret = -EINVAL;
+
+	/* Be paranoid, rather than too clever. */
+	if (unlikely(skb_headroom(skb) < hh_len && dev->header_ops)) {
+		struct sk_buff *skb2;
+
+		skb2 = skb_realloc_headroom(skb, LL_RESERVED_SPACE(dev));
+		if (!skb2) {
+			ret = -ENOMEM;
+			goto err;
+		}
+		if (skb->sk)
+			skb_set_owner_w(skb2, skb->sk);
+
+		consume_skb(skb);
+		skb = skb2;
+	}
+
+	rcu_read_lock_bh();
+
+	nexthop = (__force u32)rt_nexthop(rt, ip_hdr(skb)->daddr);
+	neigh = __ipv4_neigh_lookup_noref(dev, nexthop);
+	if (unlikely(!neigh))
+		neigh = __neigh_create(&arp_tbl, &nexthop, dev, false);
+	if (!IS_ERR(neigh))
+		ret = dst_neigh_output(dst, neigh, skb);
+
+	rcu_read_unlock_bh();
+err:
+	if (unlikely(ret < 0))
+		vrf_tx_error(skb->dev, skb);
+	return ret;
 }
 
 static int vrf_output(struct sock *sk, struct sk_buff *skb)
@@ -257,7 +306,7 @@ static int vrf_output(struct sock *sk, struct sk_buff *skb)
 
 	return NF_HOOK_COND(NFPROTO_IPV4, NF_INET_POST_ROUTING, sk, skb,
 			    NULL, dev,
-			    vrf_finish,
+			    vrf_finish_output,
 			    !(IPCB(skb)->flags & IPSKB_REROUTED));
 }
 
@@ -265,8 +314,7 @@ static void vrf_rtable_destroy(struct net_vrf *vrf)
 {
 	struct dst_entry *dst = (struct dst_entry *)vrf->rth;
 
-	if (dst)
-		dst_destroy(dst);
+	dst_destroy(dst);
 	vrf->rth = NULL;
 }
 
@@ -289,7 +337,6 @@ static struct rtable *vrf_rtable_create(struct net_device *dev)
 		rth->rt_uses_gateway = 0;
 		INIT_LIST_HEAD(&rth->rt_uncached);
 		rth->rt_uncached_list = NULL;
-		rth->rt_lwtstate = NULL;
 	}
 
 	return rth;
@@ -334,23 +381,18 @@ static struct slave *__vrf_find_slave_dev(struct slave_queue *queue,
 /* inverse of __vrf_insert_slave */
 static void __vrf_remove_slave(struct slave_queue *queue, struct slave *slave)
 {
-	dev_put(slave->dev);
 	list_del(&slave->list);
-	queue->num_slaves--;
 }
 
 static void __vrf_insert_slave(struct slave_queue *queue, struct slave *slave)
 {
-	dev_hold(slave->dev);
 	list_add(&slave->list, &queue->all_slaves);
-	queue->num_slaves++;
 }
 
 static int do_vrf_add_slave(struct net_device *dev, struct net_device *port_dev)
 {
 	struct net_vrf_dev *vrf_ptr = kmalloc(sizeof(*vrf_ptr), GFP_KERNEL);
 	struct slave *slave = kzalloc(sizeof(*slave), GFP_KERNEL);
-	struct slave *duplicate_slave;
 	struct net_vrf *vrf = netdev_priv(dev);
 	struct slave_queue *queue = &vrf->queue;
 	int ret = -ENOMEM;
@@ -359,17 +401,8 @@ static int do_vrf_add_slave(struct net_device *dev, struct net_device *port_dev)
 		goto out_fail;
 
 	slave->dev = port_dev;
-
 	vrf_ptr->ifindex = dev->ifindex;
 	vrf_ptr->tb_id = vrf->tb_id;
-
-	duplicate_slave = __vrf_find_slave_dev(queue, port_dev);
-	if (duplicate_slave) {
-		ret = -EBUSY;
-		goto out_fail;
-	}
-
-	__vrf_insert_slave(queue, slave);
 
 	/* register the packet handler for slave ports */
 	ret = netdev_rx_handler_register(port_dev, vrf_handle_frame, dev);
@@ -377,7 +410,7 @@ static int do_vrf_add_slave(struct net_device *dev, struct net_device *port_dev)
 		netdev_err(port_dev,
 			   "Device %s failed to register rx_handler\n",
 			   port_dev->name);
-		goto out_remove;
+		goto out_fail;
 	}
 
 	ret = netdev_master_upper_dev_link(port_dev, dev);
@@ -385,7 +418,7 @@ static int do_vrf_add_slave(struct net_device *dev, struct net_device *port_dev)
 		goto out_unregister;
 
 	port_dev->flags |= IFF_SLAVE;
-
+	__vrf_insert_slave(queue, slave);
 	rcu_assign_pointer(port_dev->vrf_ptr, vrf_ptr);
 	cycle_netdev(port_dev);
 
@@ -393,8 +426,6 @@ static int do_vrf_add_slave(struct net_device *dev, struct net_device *port_dev)
 
 out_unregister:
 	netdev_rx_handler_unregister(port_dev);
-out_remove:
-	__vrf_remove_slave(queue, slave);
 out_fail:
 	kfree(vrf_ptr);
 	kfree(slave);
@@ -403,8 +434,7 @@ out_fail:
 
 static int vrf_add_slave(struct net_device *dev, struct net_device *port_dev)
 {
-	if (!netif_is_vrf(dev) || netif_is_vrf(port_dev) ||
-	    vrf_is_slave(port_dev))
+	if (netif_is_vrf(port_dev) || vrf_is_slave(port_dev))
 		return -EINVAL;
 
 	return do_vrf_add_slave(dev, port_dev);
@@ -441,9 +471,6 @@ static int do_vrf_del_slave(struct net_device *dev, struct net_device *port_dev)
 
 static int vrf_del_slave(struct net_device *dev, struct net_device *port_dev)
 {
-	if (!netif_is_vrf(dev))
-		return -EINVAL;
-
 	return do_vrf_del_slave(dev, port_dev);
 }
 
@@ -459,8 +486,7 @@ static void vrf_dev_uninit(struct net_device *dev)
 	list_for_each_entry_safe(slave, next, head, list)
 		vrf_del_slave(dev, slave->dev);
 
-	if (dev->dstats)
-		free_percpu(dev->dstats);
+	free_percpu(dev->dstats);
 	dev->dstats = NULL;
 }
 
@@ -630,9 +656,8 @@ static int vrf_device_event(struct notifier_block *unused,
 		if (!vrf_ptr || netif_is_vrf(dev))
 			goto out;
 
-		vrf_dev = __dev_get_by_index(dev_net(dev), vrf_ptr->ifindex);
-		if (vrf_dev)
-			vrf_del_slave(vrf_dev, dev);
+		vrf_dev = netdev_master_upper_dev_get(dev);
+		vrf_del_slave(vrf_dev, dev);
 	}
 out:
 	return NOTIFY_DONE;
@@ -649,7 +674,7 @@ static int __init vrf_init_module(void)
 	vrf_dst_ops.kmem_cachep =
 		kmem_cache_create("vrf_ip_dst_cache",
 				  sizeof(struct rtable), 0,
-				  SLAB_HWCACHE_ALIGN | SLAB_PANIC,
+				  SLAB_HWCACHE_ALIGN,
 				  NULL);
 
 	if (!vrf_dst_ops.kmem_cachep)

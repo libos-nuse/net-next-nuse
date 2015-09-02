@@ -322,6 +322,9 @@ static const struct usb_device_id blacklist_table[] = {
 	{ USB_DEVICE(0x13d3, 0x3461), .driver_info = BTUSB_REALTEK },
 	{ USB_DEVICE(0x13d3, 0x3462), .driver_info = BTUSB_REALTEK },
 
+	/* Silicon Wave based devices */
+	{ USB_DEVICE(0x0c10, 0x0000), .driver_info = BTUSB_SWAVE },
+
 	{ }	/* Terminating entry */
 };
 
@@ -1578,7 +1581,7 @@ static int btusb_setup_intel(struct hci_dev *hdev)
 
 	/* fw_patch_num indicates the version of patch the device currently
 	 * have. If there is no patch data in the device, it is always 0x00.
-	 * So, if it is other than 0x00, no need to patch the deivce again.
+	 * So, if it is other than 0x00, no need to patch the device again.
 	 */
 	if (ver->fw_patch_num) {
 		BT_INFO("%s: Intel device is already patched. patch num: %02x",
@@ -2097,7 +2100,7 @@ static int btusb_setup_intel_new(struct hci_dev *hdev)
 
 		frag_len += sizeof(*cmd) + cmd->plen;
 
-		/* The paramter length of the secure send command requires
+		/* The parameter length of the secure send command requires
 		 * a 4 byte alignment. It happens so that the firmware file
 		 * contains proper Intel_NOP commands to align the fragments
 		 * as needed.

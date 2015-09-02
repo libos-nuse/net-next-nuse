@@ -2367,22 +2367,26 @@ static const struct smsc911x_ops shifted_smsc911x_ops = {
 static int smsc911x_probe_config(struct smsc911x_platform_config *config,
 				 struct device *dev)
 {
+	int phy_interface;
 	u32 width = 0;
+	int err;
 
-	if (!dev)
-		return -ENODEV;
-
-	config->phy_interface = device_get_phy_mode(dev);
+	phy_interface = device_get_phy_mode(dev);
+	if (phy_interface < 0)
+		phy_interface = PHY_INTERFACE_MODE_NA;
+	config->phy_interface = phy_interface;
 
 	device_get_mac_address(dev, config->mac, ETH_ALEN);
 
-	device_property_read_u32(dev, "reg-shift", &config->shift);
-
-	device_property_read_u32(dev, "reg-io-width", &width);
-	if (width == 4)
+	err = device_property_read_u32(dev, "reg-io-width", &width);
+	if (err == -ENXIO)
+		return err;
+	if (!err && width == 4)
 		config->flags |= SMSC911X_USE_32BIT;
 	else
 		config->flags |= SMSC911X_USE_16BIT;
+
+	device_property_read_u32(dev, "reg-shift", &config->shift);
 
 	if (device_property_present(dev, "smsc,irq-active-high"))
 		config->irq_polarity = SMSC911X_IRQ_POLARITY_ACTIVE_HIGH;
@@ -2424,7 +2428,10 @@ static int smsc911x_drv_probe(struct platform_device *pdev)
 	res_size = resource_size(res);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq <= 0) {
+	if (irq == -EPROBE_DEFER) {
+		retval = -EPROBE_DEFER;
+		goto out_0;
+	} else if (irq <= 0) {
 		pr_warn("Could not allocate irq resource\n");
 		retval = -ENODEV;
 		goto out_0;

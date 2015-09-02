@@ -519,7 +519,7 @@ static void ath10k_wmi_tlv_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_TLV_SERVICE_READY_EVENTID:
 		ath10k_wmi_event_service_ready(ar, skb);
-		break;
+		return;
 	case WMI_TLV_READY_EVENTID:
 		ath10k_wmi_event_ready(ar, skb);
 		break;
@@ -838,9 +838,9 @@ static int ath10k_wmi_tlv_op_pull_swba_ev(struct ath10k *ar,
 	return 0;
 }
 
-static int ath10k_wmi_tlv_op_pull_phyerr_ev(struct ath10k *ar,
-					    struct sk_buff *skb,
-					    struct wmi_phyerr_ev_arg *arg)
+static int ath10k_wmi_tlv_op_pull_phyerr_ev_hdr(struct ath10k *ar,
+						struct sk_buff *skb,
+						struct wmi_phyerr_hdr_arg *arg)
 {
 	const void **tb;
 	const struct wmi_tlv_phyerr_ev *ev;
@@ -862,10 +862,10 @@ static int ath10k_wmi_tlv_op_pull_phyerr_ev(struct ath10k *ar,
 		return -EPROTO;
 	}
 
-	arg->num_phyerrs  = ev->num_phyerrs;
-	arg->tsf_l32 = ev->tsf_l32;
-	arg->tsf_u32 = ev->tsf_u32;
-	arg->buf_len = ev->buf_len;
+	arg->num_phyerrs  = __le32_to_cpu(ev->num_phyerrs);
+	arg->tsf_l32 = __le32_to_cpu(ev->tsf_l32);
+	arg->tsf_u32 = __le32_to_cpu(ev->tsf_u32);
+	arg->buf_len = __le32_to_cpu(ev->buf_len);
 	arg->phyerrs = phyerrs;
 
 	kfree(tb);
@@ -1279,6 +1279,11 @@ ath10k_wmi_tlv_op_gen_pdev_set_rd(struct ath10k *ar,
 	return skb;
 }
 
+static enum wmi_txbf_conf ath10k_wmi_tlv_txbf_conf_scheme(struct ath10k *ar)
+{
+	return WMI_TXBF_CONF_AFTER_ASSOC;
+}
+
 static struct sk_buff *
 ath10k_wmi_tlv_op_gen_pdev_set_param(struct ath10k *ar, u32 param_id,
 				     u32 param_value)
@@ -1373,7 +1378,7 @@ static struct sk_buff *ath10k_wmi_tlv_op_gen_init(struct ath10k *ar)
 	cfg->rx_timeout_pri[1] = __cpu_to_le32(0x64);
 	cfg->rx_timeout_pri[2] = __cpu_to_le32(0x64);
 	cfg->rx_timeout_pri[3] = __cpu_to_le32(0x28);
-	cfg->rx_decap_mode = __cpu_to_le32(1);
+	cfg->rx_decap_mode = __cpu_to_le32(ar->wmi.rx_decap_mode);
 	cfg->scan_max_pending_reqs = __cpu_to_le32(4);
 	cfg->bmiss_offload_max_vdev = __cpu_to_le32(TARGET_TLV_NUM_VDEVS);
 	cfg->roam_offload_max_vdev = __cpu_to_le32(TARGET_TLV_NUM_VDEVS);
@@ -3402,12 +3407,14 @@ static const struct wmi_ops wmi_tlv_ops = {
 	.pull_vdev_start = ath10k_wmi_tlv_op_pull_vdev_start_ev,
 	.pull_peer_kick = ath10k_wmi_tlv_op_pull_peer_kick_ev,
 	.pull_swba = ath10k_wmi_tlv_op_pull_swba_ev,
-	.pull_phyerr = ath10k_wmi_tlv_op_pull_phyerr_ev,
+	.pull_phyerr_hdr = ath10k_wmi_tlv_op_pull_phyerr_ev_hdr,
+	.pull_phyerr = ath10k_wmi_op_pull_phyerr_ev,
 	.pull_svc_rdy = ath10k_wmi_tlv_op_pull_svc_rdy_ev,
 	.pull_rdy = ath10k_wmi_tlv_op_pull_rdy_ev,
 	.pull_fw_stats = ath10k_wmi_tlv_op_pull_fw_stats,
 	.pull_roam_ev = ath10k_wmi_tlv_op_pull_roam_ev,
 	.pull_wow_event = ath10k_wmi_tlv_op_pull_wow_ev,
+	.get_txbf_conf_scheme = ath10k_wmi_tlv_txbf_conf_scheme,
 
 	.gen_pdev_suspend = ath10k_wmi_tlv_op_gen_pdev_suspend,
 	.gen_pdev_resume = ath10k_wmi_tlv_op_gen_pdev_resume,

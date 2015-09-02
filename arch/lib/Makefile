@@ -102,7 +102,7 @@ kernel/bpf_to_keep=bpf/core.o
 mm/_to_keep=util.o list_lru.o slib.o page_alloc.o memblock.o mmzone.o slib_env.o \
 nobootmem.o highmem.o oom_kill.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
-crc32c_generic.o
+crc32c_generic.o rng.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o
 drivers/net/_to_keep=loopback.o
 lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
@@ -172,7 +172,7 @@ OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(built
 export OBJS KERNEL_LIB COV covl_yes covl_no
 
 # objcopy trick is taken from rumpkernel
-EXP_SYMRENAME=rump|RUMP|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_GLOBAL_OFFSET_TABLE'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
+EXP_SYMRENAME=rump|RUMP|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_end|_GLOBAL_OFFSET_TABLE'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
 
 quiet_cmd_cc = CC      $@
       cmd_cc = 	mkdir -p $(dir $@);	\

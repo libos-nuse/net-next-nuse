@@ -586,6 +586,21 @@ tcp_min_tso_segs - INTEGER
 	if available window is too small.
 	Default: 2
 
+tcp_pacing_ss_ratio - INTEGER
+	sk->sk_pacing_rate is set by TCP stack using a ratio applied
+	to current rate. (current_rate = cwnd * mss / srtt)
+	If TCP is in slow start, tcp_pacing_ss_ratio is applied
+	to let TCP probe for bigger speeds, assuming cwnd can be
+	doubled every other RTT.
+	Default: 200
+
+tcp_pacing_ca_ratio - INTEGER
+	sk->sk_pacing_rate is set by TCP stack using a ratio applied
+	to current rate. (current_rate = cwnd * mss / srtt)
+	If TCP is in congestion avoidance phase, tcp_pacing_ca_ratio
+	is applied to conservatively probe for bigger throughput.
+	Default: 120
+
 tcp_tso_win_divisor - INTEGER
 	This allows control over what percentage of the congestion window
 	can be consumed by a single TSO frame.
@@ -1181,6 +1196,16 @@ tag - INTEGER
 	Allows you to write a number, which can be used as required.
 	Default value is 0.
 
+xfrm4_gc_thresh - INTEGER
+	The threshold at which we will start garbage collecting for IPv4
+	destination cache entries.  At twice this value the system will
+	refuse new allocations.
+
+igmp_link_local_mcast_reports - BOOLEAN
+	Enable IGMP reports for link local multicast groups in the
+	224.0.0.X range.
+	Default TRUE
+
 Alexey Kuznetsov.
 kuznet@ms2.inr.ac.ru
 
@@ -1616,6 +1641,11 @@ ratelimit - INTEGER
 	0 to disable any limiting,
 	otherwise the minimal space between responses in milliseconds.
 	Default: 1000
+
+xfrm6_gc_thresh - INTEGER
+	The threshold at which we will start garbage collecting for IPv6
+	destination cache entries.  At twice this value the system will
+	refuse new allocations.
 
 
 IPv6 Update by:

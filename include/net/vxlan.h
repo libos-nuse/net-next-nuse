@@ -161,6 +161,7 @@ struct vxlan_dev {
 	struct timer_list age_timer;
 	spinlock_t	  hash_lock;
 	unsigned int	  addrcnt;
+	struct gro_cells  gro_cells;
 
 	struct vxlan_config	cfg;
 
@@ -240,4 +241,10 @@ static inline void vxlan_get_rx_port(struct net_device *netdev)
 {
 }
 #endif
+
+static inline unsigned short vxlan_get_sk_family(struct vxlan_sock *vs)
+{
+	return vs->sock->sk->sk_family;
+}
+
 #endif

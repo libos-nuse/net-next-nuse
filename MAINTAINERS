@@ -158,6 +158,7 @@ L:	linux-wpan@vger.kernel.org
 S:	Maintained
 F:	net/6lowpan/
 F:	include/net/6lowpan.h
+F:	Documentation/networking/6lowpan.txt
 
 6PACK NETWORK DRIVER FOR AX.25
 M:	Andreas Koensgen <ajk@comnets.uni-bremen.de>
@@ -927,7 +928,7 @@ M:	Sunil Goutham <sgoutham@cavium.com>
 M:	Robert Richter <rric@kernel.org>
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Supported
-F:	drivers/net/ethernet/cavium/
+F:	drivers/net/ethernet/cavium/thunder/
 
 ARM/CIRRUS LOGIC CLPS711X ARM ARCHITECTURE
 M:	Alexander Shiyan <shc_work@mail.ru>
@@ -2542,7 +2543,6 @@ M:     Raghu Vatsavayi <raghu.vatsavayi@caviumnetworks.com>
 L:     netdev@vger.kernel.org
 W:     http://www.cavium.com
 S:     Supported
-F:     drivers/net/ethernet/cavium/
 F:     drivers/net/ethernet/cavium/liquidio/
 
 CC2520 IEEE-802.15.4 RADIO DRIVER
@@ -3586,6 +3586,15 @@ L:	dri-devel@lists.freedesktop.org
 S:	Maintained
 F:	drivers/gpu/drm/rockchip/
 F:	Documentation/devicetree/bindings/video/rockchip*
+
+DRM DRIVERS FOR STI
+M:	Benjamin Gaignard <benjamin.gaignard@linaro.org>
+M:	Vincent Abriou <vincent.abriou@st.com>
+L:	dri-devel@lists.freedesktop.org
+T:	git http://git.linaro.org/people/benjamin.gaignard/kernel.git
+S:	Maintained
+F:	drivers/gpu/drm/sti
+F:	Documentation/devicetree/bindings/gpu/st,stih4xx.txt
 
 DSBR100 USB FM RADIO DRIVER
 M:	Alexey Klimov <klimov.linux@gmail.com>
@@ -5840,6 +5849,7 @@ S:	Odd Fixes
 
 KERNEL NFSD, SUNRPC, AND LOCKD SERVERS
 M:	"J. Bruce Fields" <bfields@fieldses.org>
+M:	Jeff Layton <jlayton@poochiereds.net>
 L:	linux-nfs@vger.kernel.org
 W:	http://nfs.sourceforge.net/
 S:	Supported
@@ -8880,6 +8890,12 @@ L:	linux-media@vger.kernel.org
 S:	Supported
 F:	drivers/media/i2c/s5k5baf.c
 
+SAMSUNG S3FWRN5 NFC DRIVER
+M:	Robert Baldyga <r.baldyga@samsung.com>
+L:	linux-nfc@lists.01.org (moderated for non-subscribers)
+S:	Supported
+F:	drivers/nfc/s3fwrn5
+
 SAMSUNG SOC CLOCK DRIVERS
 M:	Sylwester Nawrocki <s.nawrocki@samsung.com>
 M:	Tomasz Figa <tomasz.figa@gmail.com>
@@ -11046,7 +11062,7 @@ F:	drivers/input/mouse/vmmouse.c
 F:	drivers/input/mouse/vmmouse.h
 
 VMWARE VMXNET3 ETHERNET DRIVER
-M:	Shreyas Bhatewara <sbhatewara@vmware.com>
+M:	Shrikrishna Khare <skhare@vmware.com>
 M:	"VMware, Inc." <pv-drivers@vmware.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
@@ -11070,6 +11086,14 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/broonie/regulator.git
 S:	Supported
 F:	drivers/regulator/
 F:	include/linux/regulator/
+
+VRF
+M:	David Ahern <dsa@cumulusnetworks.com>
+M:	Shrijeet Mukherjee <shm@cumulusnetworks.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	drivers/net/vrf.c
+F:	include/net/vrf.h
 
 VT1211 HARDWARE MONITOR DRIVER
 M:	Juerg Haefliger <juergh@gmail.com>

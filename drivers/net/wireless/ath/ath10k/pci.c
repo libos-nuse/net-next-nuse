@@ -58,12 +58,15 @@ MODULE_PARM_DESC(reset_mode, "0: auto, 1: warm only (default: 0)");
 #define ATH10K_PCI_NUM_WARM_RESET_ATTEMPTS 3
 
 #define QCA988X_2_0_DEVICE_ID	(0x003c)
+#define QCA6164_2_1_DEVICE_ID	(0x0041)
 #define QCA6174_2_1_DEVICE_ID	(0x003e)
 #define QCA99X0_2_0_DEVICE_ID	(0x0040)
 
 static const struct pci_device_id ath10k_pci_id_table[] = {
 	{ PCI_VDEVICE(ATHEROS, QCA988X_2_0_DEVICE_ID) }, /* PCI-E QCA988X V2 */
+	{ PCI_VDEVICE(ATHEROS, QCA6164_2_1_DEVICE_ID) }, /* PCI-E QCA6164 V2.1 */
 	{ PCI_VDEVICE(ATHEROS, QCA6174_2_1_DEVICE_ID) }, /* PCI-E QCA6174 V2.1 */
+	{ PCI_VDEVICE(ATHEROS, QCA99X0_2_0_DEVICE_ID) }, /* PCI-E QCA99X0 V2 */
 	{0}
 };
 
@@ -73,11 +76,20 @@ static const struct ath10k_pci_supp_chip ath10k_pci_supp_chips[] = {
 	 * because of that.
 	 */
 	{ QCA988X_2_0_DEVICE_ID, QCA988X_HW_2_0_CHIP_ID_REV },
+
+	{ QCA6164_2_1_DEVICE_ID, QCA6174_HW_2_1_CHIP_ID_REV },
+	{ QCA6164_2_1_DEVICE_ID, QCA6174_HW_2_2_CHIP_ID_REV },
+	{ QCA6164_2_1_DEVICE_ID, QCA6174_HW_3_0_CHIP_ID_REV },
+	{ QCA6164_2_1_DEVICE_ID, QCA6174_HW_3_1_CHIP_ID_REV },
+	{ QCA6164_2_1_DEVICE_ID, QCA6174_HW_3_2_CHIP_ID_REV },
+
 	{ QCA6174_2_1_DEVICE_ID, QCA6174_HW_2_1_CHIP_ID_REV },
 	{ QCA6174_2_1_DEVICE_ID, QCA6174_HW_2_2_CHIP_ID_REV },
 	{ QCA6174_2_1_DEVICE_ID, QCA6174_HW_3_0_CHIP_ID_REV },
 	{ QCA6174_2_1_DEVICE_ID, QCA6174_HW_3_1_CHIP_ID_REV },
 	{ QCA6174_2_1_DEVICE_ID, QCA6174_HW_3_2_CHIP_ID_REV },
+
+	{ QCA99X0_2_0_DEVICE_ID, QCA99X0_HW_2_0_CHIP_ID_REV },
 };
 
 static void ath10k_pci_buffer_cleanup(struct ath10k *ar);
@@ -1665,8 +1677,10 @@ static int ath10k_pci_hif_exchange_bmi_msg(struct ath10k *ar,
 
 	req_paddr = dma_map_single(ar->dev, treq, req_len, DMA_TO_DEVICE);
 	ret = dma_mapping_error(ar->dev, req_paddr);
-	if (ret)
+	if (ret) {
+		ret = -EIO;
 		goto err_dma;
+	}
 
 	if (resp && resp_len) {
 		tresp = kzalloc(*resp_len, GFP_KERNEL);
@@ -1678,8 +1692,10 @@ static int ath10k_pci_hif_exchange_bmi_msg(struct ath10k *ar,
 		resp_paddr = dma_map_single(ar->dev, tresp, *resp_len,
 					    DMA_FROM_DEVICE);
 		ret = dma_mapping_error(ar->dev, resp_paddr);
-		if (ret)
+		if (ret) {
+			ret = EIO;
 			goto err_req;
+		}
 
 		xfer.wait_for_resp = true;
 		xfer.resp_len = 0;
@@ -1808,6 +1824,7 @@ static int ath10k_pci_get_num_banks(struct ath10k *ar)
 	case QCA988X_2_0_DEVICE_ID:
 	case QCA99X0_2_0_DEVICE_ID:
 		return 1;
+	case QCA6164_2_1_DEVICE_ID:
 	case QCA6174_2_1_DEVICE_ID:
 		switch (MS(ar->chip_id, SOC_CHIP_ID_REV)) {
 		case QCA6174_HW_1_0_CHIP_ID_REV:
@@ -2761,7 +2778,6 @@ static int ath10k_pci_wait_for_target_init(struct ath10k *ar)
 
 static int ath10k_pci_cold_reset(struct ath10k *ar)
 {
-	int i;
 	u32 val;
 
 	ath10k_dbg(ar, ATH10K_DBG_BOOT, "boot cold reset\n");
@@ -2777,23 +2793,18 @@ static int ath10k_pci_cold_reset(struct ath10k *ar)
 	val |= 1;
 	ath10k_pci_reg_write32(ar, SOC_GLOBAL_RESET_ADDRESS, val);
 
-	for (i = 0; i < ATH_PCI_RESET_WAIT_MAX; i++) {
-		if (ath10k_pci_reg_read32(ar, RTC_STATE_ADDRESS) &
-					  RTC_STATE_COLD_RESET_MASK)
-			break;
-		msleep(1);
-	}
+	/* After writing into SOC_GLOBAL_RESET to put device into
+	 * reset and pulling out of reset pcie may not be stable
+	 * for any immediate pcie register access and cause bus error,
+	 * add delay before any pcie access request to fix this issue.
+	 */
+	msleep(20);
 
 	/* Pull Target, including PCIe, out of RESET. */
 	val &= ~1;
 	ath10k_pci_reg_write32(ar, SOC_GLOBAL_RESET_ADDRESS, val);
 
-	for (i = 0; i < ATH_PCI_RESET_WAIT_MAX; i++) {
-		if (!(ath10k_pci_reg_read32(ar, RTC_STATE_ADDRESS) &
-					    RTC_STATE_COLD_RESET_MASK))
-			break;
-		msleep(1);
-	}
+	msleep(20);
 
 	ath10k_dbg(ar, ATH10K_DBG_BOOT, "boot cold reset complete\n");
 
@@ -2902,6 +2913,7 @@ static int ath10k_pci_probe(struct pci_dev *pdev,
 	case QCA988X_2_0_DEVICE_ID:
 		hw_rev = ATH10K_HW_QCA988X;
 		break;
+	case QCA6164_2_1_DEVICE_ID:
 	case QCA6174_2_1_DEVICE_ID:
 		hw_rev = ATH10K_HW_QCA6174;
 		break;
@@ -2926,6 +2938,7 @@ static int ath10k_pci_probe(struct pci_dev *pdev,
 	ar_pci->pdev = pdev;
 	ar_pci->dev = &pdev->dev;
 	ar_pci->ar = ar;
+	ar->dev_id = pci_dev->device;
 
 	if (pdev->subsystem_vendor || pdev->subsystem_device)
 		scnprintf(ar->spec_board_id, sizeof(ar->spec_board_id),

@@ -286,21 +286,6 @@ enum rt_class_t {
 
 /* Routing message attributes */
 
-enum ip_tunnel_t {
-	IP_TUN_UNSPEC,
-	IP_TUN_ID,
-	IP_TUN_DST,
-	IP_TUN_SRC,
-	IP_TUN_TTL,
-	IP_TUN_TOS,
-	IP_TUN_SPORT,
-	IP_TUN_DPORT,
-	IP_TUN_FLAGS,
-	__IP_TUN_MAX,
-};
-
-#define IP_TUN_MAX (__IP_TUN_MAX - 1)
-
 enum rtattr_type_t {
 	RTA_UNSPEC,
 	RTA_DST,
@@ -433,10 +418,13 @@ enum {
 
 #define RTAX_MAX (__RTAX_MAX - 1)
 
-#define RTAX_FEATURE_ECN	0x00000001
-#define RTAX_FEATURE_SACK	0x00000002
-#define RTAX_FEATURE_TIMESTAMP	0x00000004
-#define RTAX_FEATURE_ALLFRAG	0x00000008
+#define RTAX_FEATURE_ECN	(1 << 0)
+#define RTAX_FEATURE_SACK	(1 << 1)
+#define RTAX_FEATURE_TIMESTAMP	(1 << 2)
+#define RTAX_FEATURE_ALLFRAG	(1 << 3)
+
+#define RTAX_FEATURE_MASK	(RTAX_FEATURE_ECN | RTAX_FEATURE_SACK | \
+				 RTAX_FEATURE_TIMESTAMP | RTAX_FEATURE_ALLFRAG)
 
 struct rta_session {
 	__u8	proto;

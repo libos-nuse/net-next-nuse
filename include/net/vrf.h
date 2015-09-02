@@ -24,7 +24,6 @@ struct slave {
 
 struct slave_queue {
 	struct list_head	all_slaves;
-	int			num_slaves;
 };
 
 struct net_vrf {
@@ -44,13 +43,24 @@ static inline int vrf_master_ifindex_rcu(const struct net_device *dev)
 	if (!dev)
 		return 0;
 
-	if (netif_is_vrf(dev))
+	if (netif_is_vrf(dev)) {
 		ifindex = dev->ifindex;
-	else {
+	} else {
 		vrf_ptr = rcu_dereference(dev->vrf_ptr);
 		if (vrf_ptr)
 			ifindex = vrf_ptr->ifindex;
 	}
+
+	return ifindex;
+}
+
+static inline int vrf_master_ifindex(const struct net_device *dev)
+{
+	int ifindex;
+
+	rcu_read_lock();
+	ifindex = vrf_master_ifindex_rcu(dev);
+	rcu_read_unlock();
 
 	return ifindex;
 }
@@ -76,6 +86,25 @@ static inline int vrf_dev_table(const struct net_device *dev)
 
 	rcu_read_lock();
 	tb_id = vrf_dev_table_rcu(dev);
+	rcu_read_unlock();
+
+	return tb_id;
+}
+
+static inline int vrf_dev_table_ifindex(struct net *net, int ifindex)
+{
+	struct net_device *dev;
+	int tb_id = 0;
+
+	if (!ifindex)
+		return 0;
+
+	rcu_read_lock();
+
+	dev = dev_get_by_index_rcu(net, ifindex);
+	if (dev)
+		tb_id = vrf_dev_table_rcu(dev);
+
 	rcu_read_unlock();
 
 	return tb_id;
@@ -115,12 +144,22 @@ static inline int vrf_master_ifindex_rcu(const struct net_device *dev)
 	return 0;
 }
 
+static inline int vrf_master_ifindex(const struct net_device *dev)
+{
+	return 0;
+}
+
 static inline int vrf_dev_table_rcu(const struct net_device *dev)
 {
 	return 0;
 }
 
 static inline int vrf_dev_table(const struct net_device *dev)
+{
+	return 0;
+}
+
+static inline int vrf_dev_table_ifindex(struct net *net, int ifindex)
 {
 	return 0;
 }

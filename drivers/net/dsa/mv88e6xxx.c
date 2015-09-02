@@ -14,6 +14,7 @@
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/etherdevice.h>
+#include <linux/ethtool.h>
 #include <linux/if_bridge.h>
 #include <linux/jiffies.h>
 #include <linux/list.h>
@@ -394,6 +395,7 @@ void mv88e6xxx_poll_link(struct dsa_switch *ds)
 	for (i = 0; i < DSA_MAX_PORTS; i++) {
 		struct net_device *dev;
 		int uninitialized_var(port_status);
+		int pcs_ctrl;
 		int link;
 		int speed;
 		int duplex;
@@ -401,6 +403,10 @@ void mv88e6xxx_poll_link(struct dsa_switch *ds)
 
 		dev = ds->ports[i];
 		if (dev == NULL)
+			continue;
+
+		pcs_ctrl = mv88e6xxx_reg_read(ds, REG_PORT(i), PORT_PCS_CTRL);
+		if (pcs_ctrl < 0 || pcs_ctrl & PORT_PCS_CTRL_FORCE_LINK)
 			continue;
 
 		link = 0;
@@ -558,6 +564,73 @@ static bool mv88e6xxx_6352_family(struct dsa_switch *ds)
 		return true;
 	}
 	return false;
+}
+
+/* We expect the switch to perform auto negotiation if there is a real
+ * phy. However, in the case of a fixed link phy, we force the port
+ * settings from the fixed link settings.
+ */
+void mv88e6xxx_adjust_link(struct dsa_switch *ds, int port,
+			   struct phy_device *phydev)
+{
+	struct mv88e6xxx_priv_state *ps = ds_to_priv(ds);
+	u32 ret, reg;
+
+	if (!phy_is_pseudo_fixed_link(phydev))
+		return;
+
+	mutex_lock(&ps->smi_mutex);
+
+	ret = _mv88e6xxx_reg_read(ds, REG_PORT(port), PORT_PCS_CTRL);
+	if (ret < 0)
+		goto out;
+
+	reg = ret & ~(PORT_PCS_CTRL_LINK_UP |
+		      PORT_PCS_CTRL_FORCE_LINK |
+		      PORT_PCS_CTRL_DUPLEX_FULL |
+		      PORT_PCS_CTRL_FORCE_DUPLEX |
+		      PORT_PCS_CTRL_UNFORCED);
+
+	reg |= PORT_PCS_CTRL_FORCE_LINK;
+	if (phydev->link)
+			reg |= PORT_PCS_CTRL_LINK_UP;
+
+	if (mv88e6xxx_6065_family(ds) && phydev->speed > SPEED_100)
+		goto out;
+
+	switch (phydev->speed) {
+	case SPEED_1000:
+		reg |= PORT_PCS_CTRL_1000;
+		break;
+	case SPEED_100:
+		reg |= PORT_PCS_CTRL_100;
+		break;
+	case SPEED_10:
+		reg |= PORT_PCS_CTRL_10;
+		break;
+	default:
+		pr_info("Unknown speed");
+		goto out;
+	}
+
+	reg |= PORT_PCS_CTRL_FORCE_DUPLEX;
+	if (phydev->duplex == DUPLEX_FULL)
+		reg |= PORT_PCS_CTRL_DUPLEX_FULL;
+
+	if ((mv88e6xxx_6352_family(ds) || mv88e6xxx_6351_family(ds)) &&
+	    (port >= ps->num_ports - 2)) {
+		if (phydev->interface == PHY_INTERFACE_MODE_RGMII_RXID)
+			reg |= PORT_PCS_CTRL_RGMII_DELAY_RXCLK;
+		if (phydev->interface == PHY_INTERFACE_MODE_RGMII_TXID)
+			reg |= PORT_PCS_CTRL_RGMII_DELAY_TXCLK;
+		if (phydev->interface == PHY_INTERFACE_MODE_RGMII_ID)
+			reg |= (PORT_PCS_CTRL_RGMII_DELAY_RXCLK |
+				PORT_PCS_CTRL_RGMII_DELAY_TXCLK);
+	}
+	_mv88e6xxx_reg_write(ds, REG_PORT(port), PORT_PCS_CTRL, reg);
+
+out:
+	mutex_unlock(&ps->smi_mutex);
 }
 
 /* Must be called with SMI mutex held */
@@ -1926,8 +1999,7 @@ static int mv88e6xxx_setup_port(struct dsa_switch *ds, int port)
 		 * full duplex.
 		 */
 		reg = _mv88e6xxx_reg_read(ds, REG_PORT(port), PORT_PCS_CTRL);
-		if (dsa_is_cpu_port(ds, port) ||
-		    ds->dsa_port_mask & (1 << port)) {
+		if (dsa_is_cpu_port(ds, port) || dsa_is_dsa_port(ds, port)) {
 			reg |= PORT_PCS_CTRL_FORCE_LINK |
 				PORT_PCS_CTRL_LINK_UP |
 				PORT_PCS_CTRL_DUPLEX_FULL |
@@ -1988,12 +2060,15 @@ static int mv88e6xxx_setup_port(struct dsa_switch *ds, int port)
 				reg |= PORT_CONTROL_EGRESS_ADD_TAG;
 		}
 	}
-	if (mv88e6xxx_6352_family(ds) || mv88e6xxx_6351_family(ds) ||
-	    mv88e6xxx_6165_family(ds) || mv88e6xxx_6097_family(ds) ||
-	    mv88e6xxx_6095_family(ds) || mv88e6xxx_6065_family(ds) ||
-	    mv88e6xxx_6320_family(ds)) {
-		if (ds->dsa_port_mask & (1 << port))
+	if (dsa_is_dsa_port(ds, port)) {
+		if (mv88e6xxx_6095_family(ds) || mv88e6xxx_6185_family(ds))
+			reg |= PORT_CONTROL_DSA_TAG;
+		if (mv88e6xxx_6352_family(ds) || mv88e6xxx_6351_family(ds) ||
+		    mv88e6xxx_6165_family(ds) || mv88e6xxx_6097_family(ds) ||
+		    mv88e6xxx_6320_family(ds)) {
 			reg |= PORT_CONTROL_FRAME_MODE_DSA;
+		}
+
 		if (port == dsa_upstream_port(ds))
 			reg |= PORT_CONTROL_FORWARD_UNKNOWN |
 				PORT_CONTROL_FORWARD_UNKNOWN_MC;
@@ -2031,7 +2106,7 @@ static int mv88e6xxx_setup_port(struct dsa_switch *ds, int port)
 			reg |= PORT_CONTROL_2_FORWARD_UNKNOWN;
 	}
 
-	reg |= PORT_CONTROL_2_8021Q_SECURE;
+	reg |= PORT_CONTROL_2_8021Q_FALLBACK;
 
 	if (reg) {
 		ret = _mv88e6xxx_reg_write(ds, REG_PORT(port),

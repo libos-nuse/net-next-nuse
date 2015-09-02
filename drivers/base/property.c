@@ -155,6 +155,7 @@ EXPORT_SYMBOL_GPL(fwnode_property_present);
  *	   %-ENODATA if the property does not have a value,
  *	   %-EPROTO if the property is not an array of numbers,
  *	   %-EOVERFLOW if the size of the property is not as expected.
+ *	   %-ENXIO if no suitable firmware interface is present.
  */
 int device_property_read_u8_array(struct device *dev, const char *propname,
 				  u8 *val, size_t nval)
@@ -179,6 +180,7 @@ EXPORT_SYMBOL_GPL(device_property_read_u8_array);
  *	   %-ENODATA if the property does not have a value,
  *	   %-EPROTO if the property is not an array of numbers,
  *	   %-EOVERFLOW if the size of the property is not as expected.
+ *	   %-ENXIO if no suitable firmware interface is present.
  */
 int device_property_read_u16_array(struct device *dev, const char *propname,
 				   u16 *val, size_t nval)
@@ -203,6 +205,7 @@ EXPORT_SYMBOL_GPL(device_property_read_u16_array);
  *	   %-ENODATA if the property does not have a value,
  *	   %-EPROTO if the property is not an array of numbers,
  *	   %-EOVERFLOW if the size of the property is not as expected.
+ *	   %-ENXIO if no suitable firmware interface is present.
  */
 int device_property_read_u32_array(struct device *dev, const char *propname,
 				   u32 *val, size_t nval)
@@ -227,6 +230,7 @@ EXPORT_SYMBOL_GPL(device_property_read_u32_array);
  *	   %-ENODATA if the property does not have a value,
  *	   %-EPROTO if the property is not an array of numbers,
  *	   %-EOVERFLOW if the size of the property is not as expected.
+ *	   %-ENXIO if no suitable firmware interface is present.
  */
 int device_property_read_u64_array(struct device *dev, const char *propname,
 				   u64 *val, size_t nval)
@@ -251,6 +255,7 @@ EXPORT_SYMBOL_GPL(device_property_read_u64_array);
  *	   %-ENODATA if the property does not have a value,
  *	   %-EPROTO or %-EILSEQ if the property is not an array of strings,
  *	   %-EOVERFLOW if the size of the property is not as expected.
+ *	   %-ENXIO if no suitable firmware interface is present.
  */
 int device_property_read_string_array(struct device *dev, const char *propname,
 				      const char **val, size_t nval)
@@ -272,6 +277,7 @@ EXPORT_SYMBOL_GPL(device_property_read_string_array);
  *	   %-EINVAL if given arguments are not valid,
  *	   %-ENODATA if the property does not have a value,
  *	   %-EPROTO or %-EILSEQ if the property type is not a string.
+ *	   %-ENXIO if no suitable firmware interface is present.
  */
 int device_property_read_string(struct device *dev, const char *propname,
 				const char **val)
@@ -293,9 +299,11 @@ EXPORT_SYMBOL_GPL(device_property_read_string);
 	else if (is_acpi_node(_fwnode_)) \
 		_ret_ = acpi_dev_prop_read(to_acpi_node(_fwnode_), _propname_, \
 					   _proptype_, _val_, _nval_); \
-	else \
+	else if (is_pset(_fwnode_)) \
 		_ret_ = pset_prop_read_array(to_pset(_fwnode_), _propname_, \
 					     _proptype_, _val_, _nval_); \
+	else \
+		_ret_ = -ENXIO; \
 	_ret_; \
 })
 
@@ -433,9 +441,10 @@ int fwnode_property_read_string_array(struct fwnode_handle *fwnode,
 	else if (is_acpi_node(fwnode))
 		return acpi_dev_prop_read(to_acpi_node(fwnode), propname,
 					  DEV_PROP_STRING, val, nval);
-
-	return pset_prop_read_array(to_pset(fwnode), propname,
-				    DEV_PROP_STRING, val, nval);
+	else if (is_pset(fwnode))
+		return pset_prop_read_array(to_pset(fwnode), propname,
+					    DEV_PROP_STRING, val, nval);
+	return -ENXIO;
 }
 EXPORT_SYMBOL_GPL(fwnode_property_read_string_array);
 
@@ -537,7 +546,7 @@ bool device_dma_is_coherent(struct device *dev)
 EXPORT_SYMBOL_GPL(device_dma_is_coherent);
 
 /**
- * device_get_phy_mode - Get phy mode for given device_node
+ * device_get_phy_mode - Get phy mode for given device
  * @dev:	Pointer to the given device
  *
  * The function gets phy interface string from property 'phy-mode' or
@@ -570,13 +579,18 @@ static void *device_get_mac_addr(struct device *dev,
 {
 	int ret = device_property_read_u8_array(dev, name, addr, alen);
 
-	if (ret == 0 && is_valid_ether_addr(addr))
+	if (ret == 0 && alen == ETH_ALEN && is_valid_ether_addr(addr))
 		return addr;
 	return NULL;
 }
 
 /**
- * Search the device tree for the best MAC address to use.  'mac-address' is
+ * device_get_mac_address - Get the MAC for a given device
+ * @dev:	Pointer to the device
+ * @addr:	Address of buffer to store the MAC in
+ * @alen:	Length of the buffer pointed to by addr, should be ETH_ALEN
+ *
+ * Search the firmware node for the best MAC address to use.  'mac-address' is
  * checked first, because that is supposed to contain to "most recent" MAC
  * address. If that isn't set, then 'local-mac-address' is checked next,
  * because that is the default address.  If that isn't set, then the obsolete
@@ -587,11 +601,11 @@ static void *device_get_mac_addr(struct device *dev,
  * MAC address.
  *
  * All-zero MAC addresses are rejected, because those could be properties that
- * exist in the device tree, but were not set by U-Boot.  For example, the
- * DTS could define 'mac-address' and 'local-mac-address', with zero MAC
- * addresses.  Some older U-Boots only initialized 'local-mac-address'.  In
- * this case, the real MAC is in 'local-mac-address', and 'mac-address' exists
- * but is all zeros.
+ * exist in the firmware tables, but were not updated by the firmware.  For
+ * example, the DTS could define 'mac-address' and 'local-mac-address', with
+ * zero MAC addresses.  Some older U-Boots only initialized 'local-mac-address'.
+ * In this case, the real MAC is in 'local-mac-address', and 'mac-address'
+ * exists but is all zeros.
 */
 void *device_get_mac_address(struct device *dev, char *addr, int alen)
 {

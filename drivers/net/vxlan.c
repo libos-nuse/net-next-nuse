@@ -236,7 +236,7 @@ static struct vxlan_sock *vxlan_find_sock(struct net *net, sa_family_t family,
 
 	hlist_for_each_entry_rcu(vs, vs_head(net, port), hlist) {
 		if (inet_sk(vs->sock->sk)->inet_sport == port &&
-		    inet_sk(vs->sock->sk)->sk.sk_family == family &&
+		    vxlan_get_sk_family(vs) == family &&
 		    vs->flags == flags)
 			return vs;
 	}
@@ -519,10 +519,10 @@ static struct vxlanhdr *vxlan_gro_remcsum(struct sk_buff *skb,
 					  u32 data, struct gro_remcsum *grc,
 					  bool nopartial)
 {
-	size_t start, offset, plen;
+	size_t start, offset;
 
 	if (skb->remcsum_offload)
-		return NULL;
+		return vh;
 
 	if (!NAPI_GRO_CB(skb)->csum_valid)
 		return NULL;
@@ -532,17 +532,8 @@ static struct vxlanhdr *vxlan_gro_remcsum(struct sk_buff *skb,
 			  offsetof(struct udphdr, check) :
 			  offsetof(struct tcphdr, check));
 
-	plen = hdrlen + offset + sizeof(u16);
-
-	/* Pull checksum that will be written */
-	if (skb_gro_header_hard(skb, off + plen)) {
-		vh = skb_gro_header_slow(skb, off + plen, off);
-		if (!vh)
-			return NULL;
-	}
-
-	skb_gro_remcsum_process(skb, (void *)vh + hdrlen,
-				start, offset, grc, nopartial);
+	vh = skb_gro_remcsum_process(skb, (void *)vh, off, hdrlen,
+				     start, offset, grc, nopartial);
 
 	skb->remcsum_offload = 1;
 
@@ -573,7 +564,6 @@ static struct sk_buff **vxlan_gro_receive(struct sk_buff **head,
 			goto out;
 	}
 
-	skb_gro_pull(skb, sizeof(struct vxlanhdr)); /* pull vxlan header */
 	skb_gro_postpull_rcsum(skb, vh, sizeof(struct vxlanhdr));
 
 	flags = ntohl(vh->vx_flags);
@@ -587,6 +577,8 @@ static struct sk_buff **vxlan_gro_receive(struct sk_buff **head,
 		if (!vh)
 			goto out;
 	}
+
+	skb_gro_pull(skb, sizeof(struct vxlanhdr)); /* pull vxlan header */
 
 	flush = 0;
 
@@ -625,7 +617,7 @@ static void vxlan_notify_add_rx_port(struct vxlan_sock *vs)
 	struct net_device *dev;
 	struct sock *sk = vs->sock->sk;
 	struct net *net = sock_net(sk);
-	sa_family_t sa_family = sk->sk_family;
+	sa_family_t sa_family = vxlan_get_sk_family(vs);
 	__be16 port = inet_sk(sk)->inet_sport;
 	int err;
 
@@ -650,7 +642,7 @@ static void vxlan_notify_del_rx_port(struct vxlan_sock *vs)
 	struct net_device *dev;
 	struct sock *sk = vs->sock->sk;
 	struct net *net = sock_net(sk);
-	sa_family_t sa_family = sk->sk_family;
+	sa_family_t sa_family = vxlan_get_sk_family(vs);
 	__be16 port = inet_sk(sk)->inet_sport;
 
 	rcu_read_lock();
@@ -1110,6 +1102,9 @@ static struct vxlanhdr *vxlan_remcsum(struct sk_buff *skb, struct vxlanhdr *vh,
 {
 	size_t start, offset, plen;
 
+	if (skb->remcsum_offload)
+		return vh;
+
 	start = (data & VXLAN_RCO_MASK) << VXLAN_RCO_SHIFT;
 	offset = start + ((data & VXLAN_RCO_UDP) ?
 			  offsetof(struct udphdr, check) :
@@ -1213,7 +1208,7 @@ static void vxlan_rcv(struct vxlan_sock *vs, struct sk_buff *skb,
 	stats->rx_bytes += skb->len;
 	u64_stats_update_end(&stats->syncp);
 
-	netif_rx(skb);
+	gro_cells_receive(&vxlan->gro_cells, skb);
 
 	return;
 drop:
@@ -1269,27 +1264,14 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	if (vxlan_collect_metadata(vs)) {
-		const struct iphdr *iph = ip_hdr(skb);
+		tun_dst = udp_tun_rx_dst(skb, vxlan_get_sk_family(vs), TUNNEL_KEY,
+					 cpu_to_be64(vni >> 8), sizeof(*md));
 
-		tun_dst = metadata_dst_alloc(sizeof(*md), GFP_ATOMIC);
 		if (!tun_dst)
 			goto drop;
 
 		info = &tun_dst->u.tun_info;
-		info->key.ipv4_src = iph->saddr;
-		info->key.ipv4_dst = iph->daddr;
-		info->key.ipv4_tos = iph->tos;
-		info->key.ipv4_ttl = iph->ttl;
-		info->key.tp_src = udp_hdr(skb)->source;
-		info->key.tp_dst = udp_hdr(skb)->dest;
-
-		info->mode = IP_TUNNEL_INFO_RX;
-		info->key.tun_flags = TUNNEL_KEY;
-		info->key.tun_id = cpu_to_be64(vni >> 8);
-		if (udp_hdr(skb)->check != 0)
-			info->key.tun_flags |= TUNNEL_CSUM;
-
-		md = ip_tunnel_info_opts(info, sizeof(*md));
+		md = ip_tunnel_info_opts(info);
 	} else {
 		memset(md, 0, sizeof(*md));
 	}
@@ -1894,6 +1876,7 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 	struct ip_tunnel_info *info;
 	struct vxlan_dev *vxlan = netdev_priv(dev);
 	struct sock *sk = vxlan->vn_sock->sock->sk;
+	unsigned short family = vxlan_get_sk_family(vxlan->vn_sock);
 	struct rtable *rt = NULL;
 	const struct iphdr *old_iph;
 	struct flowi4 fl4;
@@ -1908,8 +1891,7 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 	int err;
 	u32 flags = vxlan->flags;
 
-	/* FIXME: Support IPv6 */
-	info = skb_tunnel_info(skb, AF_INET);
+	info = skb_tunnel_info(skb);
 
 	if (rdst) {
 		dst_port = rdst->remote_port ? rdst->remote_port : vxlan->cfg.dst_port;
@@ -1921,11 +1903,16 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 				  dev->name);
 			goto drop;
 		}
+		if (family != ip_tunnel_info_af(info))
+			goto drop;
 
 		dst_port = info->key.tp_dst ? : vxlan->cfg.dst_port;
 		vni = be64_to_cpu(info->key.tun_id);
-		remote_ip.sin.sin_family = AF_INET;
-		remote_ip.sin.sin_addr.s_addr = info->key.ipv4_dst;
+		remote_ip.sa.sa_family = family;
+		if (family == AF_INET)
+			remote_ip.sin.sin_addr.s_addr = info->key.u.ipv4.dst;
+		else
+			remote_ip.sin6.sin6_addr = info->key.u.ipv6.dst;
 		dst = &remote_ip;
 	}
 
@@ -1951,23 +1938,24 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 	src_port = udp_flow_src_port(dev_net(dev), skb, vxlan->cfg.port_min,
 				     vxlan->cfg.port_max, true);
 
+	if (info) {
+		if (info->key.tun_flags & TUNNEL_CSUM)
+			flags |= VXLAN_F_UDP_CSUM;
+		else
+			flags &= ~VXLAN_F_UDP_CSUM;
+
+		ttl = info->key.ttl;
+		tos = info->key.tos;
+
+		if (info->options_len)
+			md = ip_tunnel_info_opts(info);
+	} else {
+		md->gbp = skb->mark;
+	}
+
 	if (dst->sa.sa_family == AF_INET) {
-		if (info) {
-			if (info->key.tun_flags & TUNNEL_DONT_FRAGMENT)
-				df = htons(IP_DF);
-			if (info->key.tun_flags & TUNNEL_CSUM)
-				flags |= VXLAN_F_UDP_CSUM;
-			else
-				flags &= ~VXLAN_F_UDP_CSUM;
-
-			ttl = info->key.ipv4_ttl;
-			tos = info->key.ipv4_tos;
-
-			if (info->options_len)
-				md = ip_tunnel_info_opts(info, sizeof(*md));
-		} else {
-			md->gbp = skb->mark;
-		}
+		if (info && (info->key.tun_flags & TUNNEL_DONT_FRAGMENT))
+			df = htons(IP_DF);
 
 		memset(&fl4, 0, sizeof(fl4));
 		fl4.flowi4_oif = rdst ? rdst->remote_ifindex : 0;
@@ -2025,7 +2013,7 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 	} else {
 		struct dst_entry *ndst;
 		struct flowi6 fl6;
-		u32 flags;
+		u32 rt6i_flags;
 
 		memset(&fl6, 0, sizeof(fl6));
 		fl6.flowi6_oif = rdst ? rdst->remote_ifindex : 0;
@@ -2050,9 +2038,9 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 		}
 
 		/* Bypass encapsulation if the destination is local */
-		flags = ((struct rt6_info *)ndst)->rt6i_flags;
-		if (flags & RTF_LOCAL &&
-		    !(flags & (RTCF_BROADCAST | RTCF_MULTICAST))) {
+		rt6i_flags = ((struct rt6_info *)ndst)->rt6i_flags;
+		if (rt6i_flags & RTF_LOCAL &&
+		    !(rt6i_flags & (RTCF_BROADCAST | RTCF_MULTICAST))) {
 			struct vxlan_dev *dst_vxlan;
 
 			dst_release(ndst);
@@ -2066,12 +2054,10 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 		}
 
 		ttl = ttl ? : ip6_dst_hoplimit(ndst);
-		md->gbp = skb->mark;
-
 		err = vxlan6_xmit_skb(ndst, sk, skb, dev, &fl6.saddr, &fl6.daddr,
 				      0, ttl, src_port, dst_port, htonl(vni << 8), md,
 				      !net_eq(vxlan->net, dev_net(vxlan->dev)),
-				      vxlan->flags);
+				      flags);
 #endif
 	}
 
@@ -2104,8 +2090,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct vxlan_rdst *rdst, *fdst = NULL;
 	struct vxlan_fdb *f;
 
-	/* FIXME: Support IPv6 */
-	info = skb_tunnel_info(skb, AF_INET);
+	info = skb_tunnel_info(skb);
 
 	skb_reset_mac_header(skb);
 	eth = eth_hdr(skb);
@@ -2130,7 +2115,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	if (vxlan->flags & VXLAN_F_COLLECT_METADATA &&
-	    info && info->mode == IP_TUNNEL_INFO_TX) {
+	    info && info->mode & IP_TUNNEL_INFO_TX) {
 		vxlan_xmit_one(skb, dev, NULL, false);
 		return NETDEV_TX_OK;
 	}
@@ -2273,6 +2258,8 @@ static int vxlan_open(struct net_device *dev)
 
 	if (vxlan_addr_multicast(&vxlan->default_dst.remote_ip)) {
 		ret = vxlan_igmp_join(vxlan);
+		if (ret == -EADDRINUSE)
+			ret = 0;
 		if (ret) {
 			vxlan_sock_release(vs);
 			return ret;
@@ -2390,7 +2377,7 @@ void vxlan_get_rx_port(struct net_device *dev)
 	for (i = 0; i < PORT_HASH_SIZE; ++i) {
 		hlist_for_each_entry_rcu(vs, &vn->sock_list[i], hlist) {
 			port = inet_sk(vs->sock->sk)->inet_sport;
-			sa_family = vs->sock->sk->sk_family;
+			sa_family = vxlan_get_sk_family(vs);
 			dev->netdev_ops->ndo_add_vxlan_port(dev, sa_family,
 							    port);
 		}
@@ -2416,7 +2403,6 @@ static void vxlan_setup(struct net_device *dev)
 	dev->destructor = free_netdev;
 	SET_NETDEV_DEVTYPE(dev, &vxlan_type);
 
-	dev->tx_queue_len = 0;
 	dev->features	|= NETIF_F_LLTX;
 	dev->features	|= NETIF_F_SG | NETIF_F_HW_CSUM;
 	dev->features   |= NETIF_F_RXCSUM;
@@ -2428,7 +2414,7 @@ static void vxlan_setup(struct net_device *dev)
 	dev->hw_features |= NETIF_F_GSO_SOFTWARE;
 	dev->hw_features |= NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_STAG_TX;
 	netif_keep_dst(dev);
-	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
+	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE | IFF_NO_QUEUE;
 
 	INIT_LIST_HEAD(&vxlan->next);
 	spin_lock_init(&vxlan->hash_lock);
@@ -2440,6 +2426,8 @@ static void vxlan_setup(struct net_device *dev)
 	vxlan->cfg.dst_port = htons(vxlan_port);
 
 	vxlan->dev = dev;
+
+	gro_cells_init(&vxlan->gro_cells, dev);
 
 	for (h = 0; h < FDB_HASH_SIZE; ++h)
 		INIT_HLIST_HEAD(&vxlan->fdb_head[h]);
@@ -2542,6 +2530,7 @@ static struct socket *vxlan_create_sock(struct net *net, bool ipv6,
 		udp_conf.family = AF_INET6;
 		udp_conf.use_udp6_rx_checksums =
 		    !(flags & VXLAN_F_UDP_ZERO_CSUM6_RX);
+		udp_conf.ipv6_v6only = 1;
 	} else {
 		udp_conf.family = AF_INET;
 	}
@@ -2880,6 +2869,7 @@ static void vxlan_dellink(struct net_device *dev, struct list_head *head)
 		hlist_del_rcu(&vxlan->hlist);
 	spin_unlock(&vn->sock_lock);
 
+	gro_cells_destroy(&vxlan->gro_cells);
 	list_del(&vxlan->next);
 	unregister_netdevice_queue(dev, head);
 }
@@ -3088,8 +3078,10 @@ static void __net_exit vxlan_exit_net(struct net *net)
 		/* If vxlan->dev is in the same netns, it has already been added
 		 * to the list by the previous loop.
 		 */
-		if (!net_eq(dev_net(vxlan->dev), net))
+		if (!net_eq(dev_net(vxlan->dev), net)) {
+			gro_cells_destroy(&vxlan->gro_cells);
 			unregister_netdevice_queue(vxlan->dev, &list);
+		}
 	}
 
 	unregister_netdevice_many(&list);

@@ -3657,7 +3657,7 @@ static inline struct sk_buff *handle_ing(struct sk_buff *skb,
 	skb->tc_verd = SET_TC_AT(skb->tc_verd, AT_INGRESS);
 	qdisc_bstats_cpu_update(cl->q, skb);
 
-	switch (tc_classify(skb, cl, &cl_res)) {
+	switch (tc_classify(skb, cl, &cl_res, false)) {
 	case TC_ACT_OK:
 	case TC_ACT_RECLASSIFY:
 		skb->tc_index = TC_H_MIN(cl_res.classid);
@@ -5311,6 +5311,7 @@ static int __netdev_upper_dev_link(struct net_device *dev,
 				   struct net_device *upper_dev, bool master,
 				   void *private)
 {
+	struct netdev_notifier_changeupper_info changeupper_info;
 	struct netdev_adjacent *i, *j, *to_i, *to_j;
 	int ret = 0;
 
@@ -5328,6 +5329,10 @@ static int __netdev_upper_dev_link(struct net_device *dev,
 
 	if (master && netdev_master_upper_dev_get(dev))
 		return -EBUSY;
+
+	changeupper_info.upper_dev = upper_dev;
+	changeupper_info.master = master;
+	changeupper_info.linking = true;
 
 	ret = __netdev_adjacent_dev_link_neighbour(dev, upper_dev, private,
 						   master);
@@ -5367,7 +5372,8 @@ static int __netdev_upper_dev_link(struct net_device *dev,
 			goto rollback_lower_mesh;
 	}
 
-	call_netdevice_notifiers(NETDEV_CHANGEUPPER, dev);
+	call_netdevice_notifiers_info(NETDEV_CHANGEUPPER, dev,
+				      &changeupper_info.info);
 	return 0;
 
 rollback_lower_mesh:
@@ -5462,8 +5468,13 @@ EXPORT_SYMBOL(netdev_master_upper_dev_link_private);
 void netdev_upper_dev_unlink(struct net_device *dev,
 			     struct net_device *upper_dev)
 {
+	struct netdev_notifier_changeupper_info changeupper_info;
 	struct netdev_adjacent *i, *j;
 	ASSERT_RTNL();
+
+	changeupper_info.upper_dev = upper_dev;
+	changeupper_info.master = netdev_master_upper_dev_get(dev) == upper_dev;
+	changeupper_info.linking = false;
 
 	__netdev_adjacent_dev_unlink_neighbour(dev, upper_dev);
 
@@ -5484,7 +5495,8 @@ void netdev_upper_dev_unlink(struct net_device *dev,
 	list_for_each_entry(i, &upper_dev->all_adj_list.upper, list)
 		__netdev_adjacent_dev_unlink(dev, i->dev);
 
-	call_netdevice_notifiers(NETDEV_CHANGEUPPER, dev);
+	call_netdevice_notifiers_info(NETDEV_CHANGEUPPER, dev,
+				      &changeupper_info.info);
 }
 EXPORT_SYMBOL(netdev_upper_dev_unlink);
 
@@ -6996,6 +7008,9 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 	INIT_LIST_HEAD(&dev->ptype_specific);
 	dev->priv_flags = IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM;
 	setup(dev);
+
+	if (!dev->tx_queue_len)
+		dev->priv_flags |= IFF_NO_QUEUE;
 
 	dev->num_tx_queues = txqs;
 	dev->real_num_tx_queues = txqs;
