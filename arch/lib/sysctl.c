@@ -101,9 +101,6 @@ int sched_rt_handler(struct ctl_table *table, int write,
 
 int sysctl_overcommit_memory = OVERCOMMIT_GUESS;
 int sysctl_overcommit_ratio = 50;
-int sysctl_panic_on_oom = 0;
-int sysctl_oom_dump_tasks = 0;
-int sysctl_oom_kill_allocating_task = 0;
 int sysctl_nr_trim_pages = 0;
 int sysctl_drop_caches = 0;
 int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES - 1] = { 32 };

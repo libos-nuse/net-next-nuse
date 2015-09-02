@@ -62,6 +62,25 @@ DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
 static DECLARE_BITMAP(cpu_possible_bits, CONFIG_NR_CPUS) __read_mostly;
 const struct cpumask *const cpu_possible_mask = to_cpumask(cpu_possible_bits);
 
+/* memory.c */
+unsigned long highest_memmap_pfn __read_mostly;
+unsigned long max_mapnr;
+
+/*
+ * Randomize the address space (stacks, mmaps, brk, etc.).
+ *
+ * ( When CONFIG_COMPAT_BRK=y we exclude brk from randomization,
+ *   as ancient (libc5 based) binaries can segfault. )
+ */
+int randomize_va_space __read_mostly =
+#ifdef CONFIG_COMPAT_BRK
+					1;
+#else
+					2;
+#endif
+
+/* vmscan.c */
+unsigned long vm_total_pages;
 
 /* arm/mmu.c */
 pgprot_t pgprot_kernel;
@@ -299,4 +318,12 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 	return 0;
 }
 
+#ifdef CONFIG_HAVE_ARCH_PFN_VALID
+extern int memblock_is_memory(phys_addr_t addr);
+
+int pfn_valid(unsigned long pfn)
+{
+	return memblock_is_memory(__pfn_to_phys(pfn));
+}
+#endif
 
