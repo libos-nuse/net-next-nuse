@@ -34,38 +34,6 @@ void lib_update_jiffies(void)
 	jiffies_64 = ns_to_jiffies(lib_current_ns());
 }
 
-struct timespec current_kernel_time(void)
-{
-	u64 ns = lib_current_ns();
-	struct timespec spec = ns_to_timespec(ns);
-
-	return spec;
-}
-
-void do_gettimeofday(struct timeval *tv)
-{
-	u64 ns = lib_current_ns();
-
-	*tv = ns_to_timeval(ns);
-}
-
-int do_adjtimex(struct timex *timex)
-{
-	lib_assert(false);
-	return -EPERM;
-}
-ktime_t ktime_get(void)
-{
-	u64 ns = lib_current_ns();
-
-	return ns_to_ktime(ns);
-}
-ktime_t ktime_get_with_offset(enum tk_offsets offs)
-{
-	/* FIXME */
-	return ktime_get();
-}
-
 /* copied from kernel/time/hrtimeer.c */
 #if BITS_PER_LONG < 64
 /*
@@ -91,16 +59,6 @@ s64 __ktime_divns(const ktime_t kt, s64 div)
 }
 #endif /* BITS_PER_LONG >= 64 */
 
-void update_xtime_cache(u64 nsec)
-{
-}
-unsigned long get_seconds(void)
-{
-	u64 ns = lib_current_ns();
-
-	do_div(ns, 1000000000);
-	return ns;
-}
 static unsigned long
 round_jiffies_common(unsigned long j,
 		     bool force_up)
@@ -143,4 +101,16 @@ void msleep(unsigned int msecs)
 	lib_event_schedule_ns(((__u64)msecs) * 1000000, &msleep_trampoline,
 			      lib_task_current());
 	lib_task_wait();
+}
+
+void read_persistent_clock(struct timespec *ts)
+{
+	u64 nsecs = lib_current_ns();
+
+	set_normalized_timespec(ts, nsecs / NSEC_PER_SEC,
+				nsecs % NSEC_PER_SEC);
+}
+
+void __init time_init(void)
+{
 }
