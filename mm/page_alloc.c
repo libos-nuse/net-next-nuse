@@ -161,7 +161,6 @@ unsigned long dirty_balance_reserve __read_mostly;
 
 int percpu_pagelist_fraction;
 
-
 gfp_t gfp_allowed_mask __read_mostly = GFP_BOOT_MASK;
 
 #ifdef CONFIG_PM_SLEEP
@@ -1318,8 +1317,6 @@ static inline void expand(struct zone *zone, struct page *page,
 			set_page_guard(zone, &page[size], high, migratetype);
 			continue;
 		}
-
-
 		list_add(&page[size].lru, &area->free_list[migratetype]);
 		area->nr_free++;
 		set_page_order(&page[size], high);
@@ -1754,7 +1751,6 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 		else
 			list_add_tail(&page->lru, list);
 		list = &page->lru;
-
 		if (is_migrate_cma(get_freepage_migratetype(page)))
 			__mod_zone_page_state(zone, NR_FREE_CMA_PAGES,
 					      -(1 << order));
@@ -1872,7 +1868,6 @@ void drain_all_pages(struct zone *zone)
 	 * cpu to drain that CPU pcps and on_each_cpu_mask
 	 * disables preemption as part of its processing
 	 */
-
 	for_each_online_cpu(cpu) {
 		struct per_cpu_pageset *pcp;
 		struct zone *z;
@@ -2139,7 +2134,6 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 		list_del(&page->lru);
 		pcp->count--;
 	} else {
-
 		if (unlikely(gfp_flags & __GFP_NOFAIL)) {
 			/*
 			 * __GFP_NOFAIL is not to be used in new code.
@@ -2644,7 +2638,7 @@ try_this_zone:
 this_zone_full:
 		if (IS_ENABLED(CONFIG_NUMA) && zlc_active)
 			zlc_mark_zone_full(zonelist, z);
-		}
+	}
 
 	/*
 	 * The first pass makes sure allocations are spread fairly within the
@@ -2672,6 +2666,7 @@ this_zone_full:
 
 	if (zonelist_rescan)
 		goto zonelist_scan;
+
 	return NULL;
 }
 
@@ -3243,9 +3238,8 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 	 * valid zone. It's possible to have an empty zonelist as a result
 	 * of __GFP_THISNODE and a memoryless node
 	 */
-	if (unlikely(!zonelist->_zonerefs->zone)) {
+	if (unlikely(!zonelist->_zonerefs->zone))
 		return NULL;
-	}
 
 	if (IS_ENABLED(CONFIG_CMA) && ac.migratetype == MIGRATE_MOVABLE)
 		alloc_flags |= ALLOC_CMA;
@@ -3259,16 +3253,13 @@ retry_cpuset:
 	preferred_zoneref = first_zones_zonelist(ac.zonelist, ac.high_zoneidx,
 				ac.nodemask ? : &cpuset_current_mems_allowed,
 				&ac.preferred_zone);
-
 	if (!ac.preferred_zone)
 		goto out;
-
 	ac.classzone_idx = zonelist_zone_idx(preferred_zoneref);
 
 	/* First allocation attempt */
 	alloc_mask = gfp_mask|__GFP_HARDWALL;
 	page = get_page_from_freelist(alloc_mask, order, alloc_flags, &ac);
-
 	if (unlikely(!page)) {
 		/*
 		 * Runtime PM, block IO and its error handling path
@@ -3299,11 +3290,9 @@ out:
 	printk(KERN_INFO "Done: I am %s %lu\n", __func__, page_to_pfn(page));
 	page->virtual = (void *)total_ram + (page_to_pfn(page) << PAGE_SHIFT);
 #endif
-
 	return page;
 }
 EXPORT_SYMBOL(__alloc_pages_nodemask);
-
 
 /*
  * Common helper functions.
@@ -3311,6 +3300,7 @@ EXPORT_SYMBOL(__alloc_pages_nodemask);
 unsigned long __get_free_pages(gfp_t gfp_mask, unsigned int order)
 {
 	struct page *page;
+
 	/*
 	 * __get_free_pages() returns a 32-bit address, which cannot represent
 	 * a highmem page
@@ -3346,14 +3336,11 @@ EXPORT_SYMBOL(__free_pages);
 #ifndef CONFIG_LIB
 void free_pages(unsigned long addr, unsigned int order)
 {
-	printk("I am %s\n", __func__);
-
 	if (addr != 0) {
 		VM_BUG_ON(!virt_addr_valid((void *)addr));
 		__free_pages(virt_to_page((void *)addr), order);
 	}
 }
-
 EXPORT_SYMBOL(free_pages);
 #else
 void free_pages(unsigned long addr, unsigned int order)
@@ -3361,14 +3348,12 @@ void free_pages(unsigned long addr, unsigned int order)
 	unsigned long pfn = addr - (unsigned long) total_ram;
 	pfn = pfn >> PAGE_SHIFT;
 
-	if (addr != 0) {
+	if (pfn != 0) {
 		__free_pages(pfn_to_page(pfn), order);
 	}
 }
-
 EXPORT_SYMBOL(free_pages);
 #endif
-
 
 /*
  * Page Fragment:
@@ -3532,7 +3517,6 @@ static void *make_alloc_exact(unsigned long addr, unsigned order, size_t size)
 	return (void *)addr;
 }
 
-
 /**
  * alloc_pages_exact - allocate an exact number physically-contiguous pages.
  * @size: the number of bytes to allocate
@@ -3555,7 +3539,6 @@ void *alloc_pages_exact(size_t size, gfp_t gfp_mask)
 	return make_alloc_exact(addr, order, size);
 }
 EXPORT_SYMBOL(alloc_pages_exact);
-
 
 /**
  * alloc_pages_exact_nid - allocate an exact number of physically-contiguous
@@ -3597,7 +3580,6 @@ void free_pages_exact(void *virt, size_t size)
 }
 EXPORT_SYMBOL(free_pages_exact);
 
-
 /**
  * nr_free_zone_pages - count number of pages beyond high watermark
  * @offset: The zone index of the highest zone
@@ -3627,9 +3609,6 @@ static unsigned long nr_free_zone_pages(int offset)
 	return sum;
 }
 
-
-
-
 /**
  * nr_free_buffer_pages - count number of pages beyond high watermark
  *
@@ -3641,15 +3620,12 @@ unsigned long nr_free_buffer_pages(void)
 {
 	return nr_free_zone_pages(gfp_zone(GFP_USER));
 }
-
 #else
 unsigned long nr_free_buffer_pages(void)
 {
 	return 65535;
 }
-
 #endif
-
 EXPORT_SYMBOL_GPL(nr_free_buffer_pages);
 
 /**
@@ -3680,9 +3656,7 @@ void si_meminfo(struct sysinfo *val)
 	val->freehigh = nr_free_highpages();
 	val->mem_unit = PAGE_SIZE;
 }
-
 EXPORT_SYMBOL(si_meminfo);
-
 #endif
 
 #ifdef CONFIG_NUMA
@@ -6041,7 +6015,6 @@ void free_highmem_page(struct page *page)
 #endif
 
 #ifndef CONFIG_LIB
-
 void __init mem_init_print_info(const char *str)
 {
 	unsigned long physpages, codesize, datasize, rosize, bss_size;
@@ -6094,9 +6067,7 @@ void __init mem_init_print_info(const char *str)
 #endif
 	       str ? ", " : "", str ? str : "");
 }
-
 #endif 
-
 
 /**
  * set_dma_reserve - set the specified number of pages reserved in the first zone
@@ -6293,7 +6264,6 @@ static void __setup_per_zone_wmarks(void)
 	calculate_totalreserve_pages();
 }
 
-
 /**
  * setup_per_zone_wmarks - called when min_free_kbytes changes
  * or when memory is hot-{added|removed}
@@ -6307,7 +6277,6 @@ void setup_per_zone_wmarks(void)
 	__setup_per_zone_wmarks();
 	mutex_unlock(&zonelists_mutex);
 }
-
 
 /*
  * The inactive anon list should be small enough that the VM never has to
@@ -6406,7 +6375,6 @@ int __meminit init_per_zone_wmark_min(void)
 module_init(init_per_zone_wmark_min)
 
 #ifndef CONFIG_LIB
-
 /*
  * min_free_kbytes_sysctl_handler - just a wrapper around proc_dointvec() so
  *	that we can call two helper functions whenever min_free_kbytes
@@ -6427,7 +6395,6 @@ int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
 	}
 	return 0;
 }
-
 #endif
 
 #ifdef CONFIG_NUMA
@@ -6481,8 +6448,6 @@ int lowmem_reserve_ratio_sysctl_handler(struct ctl_table *table, int write,
 	setup_per_zone_lowmem_reserve();
 	return 0;
 }
-
-
 
 /*
  * percpu_pagelist_fraction - changes the pcp->high for each zone on each
@@ -6640,9 +6605,7 @@ void *__init alloc_large_system_hash(const char *tablename,
 
 	return table;
 }
-
 #endif
-
 
 /* Return a pointer to the bitmap storing bits affecting a block of pages */
 static inline unsigned long *get_pageblock_bitmap(struct zone *zone,

@@ -1,3 +1,12 @@
+/*
+ * Library Slab Allocator (SLIB)
+ *
+ * Copyright (c) 2015 INRIA, Hajime Tazaki
+ *
+ * Author: Mathieu Lacage <mathieu.lacage@gmail.com>
+ *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ */
+
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
@@ -11,7 +20,6 @@
 #include "slib_env.h"
 #include "sim.h"
 #include "sim-assert.h"
-
 
 struct meminfo meminfo;
 static void * __initdata vmalloc_min =
@@ -47,7 +55,6 @@ free_memmap(unsigned long start_pfn, unsigned long end_pfn)
 	if (pg < pgend)
 		memblock_free_early(pg, pgend - pg);
 }
-
 
 /*
  * The mem_map array can get very big.  Free the unused area of the memory map.
@@ -154,7 +161,6 @@ static void __init free_highpages(void)
 #endif
 }
 
-
 /*
  * mem_init() marks the free areas in the mem_map and tells us how much
  * memory is free.  This is done after various parts of the system have
@@ -219,12 +225,10 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max_low,
 	free_area_init_node(0, zone_size, min, zhole_size);
 }
 
-
 void __init arm_memblock_init(void)
 {
 	memblock_dump_all();
 }
-
 
 int __init arm_add_memory(u64 start, u64 size)
 {
@@ -270,7 +274,6 @@ int __init arm_add_memory(u64 start, u64 size)
 	return 0;
 }
 
-
 static void __init find_limits(unsigned long *min, unsigned long *max_low,
 			       unsigned long *max_high)
 {
@@ -278,8 +281,6 @@ static void __init find_limits(unsigned long *min, unsigned long *max_low,
 	*min = PFN_UP(memblock_start_of_DRAM());
 	*max_high = PFN_DOWN(memblock_end_of_DRAM());
 }
-
-
 
 static void __init arm_bootmem_init(unsigned long start_pfn,
 	unsigned long end_pfn)
@@ -333,7 +334,6 @@ static void __init arm_bootmem_init(unsigned long start_pfn,
 	}
 }
 
-
 void __init bootmem_init(void)
 {
 	unsigned long min, max_low, max_high;
@@ -357,12 +357,10 @@ void __init bootmem_init(void)
 	max_pfn = max_high;
 }
 
-
 void __init paging_init(void)
 {
 	bootmem_init();
 }
-
 
 void __init sanity_check_meminfo(void)
 {
@@ -427,7 +425,6 @@ void __init sanity_check_meminfo(void)
 				else if (!IS_ALIGNED(block_end, SECTION_SIZE))
 					memblock_limit = arm_lowmem_limit;
 			}
-
 		}
 	}
 
@@ -464,7 +461,6 @@ void __init setup_arch(char **cmd)
 	paging_init();
 }
 
-
 void *kmap_atomic(struct page *page)
 {
 	return (void *)total_ram + (page_to_pfn(page) << PAGE_SHIFT);
@@ -500,4 +496,3 @@ void test(void)
 	//					pgdat->node_zonelists, 
 	//					pgdat->nr_zones);
 }
-

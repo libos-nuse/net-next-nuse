@@ -64,6 +64,9 @@ const struct cpumask *const cpu_possible_mask = to_cpumask(cpu_possible_bits);
 unsigned long highest_memmap_pfn __read_mostly;
 unsigned long max_mapnr;
 
+/* highmem.c */
+#define cache_is_vivt() 0
+
 /*
  * Randomize the address space (stacks, mmaps, brk, etc.).
  *
