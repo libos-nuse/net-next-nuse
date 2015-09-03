@@ -120,9 +120,6 @@ source "lib/Kconfig"
 config SLIB
        def_bool y
 
-config INIT_DEBUG_ALWAYS
-	def_bool y
-
 config HAVE_MEMBLOCK
 	def_bool y
 

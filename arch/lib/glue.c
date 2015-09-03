@@ -36,8 +36,6 @@ struct mm_struct init_mm;
 
 /* defined in sched.c, used in net/sched/em_meta.c */
 unsigned long avenrun[3];
-/* defined in mm/page_alloc.c */
-//struct pglist_data __refdata contig_page_data;
 /* defined in linux/mmzone.h mm/memory.c */
 struct page *mem_map = 0;
 /* used by sysinfo in kernel/timer.c */
