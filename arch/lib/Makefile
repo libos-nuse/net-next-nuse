@@ -78,7 +78,7 @@ ifeq ($(SUBARCH),x86)
 endif
 
 KBUILD_CFLAGS := CFLAGS
-LDFLAGS += -shared -nodefaultlibs -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
+LDFLAGS += -shared -nodefaultlibs -lgcc -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
 
 # targets
 
@@ -170,7 +170,8 @@ OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(built
 export OBJS KERNEL_LIB COV covl_yes covl_no
 
 # objcopy trick is taken from rumpkernel
-EXP_SYMRENAME=rump|RUMP|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_end|_GLOBAL_OFFSET_TABLE'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
+GCCSYMBOLS=__umoddi3|__udivdi3
+EXP_SYMRENAME=rump|RUMP|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_end|_GLOBAL_OFFSET_TABLE|${GCCSYMBOLS}'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
 
 quiet_cmd_cc = CC      $@
       cmd_cc = 	mkdir -p $(dir $@);	\
