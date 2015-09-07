@@ -154,7 +154,7 @@ config ARM_L1_CACHE_SHIFT
 	default 6
 
 config PGTABLE_LEVELS
-	int 
+	int
 	default 2
 
 config HAVE_ARCH_PFN_VALID

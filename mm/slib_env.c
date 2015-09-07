@@ -11,7 +11,7 @@
 #include <linux/printk.h>
 #include <linux/memblock.h>
 #include <linux/bootmem.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/memory.h>
 #include <asm/cachetype.h>
 
@@ -24,7 +24,7 @@ struct meminfo meminfo;
 static void * __initdata vmalloc_min =
 	(void *)(VMALLOC_END - (240 << 20) - VMALLOC_OFFSET);
 
-phys_addr_t arm_lowmem_limit __initdata = 0;
+phys_addr_t arm_lowmem_limit __initdata;
 
 unsigned int cacheid __read_mostly;
 
@@ -109,19 +109,10 @@ static void __init free_highpages(void)
 	unsigned long max_low = max_low_pfn;
 	struct memblock_region *mem, *res;
 
-	printk("max_low_pfn:%lu\n", max_low_pfn);
-	printk("min_low_pfn:%lu\n", min_low_pfn);
-	printk("max_pfn:%lu\n", max_pfn);
-
-
 	/* set highmem page free */
 	for_each_memblock(memory, mem) {
 		unsigned long start = memblock_region_memory_base_pfn(mem);
 		unsigned long end = memblock_region_memory_end_pfn(mem);
-
-		printk("start:%lu\n", start);
-		printk("end:%lu\n", end);
-
 
 		/* Ignore complete lowmem entries */
 		if (end <= max_low)
@@ -172,11 +163,7 @@ void __init mem_init(void)
 	/* this will put all unused low memory onto the freelists */
 	free_unused_memmap();
 	free_all_bootmem();
-
 	free_highpages();
-
-	//mem_init_print_info(NULL);
-
 }
 
 static void __init zone_sizes_init(unsigned long min, unsigned long max_low,
@@ -211,11 +198,13 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max_low,
 
 		if (start < max_low) {
 			unsigned long low_end = min(end, max_low);
+
 			zhole_size[0] -= low_end - start;
 		}
 #ifdef CONFIG_HIGHMEM
 		if (end > max_low) {
 			unsigned long high_start = max(start, max_low);
+
 			zhole_size[ZONE_HIGHMEM] -= end - high_start;
 		}
 #endif
@@ -260,7 +249,7 @@ int __init arm_add_memory(u64 start, u64 size)
 	start = aligned_start;
 	size = size & ~(phys_addr_t)(PAGE_SIZE - 1);
 
-	printk("I am %s start:%llu, size:%llu\n", __func__, start, size);
+	pr_info("[%s] start:%llu, size:%llu\n", __func__, start, size);
 
 	/*
 	 * Check whether this memory region has non-zero size or
@@ -329,7 +318,7 @@ static void __init arm_bootmem_init(unsigned long start_pfn,
 		if (start >= end)
 			break;
 		reserve_bootmem(__pfn_to_phys(start),
-			        (end - start) << PAGE_SHIFT, BOOTMEM_DEFAULT);
+			(end - start) << PAGE_SHIFT, BOOTMEM_DEFAULT);
 	}
 }
 
@@ -339,10 +328,9 @@ void __init bootmem_init(void)
 
 	find_limits(&min, &max_low, &max_high);
 
-	printk("min:%lu\n", min);
-	printk("max_low:%lu\n", max_low);
-	printk("max_high:%lu\n", max_high);
-
+	pr_info("min:%lu\n", min);
+	pr_info("max_low:%lu\n", max_low);
+	pr_info("max_high:%lu\n", max_high);
 
 	zone_sizes_init(min, max_low, max_high);
 
@@ -388,10 +376,11 @@ void __init sanity_check_meminfo(void)
 			}
 
 			if (reg->size > size_limit) {
-				phys_addr_t overlap_size = reg->size - size_limit;
+				phys_addr_t overlap_size =
+						reg->size - size_limit;
 
 				pr_notice("Truncating RAM at %pa-%pa to -%pa",
-					  &block_start, &block_end, &vmalloc_limit);
+				    &block_start, &block_end, &vmalloc_limit);
 				memblock_remove(vmalloc_limit, overlap_size);
 				block_end = vmalloc_limit;
 			}
@@ -442,18 +431,19 @@ void __init sanity_check_meminfo(void)
 	memblock_set_current_limit(memblock_limit);
 }
 
-char *total_ram = NULL;
+char *total_ram;
 
 void __init setup_arch(char **cmd)
 {
 	int ret;
+
 	ret = arm_add_memory(0, 1024 * 1024 * 1024 * 1);
 	if (ret)
-		printk("arm_add_memory failed in %s\n", __func__);
+		pr_info("arm_add_memory failed in %s\n", __func__);
 
-	total_ram = lib_malloc(1024 * 1024 * 1024 * 1);	
+	total_ram = lib_malloc(1024 * 1024 * 1024 * 1);
 	if (total_ram == NULL)
-		printk("Alloc memory failed in %s\n", __func__);
+		pr_info("Alloc memory failed in %s\n", __func__);
 
 	sanity_check_meminfo();
 	arm_memblock_init();
@@ -489,9 +479,6 @@ void __init init_memory_system(void)
 void test(void)
 {
 	pg_data_t *pgdat = NODE_DATA(nid);
+
 	alloc_pages(GFP_KERNEL, 1);
-	
-	//printk("I am printk: %p, %p, %d\n", pgdat->node_zones, 
-	//					pgdat->node_zonelists, 
-	//					pgdat->nr_zones);
 }

@@ -316,11 +316,8 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 }
 
 #ifdef CONFIG_HAVE_ARCH_PFN_VALID
-extern int memblock_is_memory(phys_addr_t addr);
-
 int pfn_valid(unsigned long pfn)
 {
 	return memblock_is_memory(__pfn_to_phys(pfn));
 }
 #endif
-

@@ -117,7 +117,6 @@ static DEFINE_SPINLOCK(managed_page_count_lock);
 unsigned long totalram_pages __read_mostly;
 #endif
 
-
 static void print_buddy_freelist(void)
 {
 	struct zone *zone;
@@ -127,27 +126,25 @@ static void print_buddy_freelist(void)
 	int i = 0;
 
 	for_each_zone(zone) {
-		printk(KERN_INFO "I am zone %s %lu\n", zone->name, zone->present_pages);
+		pr_info("For zone %s %lu\n", zone->name,
+					zone->present_pages);
 		if (zone->present_pages == 0)
 			goto out;
-	
-		for_each_migratetype_order(order, t) {
-			list_for_each(curr, &zone->free_area[order].free_list[t]) {
-				pfn = page_to_pfn(list_entry(curr, struct page, lru));
 
-				printk(KERN_INFO "%lu %d %d %d\n",pfn, order, t, i);
+		for_each_migratetype_order(order, t) {
+			struct free_area area = zone->free_area[order];
+
+			list_for_each(curr, &area.free_list[t]) {
+				pfn = page_to_pfn(list_entry(curr,
+							struct page, lru));
+				pr_info("%lu %d %d %d\n", pfn, order, t, i);
 				i++;
 			}
-
 		}
 	}
 out:
-	printk(KERN_INFO "Totoal free page2: %d\n", i);
+	pr_info("Totoal free page2: %d\n", i);
 }
-
-
-
-
 
 unsigned long totalreserve_pages __read_mostly;
 unsigned long totalcma_pages __read_mostly;
@@ -3202,10 +3199,6 @@ got_pg:
 	return page;
 }
 
-#ifdef CONFIG_LIB
-extern char *total_ram;
-#endif
-
 /*
  * This is the 'heart' of the zoned buddy allocator.
  */
@@ -3287,7 +3280,6 @@ out:
 		goto retry_cpuset;
 
 #ifdef CONFIG_LIB
-	printk(KERN_INFO "Done: I am %s %lu\n", __func__, page_to_pfn(page));
 	page->virtual = (void *)total_ram + (page_to_pfn(page) << PAGE_SHIFT);
 #endif
 	return page;
@@ -3346,11 +3338,10 @@ EXPORT_SYMBOL(free_pages);
 void free_pages(unsigned long addr, unsigned int order)
 {
 	unsigned long pfn = addr - (unsigned long) total_ram;
-	pfn = pfn >> PAGE_SHIFT;
 
-	if (pfn != 0) {
+	pfn = pfn >> PAGE_SHIFT;
+	if (pfn != 0)
 		__free_pages(pfn_to_page(pfn), order);
-	}
 }
 EXPORT_SYMBOL(free_pages);
 #endif
@@ -3656,6 +3647,7 @@ void si_meminfo(struct sysinfo *val)
 	val->freehigh = nr_free_highpages();
 	val->mem_unit = PAGE_SIZE;
 }
+
 EXPORT_SYMBOL(si_meminfo);
 #endif
 
@@ -6067,7 +6059,7 @@ void __init mem_init_print_info(const char *str)
 #endif
 	       str ? ", " : "", str ? str : "");
 }
-#endif 
+#endif
 
 /**
  * set_dma_reserve - set the specified number of pages reserved in the first zone

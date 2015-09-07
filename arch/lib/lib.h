@@ -18,4 +18,8 @@ struct SimTask {
 	void *private;
 };
 
+#ifdef CONFIG_HAVE_ARCH_PFN_VALID
+extern int memblock_is_memory(phys_addr_t addr);
+#endif
+
 #endif /* LIB_H */
