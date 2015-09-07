@@ -3,8 +3,7 @@
  *
  * Copyright (c) 2015 INRIA, Hajime Tazaki
  *
- * Author: Mathieu Lacage <mathieu.lacage@gmail.com>
- *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ * Author: Yizheng Jiao <jyizheng@gmail.com>
  */
 
 #include <linux/init.h>

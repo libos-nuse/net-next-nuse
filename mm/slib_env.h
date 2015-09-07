@@ -1,15 +1,20 @@
+/*
+ * Library Slab Allocator (SLIB)
+ *
+ * Copyright (c) 2015 INRIA, Hajime Tazaki
+ *
+ * Author: Yizheng Jiao <jyizheng@gmail.com>
+ */
+
 #ifndef SLIB_ENV_H
 #define SLIB_ENV_H
-
 
 #include <linux/const.h>
 #include <asm/sections.h>
 
-
 /* From arm/include/asm/memory.h */
 #define __phys_to_pfn(paddr)    ((unsigned long)((paddr) >> PAGE_SHIFT))
 #define __pfn_to_phys(pfn)      ((phys_addr_t)(pfn) << PAGE_SHIFT)
-
 
 
 /*
@@ -43,8 +48,6 @@ extern struct meminfo meminfo;
 #define bank_phys_start(bank)   (bank)->start
 #define bank_phys_end(bank)     ((bank)->start + (bank)->size)
 #define bank_phys_size(bank)    (bank)->size
-
-
 
 /* From arm/mm/mmu.c */
 //pgprot_t pgprot_user;
