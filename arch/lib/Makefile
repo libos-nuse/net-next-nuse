@@ -128,7 +128,7 @@ quiet_cmd_objsmk = OBJS-MK   $@
 	done > $@
 
 $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config $(ARCH_DIR)/Makefile
-	+$(call if_changed,objsmk); \
+	+$(call if_changed,objsmk);
 
 quiet_cmd_linker = GEN     $@
       cmd_linker = ld -shared --verbose | ./$^ > $@
