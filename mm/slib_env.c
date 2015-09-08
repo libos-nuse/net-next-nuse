@@ -1,7 +1,7 @@
 /*
  * Library Slab Allocator (SLIB)
  *
- * Copyright (c) 2015 INRIA, Hajime Tazaki
+ * Copyright (c) 2015 Yizheng Jiao
  *
  * Author: Yizheng Jiao <jyizheng@gmail.com>
  */

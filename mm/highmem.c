@@ -29,6 +29,7 @@
 #include <linux/kgdb.h>
 #include <asm/tlbflush.h>
 
+
 #if defined(CONFIG_HIGHMEM) || defined(CONFIG_X86_32)
 DEFINE_PER_CPU(int, __kmap_atomic_idx);
 #endif
@@ -296,6 +297,7 @@ void *kmap_high(struct page *page)
 	unlock_kmap();
 	return (void*) vaddr;
 }
+
 EXPORT_SYMBOL(kmap_high);
 
 #ifdef ARCH_NEEDS_KMAP_HIGH_GET
