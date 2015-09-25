@@ -88,7 +88,7 @@ all-obj-for-clean:=
 all: library modules
 
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ kernel/time/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/ init/
+dirs=kernel/ kernel/time/ kernel/sched/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/ init/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
@@ -97,6 +97,7 @@ kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
 hrtimer.o
+kernel/sched/_to_keep=wait.o completion.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o

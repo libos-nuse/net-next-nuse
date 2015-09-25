@@ -26,7 +26,7 @@ struct timespec wall_to_monotonic;
 uint64_t ns_to_jiffies(uint64_t ns)
 {
 	do_div(ns, (1000000000 / HZ));
-	return ns;
+	return ns + INITIAL_JIFFIES;
 }
 
 void lib_update_jiffies(void)

@@ -479,6 +479,8 @@ EXPORT_SYMBOL(__wake_up_bit);
  */
 void wake_up_bit(void *word, int bit)
 {
+	/* FIXME: hajime: NOP until mm support by yizheng is coming */
+	return;
 	__wake_up_bit(bit_waitqueue(word, bit), word, bit);
 }
 EXPORT_SYMBOL(wake_up_bit);

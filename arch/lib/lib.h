@@ -15,6 +15,7 @@
 struct SimTask {
 	struct list_head head;
 	struct task_struct kernel_task;
+	void *event;
 	void *private;
 };
 

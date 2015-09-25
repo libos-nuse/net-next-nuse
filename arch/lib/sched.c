@@ -124,6 +124,7 @@ void __put_task_struct(struct task_struct *t)
 	lib_free(t);
 }
 
+#if 0
 void add_wait_queue(wait_queue_head_t *q, wait_queue_t *wait)
 {
 	wait->flags &= ~WQ_FLAG_EXCLUSIVE;
@@ -250,15 +251,47 @@ void __wake_up_sync_key(wait_queue_head_t *q, unsigned int mode,
 {
 	__wake_up(q, mode, nr_exclusive, key);
 }
+#endif
+
+static void trampoline(unsigned long arg)
+{
+	struct SimTask *lib_task = (struct SimTask *)arg;
+	lib_task_wakeup(lib_task);
+	lib_task->event = NULL;
+}
+
 int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags,
 			  void *key)
 {
 	struct task_struct *task = (struct task_struct *)curr->private;
 	struct SimTask *lib_task = container_of(task, struct SimTask,
 						kernel_task);
+	int ret = 1;		/* always notify waking up a task */
 
-	return lib_task_wakeup(lib_task);
+	if (!(task->state & mode))
+		return 0;
+
+#if 0
+#if 0
+	/* XXX: work-around for blocking signal for pthread_signal()
+	 * immediately detach the function. it's still not perfect
+	 * work-around...  */
+	if (lib_task->event)
+		return 1;
+	lib_task->event = lib_event_schedule_ns(0, (void *)&trampoline, lib_task);
+	/* This block is too sloooooooooooooooooooooow... */
+#endif
+	struct timer_list timer;
+	setup_timer_on_stack(&timer, trampoline, (unsigned long)lib_task);
+	mod_timer(&timer, jiffies+1);
+	del_singleshot_timer_sync(&timer);
+
+#else
+	ret = lib_task_wakeup(lib_task);
+#endif
+	return ret;
 }
+#if 0
 __sched int bit_wait(struct wait_bit_key *word)
 {
 	if (signal_pending_state(current->state, current))
@@ -299,7 +332,7 @@ wait_queue_head_t *bit_waitqueue(void *word, int bit)
 
 	return &zone->wait_table[hash_long(val, zone->wait_table_bits)];
 }
-
+#endif
 
 void schedule(void)
 {
@@ -347,6 +380,7 @@ void yield(void)
 	lib_task_yield();
 }
 
+#if 0
 void complete_all(struct completion *x)
 {
 	x->done += UINT_MAX / 2;
@@ -374,12 +408,22 @@ int wait_for_completion_killable(struct completion *x)
 	wait_for_completion_timeout(x, MAX_SCHEDULE_TIMEOUT);
 	return 0;
 }
-int wake_up_process(struct task_struct *tsk)
+#endif
+
+long __sched io_schedule_timeout(long timeout)
+{
+	return schedule_timeout(timeout);
+}
+
+int wake_up_process(struct task_struct *task)
 {
 	struct SimTask *lib_task =
-		container_of(tsk, struct SimTask, kernel_task);
+		container_of(task, struct SimTask, kernel_task);
+	int ret;
 
-	return lib_task_wakeup(lib_task);
+//lib_printf("%s task state %d\n", __FUNCTION__, task->state);
+	ret = lib_task_wakeup(lib_task);
+	return ret;
 }
 int _cond_resched(void)
 {
