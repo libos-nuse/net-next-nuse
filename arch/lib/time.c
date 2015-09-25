@@ -10,11 +10,12 @@
 #include <linux/errno.h>
 #include <linux/timex.h>
 #include <linux/ktime.h>
+#include <linux/timer.h>
 #include "sim.h"
 #include "sim-assert.h"
 
 unsigned long volatile jiffies = INITIAL_JIFFIES;
-u64 jiffies_64 = INITIAL_JIFFIES;
+//u64 jiffies_64 = INITIAL_JIFFIES;
 
 struct timespec xtime;
 seqlock_t xtime_lock;
@@ -33,6 +34,8 @@ void lib_update_jiffies(void)
 	uint64_t ns = lib_current_ns();
 	jiffies = ns_to_jiffies(ns);
 	jiffies_64 = ns_to_jiffies(ns);
+	run_local_timers();
+//	lib_printf("%ld(%ld ms): Jiffies updated\n", jiffies, jiffies*1000/HZ);
 }
 
 /* copied from kernel/time/hrtimeer.c */
@@ -60,6 +63,7 @@ s64 __ktime_divns(const ktime_t kt, s64 div)
 }
 #endif /* BITS_PER_LONG >= 64 */
 
+#if 0
 static unsigned long
 round_jiffies_common(unsigned long j,
 		     bool force_up)
@@ -103,6 +107,8 @@ void msleep(unsigned int msecs)
 			      lib_task_current());
 	lib_task_wait();
 }
+#endif
+
 
 void read_persistent_clock(struct timespec *ts)
 {

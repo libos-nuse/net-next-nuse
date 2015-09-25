@@ -168,12 +168,13 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 
 	pr_notice("%s", linux_banner);
 
+	timekeeping_init();
+	init_timers();
 	rcu_init();
 
 	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
 	devices_init();
 	buses_init();
-	timekeeping_init();
 	/* in lib/idr.c (called normally by init/main.c) */
 	idr_init_cache();
 	vfs_caches_init();

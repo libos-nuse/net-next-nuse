@@ -306,6 +306,7 @@ void schedule(void)
 	lib_task_wait();
 }
 
+#if 0
 static void trampoline(void *context)
 {
 	struct SimTask *task = context;
@@ -339,6 +340,7 @@ signed long schedule_timeout_interruptible(signed long timeout)
 {
 	return schedule_timeout(timeout);
 }
+#endif
 
 void yield(void)
 {

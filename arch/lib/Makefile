@@ -27,7 +27,7 @@ AUTOGENS=include/generated/compile.h include/generated/bounds.h \
 # sources and objects
 LIB_SRC=\
 lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
-timer.c hrtimer.c sched.c workqueue.c \
+sched.c workqueue.c \
 print.c tasklet.c tasklet-hrtimer.c \
 glue.c fs.c sysctl.c proc.c sysfs.c \
 capability.c pid.c modules.c filemap.c vmscan.c
@@ -95,7 +95,8 @@ colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o
-kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o
+kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
+hrtimer.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
