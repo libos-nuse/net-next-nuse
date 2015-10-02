@@ -83,7 +83,7 @@ LDFLAGS += -shared -nodefaultlibs -Wl,-z,lazy -lgcc_s -g3 -Wl,-O1 -Wl,-T$(ARCH_D
 # targets
 
 modules:=
-all-obj-for-clean:=
+#all-obj-for-clean:=
 
 all: library modules
 
@@ -167,13 +167,17 @@ include/generated/bounds.h:
 	$(call cmd,lib_bounds)
 
 
+uniq = $(if $1,$(firstword $1) $(call uniq,$(filter-out $(firstword $1),$1)))
+
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
+KERNEL_OBJS=$(call uniq,$(all-obj-for-clean:%builtin.o=))
+AR_OBJS=$(LIB_OBJ) $(foreach kobj,$(KERNEL_OBJS),$(if $(wildcard $(kobj)),$(kobj)))
 export OBJS KERNEL_LIB COV covl_yes covl_no
 
 # objcopy trick is taken from rumpkernel
 GCCSYMBOLS=__umoddi3|__udivdi3
-EXP_SYMRENAME=rump|RUMP|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_end|_GLOBAL_OFFSET_TABLE|${GCCSYMBOLS}'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
+EXP_SYMRENAME=rump|RUMP|bmk_|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_end|_GLOBAL_OFFSET_TABLE|${GCCSYMBOLS}'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
 
 quiet_cmd_cc = CC      $@
       cmd_cc = 	mkdir -p $(dir $@);	\
@@ -217,7 +221,8 @@ $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOGENS) $(OBJS)
 
 quiet_cmd_linklib = LIB     $@
       cmd_linklib = $(CC) -Wl,--whole-archive $(OBJS) $(LDFLAGS) -o $@; \
-		    ln -s -f $(KERNEL_LIB) liblinux.so
+		    ln -s -f $(KERNEL_LIB) liblinux.so; \
+		    rm -f liblinux.a ; $(AR) cru liblinux.a $(AR_OBJS)
 
 quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \

@@ -166,20 +166,27 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	exported->sys_file_write = lib_sys_file_write_forwarder;
 	exported->sys_file_read = lib_sys_file_read_forwarder;
 
+ 
 	pr_notice("%s", linux_banner);
 
+        lib_printf("GOGO timek\n");
 	timekeeping_init();
+        lib_printf("GOGO init tim\n");
 	init_timers();
+        lib_printf("GOGO rcu\n");
 	rcu_init();
 
+        lib_printf("GOGO \n");
 	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
 	devices_init();
 	buses_init();
 	/* in lib/idr.c (called normally by init/main.c) */
 	idr_init_cache();
 	vfs_caches_init();
+        lib_printf("GOGO \n");
 
 	lib_proc_net_initialize();
+        lib_printf("GOGO \n");
 
 	/* and, then, call the normal initcalls */
 	initcall_t *call;

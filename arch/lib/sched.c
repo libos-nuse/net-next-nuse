@@ -271,7 +271,7 @@ int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags,
 	if (!(task->state & mode))
 		return 0;
 
-#if 0
+#if 1
 #if 0
 	/* XXX: work-around for blocking signal for pthread_signal()
 	 * immediately detach the function. it's still not perfect
