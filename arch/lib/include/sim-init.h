@@ -19,6 +19,7 @@ struct _IO_FILE;
 typedef struct _IO_FILE FILE;
 
 struct SimExported {
+//	int (*syscall)(void);
 	struct SimTask *(*task_create)(void *priv, unsigned long pid);
 	void (*task_destroy)(struct SimTask *task);
 	void *(*task_get_private)(struct SimTask *task);

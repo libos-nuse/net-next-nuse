@@ -19,6 +19,7 @@
 #include <linux/sched/rt.h>
 #include <linux/backing-dev.h>
 #include <linux/file.h>
+#include <linux/sched/sysctl.h>
 #include <stdarg.h>
 #include "sim-assert.h"
 #include "sim.h"
@@ -32,6 +33,8 @@ struct kernel_param;
 struct super_block;
 
 struct mm_struct init_mm;
+struct pid_namespace init_pid_ns;
+struct kmem_cache *fs_cachep;
 
 /* defined in sched.c, used in net/sched/em_meta.c */
 unsigned long avenrun[3];
@@ -89,12 +92,14 @@ unsigned long vm_total_pages;
 
 /* arm/mmu.c */
 pgprot_t pgprot_kernel;
+int sysctl_max_map_count __read_mostly = DEFAULT_MAX_MAP_COUNT;
 
-
+#if 0
 struct backing_dev_info noop_backing_dev_info = {
 	.name		= "noop",
 	.capabilities	= 0,
 };
+#endif
 
 /* from rt.c */
 int sched_rr_timeslice = RR_TIMESLICE;

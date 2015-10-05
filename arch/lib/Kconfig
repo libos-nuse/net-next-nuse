@@ -117,6 +117,8 @@ source "crypto/Kconfig"
 
 source "lib/Kconfig"
 
+source "mm/Kconfig"
+
 config SLIB
        def_bool y
 

@@ -15,12 +15,14 @@
 #include "sim-assert.h"
 #include "sim-types.h"
 
+#if 0
 int mmap_min_addr_handler(struct ctl_table *table, int write,
 		void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	lib_assert(false);
 	return 0;
 }
+#endif
 
 int drop_caches_sysctl_handler(struct ctl_table *table, int write,
 			       void *buffer, size_t *length, loff_t *ppos)
@@ -49,6 +51,7 @@ int percpu_pagelist_fraction_sysctl_handler(struct ctl_table *table, int write,
 	lib_assert(false);
 	return 0;
 }
+#if 0
 int dirty_background_ratio_handler(struct ctl_table *table, int write,
 				   void *buffer, size_t *lenp,
 				   loff_t *ppos)
@@ -84,6 +87,7 @@ int dirty_writeback_centisecs_handler(struct ctl_table *table, int write,
 	lib_assert(false);
 	return 0;
 }
+#endif
 int scan_unevictable_handler(struct ctl_table *table, int write,
 			     void __user *buffer,
 			     size_t *length, loff_t *ppos)
@@ -109,8 +113,9 @@ unsigned int sysctl_sched_compat_yield = 0;
 unsigned int sysctl_sched_rt_period = 1000000;
 int sysctl_sched_rt_runtime = 950000;
 
+#if 0
 int vm_highmem_is_dirtyable;
-unsigned long vm_dirty_bytes = 0;
+/unsigned long vm_dirty_bytes = 0;
 int vm_dirty_ratio = 20;
 int dirty_background_ratio = 10;
 unsigned int dirty_expire_interval = 30 * 100;
@@ -119,6 +124,8 @@ unsigned long dirty_background_bytes = 0;
 
 int sysctl_max_map_count __read_mostly = DEFAULT_MAX_MAP_COUNT;
 unsigned long dac_mmap_min_addr = 4096;
+
+#endif
 
 int panic_timeout = 0;
 int panic_on_oops = 0;
@@ -132,7 +139,7 @@ int pid_max_min = RESERVED_PIDS + 1;
 int pid_max_max = PID_MAX_LIMIT;
 
 int max_threads = 100;
-int laptop_mode = 0;
+//int laptop_mode = 0;
 
 #define DEFAULT_MESSAGE_LOGLEVEL 4
 #define MINIMUM_CONSOLE_LOGLEVEL 1
@@ -148,24 +155,26 @@ int print_fatal_signals = 0;
 unsigned int core_pipe_limit = 0;
 int core_uses_pid = 0;
 int vm_swappiness = 60;
-int nr_pdflush_threads = 0;
+//int nr_pdflush_threads = 0;
 unsigned long scan_unevictable_pages = 0;
 int suid_dumpable = 0;
 int page_cluster = 0;
-int block_dump = 0;
+//int block_dump = 0;
 int C_A_D = 0;
-#include <linux/nsproxy.h>
-struct nsproxy init_nsproxy;
+/* #include <linux/nsproxy.h> */
+/* struct nsproxy init_nsproxy; */
 #include <linux/reboot.h>
 char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
 unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
 unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 
+#if 0
 int pdflush_proc_obsolete(struct ctl_table *table, int write,
 			  void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	return nr_pdflush_threads;
 }
+#endif
 #include <linux/fs.h>
 
 /**

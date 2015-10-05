@@ -12,6 +12,7 @@
 #include <linux/nsproxy.h>
 #include <linux/hash.h>
 #include <net/net_namespace.h>
+#include <linux/init_task.h>
 #include "lib.h"
 #include "sim.h"
 #include "sim-assert.h"
@@ -75,6 +76,13 @@ struct SimTask *lib_task_create(void *private, unsigned long pid)
 	task->kernel_task.stack = info;
 	/* this is a hack. */
 	task->kernel_task.group_leader = &task->kernel_task;
+	task->kernel_task.signal = lib_malloc(sizeof(struct signal_struct));
+	task->kernel_task.signal->rlim[RLIMIT_NOFILE].rlim_cur = RLIM_INFINITY;
+	task->kernel_task.signal->rlim[RLIMIT_NOFILE].rlim_max = RLIM_INFINITY;
+	task->kernel_task.files = &init_files,
+	task->kernel_task.nsproxy = &init_nsproxy;
+	task->kernel_task.fs = &init_fs;
+
 	task->private = private;
 	return task;
 }
@@ -271,7 +279,7 @@ int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags,
 	if (!(task->state & mode))
 		return 0;
 
-#if 1
+#if 0
 #if 0
 	/* XXX: work-around for blocking signal for pthread_signal()
 	 * immediately detach the function. it's still not perfect

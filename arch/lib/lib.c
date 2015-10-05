@@ -11,10 +11,14 @@
 #include <linux/sched.h>        /* struct task_struct */
 #include <linux/device.h>
 #include <linux/fs.h>
+#include <linux/file.h>
 #include <linux/mm.h>
 #include <drivers/base/base.h>
 #include <linux/idr.h>
 #include <linux/rcupdate.h>
+#include <linux/init_task.h>
+#include <linux/mqueue.h>
+#include "sim-printf.h"
 #include "sim-init.h"
 #include "sim.h"
 
@@ -133,6 +137,7 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	/* make sure we can call the callbacks */
 	g_imported = *imported;
 	g_kernel = kernel;
+//	exported->syscall = lib_syscall;
 	exported->task_create = lib_task_create;
 	exported->task_destroy = lib_task_destroy;
 	exported->task_get_private = lib_task_get_private;
@@ -168,6 +173,8 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 
  
 	pr_notice("%s", linux_banner);
+	init_task.nsproxy = &init_nsproxy;
+	init_task.fs = &init_fs;
 
         lib_printf("GOGO timek\n");
 	timekeeping_init();
@@ -198,6 +205,11 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 		(*call)();
 		call++;
 	} while (call < __initcall_end);
+
+	/* open 0/1/2 to init */
+	get_unused_fd_flags(0);
+	get_unused_fd_flags(0);
+	get_unused_fd_flags(0);
 
 	/* finally, put the system in RUNNING state. */
 	system_state = SYSTEM_RUNNING;
