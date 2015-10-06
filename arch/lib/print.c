@@ -9,13 +9,11 @@
 #include <stdarg.h>
 #include <linux/string.h>
 #include <linux/printk.h>
+#include <linux/kernel.h>
 #include "sim.h"
 #include "sim-assert.h"
 
 int dmesg_restrict = 1;
-
-/* from lib/vsprintf.c */
-int vsnprintf(char *buf, size_t size, const char *fmt, va_list args);
 
 int printk(const char *fmt, ...)
 {
@@ -24,8 +22,9 @@ int printk(const char *fmt, ...)
 	int value;
 
 	va_start(args, fmt);
-	value = vsnprintf(buf, 256, printk_skip_level(fmt), args);
-	lib_printf("<%c>%s", printk_get_level(fmt), buf);
+	snprintf(buf, 4, "<%c>", printk_get_level(fmt));
+	value = vsnprintf(buf+3, 256 - 3, printk_skip_level(fmt), args);
+	lib_printf(buf);
 	va_end(args);
 	return value;
 }

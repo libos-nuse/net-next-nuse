@@ -432,16 +432,17 @@ void __init sanity_check_meminfo(void)
 }
 
 char *total_ram;
-
+/* FIXME: need to be configurable or dynamically detectable */
+#define TOTAL_RAMSIZE (1024 * 1024 * 1)
 void __init setup_arch(char **cmd)
 {
 	int ret;
 
-	ret = arm_add_memory(0, 1024 * 1024 * 1024 * 1);
+	ret = arm_add_memory(0, TOTAL_RAMSIZE);
 	if (ret)
 		pr_info("arm_add_memory failed in %s\n", __func__);
 
-	total_ram = lib_malloc(1024 * 1024 * 1024 * 1);
+	total_ram = lib_malloc(TOTAL_RAMSIZE);
 	if (total_ram == NULL)
 		pr_info("Alloc memory failed in %s\n", __func__);
 

@@ -1,6 +1,8 @@
 #ifndef _ASM_SIM_THREAD_INFO_H
 #define _ASM_SIM_THREAD_INFO_H
 
+#include <asm/segment.h>
+
 #define TIF_NEED_RESCHED 1
 #define TIF_SIGPENDING 2
 #define TIF_MEMDIE 5
@@ -9,6 +11,7 @@ struct thread_info {
 	__u32 flags;
 	int preempt_count;
 	struct task_struct *task;
+	mm_segment_t addr_limit;
 	struct restart_block restart_block;
 };
 

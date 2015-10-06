@@ -12,10 +12,6 @@
 #include <linux/const.h>
 #include <asm/sections.h>
 
-/* From arm/include/asm/memory.h */
-#define __phys_to_pfn(paddr)    ((unsigned long)((paddr) >> PAGE_SHIFT))
-#define __pfn_to_phys(pfn)      ((phys_addr_t)(pfn) << PAGE_SHIFT)
-
 /*
  * Memory map description: from arm/include/asm/setup.h
  */

@@ -69,6 +69,7 @@ static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)
 long atomic64_xchg(atomic64_t *v, long new);
 int atomic64_add_unless(atomic64_t *v, long a, long u);
 int atomic64_inc_is_not_zero(atomic64_t *v);
+#define atomic64_dec_and_test(v)	(atomic64_dec_return((v)) == 0)
 #define atomic64_inc_not_zero(v) 	atomic64_add_unless((v), 1LL, 0LL)
 
 #include <asm-generic/atomic.h>

@@ -30,10 +30,12 @@ lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
 sched.c workqueue.c \
 print.c tasklet.c tasklet-hrtimer.c \
 glue.c sysctl.c proc.c sysfs.c \
-pid.c modules.c vmscan.c
+pid.c modules.c vmscan.c kernel/syscalls.c
 
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
 LIB_DEPS=$(addprefix $(ARCH_DIR)/.,$(addsuffix .o.cmd,$(basename $(LIB_SRC))))
+#XXX: FIXME
+LIB_DEPS+=$(addprefix $(ARCH_DIR)/kernel/.,$(addsuffix .o.cmd,$(basename $(notdir $(LIB_SRC)))))
 -include $(LIB_DEPS)
 
 # options
@@ -49,6 +51,10 @@ PIC?=yes
 pic_yes=-fpic -DPIC
 pic_no=-mcmodel=large
 PIC_CFLAGS=$(pic_$(PIC))
+KLIBC?=yes
+klibc_yes=-DRUMP_KERNEL_IS_LIBC
+klibc_no=
+
 
 # flags
 CFLAGS_USPACE= \
@@ -96,13 +102,14 @@ comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o capability.o nsproxy.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
-hrtimer.o
+hrtimer.o posix-timers.o posix-clock.o posix-cpu-timers.o
 kernel/sched/_to_keep=wait.o completion.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/update.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
 mm/_to_keep=util.o list_lru.o slib.o page_alloc.o memblock.o mmzone.o slib_env.o \
-nobootmem.o highmem.o oom_kill.o page-writeback.o filemap.o backing-dev.o workingset.o compaction.o
+nobootmem.o highmem.o oom_kill.o page-writeback.o filemap.o backing-dev.o workingset.o \
+compaction.o truncate.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o rng.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o syscore.o
@@ -112,16 +119,18 @@ find_last_bit.o find_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
-rhashtable.o iov_iter.o cmdline.o kobject_uevent.o once.o flex_proportions.o
+rhashtable.o iov_iter.o cmdline.o kobject_uevent.o once.o flex_proportions.o \
+llist.o timerqueue.o
 fs/_to_keep=read_write.o libfs.o namei.o filesystems.o file.o file_table.o \
 dcache.o inode.o pipe.o char_dev.o splice.o no-block.o seq_file.o super.o \
-fcntl.o coredump.o ioctl.o open.o namespace.o nsfs.o fs-writeback.o fs_struct.o
+fcntl.o coredump.o ioctl.o open.o namespace.o nsfs.o fs-writeback.o fs_struct.o \
+eventpoll.o anon_inodes.o select.o
 fs/ramfs/_to_keep=inode.o file-mmu.o
 fs/proc/_to_keep=proc_sysctl.o proc_net.o root.o generic.o inode.o
 fs/sysfs/_to_keep=mount.o
 init/_to_keep=version.o do_mounts.o
 
-quiet_cmd_objsmk = OBJS-MK   $@
+quiet_cmd_objsmk = OBJS-MK $@
       cmd_objsmk = \
 	for i in 1; do \
 	$(foreach d,$(dirs), \
@@ -174,13 +183,13 @@ uniq = $(if $1,$(firstword $1) $(call uniq,$(filter-out $(firstword $1),$1)))
 
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
-KERNEL_OBJS=$(call uniq,$(all-obj-for-clean:%builtin.o=))
+KERNEL_OBJS=$(call uniq,./net/socket.o ./net/ipv6/af_inet6.o $(all-obj-for-clean:%builtin.o=))
 AR_OBJS=$(LIB_OBJ) $(foreach kobj,$(KERNEL_OBJS),$(if $(wildcard $(kobj)),$(kobj)))
-export OBJS KERNEL_LIB COV covl_yes covl_no
+export OBJS KERNEL_LIB COV covl_yes covl_no KLIBC klibc_yes klibc_no
 
 # objcopy trick is taken from rumpkernel
 GCCSYMBOLS=__umoddi3|__udivdi3
-EXP_SYMRENAME=rump|RUMP|bmk_|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_end|_GLOBAL_OFFSET_TABLE|${GCCSYMBOLS}'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
+EXP_SYMRENAME=rump|RUMP|bmk_|lib_|nuse_|__tls|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_end|_GLOBAL_OFFSET_TABLE|${GCCSYMBOLS}'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
 
 quiet_cmd_cc = CC      $@
       cmd_cc = 	mkdir -p $(dir $@);	\
@@ -206,7 +215,7 @@ quiet_cmd_builtin = BUILTIN   $@
 %.o:%.c $(AUTOGENS)
 	$(call if_changed_dep,cc)
 
-library: $(KERNEL_LIB) $(LIBOS_TOOLS)
+library: $(ARCH_DIR)/rump_syscalls.c $(KERNEL_LIB) $(LIBOS_TOOLS)
 modules: $(modules)
 
 $(LIBOS_TOOLS): $(KERNEL_LIB) Makefile FORCE
@@ -220,12 +229,13 @@ install: modules library
 install-dir:
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOGENS) $(OBJS)
+	@echo $(all-obj-for-clean) > /tmp/b
 	$(call if_changed,linklib)
 
 quiet_cmd_linklib = LIB     $@
       cmd_linklib = $(CC) -Wl,--whole-archive $(OBJS) $(LDFLAGS) -o $@; \
 		    ln -s -f $(KERNEL_LIB) liblinux.so; \
-		    rm -f liblinux.a ; $(AR) cru liblinux.a $(AR_OBJS)
+		    rm -f liblinux.a liblinux-tmp.a ; $(AR) Tcru liblinux-tmp.a $(OBJS) ; $(AR) t liblinux-tmp.a | xargs ar cru liblinux.a
 
 quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
@@ -236,6 +246,18 @@ quiet_cmd_clean = CLEAN   $@
 archclean:
 	$(call if_changed,clean)
 
+# FIXME: now only support x86_64
+HEADER_ARCH=x86
+ARCH_SYSCALL_HDR=$(ARCH_DIR)/include/generated/asm/syscalls_64.h
+ARCH_SYSCALL_TBL=arch/$(HEADER_ARCH)/entry/syscalls/syscall_64.tbl
+ARCH_UNISTD_HDR=$(ARCH_DIR)/include/generated/asm/unistd_64.h
+ARCH_SYSCALL_PROTO=$(ARCH_DIR)/include/generated/rump_syscalls.h
+quiet_cmd_systbl = SYSTBL  $@ $(ARCH_SYSCALL_PROTO) $(ARCH_SYSCALL_HDR) $(ARCH_UNISTD_HDR)
+      cmd_systbl = $(CONFIG_SHELL) $< $(ARCH_SYSCALL_TBL) $@ $(ARCH_SYSCALL_HDR) $(ARCH_SYSCALL_PROTO) $(ARCH_UNISTD_HDR)
+
+$(ARCH_DIR)/rump_syscalls.c: $(ARCH_DIR)/kernel/makesyscalls.sh
+	$(call if_changed,systbl)
+
 archprepare: include/generated/bounds.h include/generated/utsrelease.h \
 	asm-generic $(version_h)
 
@@ -243,3 +265,4 @@ test:
 	$(Q) $(MAKE) -C $(DCE_TESTDIR)/
 
 .PHONY : clean
+.NOTPARALLEL : $(ARCH_DIR)/rump_syscalls.c

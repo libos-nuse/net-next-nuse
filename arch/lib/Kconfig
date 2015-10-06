@@ -109,6 +109,13 @@ config MULTIUSER
 config NETDEVICES
        def_bool y
 
+config ANON_INODES
+       bool
+
+config EPOLL
+       def_bool y
+       select ANON_INODES
+
 source "net/Kconfig"
 
 source "drivers/base/Kconfig"

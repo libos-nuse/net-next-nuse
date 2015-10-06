@@ -3661,7 +3661,6 @@ static inline void show_node(struct zone *zone)
 		printk("Node %d ", zone_to_nid(zone));
 }
 
-#ifndef CONFIG_LIB
 void si_meminfo(struct sysinfo *val)
 {
 	val->totalram = totalram_pages;
@@ -3674,7 +3673,6 @@ void si_meminfo(struct sysinfo *val)
 }
 
 EXPORT_SYMBOL(si_meminfo);
-#endif
 
 #ifdef CONFIG_NUMA
 void si_meminfo_node(struct sysinfo *val, int nid)
@@ -6525,8 +6523,6 @@ static int __init set_hashdist(char *str)
 __setup("hashdist=", set_hashdist);
 #endif
 
-#ifndef CONFIG_LIB
-
 /*
  * allocate a large system hash table from bootmem
  * - it is assumed that the hash table must contain an exact power-of-2
@@ -6624,7 +6620,6 @@ void *__init alloc_large_system_hash(const char *tablename,
 
 	return table;
 }
-#endif
 
 /* Return a pointer to the bitmap storing bits affecting a block of pages */
 static inline unsigned long *get_pageblock_bitmap(struct zone *zone,

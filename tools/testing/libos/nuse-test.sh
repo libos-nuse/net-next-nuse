@@ -40,8 +40,7 @@ RUMP_URL=unix:///tmp/rump-server-nuse.$PID_SLEEP
 # ls -ltr /tmp/*
 
 sudo chmod 777 /tmp/rump-server-nuse.$PID_SLEEP
-LD_PRELOAD=./libnuse-hijack.so  RUMPHIJACK=socket=all \
-    RUMP_SERVER=$RUMP_URL ip addr show
+RUMP_SERVER=$RUMP_URL ./rumpclient.sh ip addr show
 
 wait %1
 

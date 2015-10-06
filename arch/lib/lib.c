@@ -134,6 +134,8 @@ struct SimKernel *g_kernel;
 void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	      struct SimKernel *kernel)
 {
+	int i;
+
 	/* make sure we can call the callbacks */
 	g_imported = *imported;
 	g_kernel = kernel;
@@ -172,29 +174,24 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	exported->sys_file_read = lib_sys_file_read_forwarder;
 
  
-	pr_notice("%s", linux_banner);
+	pr_notice("%s\n", linux_banner);
 	init_task.nsproxy = &init_nsproxy;
 	init_task.fs = &init_fs;
 
-        lib_printf("GOGO timek\n");
 	timekeeping_init();
-        lib_printf("GOGO init tim\n");
 	init_timers();
-        lib_printf("GOGO rcu\n");
+	hrtimers_init();
 	init_memory_system();
 	rcu_init();
 
-        lib_printf("GOGO \n");
 	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
 	devices_init();
 	buses_init();
 	/* in lib/idr.c (called normally by init/main.c) */
 	idr_init_cache();
 	vfs_caches_init();
-        lib_printf("GOGO \n");
 
 	lib_proc_net_initialize();
-        lib_printf("GOGO \n");
 
 	/* and, then, call the normal initcalls */
 	initcall_t *call;
@@ -205,11 +202,6 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 		(*call)();
 		call++;
 	} while (call < __initcall_end);
-
-	/* open 0/1/2 to init */
-	get_unused_fd_flags(0);
-	get_unused_fd_flags(0);
-	get_unused_fd_flags(0);
 
 	/* finally, put the system in RUNNING state. */
 	system_state = SYSTEM_RUNNING;

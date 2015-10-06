@@ -12,6 +12,7 @@
 #include <linux/nsproxy.h>
 #include <linux/hash.h>
 #include <net/net_namespace.h>
+#include <linux/fdtable.h>
 #include <linux/init_task.h>
 #include "lib.h"
 #include "sim.h"
@@ -79,6 +80,12 @@ struct SimTask *lib_task_create(void *private, unsigned long pid)
 	task->kernel_task.signal = lib_malloc(sizeof(struct signal_struct));
 	task->kernel_task.signal->rlim[RLIMIT_NOFILE].rlim_cur = RLIM_INFINITY;
 	task->kernel_task.signal->rlim[RLIMIT_NOFILE].rlim_max = RLIM_INFINITY;
+	init_files.resize_in_progress = false;
+	init_waitqueue_head(&init_files.resize_wait);
+	/* This trick is almost the same as rump hijack library (librumphijack.so) */
+#define RUMP_FD_OFFSET 256/2
+	init_files.next_fd = RUMP_FD_OFFSET;
+
 	task->kernel_task.files = &init_files,
 	task->kernel_task.nsproxy = &init_nsproxy;
 	task->kernel_task.fs = &init_fs;
@@ -88,7 +95,6 @@ struct SimTask *lib_task_create(void *private, unsigned long pid)
 }
 void lib_task_destroy(struct SimTask *task)
 {
-	lib_free((void *)task->kernel_task.nsproxy);
 	lib_free((void *)task->kernel_task.cred);
 	lib_free((void *)task->kernel_task.cred->user);
 	free_thread_info(task->kernel_task.stack);
@@ -132,136 +138,8 @@ void __put_task_struct(struct task_struct *t)
 	lib_free(t);
 }
 
-#if 0
-void add_wait_queue(wait_queue_head_t *q, wait_queue_t *wait)
-{
-	wait->flags &= ~WQ_FLAG_EXCLUSIVE;
-	list_add(&wait->task_list, &q->task_list);
-}
-void add_wait_queue_exclusive(wait_queue_head_t *q, wait_queue_t *wait)
-{
-	wait->flags |= WQ_FLAG_EXCLUSIVE;
-	list_add_tail(&wait->task_list, &q->task_list);
-}
-void remove_wait_queue(wait_queue_head_t *q, wait_queue_t *wait)
-{
-	if (wait->task_list.prev != LIST_POISON2)
-		list_del(&wait->task_list);
-}
-void
-prepare_to_wait_exclusive(wait_queue_head_t *q, wait_queue_t *wait, int state)
-{
-	wait->flags |= WQ_FLAG_EXCLUSIVE;
-	if (list_empty(&wait->task_list))
-		list_add_tail(&wait->task_list, &q->task_list);
-	set_current_state(state);
-}
-void prepare_to_wait(wait_queue_head_t *q, wait_queue_t *wait, int state)
-{
-	unsigned long flags;
 
-	wait->flags &= ~WQ_FLAG_EXCLUSIVE;
-	spin_lock_irqsave(&q->lock, flags);
-	if (list_empty(&wait->task_list))
-		__add_wait_queue(q, wait);
-	set_current_state(state);
-	spin_unlock_irqrestore(&q->lock, flags);
-}
-void finish_wait(wait_queue_head_t *q, wait_queue_t *wait)
-{
-	set_current_state(TASK_RUNNING);
-	if (!list_empty(&wait->task_list))
-		list_del_init(&wait->task_list);
-}
-int autoremove_wake_function(wait_queue_t *wait, unsigned mode, int sync,
-			     void *key)
-{
-	int ret = default_wake_function(wait, mode, sync, key);
-
-	if (ret && (wait->task_list.prev != LIST_POISON2))
-		list_del_init(&wait->task_list);
-
-	return ret;
-}
-
-int woken_wake_function(wait_queue_t *wait, unsigned mode, int sync, void *key)
-{
-	wait->flags |= WQ_FLAG_WOKEN;
-	return default_wake_function(wait, mode, sync, key);
-}
-
-void __init_waitqueue_head(wait_queue_head_t *q, const char *name,
-			   struct lock_class_key *k)
-{
-	INIT_LIST_HEAD(&q->task_list);
-}
-/**
- * wait_for_completion: - waits for completion of a task
- * @x:  holds the state of this particular completion
- *
- * This waits to be signaled for completion of a specific task. It is NOT
- * interruptible and there is no timeout.
- *
- * See also similar routines (i.e. wait_for_completion_timeout()) with timeout
- * and interrupt capability. Also see complete().
- */
-void wait_for_completion(struct completion *x)
-{
-	wait_for_completion_timeout(x, MAX_SCHEDULE_TIMEOUT);
-}
-unsigned long wait_for_completion_timeout(struct completion *x,
-					  unsigned long timeout)
-{
-	if (!x->done) {
-		DECLARE_WAITQUEUE(wait, current);
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		wait.flags |= WQ_FLAG_EXCLUSIVE;
-		list_add_tail(&wait.task_list, &x->wait.task_list);
-		do
-			timeout = schedule_timeout(timeout);
-		while (!x->done && timeout);
-		if (wait.task_list.prev != LIST_POISON2)
-			list_del(&wait.task_list);
-
-		if (!x->done)
-			return timeout;
-	}
-	x->done--;
-	return timeout ? : 1;
-}
-
-/**
- * __wake_up - wake up threads blocked on a waitqueue.
- * @q: the waitqueue
- * @mode: which threads
- * @nr_exclusive: how many wake-one or wake-many threads to wake up
- * @key: is directly passed to the wakeup function
- *
- * It may be assumed that this function implies a write memory barrier before
- * changing the task state if and only if any tasks are woken up.
- */
-void __wake_up(wait_queue_head_t *q, unsigned int mode,
-	       int nr_exclusive, void *key)
-{
-	wait_queue_t *curr, *next;
-
-	list_for_each_entry_safe(curr, next, &q->task_list, task_list) {
-		unsigned flags = curr->flags;
-
-		if (curr->func(curr, mode, 0, key) &&
-		    (flags & WQ_FLAG_EXCLUSIVE) &&
-		    !--nr_exclusive)
-			break;
-	}
-}
-void __wake_up_sync_key(wait_queue_head_t *q, unsigned int mode,
-			int nr_exclusive, void *key)
-{
-	__wake_up(q, mode, nr_exclusive, key);
-}
-#endif
-
-static void trampoline(unsigned long arg)
+static void wake_trampoline(unsigned long arg)
 {
 	struct SimTask *lib_task = (struct SimTask *)arg;
 	lib_task_wakeup(lib_task);
@@ -279,6 +157,7 @@ int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags,
 	if (!(task->state & mode))
 		return 0;
 
+	/* delay wakeup: otherwise local-scoped wait_queue_t corrupted */
 #if 0
 #if 0
 	/* XXX: work-around for blocking signal for pthread_signal()
@@ -286,137 +165,29 @@ int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags,
 	 * work-around...  */
 	if (lib_task->event)
 		return 1;
-	lib_task->event = lib_event_schedule_ns(0, (void *)&trampoline, lib_task);
+	lib_task->event = lib_event_schedule_ns(0, (void *)&wake_trampoline, lib_task);
 	/* This block is too sloooooooooooooooooooooow... */
 #endif
 	struct timer_list timer;
-	setup_timer_on_stack(&timer, trampoline, (unsigned long)lib_task);
+	setup_timer_on_stack(&timer, wake_trampoline, (unsigned long)lib_task);
 	mod_timer(&timer, jiffies+1);
 	del_singleshot_timer_sync(&timer);
-
 #else
 	ret = lib_task_wakeup(lib_task);
 #endif
 	return ret;
 }
-#if 0
-__sched int bit_wait(struct wait_bit_key *word)
-{
-	if (signal_pending_state(current->state, current))
-		return 1;
-	schedule();
-	return 0;
-}
-int wake_bit_function(wait_queue_t *wait, unsigned mode, int sync, void *arg)
-{
-	struct wait_bit_key *key = arg;
-	struct wait_bit_queue *wait_bit
-		= container_of(wait, struct wait_bit_queue, wait);
-
-	if (wait_bit->key.flags != key->flags ||
-			wait_bit->key.bit_nr != key->bit_nr ||
-			test_bit(key->bit_nr, key->flags))
-		return 0;
-	else
-		return autoremove_wake_function(wait, mode, sync, key);
-}
-void __wake_up_bit(wait_queue_head_t *wq, void *word, int bit)
-{
-	struct wait_bit_key key = __WAIT_BIT_KEY_INITIALIZER(word, bit);
-	if (waitqueue_active(wq))
-		__wake_up(wq, TASK_NORMAL, 1, &key);
-}
-void wake_up_bit(void *word, int bit)
-{
-	/* FIXME */
-	return;
-	__wake_up_bit(bit_waitqueue(word, bit), word, bit);
-}
-wait_queue_head_t *bit_waitqueue(void *word, int bit)
-{
-	const int shift = BITS_PER_LONG == 32 ? 5 : 6;
-	const struct zone *zone = page_zone(virt_to_page(word));
-	unsigned long val = (unsigned long)word << shift | bit;
-
-	return &zone->wait_table[hash_long(val, zone->wait_table_bits)];
-}
-#endif
 
 void schedule(void)
 {
 	lib_task_wait();
 }
 
-#if 0
-static void trampoline(void *context)
-{
-	struct SimTask *task = context;
-
-	lib_task_wakeup(task);
-}
-
-signed long schedule_timeout(signed long timeout)
-{
-	u64 ns;
-	struct SimTask *self;
-
-	if (timeout == MAX_SCHEDULE_TIMEOUT) {
-		lib_task_wait();
-		return MAX_SCHEDULE_TIMEOUT;
-	}
-	lib_assert(timeout >= 0);
-	ns = ((__u64)timeout) * (1000000000 / HZ);
-	self = lib_task_current();
-	lib_event_schedule_ns(ns, &trampoline, self);
-	lib_task_wait();
-	/* we know that we are always perfectly on time. */
-	return 0;
-}
-
-signed long schedule_timeout_uninterruptible(signed long timeout)
-{
-	return schedule_timeout(timeout);
-}
-signed long schedule_timeout_interruptible(signed long timeout)
-{
-	return schedule_timeout(timeout);
-}
-#endif
 
 void yield(void)
 {
 	lib_task_yield();
 }
-
-#if 0
-void complete_all(struct completion *x)
-{
-	x->done += UINT_MAX / 2;
-	__wake_up(&x->wait, TASK_NORMAL, 0, 0);
-}
-void complete(struct completion *x)
-{
-	x->done++;
-	__wake_up(&x->wait, TASK_NORMAL, 1, 0);
-}
-
-long wait_for_completion_interruptible_timeout(
-	struct completion *x, unsigned long timeout)
-{
-	return wait_for_completion_timeout(x, timeout);
-}
-int wait_for_completion_interruptible(struct completion *x)
-{
-	wait_for_completion_timeout(x, MAX_SCHEDULE_TIMEOUT);
-	return 0;
-}
-int wait_for_completion_killable(struct completion *x)
-{
-	/* XXX */
-	wait_for_completion_timeout(x, MAX_SCHEDULE_TIMEOUT);
-	return 0;
-}
-#endif
 
 long __sched io_schedule_timeout(long timeout)
 {
@@ -429,7 +200,6 @@ int wake_up_process(struct task_struct *task)
 		container_of(task, struct SimTask, kernel_task);
 	int ret;
 
-//lib_printf("%s task state %d\n", __FUNCTION__, task->state);
 	ret = lib_task_wakeup(lib_task);
 	return ret;
 }

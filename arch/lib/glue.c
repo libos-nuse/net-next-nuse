@@ -94,13 +94,6 @@ unsigned long vm_total_pages;
 pgprot_t pgprot_kernel;
 int sysctl_max_map_count __read_mostly = DEFAULT_MAX_MAP_COUNT;
 
-#if 0
-struct backing_dev_info noop_backing_dev_info = {
-	.name		= "noop",
-	.capabilities	= 0,
-};
-#endif
-
 /* from rt.c */
 int sched_rr_timeslice = RR_TIMESLICE;
 /* from main.c */
@@ -158,110 +151,6 @@ void lib_printf(const char *str, ...)
 #include <linux/vmalloc.h>
 #include <linux/kmemleak.h>
 
-static unsigned long __meminitdata nr_kernel_pages = 8192;
-static unsigned long __meminitdata nr_all_pages = 81920;
-/*
- * allocate a large system hash table from bootmem
- * - it is assumed that the hash table must contain an exact power-of-2
- *   quantity of entries
- * - limit is the number of hash buckets, not the total allocation size
- */
-void *__init alloc_large_system_hash(const char *tablename,
-				     unsigned long bucketsize,
-				     unsigned long numentries,
-				     int scale,
-				     int flags,
-				     unsigned int *_hash_shift,
-				     unsigned int *_hash_mask,
-				     unsigned long low_limit,
-				     unsigned long high_limit)
-{
-	unsigned long long max = high_limit;
-	unsigned long log2qty, size;
-	void *table = NULL;
-
-	/* allow the kernel cmdline to have a say */
-	if (!numentries) {
-		/* round applicable memory size up to nearest megabyte */
-		numentries = nr_kernel_pages;
-		numentries += (1UL << (20 - PAGE_SHIFT)) - 1;
-		numentries >>= 20 - PAGE_SHIFT;
-		numentries <<= 20 - PAGE_SHIFT;
-
-		/* limit to 1 bucket per 2^scale bytes of low memory */
-		if (scale > PAGE_SHIFT)
-			numentries >>= (scale - PAGE_SHIFT);
-		else
-			numentries <<= (PAGE_SHIFT - scale);
-
-		/* Make sure we've got at least a 0-order allocation.. */
-		if (unlikely(flags & HASH_SMALL)) {
-			/* Makes no sense without HASH_EARLY */
-			WARN_ON(!(flags & HASH_EARLY));
-			if (!(numentries >> *_hash_shift)) {
-				numentries = 1UL << *_hash_shift;
-				BUG_ON(!numentries);
-			}
-		} else if (unlikely((numentries * bucketsize) < PAGE_SIZE))
-			numentries = PAGE_SIZE / bucketsize;
-	}
-	numentries = roundup_pow_of_two(numentries);
-
-	/* limit allocation size to 1/16 total memory by default */
-	if (max == 0) {
-		max = ((unsigned long long)nr_all_pages << PAGE_SHIFT) >> 4;
-		do_div(max, bucketsize);
-	}
-
-	if (numentries > max)
-		numentries = max;
-
-	log2qty = ilog2(numentries);
-
-	do {
-		size = bucketsize << log2qty;
-		if (flags & HASH_EARLY)
-			table = alloc_bootmem_nopanic(size);
-		else if (hashdist)
-			table = __vmalloc(size, GFP_ATOMIC, PAGE_KERNEL);
-		else {
-			/*
-			 * If bucketsize is not a power-of-two, we may free
-			 * some pages at the end of hash table which
-			 * alloc_pages_exact() automatically does
-			 */
-			if (get_order(size) < MAX_ORDER) {
-				table = alloc_pages_exact(size, GFP_ATOMIC);
-				kmemleak_alloc(table, size, 1, GFP_ATOMIC);
-			}
-		}
-	} while (!table && size > PAGE_SIZE && --log2qty);
-
-	if (!table)
-		panic("Failed to allocate %s hash table\n", tablename);
-
-	pr_info("%s hash table entries: %d (order: %d, %lu bytes)\n",
-	       tablename,
-	       (1U << log2qty),
-	       ilog2(size) - PAGE_SHIFT,
-	       size);
-
-	if (_hash_shift)
-		*_hash_shift = log2qty;
-	if (_hash_mask)
-		*_hash_mask = (1 << log2qty) - 1;
-
-	return table;
-}
-
-void si_meminfo(struct sysinfo *val)
-{
-	/* This function is called from the ip layer to get information about
-	   the amount of memory in the system and make some educated guesses
-	   about some default buffer sizes. We pick a value which ensures
-	   small buffers. */
-	val->totalram = 0;
-}
 int slab_is_available(void)
 {
 	/* called from kernel/param.c. */
