@@ -34,7 +34,7 @@ char i40evf_driver_name[] = "i40evf";
 static const char i40evf_driver_string[] =
 	"Intel(R) XL710/X710 Virtual Function Network Driver";
 
-#define DRV_VERSION "1.3.5"
+#define DRV_VERSION "1.3.13"
 const char i40evf_driver_version[] = DRV_VERSION;
 static const char i40evf_copyright[] =
 	"Copyright (c) 2013 - 2015 Intel Corporation.";
@@ -489,8 +489,7 @@ i40evf_request_traffic_irqs(struct i40evf_adapter *adapter, char *basename)
 			q_vector);
 		if (err) {
 			dev_info(&adapter->pdev->dev,
-				 "%s: request_irq failed, error: %d\n",
-				__func__, err);
+				 "Request_irq failed, error: %d\n", err);
 			goto free_queue_irqs;
 		}
 		/* assign the mask for this irq */
@@ -856,6 +855,7 @@ static void i40evf_set_rx_mode(struct net_device *netdev)
 	struct i40evf_mac_filter *f, *ftmp;
 	struct netdev_hw_addr *uca;
 	struct netdev_hw_addr *mca;
+	struct netdev_hw_addr *ha;
 	int count = 50;
 
 	/* add addr if not already in the filter list */
@@ -877,29 +877,27 @@ static void i40evf_set_rx_mode(struct net_device *netdev)
 	}
 	/* remove filter if not in netdev list */
 	list_for_each_entry_safe(f, ftmp, &adapter->mac_filter_list, list) {
-		bool found = false;
+		netdev_for_each_mc_addr(mca, netdev)
+			if (ether_addr_equal(mca->addr, f->macaddr))
+				goto bottom_of_search_loop;
 
-		if (is_multicast_ether_addr(f->macaddr)) {
-			netdev_for_each_mc_addr(mca, netdev) {
-				if (ether_addr_equal(mca->addr, f->macaddr)) {
-					found = true;
-					break;
-				}
-			}
-		} else {
-			netdev_for_each_uc_addr(uca, netdev) {
-				if (ether_addr_equal(uca->addr, f->macaddr)) {
-					found = true;
-					break;
-				}
-			}
-			if (ether_addr_equal(f->macaddr, adapter->hw.mac.addr))
-				found = true;
-		}
-		if (!found) {
-			f->remove = true;
-			adapter->aq_required |= I40EVF_FLAG_AQ_DEL_MAC_FILTER;
-		}
+		netdev_for_each_uc_addr(uca, netdev)
+			if (ether_addr_equal(uca->addr, f->macaddr))
+				goto bottom_of_search_loop;
+
+		for_each_dev_addr(netdev, ha)
+			if (ether_addr_equal(ha->addr, f->macaddr))
+				goto bottom_of_search_loop;
+
+		if (ether_addr_equal(f->macaddr, adapter->hw.mac.addr))
+			goto bottom_of_search_loop;
+
+		/* f->macaddr wasn't found in uc, mc, or ha list so delete it */
+		f->remove = true;
+		adapter->aq_required |= I40EVF_FLAG_AQ_DEL_MAC_FILTER;
+
+bottom_of_search_loop:
+		continue;
 	}
 	clear_bit(__I40EVF_IN_CRITICAL_TASK, &adapter->crit_section);
 }
@@ -1165,7 +1163,7 @@ static int i40evf_set_interrupt_capability(struct i40evf_adapter *adapter)
 	for (vector = 0; vector < v_budget; vector++)
 		adapter->msix_entries[vector].entry = vector;
 
-	i40evf_acquire_msix_vectors(adapter, v_budget);
+	err = i40evf_acquire_msix_vectors(adapter, v_budget);
 
 out:
 	adapter->netdev->real_num_tx_queues = pairs;
@@ -1853,8 +1851,7 @@ static int i40evf_setup_all_tx_resources(struct i40evf_adapter *adapter)
 		if (!err)
 			continue;
 		dev_err(&adapter->pdev->dev,
-			"%s: Allocation for Tx Queue %u failed\n",
-			__func__, i);
+			"Allocation for Tx Queue %u failed\n", i);
 		break;
 	}
 
@@ -1881,8 +1878,7 @@ static int i40evf_setup_all_rx_resources(struct i40evf_adapter *adapter)
 		if (!err)
 			continue;
 		dev_err(&adapter->pdev->dev,
-			"%s: Allocation for Rx Queue %u failed\n",
-			__func__, i);
+			"Allocation for Rx Queue %u failed\n", i);
 		break;
 	}
 	return err;
@@ -2300,8 +2296,7 @@ static void i40evf_init_task(struct work_struct *work)
 	}
 	return;
 restart:
-	schedule_delayed_work(&adapter->init_task,
-			      msecs_to_jiffies(50));
+	schedule_delayed_work(&adapter->init_task, msecs_to_jiffies(30));
 	return;
 
 err_register:
@@ -2434,7 +2429,8 @@ static int i40evf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	INIT_WORK(&adapter->adminq_task, i40evf_adminq_task);
 	INIT_WORK(&adapter->watchdog_task, i40evf_watchdog_task);
 	INIT_DELAYED_WORK(&adapter->init_task, i40evf_init_task);
-	schedule_delayed_work(&adapter->init_task, 10);
+	schedule_delayed_work(&adapter->init_task,
+			      msecs_to_jiffies(5 * (pdev->devfn & 0x07)));
 
 	return 0;
 
@@ -2510,6 +2506,7 @@ static int i40evf_resume(struct pci_dev *pdev)
 	rtnl_lock();
 	err = i40evf_set_interrupt_capability(adapter);
 	if (err) {
+		rtnl_unlock();
 		dev_err(&pdev->dev, "Cannot enable MSI-X interrupts.\n");
 		return err;
 	}

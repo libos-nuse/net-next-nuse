@@ -107,7 +107,8 @@ static void xgene_enet_set_ring_state(struct xgene_enet_desc_ring *ring)
 {
 	xgene_enet_ring_set_type(ring);
 
-	if (xgene_enet_ring_owner(ring->id) == RING_OWNER_ETH0)
+	if (xgene_enet_ring_owner(ring->id) == RING_OWNER_ETH0 ||
+	    xgene_enet_ring_owner(ring->id) == RING_OWNER_ETH1)
 		xgene_enet_ring_set_recombbuf(ring);
 
 	xgene_enet_ring_init(ring);
@@ -689,16 +690,24 @@ static int xgene_enet_phy_connect(struct net_device *ndev)
 			netdev_dbg(ndev, "No phy-handle found in DT\n");
 			return -ENODEV;
 		}
-		pdata->phy_dev = of_phy_find_device(phy_np);
-	}
 
-	phy_dev = pdata->phy_dev;
+		phy_dev = of_phy_connect(ndev, phy_np, &xgene_enet_adjust_link,
+					 0, pdata->phy_mode);
+		if (!phy_dev) {
+			netdev_err(ndev, "Could not connect to PHY\n");
+			return -ENODEV;
+		}
 
-	if (!phy_dev ||
-	    phy_connect_direct(ndev, phy_dev, &xgene_enet_adjust_link,
-			       pdata->phy_mode)) {
-		netdev_err(ndev, "Could not connect to PHY\n");
-		return  -ENODEV;
+		pdata->phy_dev = phy_dev;
+	} else {
+		phy_dev = pdata->phy_dev;
+
+		if (!phy_dev ||
+		    phy_connect_direct(ndev, phy_dev, &xgene_enet_adjust_link,
+				       pdata->phy_mode)) {
+			netdev_err(ndev, "Could not connect to PHY\n");
+			return  -ENODEV;
+		}
 	}
 
 	pdata->phy_speed = SPEED_UNKNOWN;

@@ -29,9 +29,10 @@
  */
 void device_add_property_set(struct device *dev, struct property_set *pset)
 {
-	if (pset)
-		pset->fwnode.type = FWNODE_PDATA;
+	if (!pset)
+		return;
 
+	pset->fwnode.type = FWNODE_PDATA;
 	set_secondary_fwnode(dev, &pset->fwnode);
 }
 EXPORT_SYMBOL_GPL(device_add_property_set);
@@ -472,7 +473,8 @@ int fwnode_property_read_string(struct fwnode_handle *fwnode,
 		return acpi_dev_prop_read(to_acpi_node(fwnode), propname,
 					  DEV_PROP_STRING, val, 1);
 
-	return -ENXIO;
+	return pset_prop_read_array(to_pset(fwnode), propname,
+				    DEV_PROP_STRING, val, 1);
 }
 EXPORT_SYMBOL_GPL(fwnode_property_read_string);
 
@@ -609,13 +611,15 @@ static void *device_get_mac_addr(struct device *dev,
 */
 void *device_get_mac_address(struct device *dev, char *addr, int alen)
 {
-	addr = device_get_mac_addr(dev, "mac-address", addr, alen);
-	if (addr)
-		return addr;
+	char *res;
 
-	addr = device_get_mac_addr(dev, "local-mac-address", addr, alen);
-	if (addr)
-		return addr;
+	res = device_get_mac_addr(dev, "mac-address", addr, alen);
+	if (res)
+		return res;
+
+	res = device_get_mac_addr(dev, "local-mac-address", addr, alen);
+	if (res)
+		return res;
 
 	return device_get_mac_addr(dev, "address", addr, alen);
 }

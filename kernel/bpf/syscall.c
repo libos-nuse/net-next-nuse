@@ -155,14 +155,15 @@ static int map_lookup_elem(union bpf_attr *attr)
 	void __user *ukey = u64_to_ptr(attr->key);
 	void __user *uvalue = u64_to_ptr(attr->value);
 	int ufd = attr->map_fd;
-	struct fd f = fdget(ufd);
 	struct bpf_map *map;
 	void *key, *value, *ptr;
+	struct fd f;
 	int err;
 
 	if (CHECK_ATTR(BPF_MAP_LOOKUP_ELEM))
 		return -EINVAL;
 
+	f = fdget(ufd);
 	map = bpf_map_get(f);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
@@ -213,14 +214,15 @@ static int map_update_elem(union bpf_attr *attr)
 	void __user *ukey = u64_to_ptr(attr->key);
 	void __user *uvalue = u64_to_ptr(attr->value);
 	int ufd = attr->map_fd;
-	struct fd f = fdget(ufd);
 	struct bpf_map *map;
 	void *key, *value;
+	struct fd f;
 	int err;
 
 	if (CHECK_ATTR(BPF_MAP_UPDATE_ELEM))
 		return -EINVAL;
 
+	f = fdget(ufd);
 	map = bpf_map_get(f);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
@@ -265,14 +267,15 @@ static int map_delete_elem(union bpf_attr *attr)
 {
 	void __user *ukey = u64_to_ptr(attr->key);
 	int ufd = attr->map_fd;
-	struct fd f = fdget(ufd);
 	struct bpf_map *map;
+	struct fd f;
 	void *key;
 	int err;
 
 	if (CHECK_ATTR(BPF_MAP_DELETE_ELEM))
 		return -EINVAL;
 
+	f = fdget(ufd);
 	map = bpf_map_get(f);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
@@ -305,14 +308,15 @@ static int map_get_next_key(union bpf_attr *attr)
 	void __user *ukey = u64_to_ptr(attr->key);
 	void __user *unext_key = u64_to_ptr(attr->next_key);
 	int ufd = attr->map_fd;
-	struct fd f = fdget(ufd);
 	struct bpf_map *map;
 	void *key, *next_key;
+	struct fd f;
 	int err;
 
 	if (CHECK_ATTR(BPF_MAP_GET_NEXT_KEY))
 		return -EINVAL;
 
+	f = fdget(ufd);
 	map = bpf_map_get(f);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
@@ -398,6 +402,10 @@ static void fixup_bpf_calls(struct bpf_prog *prog)
 			 */
 			BUG_ON(!prog->aux->ops->get_func_proto);
 
+			if (insn->imm == BPF_FUNC_get_route_realm)
+				prog->dst_needed = 1;
+			if (insn->imm == BPF_FUNC_get_prandom_u32)
+				bpf_user_rnd_init_once();
 			if (insn->imm == BPF_FUNC_tail_call) {
 				/* mark bpf_tail_call as different opcode
 				 * to avoid conditional branch in
@@ -549,10 +557,10 @@ static int bpf_prog_load(union bpf_attr *attr)
 		goto free_prog;
 
 	prog->orig_prog = NULL;
-	prog->jited = false;
+	prog->jited = 0;
 
 	atomic_set(&prog->aux->refcnt, 1);
-	prog->gpl_compatible = is_gpl;
+	prog->gpl_compatible = is_gpl ? 1 : 0;
 
 	/* find program type: socket_filter vs tracing_filter */
 	err = find_prog_type(type, prog);
