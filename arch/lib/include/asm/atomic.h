@@ -30,7 +30,6 @@ int atomic64_sub_and_test(long i, atomic64_t *v);
 int atomic64_dec_and_test(atomic64_t *v);
 int atomic64_inc_and_test(atomic64_t *v);
 int atomic64_add_negative(long i, atomic64_t *v);
-/* long atomic64_add_return(long i, atomic64_t *v); */
 static inline long atomic64_add_return(long i, atomic64_t *v)
 {
 	v->counter += i;
@@ -40,6 +39,11 @@ static inline void atomic64_set(atomic64_t *v, long i)
 {
 	v->counter = i;
 }
+static void atomic64_and(long long i, atomic64_t *v)
+{
+	v->counter &= i;
+}
+
 long atomic64_sub_return(long i, atomic64_t *v);
 #define atomic64_inc_return(v)  (atomic64_add_return(1, (v)))
 #define atomic64_dec_return(v)  (atomic64_sub_return(1, (v)))
