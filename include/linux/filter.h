@@ -326,8 +326,11 @@ struct bpf_binary_header {
 
 struct bpf_prog {
 	u16			pages;		/* Number of allocated pages */
-	bool			jited;		/* Is our filter JIT'ed? */
-	bool			gpl_compatible;	/* Is our filter GPL compatible? */
+	kmemcheck_bitfield_begin(meta);
+	u16			jited:1,	/* Is our filter JIT'ed? */
+				gpl_compatible:1, /* Is filter GPL compatible? */
+				dst_needed:1;	/* Do we need dst entry? */
+	kmemcheck_bitfield_end(meta);
 	u32			len;		/* Number of filter blocks */
 	enum bpf_prog_type	type;		/* Type of BPF program */
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
@@ -408,7 +411,7 @@ typedef int (*bpf_aux_classic_check_t)(struct sock_filter *filter,
 
 int bpf_prog_create(struct bpf_prog **pfp, struct sock_fprog_kern *fprog);
 int bpf_prog_create_from_user(struct bpf_prog **pfp, struct sock_fprog *fprog,
-			      bpf_aux_classic_check_t trans);
+			      bpf_aux_classic_check_t trans, bool save_orig);
 void bpf_prog_destroy(struct bpf_prog *fp);
 
 int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk);

@@ -91,8 +91,13 @@ static void run_timer_softirq(struct softirq_action *h)
 		fn = timer->function;
 		data = timer->data;
 		lib_assert(l_timer->event == 0);
+		if (l_timer->t_hash.next != LIST_POISON1) {
+			hlist_del(&l_timer->t_hash);
+			lib_free(l_timer);
+		}
 
-		hlist_del(&timer->entry);
+		if (timer->entry.next != LIST_POISON1)
+			hlist_del(&timer->entry);
 		timer->entry.pprev = NULL;
 		fn(data);
 	}
@@ -115,12 +120,14 @@ static void timer_trampoline(void *context)
 	ensure_softirq_opened();
 	timer = context;
 
-	l_timer = lib_timer_find(timer);
-	if (l_timer)
-		l_timer->event = NULL;
-
-	if (timer->entry.pprev != 0)
+	if (timer->entry.next != LIST_POISON1)
 		hlist_del(&timer->entry);
+
+	l_timer = lib_timer_find(timer);
+	/* canceled */
+	if (!l_timer)
+		return;
+	l_timer->event = NULL;
 
 	timer->entry.pprev = NULL;
 	hlist_add_head(&timer->entry, &g_expired_events);
@@ -161,6 +168,7 @@ void add_timer(struct timer_list *timer)
 		struct lib_timer *l_timer;
 
 		l_timer = lib_malloc(sizeof(struct lib_timer));
+		memset(l_timer, 0, sizeof(struct lib_timer));
 		l_timer->timer = timer;
 		l_timer->event = event;
 		hlist_add_head(&l_timer->t_hash, head);

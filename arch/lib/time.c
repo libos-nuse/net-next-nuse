@@ -30,8 +30,9 @@ uint64_t ns_to_jiffies(uint64_t ns)
 
 void lib_update_jiffies(void)
 {
-	jiffies = ns_to_jiffies(lib_current_ns());
-	jiffies_64 = ns_to_jiffies(lib_current_ns());
+	uint64_t ns = lib_current_ns();
+	jiffies = ns_to_jiffies(ns);
+	jiffies_64 = ns_to_jiffies(ns);
 }
 
 /* copied from kernel/time/hrtimeer.c */

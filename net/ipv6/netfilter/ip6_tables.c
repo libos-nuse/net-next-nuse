@@ -275,7 +275,8 @@ get_chainname_rulenum(const struct ip6t_entry *s, const struct ip6t_entry *e,
 	return 0;
 }
 
-static void trace_packet(const struct sk_buff *skb,
+static void trace_packet(struct net *net,
+			 const struct sk_buff *skb,
 			 unsigned int hook,
 			 const struct net_device *in,
 			 const struct net_device *out,
@@ -287,7 +288,6 @@ static void trace_packet(const struct sk_buff *skb,
 	const char *hookname, *chainname, *comment;
 	const struct ip6t_entry *iter;
 	unsigned int rulenum = 0;
-	struct net *net = dev_net(in ? in : out);
 
 	root = get_entry(private->entries, private->hook_entry[hook]);
 
@@ -314,10 +314,10 @@ ip6t_next_entry(const struct ip6t_entry *entry)
 /* Returns one of the generic firewall policies, like NF_ACCEPT. */
 unsigned int
 ip6t_do_table(struct sk_buff *skb,
-	      unsigned int hook,
 	      const struct nf_hook_state *state,
 	      struct xt_table *table)
 {
+	unsigned int hook = state->hook;
 	static const char nulldevname[IFNAMSIZ] __attribute__((aligned(sizeof(long))));
 	/* Initializing verdict to NF_DROP keeps gcc happy. */
 	unsigned int verdict = NF_DROP;
@@ -340,6 +340,7 @@ ip6t_do_table(struct sk_buff *skb,
 	 * rule is also a fragment-specific rule, non-fragments won't
 	 * match it. */
 	acpar.hotdrop = false;
+	acpar.net     = state->net;
 	acpar.in      = state->in;
 	acpar.out     = state->out;
 	acpar.family  = NFPROTO_IPV6;
@@ -401,8 +402,8 @@ ip6t_do_table(struct sk_buff *skb,
 #if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE)
 		/* The packet is traced: log it */
 		if (unlikely(skb->nf_trace))
-			trace_packet(skb, hook, state->in, state->out,
-				     table->name, private, e);
+			trace_packet(state->net, skb, hook, state->in,
+				     state->out, table->name, private, e);
 #endif
 		/* Standard target? */
 		if (!t->u.kernel.target->target) {

@@ -41,9 +41,11 @@ static void ieee80211_tdls_add_ext_capab(struct ieee80211_sub_if_data *sdata,
 					 struct sk_buff *skb)
 {
 	struct ieee80211_local *local = sdata->local;
+	struct ieee80211_if_managed *ifmgd = &sdata->u.mgd;
 	bool chan_switch = local->hw.wiphy->features &
 			   NL80211_FEATURE_TDLS_CHANNEL_SWITCH;
-	bool wider_band = ieee80211_hw_check(&local->hw, TDLS_WIDER_BW);
+	bool wider_band = ieee80211_hw_check(&local->hw, TDLS_WIDER_BW) &&
+			  !ifmgd->tdls_wider_bw_prohibited;
 	enum ieee80211_band band = ieee80211_get_sdata_band(sdata);
 	struct ieee80211_supported_band *sband = local->hw.wiphy->bands[band];
 	bool vht = sband && sband->vht_cap.vht_supported;
@@ -331,8 +333,8 @@ ieee80211_tdls_chandef_vht_upgrade(struct ieee80211_sub_if_data *sdata,
 
 	/* proceed to downgrade the chandef until usable or the same */
 	while (uc.width > max_width &&
-	       !cfg80211_reg_can_beacon(sdata->local->hw.wiphy,
-					&uc, sdata->wdev.iftype))
+	       !cfg80211_reg_can_beacon_relax(sdata->local->hw.wiphy, &uc,
+					      sdata->wdev.iftype))
 		ieee80211_chandef_downgrade(&uc);
 
 	if (!cfg80211_chandef_identical(&uc, &sta->tdls_chandef)) {
@@ -1249,6 +1251,58 @@ static void iee80211_tdls_recalc_chanctx(struct ieee80211_sub_if_data *sdata)
 	mutex_unlock(&local->chanctx_mtx);
 }
 
+static int iee80211_tdls_have_ht_peers(struct ieee80211_sub_if_data *sdata)
+{
+	struct sta_info *sta;
+	bool result = false;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(sta, &sdata->local->sta_list, list) {
+		if (!sta->sta.tdls || sta->sdata != sdata || !sta->uploaded ||
+		    !test_sta_flag(sta, WLAN_STA_AUTHORIZED) ||
+		    !test_sta_flag(sta, WLAN_STA_TDLS_PEER_AUTH) ||
+		    !sta->sta.ht_cap.ht_supported)
+			continue;
+		result = true;
+		break;
+	}
+	rcu_read_unlock();
+
+	return result;
+}
+
+static void
+iee80211_tdls_recalc_ht_protection(struct ieee80211_sub_if_data *sdata,
+				   struct sta_info *sta)
+{
+	struct ieee80211_if_managed *ifmgd = &sdata->u.mgd;
+	bool tdls_ht;
+	u16 protection = IEEE80211_HT_OP_MODE_PROTECTION_NONHT_MIXED |
+			 IEEE80211_HT_OP_MODE_NON_GF_STA_PRSNT |
+			 IEEE80211_HT_OP_MODE_NON_HT_STA_PRSNT;
+	u16 opmode;
+
+	/* Nothing to do if the BSS connection uses HT */
+	if (!(ifmgd->flags & IEEE80211_STA_DISABLE_HT))
+		return;
+
+	tdls_ht = (sta && sta->sta.ht_cap.ht_supported) ||
+		  iee80211_tdls_have_ht_peers(sdata);
+
+	opmode = sdata->vif.bss_conf.ht_operation_mode;
+
+	if (tdls_ht)
+		opmode |= protection;
+	else
+		opmode &= ~protection;
+
+	if (opmode == sdata->vif.bss_conf.ht_operation_mode)
+		return;
+
+	sdata->vif.bss_conf.ht_operation_mode = opmode;
+	ieee80211_bss_info_change_notify(sdata, BSS_CHANGED_HT);
+}
+
 int ieee80211_tdls_oper(struct wiphy *wiphy, struct net_device *dev,
 			const u8 *peer, enum nl80211_tdls_operation oper)
 {
@@ -1274,6 +1328,10 @@ int ieee80211_tdls_oper(struct wiphy *wiphy, struct net_device *dev,
 		return -ENOTSUPP;
 	}
 
+	/* protect possible bss_conf changes and avoid concurrency in
+	 * ieee80211_bss_info_change_notify()
+	 */
+	sdata_lock(sdata);
 	mutex_lock(&local->mtx);
 	tdls_dbg(sdata, "TDLS oper %d peer %pM\n", oper, peer);
 
@@ -1287,16 +1345,18 @@ int ieee80211_tdls_oper(struct wiphy *wiphy, struct net_device *dev,
 
 		iee80211_tdls_recalc_chanctx(sdata);
 
-		rcu_read_lock();
+		mutex_lock(&local->sta_mtx);
 		sta = sta_info_get(sdata, peer);
 		if (!sta) {
-			rcu_read_unlock();
+			mutex_unlock(&local->sta_mtx);
 			ret = -ENOLINK;
 			break;
 		}
 
+		iee80211_tdls_recalc_ht_protection(sdata, sta);
+
 		set_sta_flag(sta, WLAN_STA_TDLS_PEER_AUTH);
-		rcu_read_unlock();
+		mutex_unlock(&local->sta_mtx);
 
 		WARN_ON_ONCE(is_zero_ether_addr(sdata->u.mgd.tdls_peer) ||
 			     !ether_addr_equal(sdata->u.mgd.tdls_peer, peer));
@@ -1318,6 +1378,11 @@ int ieee80211_tdls_oper(struct wiphy *wiphy, struct net_device *dev,
 		ieee80211_flush_queues(local, sdata, false);
 
 		ret = sta_info_destroy_addr(sdata, peer);
+
+		mutex_lock(&local->sta_mtx);
+		iee80211_tdls_recalc_ht_protection(sdata, NULL);
+		mutex_unlock(&local->sta_mtx);
+
 		iee80211_tdls_recalc_chanctx(sdata);
 		break;
 	default:
@@ -1335,6 +1400,7 @@ int ieee80211_tdls_oper(struct wiphy *wiphy, struct net_device *dev,
 				     &sdata->u.mgd.request_smps_work);
 
 	mutex_unlock(&local->mtx);
+	sdata_unlock(sdata);
 	return ret;
 }
 

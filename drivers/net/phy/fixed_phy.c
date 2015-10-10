@@ -220,7 +220,7 @@ int fixed_phy_update_state(struct phy_device *phydev,
 	struct fixed_mdio_bus *fmb = &platform_fmb;
 	struct fixed_phy *fp;
 
-	if (!phydev || !phydev->bus)
+	if (!phydev || phydev->bus != fmb->mii_bus)
 		return -EINVAL;
 
 	list_for_each_entry(fp, &fmb->phys, node) {
@@ -325,7 +325,7 @@ struct phy_device *fixed_phy_register(unsigned int irq,
 	phy_addr = phy_fixed_addr++;
 	spin_unlock(&phy_fixed_addr_lock);
 
-	ret = fixed_phy_add(PHY_POLL, phy_addr, status, link_gpio);
+	ret = fixed_phy_add(irq, phy_addr, status, link_gpio);
 	if (ret < 0)
 		return ERR_PTR(ret);
 
