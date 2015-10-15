@@ -248,9 +248,9 @@ archclean:
 
 # FIXME: now only support x86_64
 HEADER_ARCH=x86
-ARCH_SYSCALL_HDR=$(ARCH_DIR)/include/generated/asm/syscalls_64.h
+ARCH_SYSCALL_HDR=$(ARCH_DIR)/include/asm/syscalls_64.h
 ARCH_SYSCALL_TBL=arch/$(HEADER_ARCH)/entry/syscalls/syscall_64.tbl
-ARCH_UNISTD_HDR=$(ARCH_DIR)/include/generated/asm/unistd_64.h
+ARCH_UNISTD_HDR=$(ARCH_DIR)/include/asm/unistd_64.h
 ARCH_SYSCALL_PROTO=$(ARCH_DIR)/include/generated/rump_syscalls.h
 quiet_cmd_systbl = SYSTBL  $@ $(ARCH_SYSCALL_PROTO) $(ARCH_SYSCALL_HDR) $(ARCH_UNISTD_HDR)
       cmd_systbl = $(CONFIG_SHELL) $< $(ARCH_SYSCALL_TBL) $@ $(ARCH_SYSCALL_HDR) $(ARCH_SYSCALL_PROTO) $(ARCH_UNISTD_HDR)
