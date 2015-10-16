@@ -223,7 +223,7 @@ modules: $(modules)
 
 $(LIBOS_TOOLS): $(KERNEL_LIB) Makefile FORCE
 	$(Q) if [ ! -d "$@" ]; then \
-		git clone $(LIBOS_GIT_REPO) $@ ;\
+		git clone $(LIBOS_GIT_REPO) -b rump-hypcall $@ ;\
 	fi
 	$(Q) $(MAKE) -C $(LIBOS_TOOLS)
 
