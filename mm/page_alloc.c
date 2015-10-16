@@ -6507,12 +6507,9 @@ out:
 #endif
 
 
-#ifndef CONFIG_LIB
+#ifdef CONFIG_NUMA
 int hashdist = (HASHDIST_DEFAULT);
 
-#endif
-
-#ifdef CONFIG_NUMA
 static int __init set_hashdist(char *str)
 {
 	if (!str)
