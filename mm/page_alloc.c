@@ -6508,7 +6508,7 @@ out:
 
 
 #ifndef CONFIG_LIB
-int hashdist = HASHDIST_DEFAULT;
+int hashdist = (HASHDIST_DEFAULT);
 
 #endif
 
