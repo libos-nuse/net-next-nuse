@@ -77,6 +77,9 @@ CFLAGS+= \
  -include $(srctree)/include/linux/kconfig.h \
  -I$(ARCH_DIR) -I.
 
+# XXX: need to upstream to change mm/page-writeback.c
+CFLAGS+=-Wno-uninitialized
+
 ifeq ($(SUBARCH),x86)
   ifeq ($(shell uname -m),x86_64)
 	CFLAGS+= -DCONFIG_64BIT
