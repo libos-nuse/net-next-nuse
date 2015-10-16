@@ -85,29 +85,6 @@ struct iovec;
 struct sockaddr;
 struct timeval;
 
-#ifndef __dead
-#define __dead __attribute__((__noreturn__))
-#endif
-
-#ifndef __printflike
-#ifdef __GNUC__
-#define __printflike(a,b) __attribute__((__format__ (__printf__,a,b)))
-#else
-#define __printflike(a,b)
-#endif
-#endif
-
-typedef long long      loff_t;
-typedef int            clockid_t;
-typedef unsigned long          u_long;
-typedef unsigned int           u_int;
-#define RUMP_REGISTER_T long
-typedef RUMP_REGISTER_T register_t;
-typedef int            pid_t;
-typedef struct {
-       unsigned long fds_bits[__FD_SETSIZE / (8 * sizeof(long))];
-} fd_set;
-
 
 /* For hijack.c compatibility of NetBSD */
 #define NOT_IMPLEMENTED(x) void (x)(void){}
@@ -166,6 +143,32 @@ struct syscall_args {
 #define rsys_seterrno(error) errno = error
 
 #else /* !RUMP_CLIENT */
+
+#ifndef __dead
+#define __dead __attribute__((__noreturn__))
+#endif
+
+#ifndef __printflike
+#ifdef __GNUC__
+#define __printflike(a,b) __attribute__((__format__ (__printf__,a,b)))
+#else
+#define __printflike(a,b)
+#endif
+#endif
+
+#ifndef loff_t
+typedef long long      loff_t;
+#endif /* loff_t */
+typedef int            clockid_t;
+typedef unsigned long          u_long;
+typedef unsigned int           u_int;
+#define RUMP_REGISTER_T long
+typedef RUMP_REGISTER_T register_t;
+typedef int            pid_t;
+typedef struct {
+       unsigned long fds_bits[__FD_SETSIZE / (8 * sizeof(long))];
+} fd_set;
+
 
 #include <generated/rump_syscalls.h>
 #include <rump/rump.h>
@@ -305,7 +308,7 @@ EOF
 cat <<EOF
 
 __weak_alias(rump___sysimpl_socket30,rump___sysimpl_socket);
-__weak_alias(rump___sysimpl_pwirte,rump___sysimpl_pwrite64);
+__weak_alias(rump___sysimpl_pwrite,rump___sysimpl_pwrite64);
 
 EOF
 
