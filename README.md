@@ -1,7 +1,7 @@
 A library operating system version of Linux kernel
 ==================================================
 
-NUSE [![Build Status](https://travis-ci.org/libos-nuse/net-next-nuse.png)](https://travis-ci.org/libos-nuse/net-next-nuse)
+NUSE [![Build Status](https://travis-ci.org/libos-nuse/net-next-nuse.png?branch=master)](https://travis-ci.org/libos-nuse/net-next-nuse)
 [![Circle CI](https://circleci.com/gh/libos-nuse/net-next-nuse/tree/master.svg?style=svg)](https://circleci.com/gh/libos-nuse/net-next-nuse/tree/master)
 DCE [![Build Status](https://travis-ci.org/direct-code-execution/net-next-sim.png)](https://travis-ci.org/direct-code-execution/net-next-sim)
 
