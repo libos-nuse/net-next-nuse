@@ -6,7 +6,7 @@ out_h="$3"
 proto_h="$4"
 unistd_h="$5"
 
-# FIXME
+# XXX:
 SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime"
 NR_syscall_max=0
 
@@ -40,6 +40,10 @@ extern const sys_call_ptr_t rump_sys_call_table[];
 struct syscall_args {
 	unsigned long args[6];
 };
+
+#ifndef umode_t
+typedef unsigned short		umode_t;
+#endif /* umode_t */
 
 EOF
 
@@ -84,43 +88,6 @@ struct user_msghdr;
 struct iovec;
 struct sockaddr;
 struct timeval;
-
-
-/* For hijack.c compatibility of NetBSD */
-#define NOT_IMPLEMENTED(x) void (x)(void){}
-
-NOT_IMPLEMENTED(rump___sysimpl_shutdown)
-NOT_IMPLEMENTED(rump___sysimpl_readv)
-NOT_IMPLEMENTED(rump___sysimpl_pread)
-NOT_IMPLEMENTED(rump___sysimpl_preadv)
-NOT_IMPLEMENTED(rump___sysimpl_dup2)
-NOT_IMPLEMENTED(rump___sysimpl_pollts50)
-NOT_IMPLEMENTED(rump___sysimpl_chmod)
-NOT_IMPLEMENTED(rump___sysimpl_lchmod)
-NOT_IMPLEMENTED(rump___sysimpl_fchmod)
-NOT_IMPLEMENTED(rump___sysimpl_chown)
-NOT_IMPLEMENTED(rump___sysimpl_lchown)
-NOT_IMPLEMENTED(rump___sysimpl_fchown)
-NOT_IMPLEMENTED(rump___sysimpl_open)
-NOT_IMPLEMENTED(rump___sysimpl_chdir)
-NOT_IMPLEMENTED(rump___sysimpl_fchdir)
-NOT_IMPLEMENTED(rump___sysimpl_lseek)
-NOT_IMPLEMENTED(rump___sysimpl_unlink)
-NOT_IMPLEMENTED(rump___sysimpl_symlink)
-NOT_IMPLEMENTED(rump___sysimpl_readlink)
-NOT_IMPLEMENTED(rump___sysimpl_link)
-NOT_IMPLEMENTED(rump___sysimpl_rename)
-NOT_IMPLEMENTED(rump___sysimpl_mkdir)
-NOT_IMPLEMENTED(rump___sysimpl_rmdir)
-NOT_IMPLEMENTED(rump___sysimpl_utimes50)
-NOT_IMPLEMENTED(rump___sysimpl_lutimes50)
-NOT_IMPLEMENTED(rump___sysimpl_futimes50)
-NOT_IMPLEMENTED(rump___sysimpl_utimensat)
-NOT_IMPLEMENTED(rump___sysimpl_futimens)
-NOT_IMPLEMENTED(rump___sysimpl_truncate)
-NOT_IMPLEMENTED(rump___sysimpl_ftruncate)
-NOT_IMPLEMENTED(rump___sysimpl_fsync)
-NOT_IMPLEMENTED(rump___sysimpl_access)
 
 
 #ifdef RUMP_CLIENT
@@ -190,20 +157,37 @@ int rump_syscall(int num, void *data, size_t dlen, register_t *retval);
 	extern __typeof (name) aliasname __attribute__ ((strong, alias (# name)))
 #define __strong_alias(aliasname, name)
 
+#define NOT_IMPLEMENTED(x) int (x)(void){      \
+	rsys_seterrno(ENOSYS);                 \
+	return -1;                             \
+        }
+
+NOT_IMPLEMENTED(rump___sysimpl_pollts50)
+NOT_IMPLEMENTED(rump___sysimpl_lchmod)
+NOT_IMPLEMENTED(rump___sysimpl_lutimes50)
+NOT_IMPLEMENTED(rump___sysimpl_futimes50)
+
 EOF
 
 grep '^[0-9]' "$in" | sort -n | (
     while read nr abi name entry compat; do
 	abi=`echo "$abi" | tr '[a-z]' '[A-Z]'`
 	NR_syscall_max=${nr}
-	# parse only defined in $(SYSCALL_LIST)
-	if [ -z "`echo ${name} | grep -w -E ${SYSCALL_LIST}`" ] ; then
-	    #echo "skip=="
+	# skip compat
+	if [ -n "`echo ${entry}|grep compat`" ] ; then
 	    continue
 	fi
 
-	# skip compat
-	if [ -n "`echo ${entry}|grep compat`" ] ; then
+	# skip x32
+	if [ -n "`echo ${entry}|grep x32`" ] ; then
+	    continue
+	fi
+
+	# parse only defined in $(SYSCALL_LIST)
+	if [ -z "`echo ${name} | grep -w -E ${SYSCALL_LIST}`" ] ; then
+	    #echo "skip=="
+	    echo "NOT_IMPLEMENTED(rump___sysimpl_"${name}")"
+	    echo ""
 	    continue
 	fi
 
@@ -287,7 +271,7 @@ EOF
 	done
 
 	cat <<EOF >> "$unistd_h"
-#define __NR_${name} ${nr}
+#define __NR_${name}                     ${nr}
 EOF
 
 	cat <<EOF
@@ -307,8 +291,11 @@ EOF
 
 cat <<EOF
 
+/* For hijack.c compatibility of NetBSD */
 __weak_alias(rump___sysimpl_socket30,rump___sysimpl_socket);
 __weak_alias(rump___sysimpl_pwrite,rump___sysimpl_pwrite64);
+__weak_alias(rump___sysimpl_pread,rump___sysimpl_pread64);
+__weak_alias(rump___sysimpl_utimes50,rump___sysimpl_utimes);
 
 EOF
 

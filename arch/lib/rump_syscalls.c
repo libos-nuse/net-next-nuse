@@ -31,43 +31,6 @@ struct sockaddr;
 struct timeval;
 
 
-/* For hijack.c compatibility of NetBSD */
-#define NOT_IMPLEMENTED(x) void (x)(void){}
-
-NOT_IMPLEMENTED(rump___sysimpl_shutdown)
-NOT_IMPLEMENTED(rump___sysimpl_readv)
-NOT_IMPLEMENTED(rump___sysimpl_pread)
-NOT_IMPLEMENTED(rump___sysimpl_preadv)
-NOT_IMPLEMENTED(rump___sysimpl_dup2)
-NOT_IMPLEMENTED(rump___sysimpl_pollts50)
-NOT_IMPLEMENTED(rump___sysimpl_chmod)
-NOT_IMPLEMENTED(rump___sysimpl_lchmod)
-NOT_IMPLEMENTED(rump___sysimpl_fchmod)
-NOT_IMPLEMENTED(rump___sysimpl_chown)
-NOT_IMPLEMENTED(rump___sysimpl_lchown)
-NOT_IMPLEMENTED(rump___sysimpl_fchown)
-NOT_IMPLEMENTED(rump___sysimpl_open)
-NOT_IMPLEMENTED(rump___sysimpl_chdir)
-NOT_IMPLEMENTED(rump___sysimpl_fchdir)
-NOT_IMPLEMENTED(rump___sysimpl_lseek)
-NOT_IMPLEMENTED(rump___sysimpl_unlink)
-NOT_IMPLEMENTED(rump___sysimpl_symlink)
-NOT_IMPLEMENTED(rump___sysimpl_readlink)
-NOT_IMPLEMENTED(rump___sysimpl_link)
-NOT_IMPLEMENTED(rump___sysimpl_rename)
-NOT_IMPLEMENTED(rump___sysimpl_mkdir)
-NOT_IMPLEMENTED(rump___sysimpl_rmdir)
-NOT_IMPLEMENTED(rump___sysimpl_utimes50)
-NOT_IMPLEMENTED(rump___sysimpl_lutimes50)
-NOT_IMPLEMENTED(rump___sysimpl_futimes50)
-NOT_IMPLEMENTED(rump___sysimpl_utimensat)
-NOT_IMPLEMENTED(rump___sysimpl_futimens)
-NOT_IMPLEMENTED(rump___sysimpl_truncate)
-NOT_IMPLEMENTED(rump___sysimpl_ftruncate)
-NOT_IMPLEMENTED(rump___sysimpl_fsync)
-NOT_IMPLEMENTED(rump___sysimpl_access)
-
-
 #ifdef RUMP_CLIENT
 #include <errno.h>
 #include <stdint.h>
@@ -131,6 +94,13 @@ int rump_syscall(int num, void *data, size_t dlen, register_t *retval);
 //#define __strong_alias(aliasname, name)						extern __typeof (name) aliasname __attribute__ ((strong, alias (# name)))
 #define __strong_alias(aliasname, name)
 
+#define NOT_IMPLEMENTED(x) int (x)(void){      	rsys_seterrno(ENOSYS);                 	return -1;                                     }
+
+NOT_IMPLEMENTED(rump___sysimpl_pollts50)
+NOT_IMPLEMENTED(rump___sysimpl_lchmod)
+NOT_IMPLEMENTED(rump___sysimpl_lutimes50)
+NOT_IMPLEMENTED(rump___sysimpl_futimes50)
+
 long rump___sysimpl_read(unsigned int fd, char __user * buf, size_t count);
 long
 rump___sysimpl_read(unsigned int fd,  char __user * buf,  size_t count)
@@ -177,6 +147,8 @@ __weak_alias(_write,rump___sysimpl_write);
 __strong_alias(_sys_write,rump___sysimpl_write);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_open)
+
 long rump___sysimpl_close(unsigned int fd);
 long
 rump___sysimpl_close(unsigned int fd)
@@ -197,6 +169,12 @@ __weak_alias(close,rump___sysimpl_close);
 __weak_alias(_close,rump___sysimpl_close);
 __strong_alias(_sys_close,rump___sysimpl_close);
 #endif /* RUMP_KERNEL_IS_LIBC */
+
+NOT_IMPLEMENTED(rump___sysimpl_stat)
+
+NOT_IMPLEMENTED(rump___sysimpl_fstat)
+
+NOT_IMPLEMENTED(rump___sysimpl_lstat)
 
 long rump___sysimpl_poll(struct pollfd __user * ufds, unsigned int nfds, int timeout);
 long
@@ -221,6 +199,22 @@ __weak_alias(_poll,rump___sysimpl_poll);
 __strong_alias(_sys_poll,rump___sysimpl_poll);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_lseek)
+
+NOT_IMPLEMENTED(rump___sysimpl_mmap)
+
+NOT_IMPLEMENTED(rump___sysimpl_mprotect)
+
+NOT_IMPLEMENTED(rump___sysimpl_munmap)
+
+NOT_IMPLEMENTED(rump___sysimpl_brk)
+
+NOT_IMPLEMENTED(rump___sysimpl_rt_sigaction)
+
+NOT_IMPLEMENTED(rump___sysimpl_rt_sigprocmask)
+
+NOT_IMPLEMENTED(rump___sysimpl_rt_sigreturn)
+
 long rump___sysimpl_ioctl(unsigned int fd, unsigned int cmd, unsigned long arg);
 long
 rump___sysimpl_ioctl(unsigned int fd,  unsigned int cmd,  unsigned long arg)
@@ -243,6 +237,8 @@ __weak_alias(ioctl,rump___sysimpl_ioctl);
 __weak_alias(_ioctl,rump___sysimpl_ioctl);
 __strong_alias(_sys_ioctl,rump___sysimpl_ioctl);
 #endif /* RUMP_KERNEL_IS_LIBC */
+
+NOT_IMPLEMENTED(rump___sysimpl_pread64)
 
 long rump___sysimpl_pwrite64(unsigned int fd, const char __user * buf, size_t count, loff_t pos);
 long
@@ -268,6 +264,8 @@ __weak_alias(_pwrite64,rump___sysimpl_pwrite64);
 __strong_alias(_sys_pwrite64,rump___sysimpl_pwrite64);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_readv)
+
 long rump___sysimpl_writev(unsigned long fd, const struct iovec __user * vec, unsigned long vlen);
 long
 rump___sysimpl_writev(unsigned long fd,  const struct iovec __user * vec,  unsigned long vlen)
@@ -290,6 +288,8 @@ __weak_alias(writev,rump___sysimpl_writev);
 __weak_alias(_writev,rump___sysimpl_writev);
 __strong_alias(_sys_writev,rump___sysimpl_writev);
 #endif /* RUMP_KERNEL_IS_LIBC */
+
+NOT_IMPLEMENTED(rump___sysimpl_access)
 
 long rump___sysimpl_pipe(int __user * fildes);
 long
@@ -336,6 +336,40 @@ __weak_alias(select,rump___sysimpl_select);
 __weak_alias(_select,rump___sysimpl_select);
 __strong_alias(_sys_select,rump___sysimpl_select);
 #endif /* RUMP_KERNEL_IS_LIBC */
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_yield)
+
+NOT_IMPLEMENTED(rump___sysimpl_mremap)
+
+NOT_IMPLEMENTED(rump___sysimpl_msync)
+
+NOT_IMPLEMENTED(rump___sysimpl_mincore)
+
+NOT_IMPLEMENTED(rump___sysimpl_madvise)
+
+NOT_IMPLEMENTED(rump___sysimpl_shmget)
+
+NOT_IMPLEMENTED(rump___sysimpl_shmat)
+
+NOT_IMPLEMENTED(rump___sysimpl_shmctl)
+
+NOT_IMPLEMENTED(rump___sysimpl_dup)
+
+NOT_IMPLEMENTED(rump___sysimpl_dup2)
+
+NOT_IMPLEMENTED(rump___sysimpl_pause)
+
+NOT_IMPLEMENTED(rump___sysimpl_nanosleep)
+
+NOT_IMPLEMENTED(rump___sysimpl_getitimer)
+
+NOT_IMPLEMENTED(rump___sysimpl_alarm)
+
+NOT_IMPLEMENTED(rump___sysimpl_setitimer)
+
+NOT_IMPLEMENTED(rump___sysimpl_getpid)
+
+NOT_IMPLEMENTED(rump___sysimpl_sendfile)
 
 long rump___sysimpl_socket(int, int, int);
 long
@@ -504,6 +538,8 @@ __weak_alias(_recvmsg,rump___sysimpl_recvmsg);
 __strong_alias(_sys_recvmsg,rump___sysimpl_recvmsg);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_shutdown)
+
 long rump___sysimpl_bind(int, struct sockaddr __user *, int);
 long
 rump___sysimpl_bind(int arg1,  struct sockaddr __user * arg2, int arg3)
@@ -595,6 +631,8 @@ __weak_alias(_getpeername,rump___sysimpl_getpeername);
 __strong_alias(_sys_getpeername,rump___sysimpl_getpeername);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_socketpair)
+
 long rump___sysimpl_setsockopt(int fd, int level, int optname, char __user * optval, int optlen);
 long
 rump___sysimpl_setsockopt(int fd,  int level,  int optname,  char __user * optval,  int optlen)
@@ -645,6 +683,38 @@ __weak_alias(_getsockopt,rump___sysimpl_getsockopt);
 __strong_alias(_sys_getsockopt,rump___sysimpl_getsockopt);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_clone)
+
+NOT_IMPLEMENTED(rump___sysimpl_fork)
+
+NOT_IMPLEMENTED(rump___sysimpl_vfork)
+
+NOT_IMPLEMENTED(rump___sysimpl_execve)
+
+NOT_IMPLEMENTED(rump___sysimpl_exit)
+
+NOT_IMPLEMENTED(rump___sysimpl_wait4)
+
+NOT_IMPLEMENTED(rump___sysimpl_kill)
+
+NOT_IMPLEMENTED(rump___sysimpl_uname)
+
+NOT_IMPLEMENTED(rump___sysimpl_semget)
+
+NOT_IMPLEMENTED(rump___sysimpl_semop)
+
+NOT_IMPLEMENTED(rump___sysimpl_semctl)
+
+NOT_IMPLEMENTED(rump___sysimpl_shmdt)
+
+NOT_IMPLEMENTED(rump___sysimpl_msgget)
+
+NOT_IMPLEMENTED(rump___sysimpl_msgsnd)
+
+NOT_IMPLEMENTED(rump___sysimpl_msgrcv)
+
+NOT_IMPLEMENTED(rump___sysimpl_msgctl)
+
 long rump___sysimpl_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg);
 long
 rump___sysimpl_fcntl(unsigned int fd,  unsigned int cmd,  unsigned long arg)
@@ -668,6 +738,286 @@ __weak_alias(_fcntl,rump___sysimpl_fcntl);
 __strong_alias(_sys_fcntl,rump___sysimpl_fcntl);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_flock)
+
+NOT_IMPLEMENTED(rump___sysimpl_fsync)
+
+NOT_IMPLEMENTED(rump___sysimpl_fdatasync)
+
+NOT_IMPLEMENTED(rump___sysimpl_truncate)
+
+NOT_IMPLEMENTED(rump___sysimpl_ftruncate)
+
+NOT_IMPLEMENTED(rump___sysimpl_getdents)
+
+NOT_IMPLEMENTED(rump___sysimpl_getcwd)
+
+NOT_IMPLEMENTED(rump___sysimpl_chdir)
+
+NOT_IMPLEMENTED(rump___sysimpl_fchdir)
+
+NOT_IMPLEMENTED(rump___sysimpl_rename)
+
+NOT_IMPLEMENTED(rump___sysimpl_mkdir)
+
+NOT_IMPLEMENTED(rump___sysimpl_rmdir)
+
+NOT_IMPLEMENTED(rump___sysimpl_creat)
+
+NOT_IMPLEMENTED(rump___sysimpl_link)
+
+NOT_IMPLEMENTED(rump___sysimpl_unlink)
+
+NOT_IMPLEMENTED(rump___sysimpl_symlink)
+
+NOT_IMPLEMENTED(rump___sysimpl_readlink)
+
+NOT_IMPLEMENTED(rump___sysimpl_chmod)
+
+NOT_IMPLEMENTED(rump___sysimpl_fchmod)
+
+NOT_IMPLEMENTED(rump___sysimpl_chown)
+
+NOT_IMPLEMENTED(rump___sysimpl_fchown)
+
+NOT_IMPLEMENTED(rump___sysimpl_lchown)
+
+NOT_IMPLEMENTED(rump___sysimpl_umask)
+
+NOT_IMPLEMENTED(rump___sysimpl_gettimeofday)
+
+NOT_IMPLEMENTED(rump___sysimpl_getrlimit)
+
+NOT_IMPLEMENTED(rump___sysimpl_getrusage)
+
+NOT_IMPLEMENTED(rump___sysimpl_sysinfo)
+
+NOT_IMPLEMENTED(rump___sysimpl_times)
+
+NOT_IMPLEMENTED(rump___sysimpl_ptrace)
+
+NOT_IMPLEMENTED(rump___sysimpl_getuid)
+
+NOT_IMPLEMENTED(rump___sysimpl_syslog)
+
+NOT_IMPLEMENTED(rump___sysimpl_getgid)
+
+NOT_IMPLEMENTED(rump___sysimpl_setuid)
+
+NOT_IMPLEMENTED(rump___sysimpl_setgid)
+
+NOT_IMPLEMENTED(rump___sysimpl_geteuid)
+
+NOT_IMPLEMENTED(rump___sysimpl_getegid)
+
+NOT_IMPLEMENTED(rump___sysimpl_setpgid)
+
+NOT_IMPLEMENTED(rump___sysimpl_getppid)
+
+NOT_IMPLEMENTED(rump___sysimpl_getpgrp)
+
+NOT_IMPLEMENTED(rump___sysimpl_setsid)
+
+NOT_IMPLEMENTED(rump___sysimpl_setreuid)
+
+NOT_IMPLEMENTED(rump___sysimpl_setregid)
+
+NOT_IMPLEMENTED(rump___sysimpl_getgroups)
+
+NOT_IMPLEMENTED(rump___sysimpl_setgroups)
+
+NOT_IMPLEMENTED(rump___sysimpl_setresuid)
+
+NOT_IMPLEMENTED(rump___sysimpl_getresuid)
+
+NOT_IMPLEMENTED(rump___sysimpl_setresgid)
+
+NOT_IMPLEMENTED(rump___sysimpl_getresgid)
+
+NOT_IMPLEMENTED(rump___sysimpl_getpgid)
+
+NOT_IMPLEMENTED(rump___sysimpl_setfsuid)
+
+NOT_IMPLEMENTED(rump___sysimpl_setfsgid)
+
+NOT_IMPLEMENTED(rump___sysimpl_getsid)
+
+NOT_IMPLEMENTED(rump___sysimpl_capget)
+
+NOT_IMPLEMENTED(rump___sysimpl_capset)
+
+NOT_IMPLEMENTED(rump___sysimpl_rt_sigpending)
+
+NOT_IMPLEMENTED(rump___sysimpl_rt_sigtimedwait)
+
+NOT_IMPLEMENTED(rump___sysimpl_rt_sigqueueinfo)
+
+NOT_IMPLEMENTED(rump___sysimpl_rt_sigsuspend)
+
+NOT_IMPLEMENTED(rump___sysimpl_sigaltstack)
+
+NOT_IMPLEMENTED(rump___sysimpl_utime)
+
+NOT_IMPLEMENTED(rump___sysimpl_mknod)
+
+NOT_IMPLEMENTED(rump___sysimpl_uselib)
+
+NOT_IMPLEMENTED(rump___sysimpl_personality)
+
+NOT_IMPLEMENTED(rump___sysimpl_ustat)
+
+NOT_IMPLEMENTED(rump___sysimpl_statfs)
+
+NOT_IMPLEMENTED(rump___sysimpl_fstatfs)
+
+NOT_IMPLEMENTED(rump___sysimpl_sysfs)
+
+NOT_IMPLEMENTED(rump___sysimpl_getpriority)
+
+NOT_IMPLEMENTED(rump___sysimpl_setpriority)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_setparam)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_getparam)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_setscheduler)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_getscheduler)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_get_priority_max)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_get_priority_min)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_rr_get_interval)
+
+NOT_IMPLEMENTED(rump___sysimpl_mlock)
+
+NOT_IMPLEMENTED(rump___sysimpl_munlock)
+
+NOT_IMPLEMENTED(rump___sysimpl_mlockall)
+
+NOT_IMPLEMENTED(rump___sysimpl_munlockall)
+
+NOT_IMPLEMENTED(rump___sysimpl_vhangup)
+
+NOT_IMPLEMENTED(rump___sysimpl_modify_ldt)
+
+NOT_IMPLEMENTED(rump___sysimpl_pivot_root)
+
+NOT_IMPLEMENTED(rump___sysimpl__sysctl)
+
+NOT_IMPLEMENTED(rump___sysimpl_prctl)
+
+NOT_IMPLEMENTED(rump___sysimpl_arch_prctl)
+
+NOT_IMPLEMENTED(rump___sysimpl_adjtimex)
+
+NOT_IMPLEMENTED(rump___sysimpl_setrlimit)
+
+NOT_IMPLEMENTED(rump___sysimpl_chroot)
+
+NOT_IMPLEMENTED(rump___sysimpl_sync)
+
+NOT_IMPLEMENTED(rump___sysimpl_acct)
+
+NOT_IMPLEMENTED(rump___sysimpl_settimeofday)
+
+NOT_IMPLEMENTED(rump___sysimpl_mount)
+
+NOT_IMPLEMENTED(rump___sysimpl_umount2)
+
+NOT_IMPLEMENTED(rump___sysimpl_swapon)
+
+NOT_IMPLEMENTED(rump___sysimpl_swapoff)
+
+NOT_IMPLEMENTED(rump___sysimpl_reboot)
+
+NOT_IMPLEMENTED(rump___sysimpl_sethostname)
+
+NOT_IMPLEMENTED(rump___sysimpl_setdomainname)
+
+NOT_IMPLEMENTED(rump___sysimpl_iopl)
+
+NOT_IMPLEMENTED(rump___sysimpl_ioperm)
+
+NOT_IMPLEMENTED(rump___sysimpl_create_module)
+
+NOT_IMPLEMENTED(rump___sysimpl_init_module)
+
+NOT_IMPLEMENTED(rump___sysimpl_delete_module)
+
+NOT_IMPLEMENTED(rump___sysimpl_get_kernel_syms)
+
+NOT_IMPLEMENTED(rump___sysimpl_query_module)
+
+NOT_IMPLEMENTED(rump___sysimpl_quotactl)
+
+NOT_IMPLEMENTED(rump___sysimpl_nfsservctl)
+
+NOT_IMPLEMENTED(rump___sysimpl_getpmsg)
+
+NOT_IMPLEMENTED(rump___sysimpl_putpmsg)
+
+NOT_IMPLEMENTED(rump___sysimpl_afs_syscall)
+
+NOT_IMPLEMENTED(rump___sysimpl_tuxcall)
+
+NOT_IMPLEMENTED(rump___sysimpl_security)
+
+NOT_IMPLEMENTED(rump___sysimpl_gettid)
+
+NOT_IMPLEMENTED(rump___sysimpl_readahead)
+
+NOT_IMPLEMENTED(rump___sysimpl_setxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_lsetxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_fsetxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_getxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_lgetxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_fgetxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_listxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_llistxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_flistxattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_removexattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_lremovexattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_fremovexattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_tkill)
+
+NOT_IMPLEMENTED(rump___sysimpl_time)
+
+NOT_IMPLEMENTED(rump___sysimpl_futex)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_setaffinity)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_getaffinity)
+
+NOT_IMPLEMENTED(rump___sysimpl_set_thread_area)
+
+NOT_IMPLEMENTED(rump___sysimpl_io_setup)
+
+NOT_IMPLEMENTED(rump___sysimpl_io_destroy)
+
+NOT_IMPLEMENTED(rump___sysimpl_io_getevents)
+
+NOT_IMPLEMENTED(rump___sysimpl_io_submit)
+
+NOT_IMPLEMENTED(rump___sysimpl_io_cancel)
+
+NOT_IMPLEMENTED(rump___sysimpl_get_thread_area)
+
+NOT_IMPLEMENTED(rump___sysimpl_lookup_dcookie)
+
 long rump___sysimpl_epoll_create(int size);
 long
 rump___sysimpl_epoll_create(int size)
@@ -688,6 +1038,34 @@ __weak_alias(epoll_create,rump___sysimpl_epoll_create);
 __weak_alias(_epoll_create,rump___sysimpl_epoll_create);
 __strong_alias(_sys_epoll_create,rump___sysimpl_epoll_create);
 #endif /* RUMP_KERNEL_IS_LIBC */
+
+NOT_IMPLEMENTED(rump___sysimpl_epoll_ctl_old)
+
+NOT_IMPLEMENTED(rump___sysimpl_epoll_wait_old)
+
+NOT_IMPLEMENTED(rump___sysimpl_remap_file_pages)
+
+NOT_IMPLEMENTED(rump___sysimpl_getdents64)
+
+NOT_IMPLEMENTED(rump___sysimpl_set_tid_address)
+
+NOT_IMPLEMENTED(rump___sysimpl_restart_syscall)
+
+NOT_IMPLEMENTED(rump___sysimpl_semtimedop)
+
+NOT_IMPLEMENTED(rump___sysimpl_fadvise64)
+
+NOT_IMPLEMENTED(rump___sysimpl_timer_create)
+
+NOT_IMPLEMENTED(rump___sysimpl_timer_settime)
+
+NOT_IMPLEMENTED(rump___sysimpl_timer_gettime)
+
+NOT_IMPLEMENTED(rump___sysimpl_timer_getoverrun)
+
+NOT_IMPLEMENTED(rump___sysimpl_timer_delete)
+
+NOT_IMPLEMENTED(rump___sysimpl_clock_settime)
 
 long rump___sysimpl_clock_gettime(clockid_t which_clock, struct timespec __user * tp);
 long
@@ -710,6 +1088,12 @@ __weak_alias(clock_gettime,rump___sysimpl_clock_gettime);
 __weak_alias(_clock_gettime,rump___sysimpl_clock_gettime);
 __strong_alias(_sys_clock_gettime,rump___sysimpl_clock_gettime);
 #endif /* RUMP_KERNEL_IS_LIBC */
+
+NOT_IMPLEMENTED(rump___sysimpl_clock_getres)
+
+NOT_IMPLEMENTED(rump___sysimpl_clock_nanosleep)
+
+NOT_IMPLEMENTED(rump___sysimpl_exit_group)
 
 long rump___sysimpl_epoll_wait(int epfd, struct epoll_event __user * events, int maxevents, int timeout);
 long
@@ -759,6 +1143,130 @@ __weak_alias(_epoll_ctl,rump___sysimpl_epoll_ctl);
 __strong_alias(_sys_epoll_ctl,rump___sysimpl_epoll_ctl);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_tgkill)
+
+NOT_IMPLEMENTED(rump___sysimpl_utimes)
+
+NOT_IMPLEMENTED(rump___sysimpl_vserver)
+
+NOT_IMPLEMENTED(rump___sysimpl_mbind)
+
+NOT_IMPLEMENTED(rump___sysimpl_set_mempolicy)
+
+NOT_IMPLEMENTED(rump___sysimpl_get_mempolicy)
+
+NOT_IMPLEMENTED(rump___sysimpl_mq_open)
+
+NOT_IMPLEMENTED(rump___sysimpl_mq_unlink)
+
+NOT_IMPLEMENTED(rump___sysimpl_mq_timedsend)
+
+NOT_IMPLEMENTED(rump___sysimpl_mq_timedreceive)
+
+NOT_IMPLEMENTED(rump___sysimpl_mq_notify)
+
+NOT_IMPLEMENTED(rump___sysimpl_mq_getsetattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_kexec_load)
+
+NOT_IMPLEMENTED(rump___sysimpl_waitid)
+
+NOT_IMPLEMENTED(rump___sysimpl_add_key)
+
+NOT_IMPLEMENTED(rump___sysimpl_request_key)
+
+NOT_IMPLEMENTED(rump___sysimpl_keyctl)
+
+NOT_IMPLEMENTED(rump___sysimpl_ioprio_set)
+
+NOT_IMPLEMENTED(rump___sysimpl_ioprio_get)
+
+NOT_IMPLEMENTED(rump___sysimpl_inotify_init)
+
+NOT_IMPLEMENTED(rump___sysimpl_inotify_add_watch)
+
+NOT_IMPLEMENTED(rump___sysimpl_inotify_rm_watch)
+
+NOT_IMPLEMENTED(rump___sysimpl_migrate_pages)
+
+NOT_IMPLEMENTED(rump___sysimpl_openat)
+
+NOT_IMPLEMENTED(rump___sysimpl_mkdirat)
+
+NOT_IMPLEMENTED(rump___sysimpl_mknodat)
+
+NOT_IMPLEMENTED(rump___sysimpl_fchownat)
+
+NOT_IMPLEMENTED(rump___sysimpl_futimesat)
+
+NOT_IMPLEMENTED(rump___sysimpl_newfstatat)
+
+NOT_IMPLEMENTED(rump___sysimpl_unlinkat)
+
+NOT_IMPLEMENTED(rump___sysimpl_renameat)
+
+NOT_IMPLEMENTED(rump___sysimpl_linkat)
+
+NOT_IMPLEMENTED(rump___sysimpl_symlinkat)
+
+NOT_IMPLEMENTED(rump___sysimpl_readlinkat)
+
+NOT_IMPLEMENTED(rump___sysimpl_fchmodat)
+
+NOT_IMPLEMENTED(rump___sysimpl_faccessat)
+
+NOT_IMPLEMENTED(rump___sysimpl_pselect6)
+
+NOT_IMPLEMENTED(rump___sysimpl_ppoll)
+
+NOT_IMPLEMENTED(rump___sysimpl_unshare)
+
+NOT_IMPLEMENTED(rump___sysimpl_set_robust_list)
+
+NOT_IMPLEMENTED(rump___sysimpl_get_robust_list)
+
+NOT_IMPLEMENTED(rump___sysimpl_splice)
+
+NOT_IMPLEMENTED(rump___sysimpl_tee)
+
+NOT_IMPLEMENTED(rump___sysimpl_sync_file_range)
+
+NOT_IMPLEMENTED(rump___sysimpl_vmsplice)
+
+NOT_IMPLEMENTED(rump___sysimpl_move_pages)
+
+NOT_IMPLEMENTED(rump___sysimpl_utimensat)
+
+NOT_IMPLEMENTED(rump___sysimpl_epoll_pwait)
+
+NOT_IMPLEMENTED(rump___sysimpl_signalfd)
+
+NOT_IMPLEMENTED(rump___sysimpl_timerfd_create)
+
+NOT_IMPLEMENTED(rump___sysimpl_eventfd)
+
+NOT_IMPLEMENTED(rump___sysimpl_fallocate)
+
+NOT_IMPLEMENTED(rump___sysimpl_timerfd_settime)
+
+NOT_IMPLEMENTED(rump___sysimpl_timerfd_gettime)
+
+NOT_IMPLEMENTED(rump___sysimpl_accept4)
+
+NOT_IMPLEMENTED(rump___sysimpl_signalfd4)
+
+NOT_IMPLEMENTED(rump___sysimpl_eventfd2)
+
+NOT_IMPLEMENTED(rump___sysimpl_epoll_create1)
+
+NOT_IMPLEMENTED(rump___sysimpl_dup3)
+
+NOT_IMPLEMENTED(rump___sysimpl_pipe2)
+
+NOT_IMPLEMENTED(rump___sysimpl_inotify_init1)
+
+NOT_IMPLEMENTED(rump___sysimpl_preadv)
+
 long rump___sysimpl_pwritev(unsigned long fd, const struct iovec __user * vec, unsigned long vlen, unsigned long pos_l, unsigned long pos_h);
 long
 rump___sysimpl_pwritev(unsigned long fd,  const struct iovec __user * vec,  unsigned long vlen,  unsigned long pos_l,  unsigned long pos_h)
@@ -784,6 +1292,26 @@ __weak_alias(_pwritev,rump___sysimpl_pwritev);
 __strong_alias(_sys_pwritev,rump___sysimpl_pwritev);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_rt_tgsigqueueinfo)
+
+NOT_IMPLEMENTED(rump___sysimpl_perf_event_open)
+
+NOT_IMPLEMENTED(rump___sysimpl_recvmmsg)
+
+NOT_IMPLEMENTED(rump___sysimpl_fanotify_init)
+
+NOT_IMPLEMENTED(rump___sysimpl_fanotify_mark)
+
+NOT_IMPLEMENTED(rump___sysimpl_prlimit64)
+
+NOT_IMPLEMENTED(rump___sysimpl_name_to_handle_at)
+
+NOT_IMPLEMENTED(rump___sysimpl_open_by_handle_at)
+
+NOT_IMPLEMENTED(rump___sysimpl_clock_adjtime)
+
+NOT_IMPLEMENTED(rump___sysimpl_syncfs)
+
 long rump___sysimpl_sendmmsg(int fd, struct mmsghdr __user * msg, unsigned int vlen, unsigned flags);
 long
 rump___sysimpl_sendmmsg(int fd,  struct mmsghdr __user * msg,  unsigned int vlen,  unsigned flags)
@@ -808,7 +1336,44 @@ __weak_alias(_sendmmsg,rump___sysimpl_sendmmsg);
 __strong_alias(_sys_sendmmsg,rump___sysimpl_sendmmsg);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
+NOT_IMPLEMENTED(rump___sysimpl_setns)
 
+NOT_IMPLEMENTED(rump___sysimpl_getcpu)
+
+NOT_IMPLEMENTED(rump___sysimpl_process_vm_readv)
+
+NOT_IMPLEMENTED(rump___sysimpl_process_vm_writev)
+
+NOT_IMPLEMENTED(rump___sysimpl_kcmp)
+
+NOT_IMPLEMENTED(rump___sysimpl_finit_module)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_setattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_sched_getattr)
+
+NOT_IMPLEMENTED(rump___sysimpl_renameat2)
+
+NOT_IMPLEMENTED(rump___sysimpl_seccomp)
+
+NOT_IMPLEMENTED(rump___sysimpl_getrandom)
+
+NOT_IMPLEMENTED(rump___sysimpl_memfd_create)
+
+NOT_IMPLEMENTED(rump___sysimpl_kexec_file_load)
+
+NOT_IMPLEMENTED(rump___sysimpl_bpf)
+
+NOT_IMPLEMENTED(rump___sysimpl_execveat)
+
+NOT_IMPLEMENTED(rump___sysimpl_userfaultfd)
+
+NOT_IMPLEMENTED(rump___sysimpl_membarrier)
+
+
+/* For hijack.c compatibility of NetBSD */
 __weak_alias(rump___sysimpl_socket30,rump___sysimpl_socket);
 __weak_alias(rump___sysimpl_pwrite,rump___sysimpl_pwrite64);
+__weak_alias(rump___sysimpl_pread,rump___sysimpl_pread64);
+__weak_alias(rump___sysimpl_utimes50,rump___sysimpl_utimes);
 

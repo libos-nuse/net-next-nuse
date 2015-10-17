@@ -188,7 +188,7 @@ KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
 KERNEL_OBJS=$(call uniq,./net/socket.o ./net/ipv6/af_inet6.o $(all-obj-for-clean:%builtin.o=))
 AR_OBJS=$(LIB_OBJ) $(foreach kobj,$(KERNEL_OBJS),$(if $(wildcard $(kobj)),$(kobj)))
-export OBJS KERNEL_LIB COV covl_yes covl_no KLIBC klibc_yes klibc_no
+export OBJS KERNEL_LIB COV covl_yes covl_no KLIBC klibc_yes klibc_no GCCSYMBOLS EXP_SYMRENAME
 
 # objcopy trick is taken from rumpkernel
 GCCSYMBOLS=__umoddi3|__udivdi3
@@ -232,7 +232,6 @@ install: modules library
 install-dir:
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOGENS) $(OBJS)
-	@echo $(all-obj-for-clean) > /tmp/b
 	$(call if_changed,linklib)
 
 quiet_cmd_linklib = LIB     $@
