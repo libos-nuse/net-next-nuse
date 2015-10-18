@@ -88,9 +88,6 @@ struct timespec;
 #include <stdlib.h>
 #include <string.h>
 
-#include <srcsys/syscall.h>
-#include <srcsys/syscallargs.h>
-
 #include <rump/rumpclient.h>
 
 struct syscall_args {
@@ -160,6 +157,7 @@ NOT_IMPLEMENTED(rump___sysimpl_pollts50)
 NOT_IMPLEMENTED(rump___sysimpl_lchmod)
 NOT_IMPLEMENTED(rump___sysimpl_lutimes50)
 NOT_IMPLEMENTED(rump___sysimpl_futimes50)
+NOT_IMPLEMENTED(rump___sysimpl_futimens)
 
 EOF
 
