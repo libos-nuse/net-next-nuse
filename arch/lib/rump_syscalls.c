@@ -8,15 +8,6 @@
 #include <rump/rumpuser_port.h>
 #endif /* RUMP_CLIENT */
 
-#include <stdint.h>
-#include <string.h>
-#include <linux/types.h>
-#include <sys/stat.h>
-#ifndef __USE_GNU
-#define __USE_GNU
-#endif /* __USE_GNU */
-#include <errno.h>
-
 /* XXX: FIXME to use generated syscalls_64.h */
 //#include <asm/syscalls_64.h>
 #include <asm/unistd_64.h>
@@ -29,6 +20,7 @@ struct user_msghdr;
 struct iovec;
 struct sockaddr;
 struct timeval;
+struct timespec;
 
 
 #ifdef RUMP_CLIENT
@@ -51,6 +43,11 @@ struct syscall_args {
 
 #else /* !RUMP_CLIENT */
 
+#include <linux/compiler.h>
+#include <linux/types.h>
+#include <linux/string.h>
+#include <asm-generic/errno.h>
+
 #ifndef __dead
 #define __dead __attribute__((__noreturn__))
 #endif
@@ -72,9 +69,6 @@ typedef unsigned int           u_int;
 #define RUMP_REGISTER_T long
 typedef RUMP_REGISTER_T register_t;
 typedef int            pid_t;
-typedef struct {
-       unsigned long fds_bits[__FD_SETSIZE / (8 * sizeof(long))];
-} fd_set;
 
 
 #include <generated/rump_syscalls.h>

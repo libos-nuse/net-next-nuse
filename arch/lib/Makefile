@@ -14,6 +14,10 @@ GIT_BRANCH_NAME=`git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ \1/
 -include $(srctree)/.config
 include $(srctree)/scripts/Kbuild.include
 
+RUMP_PREFIX?=$(abspath $(srctree)/../obj/dest.stage)
+RUMP_INCLUDE=$(RUMP_PREFIX)/usr/include
+RUMP_LIB=$(RUMP_PREFIX)/usr/lib
+
 # targets
 LIBOS_TOOLS=$(ARCH_DIR)/tools
 LIBOS_GIT_REPO=git://github.com/libos-nuse/linux-libos-tools
@@ -31,7 +35,8 @@ lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
 sched.c workqueue.c \
 print.c tasklet.c tasklet-hrtimer.c \
 glue.c sysctl.c proc.c sysfs.c \
-pid.c modules.c vmscan.c kernel/syscalls.c
+pid.c modules.c vmscan.c kernel/syscalls.c rump-cons.c \
+rump_syscalls.c
 
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
 LIB_DEPS=$(addprefix $(ARCH_DIR)/.,$(addsuffix .o.cmd,$(basename $(LIB_SRC))))
@@ -63,7 +68,8 @@ CFLAGS_USPACE= \
  -fno-inline -fno-strict-aliasing -fno-common \
  -fno-delete-null-pointer-checks -fno-builtin \
  -fno-stack-protector -Wno-unused -Wno-pointer-sign \
- $(PIC_CFLAGS) -D_DEBUG $(cov_$(COV)) -I$(ARCH_DIR)/include
+ $(PIC_CFLAGS) -D_DEBUG $(cov_$(COV)) $(klibc_$(KLIBC)) \
+ -DLIBRUMPUSER -I${RUMP_INCLUDE} -I$(ARCH_DIR)/include
 
 CFLAGS+= \
  $(CFLAGS_USPACE) -nostdinc -D__KERNEL__ -iwithprefix $(srctree)/include \
@@ -98,7 +104,7 @@ modules:=
 all: library modules
 
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ kernel/time/ kernel/sched/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/ramfs/ fs/proc/ fs/sysfs/ crypto/ lib/ drivers/base/ drivers/net/ net/ security/ init/
+dirs=kernel/ kernel/time/ kernel/sched/ kernel/rcu/ kernel/locking/ kernel/bpf/ kernel/printk/ mm/ fs/ fs/ramfs/ fs/proc/ fs/sysfs/ crypto/ lib/ drivers/base/ drivers/net/ net/ security/ init/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
@@ -112,6 +118,7 @@ kernel/sched/_to_keep=wait.o completion.o loadavg.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/update.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
+kernel/bpf_to_keep=printk.o
 mm/_to_keep=util.o list_lru.o slib.o page_alloc.o memblock.o mmzone.o slib_env.o \
 nobootmem.o highmem.o oom_kill.o page-writeback.o filemap.o backing-dev.o workingset.o \
 compaction.o truncate.o debug.o readahead.o
@@ -192,6 +199,7 @@ OBJS=$(LIB_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(built
 KERNEL_OBJS=$(call uniq,./net/socket.o ./net/ipv6/af_inet6.o $(all-obj-for-clean:%builtin.o=))
 AR_OBJS=$(LIB_OBJ) $(foreach kobj,$(KERNEL_OBJS),$(if $(wildcard $(kobj)),$(kobj)))
 export OBJS KERNEL_LIB COV covl_yes covl_no KLIBC klibc_yes klibc_no GCCSYMBOLS EXP_SYMRENAME
+export RUMP_PREFIX RUMP_INCLUDE RUMP_LIB
 
 # objcopy trick is taken from rumpkernel
 GCCSYMBOLS=__umoddi3|__udivdi3

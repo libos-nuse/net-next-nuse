@@ -63,21 +63,9 @@ int sysctl_sched_rt_runtime = 950000;
 
 int panic_timeout = 0;
 int panic_on_oops = 0;
-int printk_delay_msec = 0;
 int panic_on_warn = 0;
-DEFINE_RATELIMIT_STATE(printk_ratelimit_state, 5 * HZ, 10);
 
 int max_threads = 100;
-
-#define DEFAULT_MESSAGE_LOGLEVEL 4
-#define MINIMUM_CONSOLE_LOGLEVEL 1
-#define DEFAULT_CONSOLE_LOGLEVEL 7
-int console_printk[4] = {
-	DEFAULT_CONSOLE_LOGLEVEL,       /* console_loglevel */
-	DEFAULT_MESSAGE_LOGLEVEL,       /* default_message_loglevel */
-	MINIMUM_CONSOLE_LOGLEVEL,       /* minimum_console_loglevel */
-	DEFAULT_CONSOLE_LOGLEVEL,       /* default_console_loglevel */
-};
 
 int print_fatal_signals = 0;
 unsigned int core_pipe_limit = 0;

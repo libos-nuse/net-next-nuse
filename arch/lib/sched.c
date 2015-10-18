@@ -83,8 +83,10 @@ struct SimTask *lib_task_create(void *private, unsigned long pid)
 	init_files.resize_in_progress = false;
 	init_waitqueue_head(&init_files.resize_wait);
 	/* This trick is almost the same as rump hijack library (librumphijack.so) */
+#ifndef RUMP_KERNEL_IS_LIBC
 #define RUMP_FD_OFFSET 256/2
 	init_files.next_fd = RUMP_FD_OFFSET;
+#endif /* RUMP_KERNEL_IS_LIBC */
 
 	task->kernel_task.files = &init_files,
 	task->kernel_task.nsproxy = &init_nsproxy;

@@ -168,3 +168,11 @@ config PGTABLE_LEVELS
 
 config HAVE_ARCH_PFN_VALID
 	def_bool y
+
+config MESSAGE_LOGLEVEL_DEFAULT
+	int
+	default 4
+
+config LOG_BUF_SHIFT
+	int
+	default 17

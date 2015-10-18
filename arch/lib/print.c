@@ -13,9 +13,8 @@
 #include "sim.h"
 #include "sim-assert.h"
 
-int dmesg_restrict = 1;
-
-int printk(const char *fmt, ...)
+/* not used since kernel/printk/printk.c has been used. */
+int lib_printk(const char *fmt, ...)
 {
 	va_list args;
 	static char buf[256];
