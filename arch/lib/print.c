@@ -28,6 +28,8 @@ int printk(const char *fmt, ...)
 	va_end(args);
 	return value;
 }
+#define printk_deferred(X)  printk(X)
+
 void panic(const char *fmt, ...)
 {
 	va_list args;

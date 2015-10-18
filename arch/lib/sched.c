@@ -203,6 +203,11 @@ int wake_up_process(struct task_struct *task)
 	ret = lib_task_wakeup(lib_task);
 	return ret;
 }
+int wake_up_state(struct task_struct *p, unsigned int state)
+{
+	return wake_up_process(p);
+}
+
 int _cond_resched(void)
 {
 	/* we never schedule to decrease latency. */
@@ -233,4 +238,14 @@ void __sched schedule_preempt_disabled(void)
 void resched_cpu(int cpu)
 {
 	rcu_sched_qs();
+}
+
+int sched_setscheduler_nocheck(struct task_struct *p, int policy,
+			       const struct sched_param *param)
+{
+	return 0;
+}
+
+void scheduler_tick(void)
+{
 }

@@ -17,6 +17,17 @@ static inline void atomic64_add(long i, atomic64_t *v)
 {
 	v->counter += i;
 }
+static int atomic64_add_unless(atomic64_t *v, long i, long u)
+{
+	int ret = 0;
+
+	if (v->counter != u) {
+		atomic64_add(i, v);
+		ret = 1;
+	}
+
+	return ret;
+}
 static inline void atomic64_sub(long i, atomic64_t *v)
 {
 	v->counter -= i;
@@ -66,7 +77,15 @@ static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)
 		v->counter = new;
 	return val;
 }
-long atomic64_xchg(atomic64_t *v, long new);
+static inline long atomic64_xchg(atomic64_t *v, long new)
+{
+	long long val;
+
+	val = v->counter;
+	v->counter = new;
+	return val;
+}
+
 int atomic64_add_unless(atomic64_t *v, long a, long u);
 int atomic64_inc_is_not_zero(atomic64_t *v);
 #define atomic64_dec_and_test(v)	(atomic64_dec_return((v)) == 0)

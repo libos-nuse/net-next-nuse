@@ -67,11 +67,6 @@ int printk_delay_msec = 0;
 int panic_on_warn = 0;
 DEFINE_RATELIMIT_STATE(printk_ratelimit_state, 5 * HZ, 10);
 
-#define RESERVED_PIDS 300
-int pid_max = PID_MAX_DEFAULT;
-int pid_max_min = RESERVED_PIDS + 1;
-int pid_max_max = PID_MAX_LIMIT;
-
 int max_threads = 100;
 
 #define DEFAULT_MESSAGE_LOGLEVEL 4

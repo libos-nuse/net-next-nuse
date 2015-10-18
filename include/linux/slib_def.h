@@ -4,11 +4,14 @@
 
 struct kmem_cache {
 	unsigned int object_size;
+	struct list_head list;
+	int refcount;
 	const char *name;
 	size_t size;
 	size_t align;
 	unsigned long flags;
 	void (*ctor)(void *);
+	struct kmem_cache_node *node[MAX_NUMNODES];
 };
 
 void *__kmalloc(size_t size, gfp_t flags);

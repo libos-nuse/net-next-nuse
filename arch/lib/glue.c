@@ -33,11 +33,8 @@ struct kernel_param;
 struct super_block;
 
 struct mm_struct init_mm;
-struct pid_namespace init_pid_ns;
 struct kmem_cache *fs_cachep;
 
-/* defined in sched.c, used in net/sched/em_meta.c */
-unsigned long avenrun[3];
 /* defined in linux/mmzone.h mm/memory.c */
 struct page *mem_map = 0;
 unsigned long max_mapnr;
@@ -67,7 +64,24 @@ int fs_overflowgid = 0;
 int fs_overflowuid = 0;
 unsigned long sysctl_overcommit_kbytes __read_mostly;
 DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
+
+/* cpu_bit_bitmap[0] is empty - so we can back into it */
+#define MASK_DECLARE_1(x)	[x+1][0] = (1UL << (x))
+#define MASK_DECLARE_2(x)	MASK_DECLARE_1(x), MASK_DECLARE_1(x+1)
+#define MASK_DECLARE_4(x)	MASK_DECLARE_2(x), MASK_DECLARE_2(x+2)
+#define MASK_DECLARE_8(x)	MASK_DECLARE_4(x), MASK_DECLARE_4(x+4)
+
+const unsigned long cpu_bit_bitmap[BITS_PER_LONG+1][BITS_TO_LONGS(NR_CPUS)] = {
+
+	MASK_DECLARE_8(0),	MASK_DECLARE_8(8),
+	MASK_DECLARE_8(16),	MASK_DECLARE_8(24),
+#if BITS_PER_LONG > 32
+	MASK_DECLARE_8(32),	MASK_DECLARE_8(40),
+	MASK_DECLARE_8(48),	MASK_DECLARE_8(56),
+#endif
+};
 static DECLARE_BITMAP(cpu_possible_bits, CONFIG_NR_CPUS) __read_mostly;
+const DECLARE_BITMAP(cpu_all_bits, NR_CPUS) = CPU_BITS_ALL;
 const struct cpumask *const cpu_possible_mask = to_cpumask(cpu_possible_bits);
 
 /* memory.c */
@@ -185,7 +199,6 @@ unsigned long get_taint(void)
 void add_taint(unsigned flag, enum lockdep_ok lockdep_ok)
 {
 }
-struct pid *cad_pid = 0;
 
 void add_device_randomness(const void *buf, unsigned int size)
 {

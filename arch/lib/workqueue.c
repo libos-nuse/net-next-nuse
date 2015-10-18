@@ -175,6 +175,15 @@ bool cancel_delayed_work(struct delayed_work *dwork)
 	del_timer(&dwork->timer);
 	return cancel_work_sync(&dwork->work);
 }
+bool cancel_delayed_work_sync(struct delayed_work *dwork)
+{
+	return cancel_delayed_work(dwork);
+}
+
+bool current_is_workqueue_rescuer(void)
+{
+	return false;
+}
 
 struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 					       unsigned int flags,
@@ -225,6 +234,7 @@ err:
 
 struct workqueue_struct *system_wq __read_mostly;
 struct workqueue_struct *system_power_efficient_wq __read_mostly;
+struct workqueue_struct *system_unbound_wq __read_mostly;
 /* from linux/workqueue.h */
 #define system_nrt_wq                   __system_nrt_wq()
 
@@ -233,6 +243,8 @@ static int __init init_workqueues(void)
 	system_wq = alloc_workqueue("events", 0, 0);
 	system_power_efficient_wq = alloc_workqueue("events_power_efficient",
 						    WQ_POWER_EFFICIENT, 0);
+	system_unbound_wq = alloc_workqueue("events_unbound", WQ_UNBOUND,
+					    WQ_UNBOUND_MAX_ACTIVE);
 	return 0;
 }
 early_initcall(init_workqueues);

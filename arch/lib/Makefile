@@ -8,6 +8,7 @@ ifeq "$(GCCVERSIONGTEQ48)" "1"
    NO_TREE_LOOP_OPT += -fno-tree-loop-distribute-patterns
 endif
 
+GIT_BRANCH_NAME=`git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ \1/'`
 
 -include $(ARCH_DIR)/objs.mk
 -include $(srctree)/.config
@@ -103,18 +104,19 @@ space:= $(empty) $(empty)
 colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
-rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o capability.o nsproxy.o
+rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o capability.o nsproxy.o \
+kthread.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
 hrtimer.o posix-timers.o posix-clock.o posix-cpu-timers.o
-kernel/sched/_to_keep=wait.o completion.o
+kernel/sched/_to_keep=wait.o completion.o loadavg.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/update.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
 mm/_to_keep=util.o list_lru.o slib.o page_alloc.o memblock.o mmzone.o slib_env.o \
 nobootmem.o highmem.o oom_kill.o page-writeback.o filemap.o backing-dev.o workingset.o \
-compaction.o truncate.o
+compaction.o truncate.o debug.o readahead.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
-crc32c_generic.o rng.o
+crc32c_generic.o rng.o crypto_null.o blkcipher.o ablkcipher.o scatterwalk.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o syscore.o
 drivers/net/_to_keep=loopback.o
 lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
@@ -123,11 +125,12 @@ ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
 rhashtable.o iov_iter.o cmdline.o kobject_uevent.o once.o flex_proportions.o \
-llist.o timerqueue.o
+llist.o timerqueue.o parser.o random32.o radix-tree.o string_helpers.o
 fs/_to_keep=read_write.o libfs.o namei.o filesystems.o file.o file_table.o \
 dcache.o inode.o pipe.o char_dev.o splice.o no-block.o seq_file.o super.o \
 fcntl.o coredump.o ioctl.o open.o namespace.o nsfs.o fs-writeback.o fs_struct.o \
-eventpoll.o anon_inodes.o select.o
+eventpoll.o anon_inodes.o select.o pnode.o stat.o fs_pin.o attr.o bad_inode.o \
+sync.o
 fs/ramfs/_to_keep=inode.o file-mmu.o
 fs/proc/_to_keep=proc_sysctl.o proc_net.o root.o generic.o inode.o
 fs/sysfs/_to_keep=mount.o
@@ -223,7 +226,7 @@ modules: $(modules)
 
 $(LIBOS_TOOLS): $(KERNEL_LIB) Makefile FORCE
 	$(Q) if [ ! -d "$@" ]; then \
-		git clone $(LIBOS_GIT_REPO) -b rump-hypcall $@ ;\
+		git clone $(LIBOS_GIT_REPO) -b ${GIT_BRANCH_NAME} $@ ;\
 	fi
 	$(Q) $(MAKE) -C $(LIBOS_TOOLS)
 
