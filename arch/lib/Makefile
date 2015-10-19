@@ -268,7 +268,7 @@ ARCH_SYSCALL_PROTO=$(ARCH_DIR)/include/generated/rump_syscalls.h
 quiet_cmd_systbl = SYSTBL  $@ $(ARCH_SYSCALL_PROTO) $(ARCH_SYSCALL_HDR) $(ARCH_UNISTD_HDR)
       cmd_systbl = $(CONFIG_SHELL) $< $(ARCH_SYSCALL_TBL) $@ $(ARCH_SYSCALL_HDR) $(ARCH_SYSCALL_PROTO) $(ARCH_UNISTD_HDR)
 
-$(ARCH_DIR)/rump_syscalls.c: $(ARCH_DIR)/kernel/makesyscalls.sh
+$(ARCH_DIR)/rump_syscalls.c: $(ARCH_DIR)/kernel/makesyscalls.sh $(ARCH_SYSCALL_PROTO)
 	$(call if_changed,systbl)
 
 archprepare: include/generated/bounds.h include/generated/utsrelease.h \
