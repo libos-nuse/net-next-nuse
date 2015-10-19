@@ -229,7 +229,7 @@ quiet_cmd_builtin = BUILTIN   $@
 %.o:%.c $(AUTOGENS)
 	$(call if_changed_dep,cc)
 
-library: $(ARCH_DIR)/rump_syscalls.c $(KERNEL_LIB) $(LIBOS_TOOLS)
+library: $(ARCH_DIR)/rump_syscalls.c $(ARCH_SYSCALL_PROTO) $(KERNEL_LIB) $(LIBOS_TOOLS)
 modules: $(modules)
 
 $(LIBOS_TOOLS): $(KERNEL_LIB) Makefile FORCE
@@ -266,9 +266,13 @@ ARCH_SYSCALL_TBL=arch/$(HEADER_ARCH)/entry/syscalls/syscall_64.tbl
 ARCH_UNISTD_HDR=$(ARCH_DIR)/include/asm/unistd_64.h
 ARCH_SYSCALL_PROTO=$(ARCH_DIR)/include/generated/rump_syscalls.h
 quiet_cmd_systbl = SYSTBL  $@ $(ARCH_SYSCALL_PROTO) $(ARCH_SYSCALL_HDR) $(ARCH_UNISTD_HDR)
-      cmd_systbl = $(CONFIG_SHELL) $< $(ARCH_SYSCALL_TBL) $@ $(ARCH_SYSCALL_HDR) $(ARCH_SYSCALL_PROTO) $(ARCH_UNISTD_HDR)
+      cmd_systbl = $(CONFIG_SHELL) $< $(ARCH_SYSCALL_TBL) $(ARCH_DIR)/rump_syscalls.c\
+	           $(ARCH_SYSCALL_HDR) $(ARCH_SYSCALL_PROTO) $(ARCH_UNISTD_HDR)
 
-$(ARCH_DIR)/rump_syscalls.c: $(ARCH_DIR)/kernel/makesyscalls.sh $(ARCH_SYSCALL_PROTO)
+$(ARCH_SYSCALL_PROTO): $(ARCH_DIR)/kernel/makesyscalls.sh
+	$(call if_changed,systbl)
+
+$(ARCH_DIR)/rump_syscalls.c: $(ARCH_DIR)/kernel/makesyscalls.sh
 	$(call if_changed,systbl)
 
 archprepare: include/generated/bounds.h include/generated/utsrelease.h \
