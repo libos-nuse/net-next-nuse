@@ -437,7 +437,6 @@ out:
 static int tcp_v6_send_synack(const struct sock *sk, struct dst_entry *dst,
 			      struct flowi *fl,
 			      struct request_sock *req,
-			      u16 queue_mapping,
 			      struct tcp_fastopen_cookie *foc,
 			      bool attach_req)
 {
@@ -462,7 +461,6 @@ static int tcp_v6_send_synack(const struct sock *sk, struct dst_entry *dst,
 		if (np->repflow && ireq->pktopts)
 			fl6->flowlabel = ip6_flowlabel(ipv6_hdr(ireq->pktopts));
 
-		skb_set_queue_mapping(skb, queue_mapping);
 		err = ip6_xmit(sk, skb, fl6, np->opt, np->tclass);
 		err = net_xmit_eval(err);
 	}
@@ -931,7 +929,7 @@ static void tcp_v6_reqsk_send_ack(const struct sock *sk, struct sk_buff *skb,
 	 */
 	tcp_v6_send_ack(sk, skb, (sk->sk_state == TCP_LISTEN) ?
 			tcp_rsk(req)->snt_isn + 1 : tcp_sk(sk)->snd_nxt,
-			tcp_rsk(req)->rcv_nxt, req->rcv_wnd,
+			tcp_rsk(req)->rcv_nxt, req->rsk_rcv_wnd,
 			tcp_time_stamp, req->ts_recent, sk->sk_bound_dev_if,
 			tcp_v6_md5_do_lookup(sk, &ipv6_hdr(skb)->daddr),
 			0, 0);
@@ -1363,6 +1361,7 @@ static int tcp_v6_rcv(struct sk_buff *skb)
 	th = tcp_hdr(skb);
 	hdr = ipv6_hdr(skb);
 
+lookup:
 	sk = __inet6_lookup_skb(&tcp_hashinfo, skb, th->source, th->dest,
 				inet6_iif(skb));
 	if (!sk)
@@ -1382,8 +1381,12 @@ process:
 			reqsk_put(req);
 			goto discard_it;
 		}
-		if (sk->sk_state == TCP_LISTEN)
+		if (likely(sk->sk_state == TCP_LISTEN)) {
 			nsk = tcp_check_req(sk, skb, req, false);
+		} else {
+			inet_csk_reqsk_queue_drop_and_put(sk, req);
+			goto lookup;
+		}
 		if (!nsk) {
 			reqsk_put(req);
 			goto discard_it;

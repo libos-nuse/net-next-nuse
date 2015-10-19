@@ -179,7 +179,7 @@ static int hns_mac_get_inner_port_num(struct hns_mac_cb *mac_cb,
 			return -EINVAL;
 		}
 	} else if (mac_cb->dsaf_dev->dsaf_mode < DSAF_MODE_MAX) {
-		if (mac_cb->mac_id <= DSAF_MAX_PORT_NUM_PER_CHIP) {
+		if (mac_cb->mac_id >= DSAF_MAX_PORT_NUM_PER_CHIP) {
 			dev_err(mac_cb->dev,
 				"input invalid,%s mac%d vmid%d!\n",
 				mac_cb->dsaf_dev->ae_dev.name,
@@ -744,9 +744,11 @@ int hns_mac_get_cfg(struct dsaf_device *dsaf_dev, int mac_idx)
 	mac_cb->serdes_vaddr = dsaf_dev->sds_base;
 
 	if (dsaf_dev->cpld_base &&
-	    mac_idx < DSAF_SERVICE_PORT_NUM_PER_DSAF)
+	    mac_idx < DSAF_SERVICE_PORT_NUM_PER_DSAF) {
 		mac_cb->cpld_vaddr = dsaf_dev->cpld_base +
 			mac_cb->mac_id * CPLD_ADDR_PORT_OFFSET;
+		cpld_led_reset(mac_cb);
+	}
 	mac_cb->sfp_prsnt = 0;
 	mac_cb->txpkt_for_led = 0;
 	mac_cb->rxpkt_for_led = 0;

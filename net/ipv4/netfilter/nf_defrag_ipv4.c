@@ -22,14 +22,15 @@
 #endif
 #include <net/netfilter/nf_conntrack_zones.h>
 
-static int nf_ct_ipv4_gather_frags(struct sk_buff *skb, u_int32_t user)
+static int nf_ct_ipv4_gather_frags(struct net *net, struct sk_buff *skb,
+				   u_int32_t user)
 {
 	int err;
 
 	skb_orphan(skb);
 
 	local_bh_disable();
-	err = ip_defrag(skb, user);
+	err = ip_defrag(net, skb, user);
 	local_bh_enable();
 
 	if (!err) {
@@ -85,7 +86,7 @@ static unsigned int ipv4_conntrack_defrag(void *priv,
 		enum ip_defrag_users user =
 			nf_ct_defrag_user(state->hook, skb);
 
-		if (nf_ct_ipv4_gather_frags(skb, user))
+		if (nf_ct_ipv4_gather_frags(state->net, skb, user))
 			return NF_STOLEN;
 	}
 	return NF_ACCEPT;
@@ -94,14 +95,12 @@ static unsigned int ipv4_conntrack_defrag(void *priv,
 static struct nf_hook_ops ipv4_defrag_ops[] = {
 	{
 		.hook		= ipv4_conntrack_defrag,
-		.owner		= THIS_MODULE,
 		.pf		= NFPROTO_IPV4,
 		.hooknum	= NF_INET_PRE_ROUTING,
 		.priority	= NF_IP_PRI_CONNTRACK_DEFRAG,
 	},
 	{
 		.hook           = ipv4_conntrack_defrag,
-		.owner          = THIS_MODULE,
 		.pf             = NFPROTO_IPV4,
 		.hooknum        = NF_INET_LOCAL_OUT,
 		.priority       = NF_IP_PRI_CONNTRACK_DEFRAG,

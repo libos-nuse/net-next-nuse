@@ -63,7 +63,8 @@ static unsigned int ipv6_defrag(void *priv,
 		return NF_ACCEPT;
 #endif
 
-	reasm = nf_ct_frag6_gather(skb, nf_ct6_defrag_user(state->hook, skb));
+	reasm = nf_ct_frag6_gather(state->net, skb,
+				   nf_ct6_defrag_user(state->hook, skb));
 	/* queued */
 	if (reasm == NULL)
 		return NF_STOLEN;
@@ -84,14 +85,12 @@ static unsigned int ipv6_defrag(void *priv,
 static struct nf_hook_ops ipv6_defrag_ops[] = {
 	{
 		.hook		= ipv6_defrag,
-		.owner		= THIS_MODULE,
 		.pf		= NFPROTO_IPV6,
 		.hooknum	= NF_INET_PRE_ROUTING,
 		.priority	= NF_IP6_PRI_CONNTRACK_DEFRAG,
 	},
 	{
 		.hook		= ipv6_defrag,
-		.owner		= THIS_MODULE,
 		.pf		= NFPROTO_IPV6,
 		.hooknum	= NF_INET_LOCAL_OUT,
 		.priority	= NF_IP6_PRI_CONNTRACK_DEFRAG,

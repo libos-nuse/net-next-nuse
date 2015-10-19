@@ -346,12 +346,15 @@ static int dsa_slave_port_fdb_add(struct net_device *dev,
 {
 	struct dsa_slave_priv *p = netdev_priv(dev);
 	struct dsa_switch *ds = p->parent;
-	int ret = -EOPNOTSUPP;
+	int ret;
+
+	if (!ds->drv->port_fdb_prepare || !ds->drv->port_fdb_add)
+		return -EOPNOTSUPP;
 
 	if (switchdev_trans_ph_prepare(trans))
-		ret = ds->drv->port_fdb_add ? 0 : -EOPNOTSUPP;
+		ret = ds->drv->port_fdb_prepare(ds, p->port, fdb, trans);
 	else
-		ret = ds->drv->port_fdb_add(ds, p->port, fdb->addr, fdb->vid);
+		ret = ds->drv->port_fdb_add(ds, p->port, fdb, trans);
 
 	return ret;
 }
@@ -364,7 +367,7 @@ static int dsa_slave_port_fdb_del(struct net_device *dev,
 	int ret = -EOPNOTSUPP;
 
 	if (ds->drv->port_fdb_del)
-		ret = ds->drv->port_fdb_del(ds, p->port, fdb->addr, fdb->vid);
+		ret = ds->drv->port_fdb_del(ds, p->port, fdb);
 
 	return ret;
 }
@@ -390,7 +393,7 @@ static int dsa_slave_port_fdb_dump(struct net_device *dev,
 		if (ret < 0)
 			break;
 
-		fdb->addr = addr;
+		ether_addr_copy(fdb->addr, addr);
 		fdb->vid = vid;
 		fdb->ndm_state = is_static ? NUD_NOARP : NUD_REACHABLE;
 
@@ -450,7 +453,7 @@ static int dsa_slave_stp_update(struct net_device *dev, u8 state)
 }
 
 static int dsa_slave_port_attr_set(struct net_device *dev,
-				   struct switchdev_attr *attr,
+				   const struct switchdev_attr *attr,
 				   struct switchdev_trans *trans)
 {
 	struct dsa_slave_priv *p = netdev_priv(dev);
@@ -1273,7 +1276,7 @@ int dsa_slave_netdevice_event(struct notifier_block *unused,
 			goto out;
 
 		err = dsa_slave_master_changed(dev);
-		if (err)
+		if (err && err != -EOPNOTSUPP)
 			netdev_warn(dev, "failed to reflect master change\n");
 
 		break;
