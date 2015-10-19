@@ -8,7 +8,7 @@ ifeq "$(GCCVERSIONGTEQ48)" "1"
    NO_TREE_LOOP_OPT += -fno-tree-loop-distribute-patterns
 endif
 
-GIT_BRANCH_NAME=`git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ \1/'`
+GIT_BRANCH_NAME:=$(shell git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ \1/')
 
 -include $(ARCH_DIR)/objs.mk
 -include $(srctree)/.config
