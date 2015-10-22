@@ -33,6 +33,7 @@ long rump___sysimpl_pwrite64(unsigned int fd, const char __user * buf, size_t co
 long rump___sysimpl_writev(unsigned long fd, const struct iovec __user * vec, unsigned long vlen);
 long rump___sysimpl_pipe(int __user * fildes);
 long rump___sysimpl_select(int n, fd_set __user * inp, fd_set __user * outp, fd_set __user * exp, struct timeval __user * tvp);
+long rump___sysimpl_getpid(void);
 long rump___sysimpl_socket(int, int, int);
 long rump___sysimpl_connect(int, struct sockaddr __user *, int);
 long rump___sysimpl_accept(int, struct sockaddr __user *, int __user *);

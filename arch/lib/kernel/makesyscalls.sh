@@ -7,7 +7,7 @@ proto_h="$4"
 unistd_h="$5"
 
 # XXX:
-SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime"
+SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime|getpid"
 NR_syscall_max=0
 
 cat <<EOF > ${out_h}
@@ -208,6 +208,9 @@ grep '^[0-9]' "$in" | sort -n | (
 		"")
 		    continue
 		    ;;
+		"void")
+		    continue
+		    ;;
 		"int")
 		    ARG[${i}]="int arg${i}"
 		    PARAM[${i}]="arg${i}"
@@ -255,6 +258,8 @@ EOF
 	for arg in ${PARAM[1]} ${PARAM[2]} ${PARAM[3]} ${PARAM[4]} ${PARAM[5]} ${PARAM[6]} ; do
 	    idx=`expr $idx + 1`
 	    if [ -z ${arg} ] ; then
+		continue
+	    elif [ ${arg} == "void" ] ; then
 		continue
 	    fi
 	    cat <<EOF

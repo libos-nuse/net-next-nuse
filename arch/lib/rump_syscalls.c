@@ -359,7 +359,25 @@ NOT_IMPLEMENTED(rump___sysimpl_alarm)
 
 NOT_IMPLEMENTED(rump___sysimpl_setitimer)
 
-NOT_IMPLEMENTED(rump___sysimpl_getpid)
+long rump___sysimpl_getpid(void);
+long
+rump___sysimpl_getpid()
+{
+	register_t retval[2];
+	int error = 0;
+	struct syscall_args callarg;
+
+	memset(&callarg, 0, sizeof(callarg));
+	error = rsys_syscall(__NR_getpid, &callarg, sizeof(callarg), retval);
+	if (error < 0)
+		rsys_seterrno(retval[0]);
+	return error;
+}
+#ifdef RUMP_KERNEL_IS_LIBC
+__weak_alias(getpid,rump___sysimpl_getpid);
+__weak_alias(_getpid,rump___sysimpl_getpid);
+__strong_alias(_sys_getpid,rump___sysimpl_getpid);
+#endif /* RUMP_KERNEL_IS_LIBC */
 
 NOT_IMPLEMENTED(rump___sysimpl_sendfile)
 

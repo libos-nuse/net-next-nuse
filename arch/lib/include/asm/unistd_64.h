@@ -12,6 +12,7 @@
 #define __NR_writev                     20
 #define __NR_pipe                     22
 #define __NR_select                     23
+#define __NR_getpid                     39
 #define __NR_socket                     41
 #define __NR_connect                     42
 #define __NR_accept                     43

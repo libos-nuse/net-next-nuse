@@ -58,10 +58,6 @@ unsigned long totalram_pages = 0;
 unsigned int interrupt_pending = 0;
 static unsigned long g_irqflags = 0;
 static unsigned long local_irqflags = 0;
-int overflowgid = 0;
-int overflowuid = 0;
-int fs_overflowgid = 0;
-int fs_overflowuid = 0;
 unsigned long sysctl_overcommit_kbytes __read_mostly;
 DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
 

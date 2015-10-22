@@ -111,7 +111,7 @@ colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o capability.o nsproxy.o \
-kthread.o
+kthread.o sys.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
 hrtimer.o posix-timers.o posix-clock.o posix-cpu-timers.o
 kernel/sched/_to_keep=wait.o completion.o loadavg.o
