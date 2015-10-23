@@ -6,6 +6,7 @@ config LIB
        select PROC_SYSCTL
        select SYSCTL
        select SYSFS
+       select PCI
        help
           The 'lib' architecture is a library (user-mode) version of
           the linux kernel that includes only its network stack and is
@@ -102,6 +103,15 @@ config SYSFS
 
 config PROC_SYSCTL
        def_bool y
+
+config PCI
+       def_bool y
+
+config HAS_IOMEM
+       def_bool n
+
+config HAS_IOMAP
+       def_bool n
 
 config MULTIUSER
        def_bool n

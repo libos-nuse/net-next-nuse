@@ -31,13 +31,20 @@ AUTOGENS=include/generated/compile.h include/generated/bounds.h \
 	include/generated/timeconst.h lib/crc32table.h $(ARCH_DIR)/linker.lds
 
 # sources and objects
+#RUMP_PCI_SRC=libpci/pci.c libpci/rumpdev_pci.c
+#RUMP_PCI_SRC=libpci/rumpdev_pci.c libpci/pci_at_mainbus.c
+#libpci/rumpdev_bus_dma.c libpci/rumpdev_bus_space.c \
+
+
 LIB_SRC=\
 lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
 sched.c workqueue.c \
 print.c tasklet.c tasklet-hrtimer.c \
 glue.c sysctl.c proc.c sysfs.c \
 pid.c modules.c vmscan.c kernel/syscalls.c rump-cons.c \
-rump_syscalls.c
+rump_syscalls.c $(RUMP_PCI_SRC)
+
+RUMP_PCI_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_PCI_SRC))))
 
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
 LIB_DEPS=$(addprefix $(ARCH_DIR)/.,$(addsuffix .o.cmd,$(basename $(LIB_SRC))))
@@ -86,7 +93,10 @@ CFLAGS+= \
  -I$(ARCH_DIR) -I.
 
 # XXX: need to upstream to change mm/page-writeback.c
-CFLAGS+=-Wno-uninitialized
+#CFLAGS_page-writeback.o=-Wno-uninitialized
+
+CFLAGS_rumpdev_pci.o=-I$(ARCH_DIR)/libpci/ -I$(srctree)/../src/common/include \
+-I$(srctree)/../src/sys -I$(srctree)/../../rumprun/platform/hw/pci/
 
 ifeq ($(SUBARCH),x86)
   ifeq ($(shell uname -m),x86_64)
@@ -105,21 +115,21 @@ modules:=
 all: library modules
 
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ kernel/time/ kernel/sched/ kernel/rcu/ kernel/locking/ kernel/bpf/ kernel/printk/ mm/ fs/ fs/ramfs/ fs/proc/ fs/sysfs/ crypto/ lib/ drivers/base/ drivers/net/ net/ security/ init/
+dirs=kernel/ kernel/time/ kernel/sched/ kernel/rcu/ kernel/locking/ kernel/bpf/ kernel/printk/ mm/ fs/ fs/ramfs/ fs/proc/ fs/sysfs/ crypto/ lib/ drivers/base/ drivers/net/ drivers/pci/ net/ security/ init/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o capability.o nsproxy.o \
-kthread.o sys.o
+kthread.o sys.o cpu.o resource.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
 hrtimer.o posix-timers.o posix-clock.o posix-cpu-timers.o
 kernel/sched/_to_keep=wait.o completion.o loadavg.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/update.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
-kernel/bpf_to_keep=printk.o
+kernel/printk_to_keep=printk.o
 mm/_to_keep=util.o list_lru.o slib.o page_alloc.o memblock.o mmzone.o slib_env.o \
 nobootmem.o highmem.o oom_kill.o page-writeback.o filemap.o backing-dev.o workingset.o \
 compaction.o truncate.o debug.o readahead.o
@@ -127,6 +137,9 @@ crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o
 crc32c_generic.o rng.o crypto_null.o blkcipher.o ablkcipher.o scatterwalk.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o syscore.o
 drivers/net/_to_keep=loopback.o
+drivers/pci/_to_keep=access.o bus.o probe.o host-bridge.o remove.o pci.o \
+pci-driver.o search.o pci-sysfs.o rom.o setup-res.o \
+irq.o vpd.o setup-bus.o vc.o
 lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
 find_last_bit.o find_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
@@ -208,7 +221,7 @@ EXP_SYMRENAME=rump|RUMP|bmk_|lib_|nuse_|__tls|g_imported|g_kernel|__initcall_sta
 
 quiet_cmd_cc = CC      $@
       cmd_cc = 	mkdir -p $(dir $@);	\
-		$(CC) $(CFLAGS) -c $< -o $@; \
+		$(CC) $(CFLAGS) $(CFLAGS_$(notdir $@)) -c $< -o $@; \
 		${NM} -go $@ | awk ' \
 		$$NF!~/^'${_PQ}'(${EXP_SYMRENAME})/ \
 		{s=$$NF;sub(/^'${_PQ}'/, "&rumpns_", s); print $$NF, s}'\
@@ -228,6 +241,8 @@ quiet_cmd_builtin = BUILTIN   $@
 %.ko:%.o
 	$(call if_changed,linkko)
 %.o:%.c $(AUTOGENS)
+	$(call if_changed_dep,cc)
+$(RUMP_PCI_OBJ): %.o:%.c
 	$(call if_changed_dep,cc)
 
 library: $(ARCH_DIR)/rump_syscalls.c $(ARCH_SYSCALL_PROTO) $(KERNEL_LIB) $(KERNEL_SLIB) $(LIBOS_TOOLS)
