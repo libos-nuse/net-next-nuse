@@ -22,6 +22,7 @@ RUMP_LIB=$(RUMP_PREFIX)/usr/lib
 LIBOS_TOOLS=$(ARCH_DIR)/tools
 LIBOS_GIT_REPO=git://github.com/libos-nuse/linux-libos-tools
 KERNEL_LIB=liblinux-$(KERNELVERSION).so
+KERNEL_SLIB=liblinux-$(KERNELVERSION).a
 
 ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
 
@@ -229,7 +230,7 @@ quiet_cmd_builtin = BUILTIN   $@
 %.o:%.c $(AUTOGENS)
 	$(call if_changed_dep,cc)
 
-library: $(ARCH_DIR)/rump_syscalls.c $(ARCH_SYSCALL_PROTO) $(KERNEL_LIB) $(LIBOS_TOOLS)
+library: $(ARCH_DIR)/rump_syscalls.c $(ARCH_SYSCALL_PROTO) $(KERNEL_LIB) $(KERNEL_SLIB) $(LIBOS_TOOLS)
 modules: $(modules)
 
 $(LIBOS_TOOLS): $(KERNEL_LIB) Makefile FORCE
@@ -245,10 +246,17 @@ install-dir:
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOGENS) $(OBJS)
 	$(call if_changed,linklib)
 
+$(KERNEL_SLIB): $(KERNEL_LIB)
+	$(call if_changed,linkslib)
+
 quiet_cmd_linklib = LIB     $@
       cmd_linklib = $(CC) -Wl,--whole-archive $(OBJS) $(LDFLAGS) -o $@; \
-		    ln -s -f $(KERNEL_LIB) liblinux.so; \
-		    rm -f liblinux.a liblinux-tmp.a ; $(AR) Tcru liblinux-tmp.a $(OBJS) ; $(AR) t liblinux-tmp.a | xargs ar cru liblinux.a
+		    ln -s -f $(KERNEL_LIB) liblinux.so
+
+quiet_cmd_linkslib = AR      $@
+      cmd_linkslib = rm -f $(KERNEL_SLIB) liblinux-tmp.a ; $(AR) Tcru liblinux-tmp.a \
+		     $(OBJS) ; $(AR) t liblinux-tmp.a | xargs ar cru $(KERNEL_SLIB) ; \
+		     ln -s -f $(KERNEL_SLIB) liblinux.a
 
 quiet_cmd_clean = CLEAN   $@
       cmd_clean = for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done ; \
