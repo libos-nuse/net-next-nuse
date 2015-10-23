@@ -139,7 +139,28 @@ __weak_alias(_write,rump___sysimpl_write);
 __strong_alias(_sys_write,rump___sysimpl_write);
 #endif /* RUMP_KERNEL_IS_LIBC */
 
-NOT_IMPLEMENTED(rump___sysimpl_open)
+long rump___sysimpl_open(const char __user * filename, int flags, umode_t mode);
+long
+rump___sysimpl_open(const char __user * filename,  int flags,  umode_t mode)
+{
+	register_t retval[2];
+	int error = 0;
+	struct syscall_args callarg;
+
+	memset(&callarg, 0, sizeof(callarg));
+	callarg.args[0] = (unsigned long)filename;
+	callarg.args[1] = (unsigned long)flags;
+	callarg.args[2] = (unsigned long)mode;
+	error = rsys_syscall(__NR_open, &callarg, sizeof(callarg), retval);
+	if (error < 0)
+		rsys_seterrno(retval[0]);
+	return error;
+}
+#ifdef RUMP_KERNEL_IS_LIBC
+__weak_alias(open,rump___sysimpl_open);
+__weak_alias(_open,rump___sysimpl_open);
+__strong_alias(_sys_open,rump___sysimpl_open);
+#endif /* RUMP_KERNEL_IS_LIBC */
 
 long rump___sysimpl_close(unsigned int fd);
 long

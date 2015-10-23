@@ -26,6 +26,7 @@ typedef unsigned short		umode_t;
 
 long rump___sysimpl_read(unsigned int fd, char __user * buf, size_t count);
 long rump___sysimpl_write(unsigned int fd, const char __user * buf, size_t count);
+long rump___sysimpl_open(const char __user * filename, int flags, umode_t mode);
 long rump___sysimpl_close(unsigned int fd);
 long rump___sysimpl_poll(struct pollfd __user * ufds, unsigned int nfds, int timeout);
 long rump___sysimpl_ioctl(unsigned int fd, unsigned int cmd, unsigned long arg);

@@ -47,38 +47,24 @@ static struct file_operations rump_cons_file_dev = {
 	.write =	rump_file_write,
 };
 
-
-struct file *get_empty_filp(void);
 void
 rump_consdev_init(void)
 {
-#if 0
 	struct file *fp;
-	struct path path;
-#endif
+	int fd;
 
 	register_console(&rump_cons_console_dev);
 
-#if 0
-	path.dentry = d_alloc_pseudo(sock_mnt->mnt_sb, &name);
-	if (unlikely(!path.dentry))
-		return ERR_PTR(-ENOMEM);
-	path.mnt = mntget(sock_mnt);
-
+	/* open fds 0 */
 	if ((__fdget(0) != 0) || (__fdget(1) != 0) ||
 	    (__fdget(2) != 0))
 		panic("Either of fds 0/1/2 are available\n");
 
-	/* open fds 0 */
-	get_unused_fd_flags(0);
-	fp = alloc_file(&path, FMODE_WRITE | FMODE_CAN_WRITE,
-			rump_cons_file_dev);
-	if (IS_ERR(fp))
-		panic("cons __alloc_fd failed");
-	fd_install(0, fp);
+	fd = sys_open("/rump-console", O_CREAT | O_RDWR | O_NDELAY, 0);
+	fp = fget(fd);
+	fp->f_op = &rump_cons_file_dev;
 
 	if ((sys_dup3(0, 1, 0) == -1) || 
 	    (sys_dup3(0, 2, 0) == -1))
 		panic("failed to dup fd 0/1/2");
-#endif
 }

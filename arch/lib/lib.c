@@ -183,6 +183,7 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	hrtimers_init();
 	init_memory_system();
 	rcu_init();
+	vfs_caches_init_early();
 
 	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
 	devices_init();

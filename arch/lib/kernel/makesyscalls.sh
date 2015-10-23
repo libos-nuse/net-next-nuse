@@ -7,7 +7,7 @@ proto_h="$4"
 unistd_h="$5"
 
 # XXX:
-SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime|getpid"
+SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime|getpid|open"
 NR_syscall_max=0
 
 cat <<EOF > ${out_h}

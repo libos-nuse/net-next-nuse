@@ -5,6 +5,7 @@
 
 __SYSCALL_COMMON(0, sys_read, sys_read)
 __SYSCALL_COMMON(1, sys_write, sys_write)
+__SYSCALL_COMMON(2, sys_open, sys_open)
 __SYSCALL_COMMON(3, sys_close, sys_close)
 __SYSCALL_COMMON(7, sys_poll, sys_poll)
 __SYSCALL_64(16, sys_ioctl, sys_ioctl)
