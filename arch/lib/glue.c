@@ -43,6 +43,17 @@ unsigned long highest_memmap_pfn __read_mostly;
 /* vmscan */
 unsigned long vm_total_pages;
 
+/* modules.c */
+const struct kernel_symbol __start___ksymtab[1];
+const struct kernel_symbol __stop___ksymtab[1];
+const struct kernel_symbol __start___ksymtab_gpl[1];
+const struct kernel_symbol __stop___ksymtab_gpl[1];
+const struct kernel_symbol __start___ksymtab_gpl_future[1];
+const struct kernel_symbol __stop___ksymtab_gpl_future[1];
+const unsigned long __start___kcrctab[1];
+const unsigned long __start___kcrctab_gpl[1];
+const unsigned long __start___kcrctab_gpl_future[1];
+
 /* used during boot. */
 //struct tvec_base boot_tvec_bases;
 /* used by sysinfo in kernel/timer.c */

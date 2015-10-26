@@ -9,7 +9,7 @@
  *	must be provided.
  */
 
-#include "rumpcomp_userfeatures_pci.h"
+//#include "rumpcomp_userfeatures_pci.h"
 
 void *rumpcomp_pci_map(unsigned long, unsigned long);
 int rumpcomp_pci_confread(unsigned, unsigned, unsigned, int, unsigned int *);

@@ -48,12 +48,16 @@ static struct file_operations rump_cons_file_dev = {
 };
 
 void
+rump_early_consdev_init(void)
+{
+	register_console(&rump_cons_console_dev);
+}
+
+void
 rump_consdev_init(void)
 {
 	struct file *fp;
 	int fd;
-
-	register_console(&rump_cons_console_dev);
 
 	/* open fds 0 */
 	if ((__fdget(0) != 0) || (__fdget(1) != 0) ||

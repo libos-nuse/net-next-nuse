@@ -1,4 +1,6 @@
-/*      $NetBSD: rumpdev_pci.c,v 1.5 2015/05/17 13:51:31 pooka Exp $	*/
+/*
+ * rumprun PCI access (from src-netbsd/.../rumpdev_pci.c)
+ */
 
 /*
  * Copyright (c) 2013 Antti Kantee.  All Rights Reserved.
@@ -25,167 +27,52 @@
  * SUCH DAMAGE.
  */
 
-//#include <sys/cdefs.h>
-//__KERNEL_RCSID(0, "$NetBSD: rumpdev_pci.c,v 1.5 2015/05/17 13:51:31 pooka Exp $");
-
-#if 0
-#include <sys/cdefs.h>
-#include <sys/param.h>
-#include <sys/atomic.h>
-
-#include <dev/pci/pcivar.h>
-
-#endif
-
+#include <linux/init.h>
+#include <linux/kernel.h>
 #include <linux/pci.h>
+#include <linux/slab.h>
+#include <linux/interrupt.h>
 #include <linux/types.h>
 
 #include "pci_user.h"
 
-#if 1
-/* drivers/pci/access.c */
+
+resource_size_t
+pcibios_align_resource(void *data, const struct resource *res,
+			resource_size_t size, resource_size_t align)
+{
+	panic("pcibios_align_resource has accessed unaligned neurons!");
+}
+
+/* from arch/x86/pci/common.c  */
+void pcibios_fixup_bus(struct pci_bus *b)
+{
+	pci_read_bridge_bases(b);
+}
+
+/* drivers/pci/access.c
+ *
+ * @bus: PCI bus to scan
+ * @devfn: slot number to scan (must have zero function.)
+ */
 int rump_pci_generic_config_read(struct pci_bus *bus, unsigned int devfn,
 			    int where, int size, u32 *val)
 {
 
-	rumpcomp_pci_confread(bus->number, where, devfn, size, val);
+	rumpcomp_pci_confread(bus->number, devfn >> 3, devfn, where, val);
 
 	return PCIBIOS_SUCCESSFUL;
 }
-#endif
 
-#if 0
-
-void
-pci_attach_hook(device_t parent, device_t self, struct pcibus_attach_args *pba)
+int rump_pci_generic_config_write(struct pci_bus *bus, unsigned int devfn,
+			    int where, int size, u32 val)
 {
 
-	/* nada */
+	rumpcomp_pci_confwrite(bus->number, devfn >> 3, devfn, where, val);
+
+	return PCIBIOS_SUCCESSFUL;
 }
 
-int
-pci_bus_maxdevs(pci_chipset_tag_t pc, int busno)
-{
-
-	return 32;
-}
-
-pcitag_t
-pci_make_tag(pci_chipset_tag_t pc, int bus, int device, int function)
-{
-	pcitag_t pt;
-	int *tag;
-	unsigned csr;
-	int rv;
-
-	CTASSERT(sizeof(pt) >= sizeof(int));
-
-	/* a "bit" ugly, but keeps us MI */
-	tag = (int *)&pt;
-	*tag = (bus << 16) | (device << 8) | (function << 0);
-
-	/*
-	 * On Xen, we need to enable the device io/mem space.
-	 * Doesn't really belong here, but we need to do it somewhere.
-	 */
-	rv = rumpcomp_pci_confread(bus, device, function,
-	    PCI_COMMAND_STATUS_REG, &csr);
-	if (rv == 0 && (csr & PCI_COMMAND_MEM_ENABLE) == 0) {
-		rumpcomp_pci_confwrite(bus, device, function,
-		    PCI_COMMAND_STATUS_REG, csr | PCI_COMMAND_MEM_ENABLE);
-	}
-
-	return pt;
-}
-
-pcireg_t
-pci_conf_read(pci_chipset_tag_t pc, pcitag_t tag, int reg)
-{
-	unsigned int rv;
-	int bus, device, fun;
-
-	pci_decompose_tag(pc, tag, &bus, &device, &fun);
-	rumpcomp_pci_confread(bus, device, fun, reg, &rv);
-	return rv;
-}
-
-void
-pci_conf_write(pci_chipset_tag_t pc, pcitag_t tag, int reg, pcireg_t data)
-{
-	int bus, device, fun;
-
-	pci_decompose_tag(pc, tag, &bus, &device, &fun);
-	rumpcomp_pci_confwrite(bus, device, fun, reg, data);
-}
-
-void
-pci_decompose_tag(pci_chipset_tag_t pc, pcitag_t tag,
-	int *bp, int *dp, int *fp)
-{
-	int *t = (int *)&tag;
-
-	*bp = (*t >> 16) & 0xff;
-	*dp = (*t >> 8)  & 0xff;
-	*fp = (*t >> 0)  & 0xff;
-}
-
-/*
- * Well, yay, deal with the wonders of weird_t.  We'll just
- * assume it's an integral type (which, btw, isn't universally true).
- * The hypercall will map "cookie" to its internal structure.
- * Dial _t for a good time.
- */
-int
-pci_intr_map(const struct pci_attach_args *pa, pci_intr_handle_t *ih)
-{
-	static unsigned int intrhandle;
-	unsigned cookie;
-	int rv;
-
-	cookie = atomic_inc_uint_nv(&intrhandle);
-	rv = rumpcomp_pci_irq_map(pa->pa_bus,
-	    pa->pa_device, pa->pa_function, pa->pa_intrline, cookie);
-	if (rv == 0)
-		*ih = cookie;
-	return 0;
-}
-
-const char *
-pci_intr_string(pci_chipset_tag_t pc, pci_intr_handle_t ih,
-	char *buf, size_t buflen)
-{
-
-	snprintf(buf, buflen, "pausebreak");
-	return buf;
-}
-
-void *
-pci_intr_establish(pci_chipset_tag_t pc, pci_intr_handle_t ih,
-	int level, int (*func)(void *), void *arg)
-{
-
-	return rumpcomp_pci_irq_establish(ih, func, arg);
-}
-
-int
-pci_intr_setattr(pci_chipset_tag_t pc, pci_intr_handle_t *ih,
-	int attr, uint64_t data)
-{
-
-	switch (attr) {
-	case PCI_INTR_MPSAFE:
-		return 0;
-	default:
-		return ENODEV;
-	}
-}
-
-void
-pci_intr_disestablish(pci_chipset_tag_t pc, void *not_your_above_ih)
-{
-
-	panic("%s: unimplemented", __func__);
-}
 
 #ifdef __HAVE_PCIIDE_MACHDEP_COMPAT_INTR_ESTABLISH
 #include <dev/pci/pcireg.h>
@@ -209,4 +96,117 @@ pciide_machdep_compat_intr_establish(device_t dev,
 
 __strong_alias(pciide_machdep_compat_intr_disestablish,pci_intr_disestablish);
 #endif /* __HAVE_PCIIDE_MACHDEP_COMPAT_INTR_ESTABLISH */
+
+
+struct rump_pci_sysdata {
+	int domain; /* PCI domain */
+};
+
+
+/* from kernel/irq/manage.c */
+static int irq_thread(void *data)
+{
+	struct irqaction *action = data;
+	struct irq_desc *desc = irq_to_desc(action->irq);
+	irqreturn_t action_ret;
+
+	action_ret = action->thread_fn(action->irq, action->dev_id);
+	pr_info("IRQ handler returns %d\n", action_ret);
+
+	return 0;
+}
+
+int request_threaded_irq(unsigned int irq, irq_handler_t handler,
+			 irq_handler_t thread_fn, unsigned long irqflags,
+			 const char *devname, void *dev_id)
+{
+	int rv;
+	struct irqaction *action;
+
+	rv = rumpcomp_pci_irq_map(0xff, 0xff, 0xff, irq, irq);
+
+	action = kzalloc(sizeof(struct irqaction), GFP_KERNEL);
+	if (!action)
+		return -ENOMEM;
+
+	action->handler = handler;
+	action->thread_fn = thread_fn;
+	action->flags = irqflags;
+	action->name = devname;
+	action->dev_id = dev_id;
+
+	rumpcomp_pci_irq_establish(irq, irq_thread, action);
+	return 0;
+}
+
+void free_irq(unsigned int irq, void *dev_id)
+{
+//FIXME
+#if 0
+	struct irq_desc *desc = irq_to_desc(irq);
+	struct irqaction *action;
+
+	if (!desc || WARN_ON(irq_settings_is_per_cpu_devid(desc)))
+		return;
+	chip_bus_lock(desc);
+	kfree(action);
+	chip_bus_sync_unlock(desc);
 #endif
+	return;
+}
+
+static int pci_lib_claim_resource(struct pci_dev *dev, void *data)
+{
+	int i;
+	struct resource *r;
+
+	for (i = 0; i < PCI_NUM_RESOURCES; i++) {
+		r = &dev->resource[i];
+
+		if (!r->parent && r->start && r->flags) {
+			dev_info(&dev->dev, "claiming resource %s/%d\n",
+				pci_name(dev), i);
+			if (pci_claim_resource(dev, i)) {
+				dev_err(&dev->dev, "Could not claim resource %s/%d! "
+					"Device offline. Try using e820_host=1 in the guest config.\n",
+					pci_name(dev), i);
+			}
+		}
+	}
+
+	return 0;
+}
+
+struct pci_ops rump_pci_root_ops = {
+	.read = rump_pci_generic_config_read,
+	.write = rump_pci_generic_config_write,
+};
+
+
+static int __init
+rump_pci_init(void)
+{
+	struct pci_bus *bus;
+	struct rump_pci_sysdata *sd;
+	int busnum = 0;
+	LIST_HEAD(resources);
+
+	sd = kzalloc(sizeof(*sd), GFP_KERNEL);
+	if (!sd) {
+		printk(KERN_ERR "PCI: OOM, skipping PCI bus %02x\n", busnum);
+		return -1;
+	}
+
+	printk(KERN_INFO "PCI: root bus %02x: using default resources\n", busnum);
+	bus = pci_scan_bus(busnum, &rump_pci_root_ops, sd);
+	if (!bus) {
+		pci_free_resource_list(&resources);
+		kfree(sd);
+		return -1;
+	}
+	pci_walk_bus(bus, pci_lib_claim_resource, NULL);
+	pci_bus_add_devices(bus);
+
+	return 0;
+}
+device_initcall(rump_pci_init);

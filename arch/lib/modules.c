@@ -12,7 +12,6 @@
 #include <linux/kmod.h>
 #include <linux/module.h>
 
-int modules_disabled = 0;
 char modprobe_path[KMOD_PATH_LEN] = "/sbin/modprobe";
 
 static struct module_version_attribute g_empty_attr_buffer;
@@ -25,7 +24,6 @@ const struct module_version_attribute *__start___modver[] = {
 const struct module_version_attribute *__stop___modver[] = {
 	&g_empty_attr_buffer};
 
-struct module_attribute module_uevent;
 struct ctl_table usermodehelper_table[] = {};
 
 int __request_module(bool wait, const char *fmt, ...)

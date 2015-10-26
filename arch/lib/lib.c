@@ -185,12 +185,12 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	rcu_init();
 	vfs_caches_init_early();
 
-	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
-	devices_init();
-	buses_init();
 	/* in lib/idr.c (called normally by init/main.c) */
 	idr_init_cache();
 	vfs_caches_init();
+	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
+	devices_init();
+	buses_init();
 
 	lib_proc_net_initialize();
 

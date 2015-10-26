@@ -41,6 +41,9 @@ void sysfs_remove_group(struct kobject *kobj,
 			const struct attribute_group *grp)
 {
 }
+void sysfs_remove_link(struct kobject *kobj, const char *name)
+{
+}
 int sysfs_rename_dir(struct kobject *kobj, const char *new_name)
 {
 	return 0;

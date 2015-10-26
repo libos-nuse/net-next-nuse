@@ -6,7 +6,16 @@ config LIB
        select PROC_SYSCTL
        select SYSCTL
        select SYSFS
+#       select KERNFS
        select PCI
+       select GENERIC_IO
+       select GENERIC_IOMAP
+       select GENERIC_PCI_IOMAP
+       select HAS_IOPORT_MAP
+       select HAS_IOMEM
+       select VIRTIO
+       select VIRTIO_PCI
+       select VIRTIO_NET
        help
           The 'lib' architecture is a library (user-mode) version of
           the linux kernel that includes only its network stack and is
@@ -130,9 +139,17 @@ source "net/Kconfig"
 
 source "drivers/base/Kconfig"
 
+source "drivers/virtio/Kconfig"
+
+source "drivers/pci/Kconfig"
+
+source "drivers/net/Kconfig"
+
 source "crypto/Kconfig"
 
 source "lib/Kconfig"
+
+source "fs/kernfs/Kconfig"
 
 source "mm/Kconfig"
 

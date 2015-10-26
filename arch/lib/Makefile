@@ -31,10 +31,7 @@ AUTOGENS=include/generated/compile.h include/generated/bounds.h \
 	include/generated/timeconst.h lib/crc32table.h $(ARCH_DIR)/linker.lds
 
 # sources and objects
-#RUMP_PCI_SRC=libpci/pci.c libpci/rumpdev_pci.c
-#RUMP_PCI_SRC=libpci/rumpdev_pci.c libpci/pci_at_mainbus.c
-#libpci/rumpdev_bus_dma.c libpci/rumpdev_bus_space.c \
-
+RUMP_PCI_SRC=libpci/rumpdev_pci.c
 
 LIB_SRC=\
 lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
@@ -92,8 +89,7 @@ CFLAGS+= \
  -include $(srctree)/include/linux/kconfig.h \
  -I$(ARCH_DIR) -I.
 
-# XXX: need to upstream to change mm/page-writeback.c
-#CFLAGS_page-writeback.o=-Wno-uninitialized
+# XXX should be handled by argument
 
 CFLAGS_rumpdev_pci.o=-I$(ARCH_DIR)/libpci/ -I$(srctree)/../src/common/include \
 -I$(srctree)/../src/sys -I$(srctree)/../../rumprun/platform/hw/pci/
@@ -115,14 +111,14 @@ modules:=
 all: library modules
 
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ kernel/time/ kernel/sched/ kernel/rcu/ kernel/locking/ kernel/bpf/ kernel/printk/ mm/ fs/ fs/ramfs/ fs/proc/ fs/sysfs/ crypto/ lib/ drivers/base/ drivers/net/ drivers/pci/ net/ security/ init/
+dirs=kernel/ kernel/time/ kernel/sched/ kernel/rcu/ kernel/locking/ kernel/bpf/ kernel/printk/ mm/ fs/ fs/ramfs/ fs/proc/ fs/sysfs/ crypto/ lib/ drivers/base/ drivers/virtio/ drivers/net/ drivers/pci/ net/ security/ init/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o capability.o nsproxy.o \
-kthread.o sys.o cpu.o resource.o
+kthread.o sys.o cpu.o resource.o module.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
 hrtimer.o posix-timers.o posix-clock.o posix-cpu-timers.o
 kernel/sched/_to_keep=wait.o completion.o loadavg.o
@@ -136,17 +132,15 @@ compaction.o truncate.o debug.o readahead.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
 crc32c_generic.o rng.o crypto_null.o blkcipher.o ablkcipher.o scatterwalk.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o syscore.o
-drivers/net/_to_keep=loopback.o
-drivers/pci/_to_keep=access.o bus.o probe.o host-bridge.o remove.o pci.o \
-pci-driver.o search.o pci-sysfs.o rom.o setup-res.o \
-irq.o vpd.o setup-bus.o vc.o
+drivers/net/_to_keep=loopback.o virtio_net.o
+drivers/virtio/_to_keep= virtio.o virtio_ring.o virtio_pci_modern.o virtio_pci_common.o virtio_pci_legacy.o
 lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
 find_last_bit.o find_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
 rhashtable.o iov_iter.o cmdline.o kobject_uevent.o once.o flex_proportions.o \
-llist.o timerqueue.o parser.o random32.o radix-tree.o string_helpers.o
+llist.o timerqueue.o parser.o random32.o radix-tree.o string_helpers.o pci_iomap.o iomap.o
 fs/_to_keep=read_write.o libfs.o namei.o filesystems.o file.o file_table.o \
 dcache.o inode.o pipe.o char_dev.o splice.o no-block.o seq_file.o super.o \
 fcntl.o coredump.o ioctl.o open.o namespace.o nsfs.o fs-writeback.o fs_struct.o \
