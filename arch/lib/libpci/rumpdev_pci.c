@@ -36,14 +36,6 @@
 
 #include "pci_user.h"
 
-
-resource_size_t
-pcibios_align_resource(void *data, const struct resource *res,
-			resource_size_t size, resource_size_t align)
-{
-	panic("pcibios_align_resource has accessed unaligned neurons!");
-}
-
 /* from arch/x86/pci/common.c  */
 void pcibios_fixup_bus(struct pci_bus *b)
 {

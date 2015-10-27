@@ -31,7 +31,10 @@ AUTOGENS=include/generated/compile.h include/generated/bounds.h \
 	include/generated/timeconst.h lib/crc32table.h $(ARCH_DIR)/linker.lds
 
 # sources and objects
-RUMP_PCI_SRC=libpci/rumpdev_pci.c
+RUMP_PCI_SRC=
+ifeq ($(PCI),yes)
+	RUMP_PCI_SRC+=libpci/rumpdev_pci.c
+endif
 
 LIB_SRC=\
 lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
@@ -65,7 +68,7 @@ PIC_CFLAGS=$(pic_$(PIC))
 KLIBC?=yes
 klibc_yes=-DRUMP_KERNEL_IS_LIBC
 klibc_no=
-
+PCI?=no
 
 # flags
 CFLAGS_USPACE= \
