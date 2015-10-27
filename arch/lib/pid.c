@@ -13,7 +13,6 @@
 #include "sim-assert.h"
 
 struct pid_namespace init_pid_ns;
-struct pid *cad_pid = 0;
 
 #define RESERVED_PIDS 300
 int pid_max = PID_MAX_DEFAULT;
@@ -36,4 +35,9 @@ struct pid *find_get_pid(int nr)
 {
 	lib_assert(false);
 	return 0;
+}
+
+struct pid_namespace *task_active_pid_ns(struct task_struct *tsk)
+{
+	return ns_of_pid(task_pid(tsk));
 }

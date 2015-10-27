@@ -7,7 +7,7 @@ proto_h="$4"
 unistd_h="$5"
 
 # XXX:
-SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime|getpid|open|nanosleep"
+SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime|getpid|open|nanosleep|reboot"
 NR_syscall_max=0
 
 cat <<EOF > ${out_h}
@@ -28,7 +28,12 @@ cat <<EOF > ${proto_h}
 
 struct pollfd;
 struct epoll_event;
+struct msghdr;
 struct mmsghdr;
+struct iovec;
+struct sockaddr;
+struct timeval;
+struct timespec;
 
 /* XXX */
 #define __user
@@ -242,6 +247,7 @@ grep '^[0-9]' "$in" | sort -n | (
 	fi
 
 	echo "$RET rump___sysimpl_${name}(${ARGS});" >> "${proto_h}"
+	echo "$RET rump_sys_${name}(${ARGS}) __asm(\"rump___sysimpl_${name}\");" >> "${proto_h}"
 
 	cat <<EOF
 $RET rump___sysimpl_${name}(${ARGS});

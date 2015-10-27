@@ -38,7 +38,7 @@ lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
 sched.c workqueue.c \
 print.c tasklet.c tasklet-hrtimer.c \
 glue.c sysctl.c proc.c sysfs.c \
-pid.c modules.c vmscan.c kernel/syscalls.c rump-cons.c \
+pid.c modules.c vmscan.c kernel/syscalls.c rump-cons.c reboot.c \
 rump_syscalls.c $(RUMP_PCI_SRC)
 
 RUMP_PCI_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_PCI_SRC))))
@@ -118,7 +118,7 @@ colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o capability.o nsproxy.o \
-kthread.o sys.o cpu.o resource.o module.o
+kthread.o sys.o cpu.o resource.o module.o reboot.o kmod.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
 hrtimer.o posix-timers.o posix-clock.o posix-cpu-timers.o
 kernel/sched/_to_keep=wait.o completion.o loadavg.o

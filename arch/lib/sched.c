@@ -55,6 +55,7 @@ struct SimTask *lib_task_create(void *private, unsigned long pid)
 	if (!kpid)
 		return NULL;
 	kpid->numbers[0].nr = pid;
+	kpid->numbers[0].ns = &init_pid_ns;
 	cred->fsuid = make_kuid(current_user_ns(), 0);
 	cred->fsgid = make_kgid(current_user_ns(), 0);
 	cred->user = user;
@@ -66,7 +67,7 @@ struct SimTask *lib_task_create(void *private, unsigned long pid)
 	ns->uts_ns = 0;
 	ns->ipc_ns = 0;
 	ns->mnt_ns = 0;
-	ns->pid_ns_for_children = 0;
+	ns->pid_ns_for_children = &init_pid_ns;
 	ns->net_ns = &init_net;
 	task->kernel_task.cred = cred;
 	task->kernel_task.pid = pid;

@@ -29,6 +29,7 @@
 #define __NR_setsockopt                     54
 #define __NR_getsockopt                     55
 #define __NR_fcntl                     72
+#define __NR_reboot                     169
 #define __NR_epoll_create                     213
 #define __NR_clock_gettime                     228
 #define __NR_epoll_wait                     232

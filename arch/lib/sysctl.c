@@ -74,9 +74,6 @@ int vm_swappiness = 60;
 unsigned long scan_unevictable_pages = 0;
 int suid_dumpable = 0;
 int page_cluster = 0;
-int C_A_D = 0;
-#include <linux/reboot.h>
-char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
 unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
 unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 

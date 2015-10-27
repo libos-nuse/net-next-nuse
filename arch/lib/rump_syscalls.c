@@ -981,7 +981,29 @@ NOT_IMPLEMENTED(rump___sysimpl_swapon)
 
 NOT_IMPLEMENTED(rump___sysimpl_swapoff)
 
-NOT_IMPLEMENTED(rump___sysimpl_reboot)
+long rump___sysimpl_reboot(int magic1, int magic2, unsigned int cmd, void __user * arg);
+long
+rump___sysimpl_reboot(int magic1,  int magic2,  unsigned int cmd,  void __user * arg)
+{
+	register_t retval[2];
+	int error = 0;
+	struct syscall_args callarg;
+
+	memset(&callarg, 0, sizeof(callarg));
+	callarg.args[0] = (unsigned long)magic1;
+	callarg.args[1] = (unsigned long)magic2;
+	callarg.args[2] = (unsigned long)cmd;
+	callarg.args[3] = (unsigned long)arg;
+	error = rsys_syscall(__NR_reboot, &callarg, sizeof(callarg), retval);
+	if (error < 0)
+		rsys_seterrno(retval[0]);
+	return error;
+}
+#ifdef RUMP_KERNEL_IS_LIBC
+__weak_alias(reboot,rump___sysimpl_reboot);
+__weak_alias(_reboot,rump___sysimpl_reboot);
+__strong_alias(_sys_reboot,rump___sysimpl_reboot);
+#endif /* RUMP_KERNEL_IS_LIBC */
 
 NOT_IMPLEMENTED(rump___sysimpl_sethostname)
 
