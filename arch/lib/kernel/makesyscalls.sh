@@ -7,7 +7,7 @@ proto_h="$4"
 unistd_h="$5"
 
 # XXX:
-SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime|getpid|open"
+SYSCALL_LIST="socket|bind|close|ioctl|connect|recvmsg|recvfrom|sendmsg|getsockname|getpeername|setsockopt|getsockopt|sendmmsg|sendto|fcntl|write|writev|read|listen|accept|epoll_create|epoll_ctl|epoll_wait|pipe|poll|select|pwrite64|pwritev|clock_gettime|getpid|open|nanosleep"
 NR_syscall_max=0
 
 cat <<EOF > ${out_h}
@@ -293,6 +293,7 @@ __weak_alias(rump___sysimpl_socket30,rump___sysimpl_socket);
 __weak_alias(rump___sysimpl_pwrite,rump___sysimpl_pwrite64);
 __weak_alias(rump___sysimpl_pread,rump___sysimpl_pread64);
 __weak_alias(rump___sysimpl_utimes50,rump___sysimpl_utimes);
+__weak_alias(rump___sysimpl_nanosleep50,rump___sysimpl_nanosleep);
 
 EOF
 

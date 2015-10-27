@@ -39,7 +39,7 @@ static ssize_t rump_file_write(struct file *fp, const char __user *s,
 static struct console rump_cons_console_dev = {
 	.name =		"rump_cons",
 	.write =	rump_console_write,
-	.flags =	CON_PRINTBUFFER | CON_BOOT,
+	.flags =	CON_PRINTBUFFER,
 	.index =	-1,
 };
 

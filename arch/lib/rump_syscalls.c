@@ -372,7 +372,27 @@ NOT_IMPLEMENTED(rump___sysimpl_dup2)
 
 NOT_IMPLEMENTED(rump___sysimpl_pause)
 
-NOT_IMPLEMENTED(rump___sysimpl_nanosleep)
+long rump___sysimpl_nanosleep(struct timespec __user * rqtp, struct timespec __user * rmtp);
+long
+rump___sysimpl_nanosleep(struct timespec __user * rqtp,  struct timespec __user * rmtp)
+{
+	register_t retval[2];
+	int error = 0;
+	struct syscall_args callarg;
+
+	memset(&callarg, 0, sizeof(callarg));
+	callarg.args[0] = (unsigned long)rqtp;
+	callarg.args[1] = (unsigned long)rmtp;
+	error = rsys_syscall(__NR_nanosleep, &callarg, sizeof(callarg), retval);
+	if (error < 0)
+		rsys_seterrno(retval[0]);
+	return error;
+}
+#ifdef RUMP_KERNEL_IS_LIBC
+__weak_alias(nanosleep,rump___sysimpl_nanosleep);
+__weak_alias(_nanosleep,rump___sysimpl_nanosleep);
+__strong_alias(_sys_nanosleep,rump___sysimpl_nanosleep);
+#endif /* RUMP_KERNEL_IS_LIBC */
 
 NOT_IMPLEMENTED(rump___sysimpl_getitimer)
 
@@ -1407,4 +1427,5 @@ __weak_alias(rump___sysimpl_socket30,rump___sysimpl_socket);
 __weak_alias(rump___sysimpl_pwrite,rump___sysimpl_pwrite64);
 __weak_alias(rump___sysimpl_pread,rump___sysimpl_pread64);
 __weak_alias(rump___sysimpl_utimes50,rump___sysimpl_utimes);
+__weak_alias(rump___sysimpl_nanosleep50,rump___sysimpl_nanosleep);
 
