@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
-#define DEBUG
+//#define DEBUG
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
@@ -2003,8 +2003,7 @@ static int virtnet_restore(struct virtio_device *vdev)
 #endif
 
 static struct virtio_device_id id_table[] = {
-	{ VIRTIO_DEV_ANY_ID, VIRTIO_DEV_ANY_ID },
-//	{ VIRTIO_ID_NET, VIRTIO_DEV_ANY_ID },
+	{ VIRTIO_ID_NET, VIRTIO_DEV_ANY_ID },
 	{ 0 },
 };
 

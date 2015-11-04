@@ -47,20 +47,53 @@ void pcibios_fixup_bus(struct pci_bus *b)
  * @bus: PCI bus to scan
  * @devfn: slot number to scan (must have zero function.)
  */
-int rump_pci_generic_config_read(struct pci_bus *bus, unsigned int devfn,
-			    int where, int size, u32 *val)
+void *rump_pci_map_bus(struct pci_bus *bus, unsigned int devfn, int where)
+{
+	unsigned long addr;
+
+	addr =  (1<<31) | (bus->number<<16) | (PCI_SLOT(devfn) <<11) |
+		(PCI_FUNC(devfn) <<8) | (where & 0xfc);
+
+	/* FIXME: length? */
+	return rumpcomp_pci_map(addr, 0);
+}
+
+int rump_pci_generic_read(struct pci_bus *bus, unsigned int devfn,
+			  int where, int size, u32 *val)
 {
 
-	rumpcomp_pci_confread(bus->number, devfn >> 3, devfn, where, val);
+	rumpcomp_pci_confread(bus->number, PCI_SLOT(devfn),
+			      PCI_FUNC(devfn), where, val);
+	if (size <= 2)
+		*val = (*val >> (8 * (where & 3))) & ((1 << (size * 8)) - 1);
 
 	return PCIBIOS_SUCCESSFUL;
 }
 
-int rump_pci_generic_config_write(struct pci_bus *bus, unsigned int devfn,
+int rump_pci_generic_write(struct pci_bus *bus, unsigned int devfn,
 			    int where, int size, u32 val)
 {
+	u32 mask, tmp;
 
-	rumpcomp_pci_confwrite(bus->number, devfn >> 3, devfn, where, val);
+	if (size == 4) {
+		rumpcomp_pci_confwrite(bus->number, PCI_SLOT(devfn),
+				       PCI_FUNC(devfn), where, val);
+		return PCIBIOS_SUCCESSFUL;
+	} else {
+		mask = ~(((1 << (size * 8)) - 1) << ((where & 0x3) * 8));
+	}
+
+	/* This brings the way much overhead though I picked this
+	 * code from access.c.. maybe should come up with single
+	 * write method to avoid that. */
+
+	rumpcomp_pci_confread(bus->number, PCI_SLOT(devfn),
+			      PCI_FUNC(devfn), where, &tmp);
+	tmp &= mask;
+	tmp |= val << ((where & 0x3) * 8);
+
+	rumpcomp_pci_confwrite(bus->number, PCI_SLOT(devfn),
+			       PCI_FUNC(devfn), where, tmp);
 
 	return PCIBIOS_SUCCESSFUL;
 }
@@ -170,8 +203,9 @@ static int pci_lib_claim_resource(struct pci_dev *dev, void *data)
 }
 
 struct pci_ops rump_pci_root_ops = {
-	.read = rump_pci_generic_config_read,
-	.write = rump_pci_generic_config_write,
+	.map_bus = rump_pci_map_bus,
+	.read = rump_pci_generic_read,
+	.write = rump_pci_generic_write,
 };
 
 
