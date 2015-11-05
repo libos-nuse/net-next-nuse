@@ -1132,7 +1132,7 @@ void mark_rodata_ro(void)
 	 * has been zapped already via cleanup_highmem().
 	 */
 	all_end = roundup((unsigned long)_brk_end, PMD_SIZE);
-	set_memory_nx(rodata_start, (all_end - rodata_start) >> PAGE_SHIFT);
+	set_memory_nx(text_end, (all_end - text_end) >> PAGE_SHIFT);
 
 	rodata_test();
 
@@ -1150,6 +1150,8 @@ void mark_rodata_ro(void)
 	free_init_pages("unused kernel",
 			(unsigned long) __va(__pa_symbol(rodata_end)),
 			(unsigned long) __va(__pa_symbol(_sdata)));
+
+	debug_checkwx();
 }
 
 #endif

@@ -33,11 +33,11 @@
 			__field(u32, chan_width)					\
 			__field(u32, center_freq1)					\
 			__field(u32, center_freq2)
-#define CHANDEF_ASSIGN(c)								\
-			__entry->control_freq = (c)->chan ? (c)->chan->center_freq : 0;	\
-			__entry->chan_width = (c)->width;				\
-			__entry->center_freq1 = (c)->center_freq1;			\
-			__entry->center_freq2 = (c)->center_freq2;
+#define CHANDEF_ASSIGN(c)							\
+			__entry->control_freq = (c) ? ((c)->chan ? (c)->chan->center_freq : 0) : 0;	\
+			__entry->chan_width = (c) ? (c)->width : 0;			\
+			__entry->center_freq1 = (c) ? (c)->center_freq1 : 0;		\
+			__entry->center_freq2 = (c) ? (c)->center_freq2 : 0;
 #define CHANDEF_PR_FMT	" control:%d MHz width:%d center: %d/%d MHz"
 #define CHANDEF_PR_ARG	__entry->control_freq, __entry->chan_width,			\
 			__entry->center_freq1, __entry->center_freq2
@@ -325,7 +325,6 @@ TRACE_EVENT(drv_config,
 		__field(u32, flags)
 		__field(int, power_level)
 		__field(int, dynamic_ps_timeout)
-		__field(int, max_sleep_period)
 		__field(u16, listen_interval)
 		__field(u8, long_frame_max_tx_count)
 		__field(u8, short_frame_max_tx_count)
@@ -339,7 +338,6 @@ TRACE_EVENT(drv_config,
 		__entry->flags = local->hw.conf.flags;
 		__entry->power_level = local->hw.conf.power_level;
 		__entry->dynamic_ps_timeout = local->hw.conf.dynamic_ps_timeout;
-		__entry->max_sleep_period = local->hw.conf.max_sleep_period;
 		__entry->listen_interval = local->hw.conf.listen_interval;
 		__entry->long_frame_max_tx_count =
 			local->hw.conf.long_frame_max_tx_count;

@@ -881,6 +881,7 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
  * int (*ndo_set_vf_rate)(struct net_device *dev, int vf, int min_tx_rate,
  *			  int max_tx_rate);
  * int (*ndo_set_vf_spoofchk)(struct net_device *dev, int vf, bool setting);
+ * int (*ndo_set_vf_trust)(struct net_device *dev, int vf, bool setting);
  * int (*ndo_get_vf_config)(struct net_device *dev,
  *			    int vf, struct ifla_vf_info *ivf);
  * int (*ndo_set_vf_link_state)(struct net_device *dev, int vf, int link_state);
@@ -1054,6 +1055,10 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
  *	This function is used to pass protocol port error state information
  *	to the switch driver. The switch driver can react to the proto_down
  *      by doing a phys down on the associated switch port.
+ * int (*ndo_fill_metadata_dst)(struct net_device *dev, struct sk_buff *skb);
+ *	This function is used to get egress tunnel information for given skb.
+ *	This is useful for retrieving outer tunnel header parameters while
+ *	sampling packet.
  *
  */
 struct net_device_ops {
@@ -1109,6 +1114,8 @@ struct net_device_ops {
 						   int max_tx_rate);
 	int			(*ndo_set_vf_spoofchk)(struct net_device *dev,
 						       int vf, bool setting);
+	int			(*ndo_set_vf_trust)(struct net_device *dev,
+						    int vf, bool setting);
 	int			(*ndo_get_vf_config)(struct net_device *dev,
 						     int vf,
 						     struct ifla_vf_info *ivf);
@@ -1227,6 +1234,8 @@ struct net_device_ops {
 	int			(*ndo_get_iflink)(const struct net_device *dev);
 	int			(*ndo_change_proto_down)(struct net_device *dev,
 							 bool proto_down);
+	int			(*ndo_fill_metadata_dst)(struct net_device *dev,
+						       struct sk_buff *skb);
 };
 
 /**
@@ -2207,6 +2216,7 @@ void dev_add_offload(struct packet_offload *po);
 void dev_remove_offload(struct packet_offload *po);
 
 int dev_get_iflink(const struct net_device *dev);
+int dev_fill_metadata_dst(struct net_device *dev, struct sk_buff *skb);
 struct net_device *__dev_get_by_flags(struct net *net, unsigned short flags,
 				      unsigned short mask);
 struct net_device *dev_get_by_name(struct net *net, const char *name);

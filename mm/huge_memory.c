@@ -1880,7 +1880,7 @@ static int __split_huge_page_map(struct page *page,
 		 * here). But it is generally safer to never allow
 		 * small and huge TLB entries for the same virtual
 		 * address to be loaded simultaneously. So instead of
-		 * doing "pmd_populate(); flush_tlb_range();" we first
+		 * doing "pmd_populate(); flush_pmd_tlb_range();" we first
 		 * mark the current pmd notpresent (atomically because
 		 * here the pmd_trans_huge and pmd_trans_splitting
 		 * must remain set at all times on the pmd until the
@@ -2206,7 +2206,8 @@ static int __collapse_huge_page_isolate(struct vm_area_struct *vma,
 	for (_pte = pte; _pte < pte+HPAGE_PMD_NR;
 	     _pte++, address += PAGE_SIZE) {
 		pte_t pteval = *_pte;
-		if (pte_none(pteval) || is_zero_pfn(pte_pfn(pteval))) {
+		if (pte_none(pteval) || (pte_present(pteval) &&
+				is_zero_pfn(pte_pfn(pteval)))) {
 			if (!userfaultfd_armed(vma) &&
 			    ++none_or_zero <= khugepaged_max_ptes_none)
 				continue;

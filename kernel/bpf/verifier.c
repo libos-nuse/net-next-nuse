@@ -214,7 +214,7 @@ static DEFINE_MUTEX(bpf_verifier_lock);
  * verbose() is used to dump the verification trace to the log, so the user
  * can figure out what's wrong with the program
  */
-static void verbose(const char *fmt, ...)
+static __printf(1, 2) void verbose(const char *fmt, ...)
 {
 	va_list args;
 
@@ -245,6 +245,7 @@ static const struct {
 } func_limit[] = {
 	{BPF_MAP_TYPE_PROG_ARRAY, BPF_FUNC_tail_call},
 	{BPF_MAP_TYPE_PERF_EVENT_ARRAY, BPF_FUNC_perf_event_read},
+	{BPF_MAP_TYPE_PERF_EVENT_ARRAY, BPF_FUNC_perf_event_output},
 };
 
 static void print_verifier_state(struct verifier_env *env)
@@ -910,7 +911,7 @@ static int check_map_func_compatibility(struct bpf_map *map, int func_id)
 		 * don't allow any other map type to be passed into
 		 * the special func;
 		 */
-		if (bool_map != bool_func)
+		if (bool_func && bool_map != bool_func)
 			return -EINVAL;
 	}
 
@@ -1988,8 +1989,7 @@ static int replace_map_fd_with_map_ptr(struct verifier_env *env)
 			}
 
 			f = fdget(insn->imm);
-
-			map = bpf_map_get(f);
+			map = __bpf_map_get(f);
 			if (IS_ERR(map)) {
 				verbose("fd %d is not pointing to valid bpf_map\n",
 					insn->imm);

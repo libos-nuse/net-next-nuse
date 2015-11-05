@@ -34,6 +34,8 @@
 #include "sta_info.h"
 #include "debug.h"
 
+extern const struct cfg80211_ops mac80211_config_ops;
+
 struct ieee80211_local;
 
 /* Maximum number of broadcast/multicast frames to buffer when some of the
@@ -500,6 +502,9 @@ struct ieee80211_if_managed {
 	 * only on couple of received frames.
 	 */
 	unsigned int count_beacon_signal;
+
+	/* Number of times beacon loss was invoked. */
+	unsigned int beacon_loss_count;
 
 	/*
 	 * Last Beacon frame signal strength average (ave_beacon_signal / 16)
@@ -1305,7 +1310,6 @@ struct ieee80211_local {
 	struct work_struct dynamic_ps_enable_work;
 	struct work_struct dynamic_ps_disable_work;
 	struct timer_list dynamic_ps_timer;
-	struct notifier_block network_latency_notifier;
 	struct notifier_block ifa_notifier;
 	struct notifier_block ifa6_notifier;
 
@@ -1491,10 +1495,8 @@ int ieee80211_mgd_disassoc(struct ieee80211_sub_if_data *sdata,
 			   struct cfg80211_disassoc_request *req);
 void ieee80211_send_pspoll(struct ieee80211_local *local,
 			   struct ieee80211_sub_if_data *sdata);
-void ieee80211_recalc_ps(struct ieee80211_local *local, s32 latency);
+void ieee80211_recalc_ps(struct ieee80211_local *local);
 void ieee80211_recalc_ps_vif(struct ieee80211_sub_if_data *sdata);
-int ieee80211_max_network_latency(struct notifier_block *nb,
-				  unsigned long data, void *dummy);
 int ieee80211_set_arp_filter(struct ieee80211_sub_if_data *sdata);
 void ieee80211_sta_work(struct ieee80211_sub_if_data *sdata);
 void ieee80211_sta_rx_queued_mgmt(struct ieee80211_sub_if_data *sdata,
@@ -1571,7 +1573,7 @@ __ieee80211_request_sched_scan_start(struct ieee80211_sub_if_data *sdata,
 				     struct cfg80211_sched_scan_request *req);
 int ieee80211_request_sched_scan_start(struct ieee80211_sub_if_data *sdata,
 				       struct cfg80211_sched_scan_request *req);
-int ieee80211_request_sched_scan_stop(struct ieee80211_sub_if_data *sdata);
+int ieee80211_request_sched_scan_stop(struct ieee80211_local *local);
 void ieee80211_sched_scan_end(struct ieee80211_local *local);
 void ieee80211_sched_scan_stopped_work(struct work_struct *work);
 
@@ -1766,11 +1768,8 @@ extern const void *const mac80211_wiphy_privid; /* for wiphy privid */
 int ieee80211_frame_duration(enum ieee80211_band band, size_t len,
 			     int rate, int erp, int short_preamble,
 			     int shift);
-void mac80211_ev_michael_mic_failure(struct ieee80211_sub_if_data *sdata, int keyidx,
-				     struct ieee80211_hdr *hdr, const u8 *tsc,
-				     gfp_t gfp);
 void ieee80211_set_wmm_default(struct ieee80211_sub_if_data *sdata,
-			       bool bss_notify);
+			       bool bss_notify, bool enable_qos);
 void ieee80211_xmit(struct ieee80211_sub_if_data *sdata,
 		    struct sta_info *sta, struct sk_buff *skb);
 
@@ -1963,7 +1962,7 @@ u8 *ieee80211_ie_build_ht_cap(u8 *pos, struct ieee80211_sta_ht_cap *ht_cap,
 			      u16 cap);
 u8 *ieee80211_ie_build_ht_oper(u8 *pos, struct ieee80211_sta_ht_cap *ht_cap,
 			       const struct cfg80211_chan_def *chandef,
-			       u16 prot_mode);
+			       u16 prot_mode, bool rifs_mode);
 u8 *ieee80211_ie_build_vht_cap(u8 *pos, struct ieee80211_sta_vht_cap *vht_cap,
 			       u32 cap);
 u8 *ieee80211_ie_build_vht_oper(u8 *pos, struct ieee80211_sta_vht_cap *vht_cap,

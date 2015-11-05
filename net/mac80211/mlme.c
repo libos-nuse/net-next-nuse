@@ -20,7 +20,6 @@
 #include <linux/etherdevice.h>
 #include <linux/moduleparam.h>
 #include <linux/rtnetlink.h>
-#include <linux/pm_qos.h>
 #include <linux/crc32.h>
 #include <linux/slab.h>
 #include <linux/export.h>
@@ -1476,7 +1475,7 @@ static bool ieee80211_powersave_allowed(struct ieee80211_sub_if_data *sdata)
 }
 
 /* need to hold RTNL or interface lock */
-void ieee80211_recalc_ps(struct ieee80211_local *local, s32 latency)
+void ieee80211_recalc_ps(struct ieee80211_local *local)
 {
 	struct ieee80211_sub_if_data *sdata, *found = NULL;
 	int count = 0;
@@ -1505,48 +1504,23 @@ void ieee80211_recalc_ps(struct ieee80211_local *local, s32 latency)
 	}
 
 	if (count == 1 && ieee80211_powersave_allowed(found)) {
+		u8 dtimper = found->u.mgd.dtim_period;
 		s32 beaconint_us;
-
-		if (latency < 0)
-			latency = pm_qos_request(PM_QOS_NETWORK_LATENCY);
 
 		beaconint_us = ieee80211_tu_to_usec(
 					found->vif.bss_conf.beacon_int);
 
 		timeout = local->dynamic_ps_forced_timeout;
-		if (timeout < 0) {
-			/*
-			 * Go to full PSM if the user configures a very low
-			 * latency requirement.
-			 * The 2000 second value is there for compatibility
-			 * until the PM_QOS_NETWORK_LATENCY is configured
-			 * with real values.
-			 */
-			if (latency > (1900 * USEC_PER_MSEC) &&
-			    latency != (2000 * USEC_PER_SEC))
-				timeout = 0;
-			else
-				timeout = 100;
-		}
+		if (timeout < 0)
+			timeout = 100;
 		local->hw.conf.dynamic_ps_timeout = timeout;
 
-		if (beaconint_us > latency) {
-			local->ps_sdata = NULL;
-		} else {
-			int maxslp = 1;
-			u8 dtimper = found->u.mgd.dtim_period;
+		/* If the TIM IE is invalid, pretend the value is 1 */
+		if (!dtimper)
+			dtimper = 1;
 
-			/* If the TIM IE is invalid, pretend the value is 1 */
-			if (!dtimper)
-				dtimper = 1;
-			else if (dtimper > 1)
-				maxslp = min_t(int, dtimper,
-						    latency / beaconint_us);
-
-			local->hw.conf.max_sleep_period = maxslp;
-			local->hw.conf.ps_dtim_period = dtimper;
-			local->ps_sdata = found;
-		}
+		local->hw.conf.ps_dtim_period = dtimper;
+		local->ps_sdata = found;
 	} else {
 		local->ps_sdata = NULL;
 	}
@@ -1770,10 +1744,10 @@ static bool ieee80211_sta_wmm_params(struct ieee80211_local *local,
 				     struct ieee80211_sub_if_data *sdata,
 				     const u8 *wmm_param, size_t wmm_param_len)
 {
-	struct ieee80211_tx_queue_params params;
+	struct ieee80211_tx_queue_params params[IEEE80211_NUM_ACS];
 	struct ieee80211_if_managed *ifmgd = &sdata->u.mgd;
 	size_t left;
-	int count;
+	int count, ac;
 	const u8 *pos;
 	u8 uapsd_queues = 0;
 
@@ -1807,25 +1781,24 @@ static bool ieee80211_sta_wmm_params(struct ieee80211_local *local,
 		int aci = (pos[0] >> 5) & 0x03;
 		int acm = (pos[0] >> 4) & 0x01;
 		bool uapsd = false;
-		int queue;
 
 		switch (aci) {
 		case 1: /* AC_BK */
-			queue = 3;
+			ac = IEEE80211_AC_BK;
 			if (acm)
 				sdata->wmm_acm |= BIT(1) | BIT(2); /* BK/- */
 			if (uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_BK)
 				uapsd = true;
 			break;
 		case 2: /* AC_VI */
-			queue = 1;
+			ac = IEEE80211_AC_VI;
 			if (acm)
 				sdata->wmm_acm |= BIT(4) | BIT(5); /* CL/VI */
 			if (uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_VI)
 				uapsd = true;
 			break;
 		case 3: /* AC_VO */
-			queue = 0;
+			ac = IEEE80211_AC_VO;
 			if (acm)
 				sdata->wmm_acm |= BIT(6) | BIT(7); /* VO/NC */
 			if (uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_VO)
@@ -1833,7 +1806,7 @@ static bool ieee80211_sta_wmm_params(struct ieee80211_local *local,
 			break;
 		case 0: /* AC_BE */
 		default:
-			queue = 2;
+			ac = IEEE80211_AC_BE;
 			if (acm)
 				sdata->wmm_acm |= BIT(0) | BIT(3); /* BE/EE */
 			if (uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_BE)
@@ -1841,25 +1814,41 @@ static bool ieee80211_sta_wmm_params(struct ieee80211_local *local,
 			break;
 		}
 
-		params.aifs = pos[0] & 0x0f;
-		params.cw_max = ecw2cw((pos[1] & 0xf0) >> 4);
-		params.cw_min = ecw2cw(pos[1] & 0x0f);
-		params.txop = get_unaligned_le16(pos + 2);
-		params.acm = acm;
-		params.uapsd = uapsd;
+		params[ac].aifs = pos[0] & 0x0f;
 
+		if (params[ac].aifs < 2) {
+			sdata_info(sdata,
+				   "AP has invalid WMM params (AIFSN=%d for ACI %d), will use 2\n",
+				   params[ac].aifs, aci);
+			params[ac].aifs = 2;
+		}
+		params[ac].cw_max = ecw2cw((pos[1] & 0xf0) >> 4);
+		params[ac].cw_min = ecw2cw(pos[1] & 0x0f);
+		params[ac].txop = get_unaligned_le16(pos + 2);
+		params[ac].acm = acm;
+		params[ac].uapsd = uapsd;
+
+		if (params[ac].cw_min > params[ac].cw_max) {
+			sdata_info(sdata,
+				   "AP has invalid WMM params (CWmin/max=%d/%d for ACI %d), using defaults\n",
+				   params[ac].cw_min, params[ac].cw_max, aci);
+			return false;
+		}
+	}
+
+	for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
 		mlme_dbg(sdata,
-			 "WMM queue=%d aci=%d acm=%d aifs=%d cWmin=%d cWmax=%d txop=%d uapsd=%d, downgraded=%d\n",
-			 queue, aci, acm,
-			 params.aifs, params.cw_min, params.cw_max,
-			 params.txop, params.uapsd,
-			 ifmgd->tx_tspec[queue].downgraded);
-		sdata->tx_conf[queue] = params;
-		if (!ifmgd->tx_tspec[queue].downgraded &&
-		    drv_conf_tx(local, sdata, queue, &params))
+			 "WMM AC=%d acm=%d aifs=%d cWmin=%d cWmax=%d txop=%d uapsd=%d, downgraded=%d\n",
+			 ac, params[ac].acm,
+			 params[ac].aifs, params[ac].cw_min, params[ac].cw_max,
+			 params[ac].txop, params[ac].uapsd,
+			 ifmgd->tx_tspec[ac].downgraded);
+		sdata->tx_conf[ac] = params[ac];
+		if (!ifmgd->tx_tspec[ac].downgraded &&
+		    drv_conf_tx(local, sdata, ac, &params[ac]))
 			sdata_err(sdata,
-				  "failed to set TX queue parameters for queue %d\n",
-				  queue);
+				  "failed to set TX queue parameters for AC %d\n",
+				  ac);
 	}
 
 	/* enable WMM or activate new settings */
@@ -1997,7 +1986,7 @@ static void ieee80211_set_associated(struct ieee80211_sub_if_data *sdata,
 	ieee80211_bss_info_change_notify(sdata, bss_info_changed);
 
 	mutex_lock(&local->iflist_mtx);
-	ieee80211_recalc_ps(local, -1);
+	ieee80211_recalc_ps(local);
 	mutex_unlock(&local->iflist_mtx);
 
 	ieee80211_recalc_smps(sdata);
@@ -2103,7 +2092,7 @@ static void ieee80211_set_disassoc(struct ieee80211_sub_if_data *sdata,
 	ieee80211_bss_info_change_notify(sdata, changed);
 
 	/* disassociated - set to defaults now */
-	ieee80211_set_wmm_default(sdata, false);
+	ieee80211_set_wmm_default(sdata, false, false);
 
 	del_timer_sync(&sdata->u.mgd.conn_mon_timer);
 	del_timer_sync(&sdata->u.mgd.bcn_mon_timer);
@@ -2165,7 +2154,7 @@ static void ieee80211_reset_ap_probe(struct ieee80211_sub_if_data *sdata)
 	__ieee80211_stop_poll(sdata);
 
 	mutex_lock(&local->iflist_mtx);
-	ieee80211_recalc_ps(local, -1);
+	ieee80211_recalc_ps(local);
 	mutex_unlock(&local->iflist_mtx);
 
 	if (ieee80211_hw_check(&sdata->local->hw, CONNECTION_MONITOR))
@@ -2341,7 +2330,7 @@ static void ieee80211_mgd_probe_ap(struct ieee80211_sub_if_data *sdata,
 		goto out;
 
 	mutex_lock(&sdata->local->iflist_mtx);
-	ieee80211_recalc_ps(sdata->local, -1);
+	ieee80211_recalc_ps(sdata->local);
 	mutex_unlock(&sdata->local->iflist_mtx);
 
 	ifmgd->probe_send_count = 0;
@@ -2446,15 +2435,9 @@ static void ieee80211_beacon_connection_loss_work(struct work_struct *work)
 		container_of(work, struct ieee80211_sub_if_data,
 			     u.mgd.beacon_connection_loss_work);
 	struct ieee80211_if_managed *ifmgd = &sdata->u.mgd;
-	struct sta_info *sta;
 
-	if (ifmgd->associated) {
-		rcu_read_lock();
-		sta = sta_info_get(sdata, ifmgd->bssid);
-		if (sta)
-			sta->beacon_loss_count++;
-		rcu_read_unlock();
-	}
+	if (ifmgd->associated)
+		ifmgd->beacon_loss_count++;
 
 	if (ifmgd->connection_loss) {
 		sdata_info(sdata, "Connection to AP %pM lost\n",
@@ -3044,8 +3027,12 @@ static bool ieee80211_assoc_success(struct ieee80211_sub_if_data *sdata,
 
 	rate_control_rate_init(sta);
 
-	if (ifmgd->flags & IEEE80211_STA_MFP_ENABLED)
+	if (ifmgd->flags & IEEE80211_STA_MFP_ENABLED) {
 		set_sta_flag(sta, WLAN_STA_MFP);
+		sta->sta.mfp = true;
+	} else {
+		sta->sta.mfp = false;
+	}
 
 	sta->sta.wme = elems.wmm_param && local->hw.queues >= IEEE80211_NUM_ACS;
 
@@ -3072,11 +3059,21 @@ static bool ieee80211_assoc_success(struct ieee80211_sub_if_data *sdata,
 	 */
 	ifmgd->wmm_last_param_set = -1;
 
-	if (!(ifmgd->flags & IEEE80211_STA_DISABLE_WMM) && elems.wmm_param)
-		ieee80211_sta_wmm_params(local, sdata, elems.wmm_param,
-					 elems.wmm_param_len);
-	else
-		ieee80211_set_wmm_default(sdata, false);
+	if (ifmgd->flags & IEEE80211_STA_DISABLE_WMM) {
+		ieee80211_set_wmm_default(sdata, false, false);
+	} else if (!ieee80211_sta_wmm_params(local, sdata, elems.wmm_param,
+					     elems.wmm_param_len)) {
+		/* still enable QoS since we might have HT/VHT */
+		ieee80211_set_wmm_default(sdata, false, true);
+		/* set the disable-WMM flag in this case to disable
+		 * tracking WMM parameter changes in the beacon if
+		 * the parameters weren't actually valid. Doing so
+		 * avoids changing parameters very strangely when
+		 * the AP is going back and forth between valid and
+		 * invalid parameters.
+		 */
+		ifmgd->flags |= IEEE80211_STA_DISABLE_WMM;
+	}
 	changed |= BSS_CHANGED_QOS;
 
 	/* set AID and assoc capability,
@@ -3544,7 +3541,7 @@ static void ieee80211_rx_mgmt_beacon(struct ieee80211_sub_if_data *sdata,
 		ifmgd->have_beacon = true;
 
 		mutex_lock(&local->iflist_mtx);
-		ieee80211_recalc_ps(local, -1);
+		ieee80211_recalc_ps(local);
 		mutex_unlock(&local->iflist_mtx);
 
 		ieee80211_recalc_ps_vif(sdata);
@@ -4148,21 +4145,6 @@ void ieee80211_mlme_notify_scan_completed(struct ieee80211_local *local)
 	rcu_read_unlock();
 }
 
-int ieee80211_max_network_latency(struct notifier_block *nb,
-				  unsigned long data, void *dummy)
-{
-	s32 latency_usec = (s32) data;
-	struct ieee80211_local *local =
-		container_of(nb, struct ieee80211_local,
-			     network_latency_notifier);
-
-	mutex_lock(&local->iflist_mtx);
-	ieee80211_recalc_ps(local, latency_usec);
-	mutex_unlock(&local->iflist_mtx);
-
-	return NOTIFY_OK;
-}
-
 static u8 ieee80211_ht_vht_rx_chains(struct ieee80211_sub_if_data *sdata,
 				     struct cfg80211_bss *cbss)
 {
@@ -4586,44 +4568,6 @@ int ieee80211_mgd_auth(struct ieee80211_sub_if_data *sdata,
 	return err;
 }
 
-static bool ieee80211_usable_wmm_params(struct ieee80211_sub_if_data *sdata,
-					const u8 *wmm_param, int len)
-{
-	const u8 *pos;
-	size_t left;
-
-	if (len < 8)
-		return false;
-
-	if (wmm_param[5] != 1 /* version */)
-		return false;
-
-	pos = wmm_param + 8;
-	left = len - 8;
-
-	for (; left >= 4; left -= 4, pos += 4) {
-		u8 aifsn = pos[0] & 0x0f;
-		u8 ecwmin = pos[1] & 0x0f;
-		u8 ecwmax = (pos[1] & 0xf0) >> 4;
-		int aci = (pos[0] >> 5) & 0x03;
-
-		if (aifsn < 2) {
-			sdata_info(sdata,
-				   "AP has invalid WMM params (AIFSN=%d for ACI %d), disabling WMM\n",
-				   aifsn, aci);
-			return false;
-		}
-		if (ecwmin > ecwmax) {
-			sdata_info(sdata,
-				   "AP has invalid WMM params (ECWmin/max=%d/%d for ACI %d), disabling WMM\n",
-				   ecwmin, ecwmax, aci);
-			return false;
-		}
-	}
-
-	return true;
-}
-
 int ieee80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 			struct cfg80211_assoc_request *req)
 {
@@ -4688,39 +4632,6 @@ int ieee80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 
 	assoc_data->wmm = bss->wmm_used &&
 			  (local->hw.queues >= IEEE80211_NUM_ACS);
-	if (assoc_data->wmm) {
-		/* try to check validity of WMM params IE */
-		const struct cfg80211_bss_ies *ies;
-		const u8 *wp, *start, *end;
-
-		rcu_read_lock();
-		ies = rcu_dereference(req->bss->ies);
-		start = ies->data;
-		end = start + ies->len;
-
-		while (true) {
-			wp = cfg80211_find_vendor_ie(
-				WLAN_OUI_MICROSOFT,
-				WLAN_OUI_TYPE_MICROSOFT_WMM,
-				start, end - start);
-			if (!wp)
-				break;
-			start = wp + wp[1] + 2;
-			/* if this IE is too short, try the next */
-			if (wp[1] <= 4)
-				continue;
-			/* if this IE is WMM params, we found what we wanted */
-			if (wp[6] == 1)
-				break;
-		}
-
-		if (!wp || !ieee80211_usable_wmm_params(sdata, wp + 2,
-							wp[1] - 2)) {
-			assoc_data->wmm = false;
-			ifmgd->flags |= IEEE80211_STA_DISABLE_WMM;
-		}
-		rcu_read_unlock();
-	}
 
 	/*
 	 * IEEE802.11n does not allow TKIP/WEP as pairwise ciphers in HT mode.
@@ -4976,6 +4887,25 @@ int ieee80211_mgd_deauth(struct ieee80211_sub_if_data *sdata,
 					    sizeof(frame_buf), true,
 					    req->reason_code);
 
+		return 0;
+	}
+
+	if (ifmgd->assoc_data &&
+	    ether_addr_equal(ifmgd->assoc_data->bss->bssid, req->bssid)) {
+		sdata_info(sdata,
+			   "aborting association with %pM by local choice (Reason: %u=%s)\n",
+			   req->bssid, req->reason_code,
+			   ieee80211_get_reason_code_string(req->reason_code));
+
+		drv_mgd_prepare_tx(sdata->local, sdata);
+		ieee80211_send_deauth_disassoc(sdata, req->bssid,
+					       IEEE80211_STYPE_DEAUTH,
+					       req->reason_code, tx,
+					       frame_buf);
+		ieee80211_destroy_assoc_data(sdata, false);
+		ieee80211_report_disconnect(sdata, frame_buf,
+					    sizeof(frame_buf), true,
+					    req->reason_code);
 		return 0;
 	}
 

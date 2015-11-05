@@ -19,6 +19,7 @@
 #include <linux/if_bridge.h>
 #include <linux/list.h>
 #include <linux/workqueue.h>
+#include <linux/if_vlan.h>
 #include <net/ip_fib.h>
 #include <net/switchdev.h>
 
@@ -224,8 +225,10 @@ static int __switchdev_port_attr_set(struct net_device *dev,
 	struct list_head *iter;
 	int err = -EOPNOTSUPP;
 
-	if (ops && ops->switchdev_port_attr_set)
-		return ops->switchdev_port_attr_set(dev, attr, trans);
+	if (ops && ops->switchdev_port_attr_set) {
+		err = ops->switchdev_port_attr_set(dev, attr, trans);
+		goto done;
+	}
 
 	if (attr->flags & SWITCHDEV_F_NO_RECURSE)
 		goto done;
@@ -237,9 +240,6 @@ static int __switchdev_port_attr_set(struct net_device *dev,
 
 	netdev_for_each_lower_dev(dev, lower_dev, iter) {
 		err = __switchdev_port_attr_set(lower_dev, attr, trans);
-		if (err == -EOPNOTSUPP &&
-		    attr->flags & SWITCHDEV_F_SKIP_EOPNOTSUPP)
-			continue;
 		if (err)
 			break;
 	}
@@ -336,6 +336,21 @@ int switchdev_port_attr_set(struct net_device *dev,
 }
 EXPORT_SYMBOL_GPL(switchdev_port_attr_set);
 
+static size_t switchdev_obj_size(const struct switchdev_obj *obj)
+{
+	switch (obj->id) {
+	case SWITCHDEV_OBJ_ID_PORT_VLAN:
+		return sizeof(struct switchdev_obj_port_vlan);
+	case SWITCHDEV_OBJ_ID_IPV4_FIB:
+		return sizeof(struct switchdev_obj_ipv4_fib);
+	case SWITCHDEV_OBJ_ID_PORT_FDB:
+		return sizeof(struct switchdev_obj_port_fdb);
+	default:
+		BUG();
+	}
+	return 0;
+}
+
 static int __switchdev_port_obj_add(struct net_device *dev,
 				    const struct switchdev_obj *obj,
 				    struct switchdev_trans *trans)
@@ -421,7 +436,7 @@ static void switchdev_port_obj_add_deferred(struct net_device *dev,
 static int switchdev_port_obj_add_defer(struct net_device *dev,
 					const struct switchdev_obj *obj)
 {
-	return switchdev_deferred_enqueue(dev, obj, sizeof(*obj),
+	return switchdev_deferred_enqueue(dev, obj, switchdev_obj_size(obj),
 					  switchdev_port_obj_add_deferred);
 }
 
@@ -489,7 +504,7 @@ static void switchdev_port_obj_del_deferred(struct net_device *dev,
 static int switchdev_port_obj_del_defer(struct net_device *dev,
 					const struct switchdev_obj *obj)
 {
-	return switchdev_deferred_enqueue(dev, obj, sizeof(*obj),
+	return switchdev_deferred_enqueue(dev, obj, switchdev_obj_size(obj),
 					  switchdev_port_obj_del_deferred);
 }
 
@@ -745,7 +760,7 @@ int switchdev_port_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 		.id = SWITCHDEV_ATTR_ID_PORT_BRIDGE_FLAGS,
 	};
 	u16 mode = BRIDGE_MODE_UNDEF;
-	u32 mask = BR_LEARNING | BR_LEARNING_SYNC;
+	u32 mask = BR_LEARNING | BR_LEARNING_SYNC | BR_FLOOD;
 	int err;
 
 	err = switchdev_port_attr_get(dev, &attr);
@@ -816,6 +831,9 @@ static int switchdev_port_br_setlink_protinfo(struct net_device *dev,
 			err = switchdev_port_br_setflag(dev, attr,
 							BR_LEARNING_SYNC);
 			break;
+		case IFLA_BRPORT_UNICAST_FLOOD:
+			err = switchdev_port_br_setflag(dev, attr, BR_FLOOD);
+			break;
 		default:
 			err = -EOPNOTSUPP;
 			break;
@@ -846,6 +864,8 @@ static int switchdev_port_br_afspec(struct net_device *dev,
 		if (nla_len(attr) != sizeof(struct bridge_vlan_info))
 			return -EINVAL;
 		vinfo = nla_data(attr);
+		if (!vinfo->vid || vinfo->vid >= VLAN_VID_MASK)
+			return -EINVAL;
 		vlan.flags = vinfo->flags;
 		if (vinfo->flags & BRIDGE_VLAN_INFO_RANGE_BEGIN) {
 			if (vlan.vid_begin)
@@ -863,7 +883,7 @@ static int switchdev_port_br_afspec(struct net_device *dev,
 			err = f(dev, &vlan.obj);
 			if (err)
 				return err;
-			memset(&vlan, 0, sizeof(vlan));
+			vlan.vid_begin = 0;
 		} else {
 			if (vlan.vid_begin)
 				return -EINVAL;
@@ -872,7 +892,7 @@ static int switchdev_port_br_afspec(struct net_device *dev,
 			err = f(dev, &vlan.obj);
 			if (err)
 				return err;
-			memset(&vlan, 0, sizeof(vlan));
+			vlan.vid_begin = 0;
 		}
 	}
 

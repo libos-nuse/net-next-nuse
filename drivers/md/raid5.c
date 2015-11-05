@@ -2271,8 +2271,7 @@ static void shrink_stripes(struct r5conf *conf)
 	       drop_one_stripe(conf))
 		;
 
-	if (conf->slab_cache)
-		kmem_cache_destroy(conf->slab_cache);
+	kmem_cache_destroy(conf->slab_cache);
 	conf->slab_cache = NULL;
 }
 
@@ -3150,6 +3149,8 @@ handle_failed_stripe(struct r5conf *conf, struct stripe_head *sh,
 			spin_unlock_irq(&sh->stripe_lock);
 			if (test_and_clear_bit(R5_Overlap, &sh->dev[i].flags))
 				wake_up(&conf->wait_for_overlap);
+			if (bi)
+				s->to_read--;
 			while (bi && bi->bi_iter.bi_sector <
 			       sh->dev[i].sector + STRIPE_SECTORS) {
 				struct bio *nextbi =
@@ -3169,6 +3170,8 @@ handle_failed_stripe(struct r5conf *conf, struct stripe_head *sh,
 		 */
 		clear_bit(R5_LOCKED, &sh->dev[i].flags);
 	}
+	s->to_write = 0;
+	s->written = 0;
 
 	if (test_and_clear_bit(STRIPE_FULL_WRITE, &sh->state))
 		if (atomic_dec_and_test(&conf->pending_full_writes))
@@ -3300,7 +3303,7 @@ static int need_this_block(struct stripe_head *sh, struct stripe_head_state *s,
 		 */
 		return 0;
 
-	for (i = 0; i < s->failed; i++) {
+	for (i = 0; i < s->failed && i < 2; i++) {
 		if (fdev[i]->towrite &&
 		    !test_bit(R5_UPTODATE, &fdev[i]->flags) &&
 		    !test_bit(R5_OVERWRITE, &fdev[i]->flags))
@@ -3324,7 +3327,7 @@ static int need_this_block(struct stripe_head *sh, struct stripe_head_state *s,
 	    sh->sector < sh->raid_conf->mddev->recovery_cp)
 		/* reconstruct-write isn't being forced */
 		return 0;
-	for (i = 0; i < s->failed; i++) {
+	for (i = 0; i < s->failed && i < 2; i++) {
 		if (s->failed_num[i] != sh->pd_idx &&
 		    s->failed_num[i] != sh->qd_idx &&
 		    !test_bit(R5_UPTODATE, &fdev[i]->flags) &&
@@ -3496,6 +3499,7 @@ returnbi:
 		}
 	if (!discard_pending &&
 	    test_bit(R5_Discard, &sh->dev[sh->pd_idx].flags)) {
+		int hash;
 		clear_bit(R5_Discard, &sh->dev[sh->pd_idx].flags);
 		clear_bit(R5_UPTODATE, &sh->dev[sh->pd_idx].flags);
 		if (sh->qd_idx >= 0) {
@@ -3509,16 +3513,17 @@ returnbi:
 		 * no updated data, so remove it from hash list and the stripe
 		 * will be reinitialized
 		 */
-		spin_lock_irq(&conf->device_lock);
 unhash:
+		hash = sh->hash_lock_index;
+		spin_lock_irq(conf->hash_locks + hash);
 		remove_hash(sh);
+		spin_unlock_irq(conf->hash_locks + hash);
 		if (head_sh->batch_head) {
 			sh = list_first_entry(&sh->batch_list,
 					      struct stripe_head, batch_list);
 			if (sh != head_sh)
 					goto unhash;
 		}
-		spin_unlock_irq(&conf->device_lock);
 		sh = head_sh;
 
 		if (test_bit(STRIPE_SYNC_REQUESTED, &sh->state))

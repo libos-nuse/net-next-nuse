@@ -85,8 +85,6 @@ static void amdgpu_flip_work_func(struct work_struct *__work)
 	/* We borrow the event spin lock for protecting flip_status */
 	spin_lock_irqsave(&crtc->dev->event_lock, flags);
 
-	/* set the proper interrupt */
-	amdgpu_irq_get(adev, &adev->pageflip_irq, work->crtc_id);
 	/* do the flip (mmio) */
 	adev->mode_info.funcs->page_flip(adev, work->crtc_id, work->base);
 	/* set the flip status */
@@ -185,10 +183,6 @@ int amdgpu_crtc_page_flip(struct drm_crtc *crtc,
 		DRM_ERROR("failed to get fences for buffer\n");
 		goto cleanup;
 	}
-
-	fence_get(work->excl);
-	for (i = 0; i < work->shared_count; ++i)
-		fence_get(work->shared[i]);
 
 	amdgpu_bo_get_tiling_flags(new_rbo, &tiling_flags);
 	amdgpu_bo_unreserve(new_rbo);

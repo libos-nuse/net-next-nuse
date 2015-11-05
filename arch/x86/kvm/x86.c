@@ -663,9 +663,9 @@ static int __kvm_set_xcr(struct kvm_vcpu *vcpu, u32 index, u64 xcr)
 	/* Only support XCR_XFEATURE_ENABLED_MASK(xcr0) now  */
 	if (index != XCR_XFEATURE_ENABLED_MASK)
 		return 1;
-	if (!(xcr0 & XSTATE_FP))
+	if (!(xcr0 & XFEATURE_MASK_FP))
 		return 1;
-	if ((xcr0 & XSTATE_YMM) && !(xcr0 & XSTATE_SSE))
+	if ((xcr0 & XFEATURE_MASK_YMM) && !(xcr0 & XFEATURE_MASK_SSE))
 		return 1;
 
 	/*
@@ -673,23 +673,24 @@ static int __kvm_set_xcr(struct kvm_vcpu *vcpu, u32 index, u64 xcr)
 	 * saving.  However, xcr0 bit 0 is always set, even if the
 	 * emulated CPU does not support XSAVE (see fx_init).
 	 */
-	valid_bits = vcpu->arch.guest_supported_xcr0 | XSTATE_FP;
+	valid_bits = vcpu->arch.guest_supported_xcr0 | XFEATURE_MASK_FP;
 	if (xcr0 & ~valid_bits)
 		return 1;
 
-	if ((!(xcr0 & XSTATE_BNDREGS)) != (!(xcr0 & XSTATE_BNDCSR)))
+	if ((!(xcr0 & XFEATURE_MASK_BNDREGS)) !=
+	    (!(xcr0 & XFEATURE_MASK_BNDCSR)))
 		return 1;
 
-	if (xcr0 & XSTATE_AVX512) {
-		if (!(xcr0 & XSTATE_YMM))
+	if (xcr0 & XFEATURE_MASK_AVX512) {
+		if (!(xcr0 & XFEATURE_MASK_YMM))
 			return 1;
-		if ((xcr0 & XSTATE_AVX512) != XSTATE_AVX512)
+		if ((xcr0 & XFEATURE_MASK_AVX512) != XFEATURE_MASK_AVX512)
 			return 1;
 	}
 	kvm_put_guest_xcr0(vcpu);
 	vcpu->arch.xcr0 = xcr0;
 
-	if ((xcr0 ^ old_xcr0) & XSTATE_EXTEND_MASK)
+	if ((xcr0 ^ old_xcr0) & XFEATURE_MASK_EXTEND)
 		kvm_update_cpuid(vcpu);
 	return 0;
 }
@@ -2905,7 +2906,7 @@ static void fill_xsave(u8 *dest, struct kvm_vcpu *vcpu)
 	 * Copy each region from the possibly compacted offset to the
 	 * non-compacted offset.
 	 */
-	valid = xstate_bv & ~XSTATE_FPSSE;
+	valid = xstate_bv & ~XFEATURE_MASK_FPSSE;
 	while (valid) {
 		u64 feature = valid & -valid;
 		int index = fls64(feature) - 1;
@@ -2943,7 +2944,7 @@ static void load_xsave(struct kvm_vcpu *vcpu, u8 *src)
 	 * Copy each region from the non-compacted offset to the
 	 * possibly compacted offset.
 	 */
-	valid = xstate_bv & ~XSTATE_FPSSE;
+	valid = xstate_bv & ~XFEATURE_MASK_FPSSE;
 	while (valid) {
 		u64 feature = valid & -valid;
 		int index = fls64(feature) - 1;
@@ -2971,7 +2972,7 @@ static void kvm_vcpu_ioctl_x86_get_xsave(struct kvm_vcpu *vcpu,
 			&vcpu->arch.guest_fpu.state.fxsave,
 			sizeof(struct fxregs_state));
 		*(u64 *)&guest_xsave->region[XSAVE_HDR_OFFSET / sizeof(u32)] =
-			XSTATE_FPSSE;
+			XFEATURE_MASK_FPSSE;
 	}
 }
 
@@ -2991,7 +2992,7 @@ static int kvm_vcpu_ioctl_x86_set_xsave(struct kvm_vcpu *vcpu,
 			return -EINVAL;
 		load_xsave(vcpu, (u8 *)guest_xsave->region);
 	} else {
-		if (xstate_bv & ~XSTATE_FPSSE)
+		if (xstate_bv & ~XFEATURE_MASK_FPSSE)
 			return -EINVAL;
 		memcpy(&vcpu->arch.guest_fpu.state.fxsave,
 			guest_xsave->region, sizeof(struct fxregs_state));
@@ -6453,6 +6454,12 @@ static inline int vcpu_block(struct kvm *kvm, struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static inline bool kvm_vcpu_running(struct kvm_vcpu *vcpu)
+{
+	return (vcpu->arch.mp_state == KVM_MP_STATE_RUNNABLE &&
+		!vcpu->arch.apf.halted);
+}
+
 static int vcpu_run(struct kvm_vcpu *vcpu)
 {
 	int r;
@@ -6461,8 +6468,7 @@ static int vcpu_run(struct kvm_vcpu *vcpu)
 	vcpu->srcu_idx = srcu_read_lock(&kvm->srcu);
 
 	for (;;) {
-		if (vcpu->arch.mp_state == KVM_MP_STATE_RUNNABLE &&
-		    !vcpu->arch.apf.halted)
+		if (kvm_vcpu_running(vcpu))
 			r = vcpu_enter_guest(vcpu);
 		else
 			r = vcpu_block(kvm, vcpu);
@@ -7000,7 +7006,7 @@ static void fx_init(struct kvm_vcpu *vcpu)
 	/*
 	 * Ensure guest xcr0 is valid for loading
 	 */
-	vcpu->arch.xcr0 = XSTATE_FP;
+	vcpu->arch.xcr0 = XFEATURE_MASK_FP;
 
 	vcpu->arch.cr0 |= X86_CR0_ET;
 }
@@ -7474,34 +7480,66 @@ void kvm_arch_sync_events(struct kvm *kvm)
 	kvm_free_pit(kvm);
 }
 
-int __x86_set_memory_region(struct kvm *kvm,
-			    const struct kvm_userspace_memory_region *mem)
+int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size)
 {
 	int i, r;
+	unsigned long hva;
+	struct kvm_memslots *slots = kvm_memslots(kvm);
+	struct kvm_memory_slot *slot, old;
 
 	/* Called with kvm->slots_lock held.  */
-	BUG_ON(mem->slot >= KVM_MEM_SLOTS_NUM);
+	if (WARN_ON(id >= KVM_MEM_SLOTS_NUM))
+		return -EINVAL;
 
+	slot = id_to_memslot(slots, id);
+	if (size) {
+		if (WARN_ON(slot->npages))
+			return -EEXIST;
+
+		/*
+		 * MAP_SHARED to prevent internal slot pages from being moved
+		 * by fork()/COW.
+		 */
+		hva = vm_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
+			      MAP_SHARED | MAP_ANONYMOUS, 0);
+		if (IS_ERR((void *)hva))
+			return PTR_ERR((void *)hva);
+	} else {
+		if (!slot->npages)
+			return 0;
+
+		hva = 0;
+	}
+
+	old = *slot;
 	for (i = 0; i < KVM_ADDRESS_SPACE_NUM; i++) {
-		struct kvm_userspace_memory_region m = *mem;
+		struct kvm_userspace_memory_region m;
 
-		m.slot |= i << 16;
+		m.slot = id | (i << 16);
+		m.flags = 0;
+		m.guest_phys_addr = gpa;
+		m.userspace_addr = hva;
+		m.memory_size = size;
 		r = __kvm_set_memory_region(kvm, &m);
 		if (r < 0)
 			return r;
+	}
+
+	if (!size) {
+		r = vm_munmap(old.userspace_addr, old.npages * PAGE_SIZE);
+		WARN_ON(r < 0);
 	}
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(__x86_set_memory_region);
 
-int x86_set_memory_region(struct kvm *kvm,
-			  const struct kvm_userspace_memory_region *mem)
+int x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size)
 {
 	int r;
 
 	mutex_lock(&kvm->slots_lock);
-	r = __x86_set_memory_region(kvm, mem);
+	r = __x86_set_memory_region(kvm, id, gpa, size);
 	mutex_unlock(&kvm->slots_lock);
 
 	return r;
@@ -7516,16 +7554,9 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 		 * unless the the memory map has changed due to process exit
 		 * or fd copying.
 		 */
-		struct kvm_userspace_memory_region mem;
-		memset(&mem, 0, sizeof(mem));
-		mem.slot = APIC_ACCESS_PAGE_PRIVATE_MEMSLOT;
-		x86_set_memory_region(kvm, &mem);
-
-		mem.slot = IDENTITY_PAGETABLE_PRIVATE_MEMSLOT;
-		x86_set_memory_region(kvm, &mem);
-
-		mem.slot = TSS_PRIVATE_MEMSLOT;
-		x86_set_memory_region(kvm, &mem);
+		x86_set_memory_region(kvm, APIC_ACCESS_PAGE_PRIVATE_MEMSLOT, 0, 0);
+		x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT, 0, 0);
+		x86_set_memory_region(kvm, TSS_PRIVATE_MEMSLOT, 0, 0);
 	}
 	kvm_iommu_unmap_guest(kvm);
 	kfree(kvm->arch.vpic);
@@ -7628,27 +7659,6 @@ int kvm_arch_prepare_memory_region(struct kvm *kvm,
 				const struct kvm_userspace_memory_region *mem,
 				enum kvm_mr_change change)
 {
-	/*
-	 * Only private memory slots need to be mapped here since
-	 * KVM_SET_MEMORY_REGION ioctl is no longer supported.
-	 */
-	if ((memslot->id >= KVM_USER_MEM_SLOTS) && (change == KVM_MR_CREATE)) {
-		unsigned long userspace_addr;
-
-		/*
-		 * MAP_SHARED to prevent internal slot pages from being moved
-		 * by fork()/COW.
-		 */
-		userspace_addr = vm_mmap(NULL, 0, memslot->npages * PAGE_SIZE,
-					 PROT_READ | PROT_WRITE,
-					 MAP_SHARED | MAP_ANONYMOUS, 0);
-
-		if (IS_ERR((void *)userspace_addr))
-			return PTR_ERR((void *)userspace_addr);
-
-		memslot->userspace_addr = userspace_addr;
-	}
-
 	return 0;
 }
 
@@ -7710,17 +7720,6 @@ void kvm_arch_commit_memory_region(struct kvm *kvm,
 {
 	int nr_mmu_pages = 0;
 
-	if (change == KVM_MR_DELETE && old->id >= KVM_USER_MEM_SLOTS) {
-		int ret;
-
-		ret = vm_munmap(old->userspace_addr,
-				old->npages * PAGE_SIZE);
-		if (ret < 0)
-			printk(KERN_WARNING
-			       "kvm_vm_ioctl_set_memory_region: "
-			       "failed to munmap memory\n");
-	}
-
 	if (!kvm->arch.n_requested_mmu_pages)
 		nr_mmu_pages = kvm_mmu_calculate_mmu_pages(kvm);
 
@@ -7769,19 +7768,36 @@ void kvm_arch_flush_shadow_memslot(struct kvm *kvm,
 	kvm_mmu_invalidate_zap_all_pages(kvm);
 }
 
+static inline bool kvm_vcpu_has_events(struct kvm_vcpu *vcpu)
+{
+	if (!list_empty_careful(&vcpu->async_pf.done))
+		return true;
+
+	if (kvm_apic_has_events(vcpu))
+		return true;
+
+	if (vcpu->arch.pv.pv_unhalted)
+		return true;
+
+	if (atomic_read(&vcpu->arch.nmi_queued))
+		return true;
+
+	if (test_bit(KVM_REQ_SMI, &vcpu->requests))
+		return true;
+
+	if (kvm_arch_interrupt_allowed(vcpu) &&
+	    kvm_cpu_has_interrupt(vcpu))
+		return true;
+
+	return false;
+}
+
 int kvm_arch_vcpu_runnable(struct kvm_vcpu *vcpu)
 {
 	if (is_guest_mode(vcpu) && kvm_x86_ops->check_nested_events)
 		kvm_x86_ops->check_nested_events(vcpu, false);
 
-	return (vcpu->arch.mp_state == KVM_MP_STATE_RUNNABLE &&
-		!vcpu->arch.apf.halted)
-		|| !list_empty_careful(&vcpu->async_pf.done)
-		|| kvm_apic_has_events(vcpu)
-		|| vcpu->arch.pv.pv_unhalted
-		|| atomic_read(&vcpu->arch.nmi_queued) ||
-		(kvm_arch_interrupt_allowed(vcpu) &&
-		 kvm_cpu_has_interrupt(vcpu));
+	return kvm_vcpu_running(vcpu) || kvm_vcpu_has_events(vcpu);
 }
 
 int kvm_arch_vcpu_should_kick(struct kvm_vcpu *vcpu)

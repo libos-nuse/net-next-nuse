@@ -617,10 +617,10 @@ static int encx24j600_hw_init(struct encx24j600_priv *priv)
 		   (eidled & REVID_MASK) >> REVID_SHIFT);
 
 	/* PHY Leds: link status,
-	 * LEDA: Link + transmit/receive events
-	 * LEDB: Link State + colision events
+	 * LEDA: Link State + collision events
+	 * LEDB: Link State + transmit/receive events
 	 */
-	encx24j600_update_reg(priv, EIDLED, 0xbc00, 0xbc00);
+	encx24j600_update_reg(priv, EIDLED, 0xff00, 0xcb00);
 
 	/* Loopback disabled */
 	encx24j600_write_reg(priv, MACON1, 0x9);
@@ -1094,9 +1094,11 @@ static int encx24j600_spi_remove(struct spi_device *spi)
 	return 0;
 }
 
-static const struct spi_device_id encx24j600_spi_id_table = {
-	.name = "encx24j600"
+static const struct spi_device_id encx24j600_spi_id_table[] = {
+	{ .name = "encx24j600" },
+	{ /* sentinel */ }
 };
+MODULE_DEVICE_TABLE(spi, encx24j600_spi_id_table);
 
 static struct spi_driver encx24j600_spi_net_driver = {
 	.driver = {
@@ -1106,7 +1108,7 @@ static struct spi_driver encx24j600_spi_net_driver = {
 	},
 	.probe		= encx24j600_spi_probe,
 	.remove		= encx24j600_spi_remove,
-	.id_table	= &encx24j600_spi_id_table,
+	.id_table	= encx24j600_spi_id_table,
 };
 
 static int __init encx24j600_init(void)

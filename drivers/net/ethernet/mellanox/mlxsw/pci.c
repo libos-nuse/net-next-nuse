@@ -1602,11 +1602,11 @@ static int mlxsw_pci_cmd_exec(void *bus_priv, u16 opcode, u8 opcode_mod,
 
 	if (in_mbox)
 		memcpy(mlxsw_pci->cmd.in_mbox.buf, in_mbox, in_mbox_size);
-	mlxsw_pci_write32(mlxsw_pci, CIR_IN_PARAM_HI, in_mapaddr >> 32);
-	mlxsw_pci_write32(mlxsw_pci, CIR_IN_PARAM_LO, in_mapaddr);
+	mlxsw_pci_write32(mlxsw_pci, CIR_IN_PARAM_HI, upper_32_bits(in_mapaddr));
+	mlxsw_pci_write32(mlxsw_pci, CIR_IN_PARAM_LO, lower_32_bits(in_mapaddr));
 
-	mlxsw_pci_write32(mlxsw_pci, CIR_OUT_PARAM_HI, out_mapaddr >> 32);
-	mlxsw_pci_write32(mlxsw_pci, CIR_OUT_PARAM_LO, out_mapaddr);
+	mlxsw_pci_write32(mlxsw_pci, CIR_OUT_PARAM_HI, upper_32_bits(out_mapaddr));
+	mlxsw_pci_write32(mlxsw_pci, CIR_OUT_PARAM_LO, lower_32_bits(out_mapaddr));
 
 	mlxsw_pci_write32(mlxsw_pci, CIR_IN_MODIFIER, in_mod);
 	mlxsw_pci_write32(mlxsw_pci, CIR_TOKEN, 0);
@@ -1662,8 +1662,9 @@ static int mlxsw_pci_cmd_exec(void *bus_priv, u16 opcode, u8 opcode_mod,
 							   CIR_OUT_PARAM_LO));
 			memcpy(out_mbox + sizeof(tmp), &tmp, sizeof(tmp));
 		}
-	} else if (!err && out_mbox)
+	} else if (!err && out_mbox) {
 		memcpy(out_mbox, mlxsw_pci->cmd.out_mbox.buf, out_mbox_size);
+	}
 
 	mutex_unlock(&mlxsw_pci->cmd.lock);
 

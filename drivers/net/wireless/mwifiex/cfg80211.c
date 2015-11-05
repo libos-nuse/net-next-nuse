@@ -1821,6 +1821,10 @@ static int mwifiex_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev)
 		return -1;
 	}
 
+	if (netif_carrier_ok(priv->netdev))
+		netif_carrier_off(priv->netdev);
+	mwifiex_stop_net_dev_queue(priv->netdev, priv->adapter);
+
 	return 0;
 }
 
@@ -1924,6 +1928,10 @@ static int mwifiex_cfg80211_start_ap(struct wiphy *wiphy,
 
 	if (mwifiex_set_mgmt_ies(priv, &params->beacon))
 		return -1;
+
+	if (!netif_carrier_ok(priv->netdev))
+		netif_carrier_on(priv->netdev);
+	mwifiex_wake_up_net_dev_queue(priv->netdev, priv->adapter);
 
 	memcpy(&priv->bss_cfg, bss_cfg, sizeof(priv->bss_cfg));
 	kfree(bss_cfg);
@@ -2374,7 +2382,7 @@ mwifiex_cfg80211_leave_ibss(struct wiphy *wiphy, struct net_device *dev)
  * CFG802.11 operation handler for scan request.
  *
  * This function issues a scan request to the firmware based upon
- * the user specified scan configuration. On successfull completion,
+ * the user specified scan configuration. On successful completion,
  * it also informs the results.
  */
 static int

@@ -1343,7 +1343,13 @@ int fib_sync_down_addr(struct net *net, __be32 local)
 	return ret;
 }
 
-int fib_sync_down_dev(struct net_device *dev, unsigned long event)
+/* Event              force Flags           Description
+ * NETDEV_CHANGE      0     LINKDOWN        Carrier OFF, not for scope host
+ * NETDEV_DOWN        0     LINKDOWN|DEAD   Link down, not for scope host
+ * NETDEV_DOWN        1     LINKDOWN|DEAD   Last address removed
+ * NETDEV_UNREGISTER  1     LINKDOWN|DEAD   Device removed
+ */
+int fib_sync_down_dev(struct net_device *dev, unsigned long event, bool force)
 {
 	int ret = 0;
 	int scope = RT_SCOPE_NOWHERE;
@@ -1352,8 +1358,7 @@ int fib_sync_down_dev(struct net_device *dev, unsigned long event)
 	struct hlist_head *head = &fib_info_devhash[hash];
 	struct fib_nh *nh;
 
-	if (event == NETDEV_UNREGISTER ||
-	    event == NETDEV_DOWN)
+	if (force)
 		scope = -1;
 
 	hlist_for_each_entry(nh, head, nh_hash) {
@@ -1498,6 +1503,13 @@ int fib_sync_up(struct net_device *dev, unsigned int nh_flags)
 	if (!(dev->flags & IFF_UP))
 		return 0;
 
+	if (nh_flags & RTNH_F_DEAD) {
+		unsigned int flags = dev_get_flags(dev);
+
+		if (flags & (IFF_RUNNING | IFF_LOWER_UP))
+			nh_flags |= RTNH_F_LINKDOWN;
+	}
+
 	prev_fi = NULL;
 	hash = fib_devindex_hashfn(dev->ifindex);
 	head = &fib_info_devhash[hash];
@@ -1564,7 +1576,8 @@ void fib_select_path(struct net *net, struct fib_result *res,
 #ifdef CONFIG_IP_ROUTE_MULTIPATH
 	if (res->fi->fib_nhs > 1 && fl4->flowi4_oif == 0) {
 		if (mp_hash < 0)
-			mp_hash = fib_multipath_hash(fl4->saddr, fl4->daddr);
+			mp_hash = get_hash_from_flowi4(fl4) >> 1;
+
 		fib_select_multipath(res, mp_hash);
 	}
 	else

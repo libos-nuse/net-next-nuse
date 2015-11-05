@@ -65,13 +65,6 @@ static DEFINE_IDA(hci_index_ida);
 #define hci_req_lock(d)		mutex_lock(&d->req_lock)
 #define hci_req_unlock(d)	mutex_unlock(&d->req_lock)
 
-/* ---- HCI notifications ---- */
-
-static void hci_notify(struct hci_dev *hdev, int event)
-{
-	hci_sock_dev_event(hdev, event);
-}
-
 /* ---- HCI debugfs entries ---- */
 
 static ssize_t dut_mode_read(struct file *file, char __user *user_buf,
@@ -162,6 +155,16 @@ static ssize_t vendor_diag_write(struct file *file, const char __user *user_buf,
 	if (strtobool(buf, &enable))
 		return -EINVAL;
 
+	/* When the diagnostic flags are not persistent and the transport
+	 * is not active, then there is no need for the vendor callback.
+	 *
+	 * Instead just store the desired value. If needed the setting
+	 * will be programmed when the controller gets powered on.
+	 */
+	if (test_bit(HCI_QUIRK_NON_PERSISTENT_DIAG, &hdev->quirks) &&
+	    !test_bit(HCI_RUNNING, &hdev->flags))
+		goto done;
+
 	hci_req_lock(hdev);
 	err = hdev->set_diag(hdev, enable);
 	hci_req_unlock(hdev);
@@ -169,6 +172,7 @@ static ssize_t vendor_diag_write(struct file *file, const char __user *user_buf,
 	if (err < 0)
 		return err;
 
+done:
 	if (enable)
 		hci_dev_set_flag(hdev, HCI_VENDOR_DIAG);
 	else
@@ -1444,12 +1448,14 @@ static int hci_dev_do_open(struct hci_dev *hdev)
 	}
 
 	set_bit(HCI_RUNNING, &hdev->flags);
-	hci_notify(hdev, HCI_DEV_OPEN);
+	hci_sock_dev_event(hdev, HCI_DEV_OPEN);
 
 	atomic_set(&hdev->cmd_cnt, 1);
 	set_bit(HCI_INIT, &hdev->flags);
 
 	if (hci_dev_test_flag(hdev, HCI_SETUP)) {
+		hci_sock_dev_event(hdev, HCI_DEV_SETUP);
+
 		if (hdev->setup)
 			ret = hdev->setup(hdev);
 
@@ -1490,9 +1496,20 @@ static int hci_dev_do_open(struct hci_dev *hdev)
 
 	if (!ret) {
 		if (!hci_dev_test_flag(hdev, HCI_UNCONFIGURED) &&
-		    !hci_dev_test_flag(hdev, HCI_USER_CHANNEL))
+		    !hci_dev_test_flag(hdev, HCI_USER_CHANNEL)) {
 			ret = __hci_init(hdev);
+			if (!ret && hdev->post_init)
+				ret = hdev->post_init(hdev);
+		}
 	}
+
+	/* If the HCI Reset command is clearing all diagnostic settings,
+	 * then they need to be reprogrammed after the init procedure
+	 * completed.
+	 */
+	if (test_bit(HCI_QUIRK_NON_PERSISTENT_DIAG, &hdev->quirks) &&
+	    hci_dev_test_flag(hdev, HCI_VENDOR_DIAG) && hdev->set_diag)
+		ret = hdev->set_diag(hdev, true);
 
 	clear_bit(HCI_INIT, &hdev->flags);
 
@@ -1500,7 +1517,7 @@ static int hci_dev_do_open(struct hci_dev *hdev)
 		hci_dev_hold(hdev);
 		hci_dev_set_flag(hdev, HCI_RPA_EXPIRED);
 		set_bit(HCI_UP, &hdev->flags);
-		hci_notify(hdev, HCI_DEV_UP);
+		hci_sock_dev_event(hdev, HCI_DEV_UP);
 		if (!hci_dev_test_flag(hdev, HCI_SETUP) &&
 		    !hci_dev_test_flag(hdev, HCI_CONFIG) &&
 		    !hci_dev_test_flag(hdev, HCI_UNCONFIGURED) &&
@@ -1528,7 +1545,7 @@ static int hci_dev_do_open(struct hci_dev *hdev)
 		}
 
 		clear_bit(HCI_RUNNING, &hdev->flags);
-		hci_notify(hdev, HCI_DEV_CLOSE);
+		hci_sock_dev_event(hdev, HCI_DEV_CLOSE);
 
 		hdev->close(hdev);
 		hdev->flags &= BIT(HCI_RAW);
@@ -1684,7 +1701,7 @@ int hci_dev_do_close(struct hci_dev *hdev)
 
 	smp_unregister(hdev);
 
-	hci_notify(hdev, HCI_DEV_DOWN);
+	hci_sock_dev_event(hdev, HCI_DEV_DOWN);
 
 	if (hdev->flush)
 		hdev->flush(hdev);
@@ -1715,7 +1732,7 @@ int hci_dev_do_close(struct hci_dev *hdev)
 	}
 
 	clear_bit(HCI_RUNNING, &hdev->flags);
-	hci_notify(hdev, HCI_DEV_CLOSE);
+	hci_sock_dev_event(hdev, HCI_DEV_CLOSE);
 
 	/* After this point our queues are empty
 	 * and no tasks are scheduled. */
@@ -2917,30 +2934,6 @@ struct hci_conn_params *hci_pend_le_action_lookup(struct list_head *list,
 }
 
 /* This function requires the caller holds hdev->lock */
-struct hci_conn_params *hci_explicit_connect_lookup(struct hci_dev *hdev,
-						    bdaddr_t *addr,
-						    u8 addr_type)
-{
-	struct hci_conn_params *param;
-
-	list_for_each_entry(param, &hdev->pend_le_conns, action) {
-		if (bacmp(&param->addr, addr) == 0 &&
-		    param->addr_type == addr_type &&
-		    param->explicit_connect)
-			return param;
-	}
-
-	list_for_each_entry(param, &hdev->pend_le_reports, action) {
-		if (bacmp(&param->addr, addr) == 0 &&
-		    param->addr_type == addr_type &&
-		    param->explicit_connect)
-			return param;
-	}
-
-	return NULL;
-}
-
-/* This function requires the caller holds hdev->lock */
 struct hci_conn_params *hci_conn_params_add(struct hci_dev *hdev,
 					    bdaddr_t *addr, u8 addr_type)
 {
@@ -3414,7 +3407,7 @@ int hci_register_dev(struct hci_dev *hdev)
 	if (test_bit(HCI_QUIRK_RAW_DEVICE, &hdev->quirks))
 		hci_dev_set_flag(hdev, HCI_UNCONFIGURED);
 
-	hci_notify(hdev, HCI_DEV_REG);
+	hci_sock_dev_event(hdev, HCI_DEV_REG);
 	hci_dev_hold(hdev);
 
 	queue_work(hdev->req_workqueue, &hdev->power_on);
@@ -3462,7 +3455,7 @@ void hci_unregister_dev(struct hci_dev *hdev)
 	 * pending list */
 	BUG_ON(!list_empty(&hdev->mgmt_pending));
 
-	hci_notify(hdev, HCI_DEV_UNREG);
+	hci_sock_dev_event(hdev, HCI_DEV_UNREG);
 
 	if (hdev->rfkill) {
 		rfkill_unregister(hdev->rfkill);
@@ -3499,7 +3492,7 @@ EXPORT_SYMBOL(hci_unregister_dev);
 /* Suspend HCI device */
 int hci_suspend_dev(struct hci_dev *hdev)
 {
-	hci_notify(hdev, HCI_DEV_SUSPEND);
+	hci_sock_dev_event(hdev, HCI_DEV_SUSPEND);
 	return 0;
 }
 EXPORT_SYMBOL(hci_suspend_dev);
@@ -3507,7 +3500,7 @@ EXPORT_SYMBOL(hci_suspend_dev);
 /* Resume HCI device */
 int hci_resume_dev(struct hci_dev *hdev)
 {
-	hci_notify(hdev, HCI_DEV_RESUME);
+	hci_sock_dev_event(hdev, HCI_DEV_RESUME);
 	return 0;
 }
 EXPORT_SYMBOL(hci_resume_dev);
@@ -3562,14 +3555,15 @@ EXPORT_SYMBOL(hci_recv_frame);
 /* Receive diagnostic message from HCI drivers */
 int hci_recv_diag(struct hci_dev *hdev, struct sk_buff *skb)
 {
+	/* Mark as diagnostic packet */
+	bt_cb(skb)->pkt_type = HCI_DIAG_PKT;
+
 	/* Time stamp */
 	__net_timestamp(skb);
 
-	/* Mark as diagnostic packet and send to monitor */
-	bt_cb(skb)->pkt_type = HCI_DIAG_PKT;
-	hci_send_to_monitor(hdev, skb);
+	skb_queue_tail(&hdev->rx_q, skb);
+	queue_work(hdev->workqueue, &hdev->rx_work);
 
-	kfree_skb(skb);
 	return 0;
 }
 EXPORT_SYMBOL(hci_recv_diag);
@@ -3649,7 +3643,7 @@ int hci_send_cmd(struct hci_dev *hdev, __u16 opcode, __u32 plen,
 	/* Stand-alone HCI commands must be flagged as
 	 * single-command requests.
 	 */
-	bt_cb(skb)->req.start = true;
+	bt_cb(skb)->hci.req_start = true;
 
 	skb_queue_tail(&hdev->cmd_q, skb);
 	queue_work(hdev->workqueue, &hdev->cmd_work);
@@ -4346,7 +4340,7 @@ static bool hci_req_is_complete(struct hci_dev *hdev)
 	if (!skb)
 		return true;
 
-	return bt_cb(skb)->req.start;
+	return bt_cb(skb)->hci.req_start;
 }
 
 static void hci_resend_last(struct hci_dev *hdev)
@@ -4406,26 +4400,26 @@ void hci_req_cmd_complete(struct hci_dev *hdev, u16 opcode, u8 status,
 	 * callback would be found in hdev->sent_cmd instead of the
 	 * command queue (hdev->cmd_q).
 	 */
-	if (bt_cb(hdev->sent_cmd)->req.complete) {
-		*req_complete = bt_cb(hdev->sent_cmd)->req.complete;
+	if (bt_cb(hdev->sent_cmd)->hci.req_complete) {
+		*req_complete = bt_cb(hdev->sent_cmd)->hci.req_complete;
 		return;
 	}
 
-	if (bt_cb(hdev->sent_cmd)->req.complete_skb) {
-		*req_complete_skb = bt_cb(hdev->sent_cmd)->req.complete_skb;
+	if (bt_cb(hdev->sent_cmd)->hci.req_complete_skb) {
+		*req_complete_skb = bt_cb(hdev->sent_cmd)->hci.req_complete_skb;
 		return;
 	}
 
 	/* Remove all pending commands belonging to this request */
 	spin_lock_irqsave(&hdev->cmd_q.lock, flags);
 	while ((skb = __skb_dequeue(&hdev->cmd_q))) {
-		if (bt_cb(skb)->req.start) {
+		if (bt_cb(skb)->hci.req_start) {
 			__skb_queue_head(&hdev->cmd_q, skb);
 			break;
 		}
 
-		*req_complete = bt_cb(skb)->req.complete;
-		*req_complete_skb = bt_cb(skb)->req.complete_skb;
+		*req_complete = bt_cb(skb)->hci.req_complete;
+		*req_complete_skb = bt_cb(skb)->hci.req_complete_skb;
 		kfree_skb(skb);
 	}
 	spin_unlock_irqrestore(&hdev->cmd_q.lock, flags);

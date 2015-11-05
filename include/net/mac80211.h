@@ -482,7 +482,9 @@ struct ieee80211_event {
  *	Note that with TDLS this can be the case (channel is HT, protection must
  *	be used from this field) even when the BSS association isn't using HT.
  * @cqm_rssi_thold: Connection quality monitor RSSI threshold, a zero value
- *	implies disabled
+ *	implies disabled. As with the cfg80211 callback, a change here should
+ *	cause an event to be sent indicating where the current value is in
+ *	relation to the newly configured threshold.
  * @cqm_rssi_hyst: Connection quality monitor RSSI hysteresis
  * @arp_addr_list: List of IPv4 addresses for hardware ARP filtering. The
  *	may filter ARP queries targeted for other addresses than listed here.
@@ -1241,11 +1243,6 @@ enum ieee80211_smps_mode {
  * @flags: configuration flags defined above
  *
  * @listen_interval: listen interval in units of beacon interval
- * @max_sleep_period: the maximum number of beacon intervals to sleep for
- *	before checking the beacon for a TIM bit (managed mode only); this
- *	value will be only achievable between DTIM frames, the hardware
- *	needs to check for the multicast traffic bit in DTIM beacons.
- *	This variable is valid only when the CONF_PS flag is set.
  * @ps_dtim_period: The DTIM period of the AP we're connected to, for use
  *	in power saving. Power saving will not be enabled until a beacon
  *	has been received and the DTIM period is known.
@@ -1275,7 +1272,6 @@ enum ieee80211_smps_mode {
 struct ieee80211_conf {
 	u32 flags;
 	int power_level, dynamic_ps_timeout;
-	int max_sleep_period;
 
 	u16 listen_interval;
 	u8 ps_dtim_period;
@@ -1683,6 +1679,7 @@ struct ieee80211_sta_rates {
  * @tdls: indicates whether the STA is a TDLS peer
  * @tdls_initiator: indicates the STA is an initiator of the TDLS link. Only
  *	valid if the STA is a TDLS peer in the first place.
+ * @mfp: indicates whether the STA uses management frame protection or not.
  * @txq: per-TID data TX queues (if driver uses the TXQ abstraction)
  */
 struct ieee80211_sta {
@@ -1700,6 +1697,7 @@ struct ieee80211_sta {
 	struct ieee80211_sta_rates __rcu *rates;
 	bool tdls;
 	bool tdls_initiator;
+	bool mfp;
 
 	struct ieee80211_txq *txq[IEEE80211_NUM_TIDS];
 
@@ -3174,18 +3172,24 @@ enum ieee80211_reconfig_type {
  *	The callback is optional and can sleep.
  *
  * @add_chanctx: Notifies device driver about new channel context creation.
+ *	This callback may sleep.
  * @remove_chanctx: Notifies device driver about channel context destruction.
+ *	This callback may sleep.
  * @change_chanctx: Notifies device driver about channel context changes that
  *	may happen when combining different virtual interfaces on the same
  *	channel context with different settings
+ *	This callback may sleep.
  * @assign_vif_chanctx: Notifies device driver about channel context being bound
  *	to vif. Possible use is for hw queue remapping.
+ *	This callback may sleep.
  * @unassign_vif_chanctx: Notifies device driver about channel context being
  *	unbound from vif.
+ *	This callback may sleep.
  * @switch_vif_chanctx: switch a number of vifs from one chanctx to
  *	another, as specified in the list of
  *	@ieee80211_vif_chanctx_switch passed to the driver, according
  *	to the mode defined in &ieee80211_chanctx_switch_mode.
+ *	This callback may sleep.
  *
  * @start_ap: Start operation on the AP interface, this is called after all the
  *	information in bss_conf is set and beacon can be retrieved. A channel
