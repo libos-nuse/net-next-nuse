@@ -44,6 +44,21 @@ static void atomic64_and(long long i, atomic64_t *v)
 	v->counter &= i;
 }
 
+static void atomic64_or(long i, atomic64_t *v)
+{
+	v->counter |= i;
+}
+
+static void atomic64_xor(long i, atomic64_t *v)
+{
+	v->counter ^= i;
+}
+
+static void atomic64_andnot(long i, atomic64_t *v)
+{
+	atomic64_and(~i, v);
+}
+
 long atomic64_sub_return(long i, atomic64_t *v);
 #define atomic64_inc_return(v)  (atomic64_add_return(1, (v)))
 #define atomic64_dec_return(v)  (atomic64_sub_return(1, (v)))
