@@ -366,6 +366,12 @@ int wait_for_completion_interruptible(struct completion *x)
 	wait_for_completion_timeout(x, MAX_SCHEDULE_TIMEOUT);
 	return 0;
 }
+int wait_for_completion_killable(struct completion *x)
+{
+	/* XXX */
+	wait_for_completion_timeout(x, MAX_SCHEDULE_TIMEOUT);
+	return 0;
+}
 int wake_up_process(struct task_struct *tsk)
 {
 	struct SimTask *lib_task =
