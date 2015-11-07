@@ -1,0 +1,144 @@
+Library operating system (libos) version of Linux
+=================================================
+
+* Overview
+
+New hardware independent architecture 'arch/lib', configured by
+CONFIG_LIB gives you two features.
+
+- network stack in userspace (NUSE)
+  NUSE will give you a personalized network stack for each application
+  without replacing host operating system.
+
+- network simulator integration, which is called Direct Code Execution (DCE)
+  DCE will give us a network simulation environment with Linux network stack
+  to investigate the detail behavior protocol implementation with a flexible
+  network configuration. This is also useful for the testing environment.
+
+(- more abstracted implementation of underlying platform will be a future
+   direction (e.g., rump hypercall))
+
+In both features, Linux kernel network stack is running on top of
+userspace application with a linked or dynamically loaded library.
+
+They have their own, isolated network stack from host operating system
+so they are configured different IP addresses as other virtualization
+methods do.
+
+
+* How different with others ?
+
+- User-mode Linux (UML)
+
+UML is a way to execute Linux kernel code as a userspace
+application. It is completely isolated from host kernel but can host
+arbitrary userspace applications on top of UML.
+
+- namespace / container
+
+Container technologies with namespace brings a process-level isolation
+to host multiple network entities but shares the kernel among
+processes, which prevents to introduce new features implemented in
+kernel space.
+
+
+* How to build it ?
+
+configuration of arch/lib follows a standard configuration of kernel.
+
+ make defconfig ARCH=lib
+
+or
+
+ make menuconfig ARCH=lib
+
+then you can build a set of libraries for libos.
+
+ make library ARCH=lib
+
+This will give you a shared library file liblinux-$(KERNELVERSION).so
+in the top directory.
+
+* Hello world
+
+you may first need to configure a configuration file, named
+'nuse.conf' so that the library version of network stack can know what
+kind of IP configuration should be used. There is an example file
+at arch/lib/nuse.conf.sample: you may copy and modify it for your purpose.
+
+ sudo NUSECONF=nuse.conf ./nuse ping www.google.com
+
+
+
+* Example use cases
+- regression test with Direct Code Execution (DCE)
+
+'make test' by DCE gives a test platform for networking code, with the
+help of network simulator facilities like link delay/bandwidth/drop
+configurations, large network topology with userspace routing protocol
+daemons, etc.
+
+An interesting feature is the determinism of any test executions. A
+test script always gives same results in every execution if there is
+no modification on test target code.
+
+For the first step, you need to obtain network simulator
+environment. 'make testbin' does all the stuff for the preparation.
+
+% make testbin -C tools/testing/libos
+
+Then, you can 'make test' for your code.
+
+% make test ARCH=lib
+
+ PASS: TestSuite netlink-socket
+ PASS: TestSuite process-manager
+ PASS: TestSuite dce-cradle
+ PASS: TestSuite dce-mptcp
+ PASS: TestSuite dce-umip
+ PASS: TestSuite dce-quagga
+ PASS: Example dce-tcp-simple
+ PASS: Example dce-udp-simple
+
+
+- userspace network stack (NUSE)
+
+an application can use its own network stack, distinct from host network stack
+in order to personalize any network feature to the application specific one.
+The 'nuse' wrapper script, based on LD_PRELOAD technique, carefully replaces
+socket API and redirects system calls to the network stack library, provided by
+this framework.
+
+the network stack can be used with any kind of raw-socket like
+technologies such as Intel DPDK, netmap, etc.
+
+
+
+* Files / External Repository
+
+The kernel source tree (i.e., arch/lib) only contains a shared part of
+applications (NUSE/DCE). Pure userspace part is managed at a different
+repository, called Linux-libos-tools: it is automatically downloaded
+during make library.
+
+ https://github.com/libos-nuse/linux-libos-tools
+
+
+* More information
+- libos-nuse@googlegroups.com (LibOS in general and NUSE related questions)
+- ns-3-users@googlegroups.com (ns-3 related questions)
+- articles, slides
+ Experimentation Tools for Networking Research (Lacage, 2010)
+   http://cutebugs.net/files/thesis.pdf
+ Direct code execution: revisiting library OS architecture for reproducible
+  network experiments (Tazaki et al., 2013)
+   http://dx.doi.org/10.1145/2535372.2535374
+ Library Operating System with Mainline Linux Network Stack (Tazaki et al., 2015)
+   https://www.netdev01.org/docs/netdev01-tazaki-libos.pdf (slides)
+
+
+* Authors
+ Mathieu Lacage <mathieu.lacage@gmail.com>
+ Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+ Frederic Urbani <frederic.urbani@gmail.com>
+ Ryo Nakamura <upa@haeena.net>

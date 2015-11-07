@@ -5920,6 +5920,15 @@ M:	Sasha Levin <sasha.levin@oracle.com>
 S:	Maintained
 F:	tools/lib/lockdep/
 
+LIBRARY OS (LIBOS)
+M:	Hajime Tazaki <tazaki@sfc.wide.ad.jp>
+L:	libos-nuse@googlegroups.com
+W:	http://libos-nuse.github.io/
+S:	Maintained
+F:	Documentation/virtual/libos-howto.txt
+F:	arch/lib/
+F:	tools/testing/libos/
+
 LINUX FOR IBM pSERIES (RS/6000)
 M:	Paul Mackerras <paulus@au.ibm.com>
 W:	http://www.ibm.com/linux/ltc/projects/ppc

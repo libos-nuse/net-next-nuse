@@ -1,0 +1,15 @@
+
+- bisect.sh
+a sample script to bisect an issue of network stack code with the help
+of LibOS (and ns-3 network simulator). This was used to detect the issue
+for the following patch.
+
+http://patchwork.ozlabs.org/patch/436351/
+
+- dce-test.sh
+a test script invoked by 'make test ARCH=lib'. The contents of test
+scenario are implemented as test suites of ns-3 network simulator.
+
+- nuse-test.sh
+a simple test script for Network Stack in Userspace (NUSE).
+
