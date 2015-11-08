@@ -119,7 +119,21 @@ int lib_sock_getsockname(struct SimSocket *socket, struct sockaddr *name,
 			 int *namelen)
 {
 	struct socket *sock = (struct socket *)socket;
-	int retval = sock->ops->getname(sock, name, namelen, 0);
+	int len;
+	struct sockaddr_storage address;
+
+	if (!namelen)
+		return -EINVAL;
+
+	int retval = sock->ops->getname(sock, (struct sockaddr *)&address,
+					&len, 0);
+	if (*namelen >= len) {
+		memcpy(name, &address, len);
+		*namelen = len;
+	}
+	else {
+		memcpy(name, &address, *namelen);
+	}
 
 	return retval;
 }
