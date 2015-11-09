@@ -46,6 +46,13 @@ static inline long atomic64_add_return(long i, atomic64_t *v)
 	v->counter += i;
 	return v->counter;
 }
+
+static inline long atomic64_sub_return(long i, atomic64_t *v)
+{
+	v->counter -= i;
+	return v->counter;
+}
+
 static inline void atomic64_set(atomic64_t *v, long i)
 {
 	v->counter = i;
@@ -65,7 +72,6 @@ static void atomic64_xor(long i, atomic64_t *v)
 	v->counter ^= i;
 }
 
-long atomic64_sub_return(long i, atomic64_t *v);
 #define atomic64_inc_return(v)  (atomic64_add_return(1, (v)))
 #define atomic64_dec_return(v)  (atomic64_sub_return(1, (v)))
 static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)

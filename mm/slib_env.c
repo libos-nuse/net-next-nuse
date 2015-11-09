@@ -433,7 +433,7 @@ void __init sanity_check_meminfo(void)
 
 char *total_ram;
 /* FIXME: need to be configurable or dynamically detectable */
-#define TOTAL_RAMSIZE (1024 * 1024 * 1)
+#define TOTAL_RAMSIZE (1024 * 1024 * 1024 * 1)
 void __init setup_arch(char **cmd)
 {
 	int ret;

@@ -99,6 +99,10 @@ struct syscall_args {
 	unsigned long args[6];
 };
 
+#ifndef umode_t
+typedef unsigned short		umode_t;
+#endif /* umode_t */
+
 #define rsys_syscall(num, data, dlen, retval)	\
     rumpclient_syscall(num, data, dlen, retval)
 #define rsys_seterrno(error) errno = error

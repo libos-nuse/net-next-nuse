@@ -1,0 +1,16 @@
+## copy&pasted from https://circleci.com/docs/config-sample
+
+## Customize checkout
+checkout:
+  post:
+    - cd ../ && git clone git://github.com/libos-nuse/buildrump.sh
+    - cd ../buildrump.sh && ln -s ../net-next-nuse ./
+
+## Customize dependencies
+dependencies:
+  post:
+    # build buildrump.sh (src-netbsd)
+    - cd ../buildrump.sh &&  wget https://gist.githubusercontent.com/thehajime/d54ab6e938c8742b3557/raw/cf6ea33850f0038743c5079e72455676c5d8585c/src-netbsd.patch
+    - cd ../buildrump.sh && git checkout linux-libos && ./buildrump.sh -l checkout
+    - cd ../buildrump.sh/src && patch -p1 < ../src-netbsd.patch
+    - cd ../buildrump.sh && ./buildrump.sh -l tools build install

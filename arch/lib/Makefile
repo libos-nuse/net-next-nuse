@@ -41,8 +41,8 @@ lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
 sched.c workqueue.c \
 print.c tasklet.c tasklet-hrtimer.c \
 glue.c sysctl.c proc.c sysfs.c \
-pid.c modules.c vmscan.c kernel/syscalls.c rump-cons.c reboot.c \
-rump_syscalls.c $(RUMP_PCI_SRC)
+pid.c modules.c vmscan.c kernel/syscalls.c rump-cons.c rump-cons-dce.c reboot.c \
+rump_syscalls.c $(RUMP_PCI_SRC) # hrtimer.o timer.o
 
 RUMP_PCI_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(RUMP_PCI_SRC))))
 
@@ -65,7 +65,7 @@ PIC?=yes
 pic_yes=-fpic -DPIC
 pic_no=-mcmodel=large
 PIC_CFLAGS=$(pic_$(PIC))
-KLIBC?=yes
+KLIBC?=no
 klibc_yes=-DRUMP_KERNEL_IS_LIBC
 klibc_no=
 PCI?=no
@@ -92,8 +92,18 @@ CFLAGS+= \
  -include $(srctree)/include/linux/kconfig.h \
  -I$(ARCH_DIR) -I.
 
-# XXX should be handled by argument
+# XXX: need to upstream to change mm/page-writeback.c, 
+# but only happened with optimized build (OPT=yes).
+CFLAGS_page-writeback.o=-Wno-uninitialized
+CFLAGS_nfnetlink_queue.o=-Wno-uninitialized
+CFLAGS_nfnetlink_log.o=-Wno-uninitialized
+CFLAGS_iov_iter.o=-Wno-uninitialized
+CFLAGS_tcp_input.o=-Wno-array-bounds
 
+# FIXME: switch DCE or NUSE
+CFLAGS_time.o=-DUSE_NATIVE_TIMER
+
+# XXX should be handled by argument
 CFLAGS_rumpdev_pci.o=-I$(ARCH_DIR)/libpci/ -I$(srctree)/../src/common/include \
 -I$(srctree)/../src/sys -I$(srctree)/../../rumprun/platform/hw/pci/
 
@@ -122,8 +132,8 @@ comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
 rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o capability.o nsproxy.o \
 kthread.o sys.o cpu.o resource.o module.o reboot.o kmod.o
-kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o timer.o \
-hrtimer.o posix-timers.o posix-clock.o posix-cpu-timers.o
+kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o \
+posix-timers.o posix-clock.o posix-cpu-timers.o timer.o hrtimer.o
 kernel/sched/_to_keep=wait.o completion.o loadavg.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/update.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o

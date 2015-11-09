@@ -15,7 +15,6 @@
 #include "sim-assert.h"
 
 unsigned long volatile jiffies = INITIAL_JIFFIES;
-//u64 jiffies_64 = INITIAL_JIFFIES;
 
 struct timespec xtime;
 seqlock_t xtime_lock;
@@ -26,7 +25,11 @@ struct timespec wall_to_monotonic;
 uint64_t ns_to_jiffies(uint64_t ns)
 {
 	do_div(ns, (1000000000 / HZ));
+#ifdef USE_NATIVE_TIMER
 	return ns + INITIAL_JIFFIES;
+#else
+	return ns;
+#endif
 }
 
 void lib_update_jiffies(void)
@@ -35,7 +38,6 @@ void lib_update_jiffies(void)
 	jiffies = ns_to_jiffies(ns);
 	jiffies_64 = ns_to_jiffies(ns);
 	run_local_timers();
-//	lib_printf("%ld(%ld ms): Jiffies updated\n", jiffies, jiffies*1000/HZ);
 }
 
 /* copied from kernel/time/hrtimeer.c */
@@ -62,53 +64,6 @@ s64 __ktime_divns(const ktime_t kt, s64 div)
 	return dclc < 0 ? -tmp : tmp;
 }
 #endif /* BITS_PER_LONG >= 64 */
-
-#if 0
-static unsigned long
-round_jiffies_common(unsigned long j,
-		     bool force_up)
-{
-	int rem;
-	unsigned long original = j;
-
-	rem = j % HZ;
-	if (rem < HZ / 4 && !force_up)  /* round down */
-		j = j - rem;
-	else                            /* round up */
-		j = j - rem + HZ;
-	if (j <= jiffies)               /* rounding ate our timeout entirely; */
-		return original;
-	return j;
-}
-unsigned long round_jiffies(unsigned long j)
-{
-	return round_jiffies_common(j, false);
-}
-unsigned long round_jiffies_relative(unsigned long j)
-{
-	unsigned long j0 = jiffies;
-
-	/* Use j0 because jiffies might change while we run */
-	return round_jiffies_common(j + j0, false) - j0;
-}
-unsigned long round_jiffies_up(unsigned long j)
-{
-	return round_jiffies_common(j, true);
-}
-static void msleep_trampoline(void *context)
-{
-	struct SimTask *task = context;
-
-	lib_task_wakeup(task);
-}
-void msleep(unsigned int msecs)
-{
-	lib_event_schedule_ns(((__u64)msecs) * 1000000, &msleep_trampoline,
-			      lib_task_current());
-	lib_task_wait();
-}
-#endif
-
 
 void read_persistent_clock(struct timespec *ts)
 {

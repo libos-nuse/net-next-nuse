@@ -24,3 +24,6 @@ void unregister_shrinker(struct shrinker *shrinker)
 {
 }
 
+void wakeup_kswapd(struct zone *zone, int order, enum zone_type classzone_idx)
+{
+}

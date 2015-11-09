@@ -115,3 +115,27 @@ int hrtimer_get_res(const clockid_t which_clock, struct timespec *tp)
 	*tp = ns_to_timespec(1);
 	return 0;
 }
+
+int schedule_hrtimeout_range(ktime_t *expires, unsigned long delta,
+			     const enum hrtimer_mode mode)
+{
+	struct hrtimer timer;
+
+	timer.base = NULL;
+	return __hrtimer_start_range_ns(&timer, *expires, delta, mode, 1);
+}
+
+long hrtimer_nanosleep_restart(struct restart_block *restart)
+{
+	return 0;
+}
+
+int sys_nanosleep(struct timespec __user * rqtp,
+		  struct timespec __user * rmtp)
+{
+	return 0;
+}
+
+void __init hrtimers_init(void)
+{
+}

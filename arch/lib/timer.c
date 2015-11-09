@@ -305,3 +305,89 @@ int mod_timer_pinned(struct timer_list *timer, unsigned long expires)
 
 	return mod_timer(timer, expires);
 }
+
+u64 jiffies_64 = INITIAL_JIFFIES;
+
+static unsigned long
+round_jiffies_common(unsigned long j,
+		     bool force_up)
+{
+	int rem;
+	unsigned long original = j;
+
+	rem = j % HZ;
+	if (rem < HZ / 4 && !force_up)  /* round down */
+		j = j - rem;
+	else                            /* round up */
+		j = j - rem + HZ;
+	if (j <= jiffies)               /* rounding ate our timeout entirely; */
+		return original;
+	return j;
+}
+unsigned long round_jiffies(unsigned long j)
+{
+	return round_jiffies_common(j, false);
+}
+unsigned long round_jiffies_relative(unsigned long j)
+{
+	unsigned long j0 = jiffies;
+
+	/* Use j0 because jiffies might change while we run */
+	return round_jiffies_common(j + j0, false) - j0;
+}
+unsigned long round_jiffies_up(unsigned long j)
+{
+	return round_jiffies_common(j, true);
+}
+static void msleep_trampoline(void *context)
+{
+	struct SimTask *task = context;
+
+	lib_task_wakeup(task);
+}
+void msleep(unsigned int msecs)
+{
+	lib_event_schedule_ns(((__u64)msecs) * 1000000, &msleep_trampoline,
+			      lib_task_current());
+	lib_task_wait();
+}
+
+#include <linux/sched.h>
+static void trampoline(void *context)
+{
+	struct SimTask *task = context;
+
+	lib_task_wakeup(task);
+}
+
+signed long schedule_timeout(signed long timeout)
+{
+	u64 ns;
+	struct SimTask *self;
+
+	if (timeout == MAX_SCHEDULE_TIMEOUT) {
+		lib_task_wait();
+		return MAX_SCHEDULE_TIMEOUT;
+	}
+	lib_assert(timeout >= 0);
+	ns = ((__u64)timeout) * (1000000000 / HZ);
+	self = lib_task_current();
+	lib_event_schedule_ns(ns, &trampoline, self);
+	lib_task_wait();
+	/* we know that we are always perfectly on time. */
+	return 0;
+}
+
+void set_timer_slack(struct timer_list *timer, int slack_hz)
+{
+	timer->slack = slack_hz;
+}
+
+void run_local_timers(void)
+{
+//	raise_softirq(TIMER_SOFTIRQ);
+}
+
+void __init init_timers(void)
+{
+}
