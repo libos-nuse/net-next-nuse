@@ -78,7 +78,7 @@ ifeq ($(SUBARCH),x86)
 endif
 
 KBUILD_CFLAGS := CFLAGS
-LDFLAGS += -shared -nodefaultlibs -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
+LDFLAGS += -shared -nodefaultlibs -Wl,-z,lazy -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
 
 # targets
 
