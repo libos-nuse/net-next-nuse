@@ -126,6 +126,8 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 	if (order)
 		return NULL;
 	p = lib_malloc(sizeof(struct page) + (1 << PAGE_SHIFT));
+	if (p != 0)
+		lib_memset(p, 0, sizeof(struct page) + (1 << PAGE_SHIFT));
 	page = (struct page *)p;
 
 	atomic_set(&page->_count, 1);
