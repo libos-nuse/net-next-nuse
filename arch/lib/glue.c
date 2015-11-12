@@ -225,7 +225,7 @@ void si_meminfo(struct sysinfo *val)
 	   small buffers. */
 	val->totalram = 0;
 }
-int slab_is_available(void)
+bool slab_is_available(void)
 {
 	/* called from kernel/param.c. */
 	return 1;
