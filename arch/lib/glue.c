@@ -18,11 +18,11 @@
 #include <linux/init_task.h>
 #include <linux/sched/rt.h>
 #include <linux/backing-dev.h>
+#include <linux/file.h>
 #include <stdarg.h>
 #include "sim-assert.h"
 #include "sim.h"
 #include "lib.h"
-
 
 struct pipe_buffer;
 struct file;
@@ -31,10 +31,10 @@ struct wait_queue_t;
 struct kernel_param;
 struct super_block;
 
+struct mm_struct init_mm;
+
 /* defined in sched.c, used in net/sched/em_meta.c */
 unsigned long avenrun[3];
-/* defined in mm/page_alloc.c */
-struct pglist_data __refdata contig_page_data;
 /* defined in linux/mmzone.h mm/memory.c */
 struct page *mem_map = 0;
 /* used by sysinfo in kernel/timer.c */
@@ -58,6 +58,30 @@ unsigned long sysctl_overcommit_kbytes __read_mostly;
 DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
 static DECLARE_BITMAP(cpu_possible_bits, CONFIG_NR_CPUS) __read_mostly;
 const struct cpumask *const cpu_possible_mask = to_cpumask(cpu_possible_bits);
+
+/* memory.c */
+unsigned long highest_memmap_pfn __read_mostly;
+unsigned long max_mapnr;
+
+/*
+ * Randomize the address space (stacks, mmaps, brk, etc.).
+ *
+ * ( When CONFIG_COMPAT_BRK=y we exclude brk from randomization,
+ *   as ancient (libc5 based) binaries can segfault. )
+ */
+int randomize_va_space __read_mostly =
+#ifdef CONFIG_COMPAT_BRK
+					1;
+#else
+					2;
+#endif
+
+/* vmscan.c */
+unsigned long vm_total_pages;
+
+/* arm/mmu.c */
+pgprot_t pgprot_kernel;
+
 
 struct backing_dev_info noop_backing_dev_info = {
 	.name		= "noop",
@@ -282,3 +306,18 @@ void on_each_cpu_mask(const struct cpumask *mask,
 		      smp_call_func_t func, void *info, bool wait)
 {
 }
+
+unsigned long
+arch_get_unmapped_area(struct file *filp, unsigned long addr,
+		unsigned long len, unsigned long pgoff, unsigned long flags)
+{
+	lib_assert(false);
+	return 0;
+}
+
+#ifdef CONFIG_HAVE_ARCH_PFN_VALID
+int pfn_valid(unsigned long pfn)
+{
+	return memblock_is_memory(__pfn_to_phys(pfn));
+}
+#endif

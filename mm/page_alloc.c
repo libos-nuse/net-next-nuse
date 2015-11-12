@@ -68,6 +68,8 @@
 #include <asm/div64.h>
 #include "internal.h"
 
+#include "slib_env.h"
+
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
 #define MIN_PERCPU_PAGELIST_FRACTION	(8)
@@ -111,7 +113,39 @@ EXPORT_SYMBOL(node_states);
 /* Protect totalram_pages and zone->managed_pages */
 static DEFINE_SPINLOCK(managed_page_count_lock);
 
+#ifndef CONFIG_LIB
 unsigned long totalram_pages __read_mostly;
+#endif
+
+static void print_buddy_freelist(void)
+{
+	struct zone *zone;
+	unsigned int order, t;
+	struct list_head *curr;
+	unsigned long pfn;
+	int i = 0;
+
+	for_each_zone(zone) {
+		pr_info("For zone %s %lu\n", zone->name,
+					zone->present_pages);
+		if (zone->present_pages == 0)
+			goto out;
+
+		for_each_migratetype_order(order, t) {
+			struct free_area area = zone->free_area[order];
+
+			list_for_each(curr, &area.free_list[t]) {
+				pfn = page_to_pfn(list_entry(curr,
+							struct page, lru));
+				pr_info("%lu %d %d %d\n", pfn, order, t, i);
+				i++;
+			}
+		}
+	}
+out:
+	pr_info("Totoal free page2: %d\n", i);
+}
+
 unsigned long totalreserve_pages __read_mostly;
 unsigned long totalcma_pages __read_mostly;
 /*
@@ -123,6 +157,7 @@ unsigned long totalcma_pages __read_mostly;
 unsigned long dirty_balance_reserve __read_mostly;
 
 int percpu_pagelist_fraction;
+
 gfp_t gfp_allowed_mask __read_mostly = GFP_BOOT_MASK;
 
 /*
@@ -186,6 +221,8 @@ unsigned int pageblock_order __read_mostly;
 
 static void __free_pages_ok(struct page *page, unsigned int order);
 
+
+#ifndef CONFIG_LIB
 /*
  * results with 256, 32 in the lowmem_reserve sysctl:
  *	1G machine -> (16M dma, 800M-16M normal, 1G-800M high)
@@ -209,6 +246,7 @@ int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES-1] = {
 #endif
 	 32,
 };
+#endif
 
 EXPORT_SYMBOL(totalram_pages);
 
@@ -3250,6 +3288,9 @@ out:
 	if (unlikely(!page && read_mems_allowed_retry(cpuset_mems_cookie)))
 		goto retry_cpuset;
 
+#ifdef CONFIG_LIB
+	page->virtual = (void *)total_ram + (page_to_pfn(page) << PAGE_SHIFT);
+#endif
 	return page;
 }
 EXPORT_SYMBOL(__alloc_pages_nodemask);
@@ -3274,6 +3315,7 @@ unsigned long __get_free_pages(gfp_t gfp_mask, unsigned int order)
 }
 EXPORT_SYMBOL(__get_free_pages);
 
+
 unsigned long get_zeroed_page(gfp_t gfp_mask)
 {
 	return __get_free_pages(gfp_mask | __GFP_ZERO, 0);
@@ -3292,6 +3334,7 @@ void __free_pages(struct page *page, unsigned int order)
 
 EXPORT_SYMBOL(__free_pages);
 
+#ifndef CONFIG_LIB
 void free_pages(unsigned long addr, unsigned int order)
 {
 	if (addr != 0) {
@@ -3299,8 +3342,18 @@ void free_pages(unsigned long addr, unsigned int order)
 		__free_pages(virt_to_page((void *)addr), order);
 	}
 }
-
 EXPORT_SYMBOL(free_pages);
+#else
+void free_pages(unsigned long addr, unsigned int order)
+{
+	unsigned long pfn = addr - (unsigned long) total_ram;
+
+	pfn = pfn >> PAGE_SHIFT;
+	if (pfn != 0)
+		__free_pages(pfn_to_page(pfn), order);
+}
+EXPORT_SYMBOL(free_pages);
+#endif
 
 /*
  * Page Fragment:
@@ -3561,10 +3614,17 @@ static unsigned long nr_free_zone_pages(int offset)
  * nr_free_buffer_pages() counts the number of pages which are beyond the high
  * watermark within ZONE_DMA and ZONE_NORMAL.
  */
+#ifndef CONFIG_LIB
 unsigned long nr_free_buffer_pages(void)
 {
 	return nr_free_zone_pages(gfp_zone(GFP_USER));
 }
+#else
+unsigned long nr_free_buffer_pages(void)
+{
+	return 65535;
+}
+#endif
 EXPORT_SYMBOL_GPL(nr_free_buffer_pages);
 
 /**
@@ -3584,6 +3644,7 @@ static inline void show_node(struct zone *zone)
 		printk("Node %d ", zone_to_nid(zone));
 }
 
+#ifndef CONFIG_LIB
 void si_meminfo(struct sysinfo *val)
 {
 	val->totalram = totalram_pages;
@@ -3596,6 +3657,7 @@ void si_meminfo(struct sysinfo *val)
 }
 
 EXPORT_SYMBOL(si_meminfo);
+#endif
 
 #ifdef CONFIG_NUMA
 void si_meminfo_node(struct sysinfo *val, int nid)
@@ -5819,7 +5881,7 @@ void free_highmem_page(struct page *page)
 }
 #endif
 
-
+#ifndef CONFIG_LIB
 void __init mem_init_print_info(const char *str)
 {
 	unsigned long physpages, codesize, datasize, rosize, bss_size;
@@ -5872,6 +5934,7 @@ void __init mem_init_print_info(const char *str)
 #endif
 	       str ? ", " : "", str ? str : "");
 }
+#endif
 
 /**
  * set_dma_reserve - set the specified number of pages reserved in the first zone
@@ -6166,14 +6229,18 @@ int __meminit init_per_zone_wmark_min(void)
 		pr_warn("min_free_kbytes is not updated to %d because user defined value %d is preferred\n",
 				new_min_free_kbytes, user_min_free_kbytes);
 	}
+
+#ifndef CONFIG_LIB
 	setup_per_zone_wmarks();
 	refresh_zone_stat_thresholds();
 	setup_per_zone_lowmem_reserve();
 	setup_per_zone_inactive_ratio();
+#endif
 	return 0;
 }
 module_init(init_per_zone_wmark_min)
 
+#ifndef CONFIG_LIB
 /*
  * min_free_kbytes_sysctl_handler - just a wrapper around proc_dointvec() so
  *	that we can call two helper functions whenever min_free_kbytes
@@ -6194,6 +6261,7 @@ int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
 	}
 	return 0;
 }
+#endif
 
 #ifdef CONFIG_NUMA
 int sysctl_min_unmapped_ratio_sysctl_handler(struct ctl_table *table, int write,
@@ -6229,6 +6297,7 @@ int sysctl_min_slab_ratio_sysctl_handler(struct ctl_table *table, int write,
 }
 #endif
 
+#ifndef CONFIG_LIB
 /*
  * lowmem_reserve_ratio_sysctl_handler - just a wrapper around
  *	proc_dointvec() so that we can call setup_per_zone_lowmem_reserve()
@@ -6288,6 +6357,7 @@ out:
 	mutex_unlock(&pcp_batch_high_lock);
 	return ret;
 }
+#endif
 
 #ifdef CONFIG_NUMA
 int hashdist = HASHDIST_DEFAULT;
@@ -6301,6 +6371,8 @@ static int __init set_hashdist(char *str)
 }
 __setup("hashdist=", set_hashdist);
 #endif
+
+#ifndef CONFIG_LIB
 
 /*
  * allocate a large system hash table from bootmem
@@ -6399,6 +6471,7 @@ void *__init alloc_large_system_hash(const char *tablename,
 
 	return table;
 }
+#endif
 
 /* Return a pointer to the bitmap storing bits affecting a block of pages */
 static inline unsigned long *get_pageblock_bitmap(struct zone *zone,

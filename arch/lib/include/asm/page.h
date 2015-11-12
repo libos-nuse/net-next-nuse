@@ -1,14 +1,16 @@
-#ifndef _ASM_SIM_PAGE_H
-#define _ASM_SIM_PAGE_H
-
-typedef struct {} pud_t;
-
-#define THREAD_ORDER    1
-#define THREAD_SIZE  (PAGE_SIZE << THREAD_ORDER)
+/*
+ *  arch/arm/include/asm/page.h
+ *
+ *  Copyright (C) 1995-2003 Russell King
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+#ifndef _ASM_LIB_PAGE_H
+#define _ASM_LIB_PAGE_H
 
 #define WANT_PAGE_VIRTUAL 1
+#include <asm/page-arm.h>
 
-#include <asm-generic/page.h>
-#include <asm-generic/getorder.h>
-
-#endif /* _ASM_SIM_PAGE_H */
+#endif

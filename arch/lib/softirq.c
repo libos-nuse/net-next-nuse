@@ -11,6 +11,10 @@
 #include "sim.h"
 #include "sim-assert.h"
 
+#ifndef __ARCH_IRQ_STAT
+irq_cpustat_t irq_stat[NR_CPUS] ____cacheline_aligned;
+EXPORT_SYMBOL(irq_stat);
+#endif
 
 static struct softirq_action softirq_vec[NR_SOFTIRQS];
 static struct SimTask *g_softirq_task = 0;
