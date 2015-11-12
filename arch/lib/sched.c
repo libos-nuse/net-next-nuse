@@ -352,6 +352,9 @@ void complete_all(struct completion *x)
 }
 void complete(struct completion *x)
 {
+	if (!x)
+		return;
+
 	x->done++;
 	__wake_up(&x->wait, TASK_NORMAL, 1, 0);
 }
