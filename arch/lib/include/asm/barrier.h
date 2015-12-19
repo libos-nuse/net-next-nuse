@@ -6,3 +6,11 @@
 		smp_mb();						\
 		ACCESS_ONCE(*p) = (v);					\
 	} while (0)
+
+#undef smp_load_acquire
+#define smp_load_acquire(p)						\
+({									\
+	typeof(*p) ___p1 = READ_ONCE(*p);				\
+	smp_mb();							\
+	___p1;								\
+})
