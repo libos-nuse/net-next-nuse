@@ -259,7 +259,7 @@ int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags,
 
 	return lib_task_wakeup(lib_task);
 }
-__sched int bit_wait(struct wait_bit_key *word)
+__sched int bit_wait(struct wait_bit_key *word, int mode)
 {
 	if (signal_pending_state(current->state, current))
 		return 1;
