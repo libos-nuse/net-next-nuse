@@ -50,6 +50,7 @@ enum switchdev_attr_id {
 };
 
 struct switchdev_attr {
+	struct net_device *orig_dev;
 	enum switchdev_attr_id id;
 	u32 flags;
 	union {
@@ -68,6 +69,7 @@ enum switchdev_obj_id {
 };
 
 struct switchdev_obj {
+	struct net_device *orig_dev;
 	enum switchdev_obj_id id;
 	u32 flags;
 };
@@ -323,7 +325,7 @@ static inline int switchdev_port_fdb_dump(struct sk_buff *skb,
 					  struct net_device *filter_dev,
 					  int idx)
 {
-	return -EOPNOTSUPP;
+       return idx;
 }
 
 static inline void switchdev_port_fwd_mark_set(struct net_device *dev,

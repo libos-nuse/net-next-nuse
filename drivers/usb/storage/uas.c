@@ -796,6 +796,10 @@ static int uas_slave_configure(struct scsi_device *sdev)
 	if (devinfo->flags & US_FL_NO_REPORT_OPCODES)
 		sdev->no_report_opcodes = 1;
 
+	/* A few buggy USB-ATA bridges don't understand FUA */
+	if (devinfo->flags & US_FL_BROKEN_FUA)
+		sdev->broken_fua = 1;
+
 	scsi_change_queue_depth(sdev, devinfo->qdepth - 2);
 	return 0;
 }
@@ -812,7 +816,6 @@ static struct scsi_host_template uas_host_template = {
 	.this_id = -1,
 	.sg_tablesize = SG_NONE,
 	.skip_settle_delay = 1,
-	.use_blk_tags = 1,
 };
 
 #define UNUSUAL_DEV(id_vendor, id_product, bcdDeviceMin, bcdDeviceMax, \
@@ -928,10 +931,6 @@ static int uas_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	result = uas_configure_endpoints(devinfo);
 	if (result)
 		goto set_alt0;
-
-	result = scsi_init_shared_tag_map(shost, devinfo->qdepth - 2);
-	if (result)
-		goto free_streams;
 
 	usb_set_intfdata(intf, shost);
 	result = scsi_add_host(shost, &intf->dev);

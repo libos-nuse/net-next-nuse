@@ -64,6 +64,8 @@
 #define MLX5E_UPDATE_STATS_INTERVAL    200 /* msecs */
 #define MLX5E_SQ_BF_BUDGET             16
 
+#define MLX5E_NUM_MAIN_GROUPS 9
+
 static const char vport_strings[][ETH_GSTRING_LEN] = {
 	/* vport statistics */
 	"rx_packets",
@@ -334,9 +336,15 @@ struct mlx5e_tx_skb_cb {
 
 #define MLX5E_TX_SKB_CB(__skb) ((struct mlx5e_tx_skb_cb *)__skb->cb)
 
+enum mlx5e_dma_map_type {
+	MLX5E_DMA_MAP_SINGLE,
+	MLX5E_DMA_MAP_PAGE
+};
+
 struct mlx5e_sq_dma {
-	dma_addr_t addr;
-	u32        size;
+	dma_addr_t              addr;
+	u32                     size;
+	enum mlx5e_dma_map_type type;
 };
 
 enum {
@@ -436,7 +444,7 @@ enum mlx5e_rqt_ix {
 struct mlx5e_eth_addr_info {
 	u8  addr[ETH_ALEN + 2];
 	u32 tt_vec;
-	u32 ft_ix[MLX5E_NUM_TT]; /* flow table index per traffic type */
+	struct mlx5_flow_rule *ft_rule[MLX5E_NUM_TT];
 };
 
 #define MLX5E_ETH_ADDR_HASH_SIZE (1 << BITS_PER_BYTE)
@@ -459,15 +467,23 @@ enum {
 };
 
 struct mlx5e_vlan_db {
-	u32           active_vlans_ft_ix[VLAN_N_VID];
-	u32           untagged_rule_ft_ix;
-	u32           any_vlan_rule_ft_ix;
+	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
+	struct mlx5_flow_rule	*active_vlans_rule[VLAN_N_VID];
+	struct mlx5_flow_rule	*untagged_rule;
+	struct mlx5_flow_rule	*any_vlan_rule;
 	bool          filter_disabled;
 };
 
 struct mlx5e_flow_table {
-	void *vlan;
-	void *main;
+	int num_groups;
+	struct mlx5_flow_table		*t;
+	struct mlx5_flow_group		**g;
+};
+
+struct mlx5e_flow_tables {
+	struct mlx5_flow_namespace	*ns;
+	struct mlx5e_flow_table		vlan;
+	struct mlx5e_flow_table		main;
 };
 
 struct mlx5e_priv {
@@ -490,7 +506,7 @@ struct mlx5e_priv {
 	u32                        rqtn[MLX5E_NUM_RQT];
 	u32                        tirn[MLX5E_NUM_TT];
 
-	struct mlx5e_flow_table    ft;
+	struct mlx5e_flow_tables   fts;
 	struct mlx5e_eth_addr_db   eth_addr;
 	struct mlx5e_vlan_db       vlan;
 
@@ -558,7 +574,7 @@ void mlx5e_completion_event(struct mlx5_core_cq *mcq);
 void mlx5e_cq_error_event(struct mlx5_core_cq *mcq, enum mlx5_event event);
 int mlx5e_napi_poll(struct napi_struct *napi, int budget);
 bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq);
-bool mlx5e_poll_rx_cq(struct mlx5e_cq *cq, int budget);
+int mlx5e_poll_rx_cq(struct mlx5e_cq *cq, int budget);
 bool mlx5e_post_rx_wqes(struct mlx5e_rq *rq);
 struct mlx5_cqe64 *mlx5e_get_cqe(struct mlx5e_cq *cq);
 

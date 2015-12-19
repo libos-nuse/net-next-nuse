@@ -601,9 +601,14 @@ static inline int acpi_device_modalias(struct device *dev,
 	return -ENODEV;
 }
 
-static inline bool acpi_check_dma(struct acpi_device *adev, bool *coherent)
+static inline bool acpi_dma_supported(struct acpi_device *adev)
 {
 	return false;
+}
+
+static inline enum dev_dma_attr acpi_get_dma_attr(struct acpi_device *adev)
+{
+	return DEV_DMA_NOT_SUPPORTED;
 }
 
 #define ACPI_PTR(_ptr)	(NULL)
@@ -865,8 +870,8 @@ static inline int acpi_dev_get_property(struct acpi_device *adev,
 }
 
 static inline int acpi_node_get_property_reference(struct fwnode_handle *fwnode,
-				const char *name, const char *cells_name,
-				size_t index, struct acpi_reference_args *args)
+				const char *name, size_t index,
+				struct acpi_reference_args *args)
 {
 	return -ENXIO;
 }

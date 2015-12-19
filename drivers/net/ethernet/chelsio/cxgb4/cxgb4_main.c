@@ -1181,15 +1181,9 @@ static int set_filter_wr(struct adapter *adapter, int fidx)
 	 */
 	if (f->fs.newdmac || f->fs.newvlan) {
 		/* allocate L2T entry for new filter */
-		f->l2t = t4_l2t_alloc_switching(adapter->l2t);
+		f->l2t = t4_l2t_alloc_switching(adapter, f->fs.vlan,
+						f->fs.eport, f->fs.dmac);
 		if (f->l2t == NULL) {
-			kfree_skb(skb);
-			return -EAGAIN;
-		}
-		if (t4_l2t_set_switching(adapter, f->l2t, f->fs.vlan,
-					f->fs.eport, f->fs.dmac)) {
-			cxgb4_l2t_release(f->l2t);
-			f->l2t = NULL;
 			kfree_skb(skb);
 			return -ENOMEM;
 		}
@@ -4865,15 +4859,25 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 #if IS_ENABLED(CONFIG_IPV6)
-	adapter->clipt = t4_init_clip_tbl(adapter->clipt_start,
-					  adapter->clipt_end);
-	if (!adapter->clipt) {
-		/* We tolerate a lack of clip_table, giving up
-		 * some functionality
+	if ((CHELSIO_CHIP_VERSION(adapter->params.chip) <= CHELSIO_T5) &&
+	    (!(t4_read_reg(adapter, LE_DB_CONFIG_A) & ASLIPCOMPEN_F))) {
+		/* CLIP functionality is not present in hardware,
+		 * hence disable all offload features
 		 */
 		dev_warn(&pdev->dev,
-			 "could not allocate Clip table, continuing\n");
+			 "CLIP not enabled in hardware, continuing\n");
 		adapter->params.offload = 0;
+	} else {
+		adapter->clipt = t4_init_clip_tbl(adapter->clipt_start,
+						  adapter->clipt_end);
+		if (!adapter->clipt) {
+			/* We tolerate a lack of clip_table, giving up
+			 * some functionality
+			 */
+			dev_warn(&pdev->dev,
+				 "could not allocate Clip table, continuing\n");
+			adapter->params.offload = 0;
+		}
 	}
 #endif
 	if (is_offload(adapter) && tid_init(&adapter->tids) < 0) {

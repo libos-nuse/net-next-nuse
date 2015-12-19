@@ -19,6 +19,7 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -28,6 +29,7 @@
 #include <linux/phy.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/of_gpio.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
 
@@ -1682,6 +1684,8 @@ static void macb_init_hw(struct macb *bp)
 	macb_set_hwaddr(bp);
 
 	config = macb_mdc_clk_div(bp);
+	if (bp->phy_interface == PHY_INTERFACE_MODE_SGMII)
+		config |= GEM_BIT(SGMIIEN) | GEM_BIT(PCSSEL);
 	config |= MACB_BF(RBOF, NET_IP_ALIGN);	/* Make eth data aligned */
 	config |= MACB_BIT(PAE);		/* PAuse Enable */
 	config |= MACB_BIT(DRFCS);		/* Discard Rx FCS */
@@ -2416,6 +2420,8 @@ static int macb_init(struct platform_device *pdev)
 	/* Set MII management clock divider */
 	val = macb_mdc_clk_div(bp);
 	val |= macb_dbw(bp);
+	if (bp->phy_interface == PHY_INTERFACE_MODE_SGMII)
+		val |= GEM_BIT(SGMIIEN) | GEM_BIT(PCSSEL);
 	macb_writel(bp, NCFGR, val);
 
 	return 0;
@@ -2813,6 +2819,7 @@ static int macb_probe(struct platform_device *pdev)
 					      = macb_clk_init;
 	int (*init)(struct platform_device *) = macb_init;
 	struct device_node *np = pdev->dev.of_node;
+	struct device_node *phy_node;
 	const struct macb_config *macb_config = NULL;
 	struct clk *pclk, *hclk, *tx_clk;
 	unsigned int queue_mask, num_queues;
@@ -2900,6 +2907,16 @@ static int macb_probe(struct platform_device *pdev)
 	else
 		macb_get_hwaddr(bp);
 
+	/* Power up the PHY if there is a GPIO reset */
+	phy_node =  of_get_next_available_child(np, NULL);
+	if (phy_node) {
+		int gpio = of_get_named_gpio(phy_node, "reset-gpios", 0);
+		if (gpio_is_valid(gpio))
+			bp->reset_gpio = gpio_to_desc(gpio);
+		gpiod_set_value(bp->reset_gpio, GPIOD_OUT_HIGH);
+	}
+	of_node_put(phy_node);
+
 	err = of_get_phy_mode(np);
 	if (err < 0) {
 		pdata = dev_get_platdata(&pdev->dev);
@@ -2966,6 +2983,10 @@ static int macb_remove(struct platform_device *pdev)
 		mdiobus_unregister(bp->mii_bus);
 		kfree(bp->mii_bus->irq);
 		mdiobus_free(bp->mii_bus);
+
+		/* Shutdown the PHY if there is a GPIO reset */
+		gpiod_set_value(bp->reset_gpio, GPIOD_OUT_LOW);
+
 		unregister_netdev(dev);
 		clk_disable_unprepare(bp->tx_clk);
 		clk_disable_unprepare(bp->hclk);

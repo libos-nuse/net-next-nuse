@@ -1223,6 +1223,9 @@ static int __net_init sctp_defaults_init(struct net *net)
 	/* Max.Burst		    - 4 */
 	net->sctp.max_burst			= SCTP_DEFAULT_MAX_BURST;
 
+	/* Enable pf state by default */
+	net->sctp.pf_enable = 1;
+
 	/* Association.Max.Retrans  - 10 attempts
 	 * Path.Max.Retrans         - 5  attempts (per destination address)
 	 * Max.Init.Retransmits     - 8  attempts
@@ -1419,7 +1422,7 @@ static __init int sctp_init(void)
 		if ((sctp_assoc_hashsize > (64 * 1024)) && order > 0)
 			continue;
 		sctp_assoc_hashtable = (struct sctp_hashbucket *)
-			__get_free_pages(GFP_ATOMIC|__GFP_NOWARN, order);
+			__get_free_pages(GFP_KERNEL | __GFP_NOWARN, order);
 	} while (!sctp_assoc_hashtable && --order > 0);
 	if (!sctp_assoc_hashtable) {
 		pr_err("Failed association hash alloc\n");
@@ -1452,7 +1455,7 @@ static __init int sctp_init(void)
 		if ((sctp_port_hashsize > (64 * 1024)) && order > 0)
 			continue;
 		sctp_port_hashtable = (struct sctp_bind_hashbucket *)
-			__get_free_pages(GFP_ATOMIC|__GFP_NOWARN, order);
+			__get_free_pages(GFP_KERNEL | __GFP_NOWARN, order);
 	} while (!sctp_port_hashtable && --order > 0);
 	if (!sctp_port_hashtable) {
 		pr_err("Failed bind hash alloc\n");
