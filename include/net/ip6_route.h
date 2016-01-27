@@ -66,6 +66,8 @@ void ip6_route_input(struct sk_buff *skb);
 
 struct dst_entry *ip6_route_output(struct net *net, const struct sock *sk,
 				   struct flowi6 *fl6);
+struct dst_entry *ip6_route_output_flags(struct net *net, const struct sock *sk,
+					 struct flowi6 *fl6, int flags);
 struct dst_entry *ip6_route_lookup(struct net *net, struct flowi6 *fl6,
 				   int flags);
 

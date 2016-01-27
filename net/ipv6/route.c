@@ -1183,11 +1183,10 @@ static struct rt6_info *ip6_pol_route_output(struct net *net, struct fib6_table 
 	return ip6_pol_route(net, table, fl6->flowi6_oif, fl6, flags);
 }
 
-struct dst_entry *ip6_route_output(struct net *net, const struct sock *sk,
-				    struct flowi6 *fl6)
+struct dst_entry *ip6_route_output_flags(struct net *net, const struct sock *sk,
+					 struct flowi6 *fl6, int flags)
 {
 	struct dst_entry *dst;
-	int flags = 0;
 	bool any_src;
 
 	dst = l3mdev_rt6_dst_by_oif(net, fl6);
@@ -1207,6 +1206,13 @@ struct dst_entry *ip6_route_output(struct net *net, const struct sock *sk,
 		flags |= rt6_srcprefs2flags(inet6_sk(sk)->srcprefs);
 
 	return fib6_rule_lookup(net, fl6, flags, ip6_pol_route_output);
+}
+EXPORT_SYMBOL_GPL(ip6_route_output_flags);
+
+struct dst_entry *ip6_route_output(struct net *net, const struct sock *sk,
+				   struct flowi6 *fl6)
+{
+	return ip6_route_output_flags(net, sk, fl6, 0);
 }
 EXPORT_SYMBOL(ip6_route_output);
 
