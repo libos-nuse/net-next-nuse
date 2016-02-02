@@ -29,7 +29,7 @@
 #include "usb.h"
 
 
-#define IOCTL_RESP_TIMEOUT		2000
+#define IOCTL_RESP_TIMEOUT		msecs_to_jiffies(2000)
 
 #define BRCMF_USB_RESET_GETVER_SPINWAIT	100	/* in unit of ms */
 #define BRCMF_USB_RESET_GETVER_LOOP_CNT	10
@@ -190,14 +190,12 @@ static struct brcmf_usbdev_info *brcmf_usb_get_businfo(struct device *dev)
 static int brcmf_usb_ioctl_resp_wait(struct brcmf_usbdev_info *devinfo)
 {
 	return wait_event_timeout(devinfo->ioctl_resp_wait,
-				  devinfo->ctl_completed,
-				  msecs_to_jiffies(IOCTL_RESP_TIMEOUT));
+				  devinfo->ctl_completed, IOCTL_RESP_TIMEOUT);
 }
 
 static void brcmf_usb_ioctl_resp_wake(struct brcmf_usbdev_info *devinfo)
 {
-	if (waitqueue_active(&devinfo->ioctl_resp_wait))
-		wake_up(&devinfo->ioctl_resp_wait);
+	wake_up(&devinfo->ioctl_resp_wait);
 }
 
 static void
@@ -1453,6 +1451,7 @@ static struct usb_device_id brcmf_usb_devid_table[] = {
 	BRCMF_USB_DEVICE(BRCM_USB_43236_DEVICE_ID),
 	BRCMF_USB_DEVICE(BRCM_USB_43242_DEVICE_ID),
 	BRCMF_USB_DEVICE(BRCM_USB_43569_DEVICE_ID),
+	{ USB_DEVICE(BRCM_USB_VENDOR_ID_LG, BRCM_USB_43242_LG_DEVICE_ID) },
 	/* special entry for device with firmware loaded and running */
 	BRCMF_USB_DEVICE(BRCM_USB_BCMFW_DEVICE_ID),
 	{ /* end: all zeroes */ }

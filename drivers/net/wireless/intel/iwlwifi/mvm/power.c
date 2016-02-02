@@ -27,7 +27,7 @@
  * in the file called COPYING.
  *
  * Contact Information:
- *  Intel Linux Wireless <ilw@linux.intel.com>
+ *  Intel Linux Wireless <linuxwifi@intel.com>
  * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
  *
  * BSD LICENSE
@@ -613,8 +613,6 @@ static void iwl_mvm_power_get_vifs_iterator(void *_data, u8 *mac,
 		break;
 
 	case NL80211_IFTYPE_STATION:
-		/* only a single MAC of the same type */
-		WARN_ON(power_iterator->bss_vif);
 		power_iterator->bss_vif = vif;
 		if (mvmvif->phy_ctxt)
 			if (mvmvif->phy_ctxt->id < MAX_PHYS)

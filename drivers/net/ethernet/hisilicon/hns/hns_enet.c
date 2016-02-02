@@ -499,50 +499,47 @@ static void hns_nic_reuse_page(struct sk_buff *skb, int i,
 	struct hnae_desc *desc;
 	int truesize, size;
 	int last_offset;
+	bool twobufs;
+
+	twobufs = ((PAGE_SIZE < 8192) && hnae_buf_size(ring) == HNS_BUFFER_SIZE_2048);
 
 	desc = &ring->desc[ring->next_to_clean];
 	size = le16_to_cpu(desc->rx.size);
 
-#if (PAGE_SIZE < 8192)
-	if (hnae_buf_size(ring) == HNS_BUFFER_SIZE_2048) {
+	if (twobufs) {
 		truesize = hnae_buf_size(ring);
 	} else {
 		truesize = ALIGN(size, L1_CACHE_BYTES);
 		last_offset = hnae_page_size(ring) - hnae_buf_size(ring);
 	}
 
-#else
-	truesize = ALIGN(size, L1_CACHE_BYTES);
-	last_offset = hnae_page_size(ring) - hnae_buf_size(ring);
-#endif
-
 	skb_add_rx_frag(skb, i, desc_cb->priv, desc_cb->page_offset + pull_len,
 			size - pull_len, truesize - pull_len);
 
 	 /* avoid re-using remote pages,flag default unreuse */
-	if (likely(page_to_nid(desc_cb->priv) == numa_node_id())) {
-#if (PAGE_SIZE < 8192)
-		if (hnae_buf_size(ring) == HNS_BUFFER_SIZE_2048) {
-			/* if we are only owner of page we can reuse it */
-			if (likely(page_count(desc_cb->priv) == 1)) {
-				/* flip page offset to other buffer */
-				desc_cb->page_offset ^= truesize;
+	if (unlikely(page_to_nid(desc_cb->priv) != numa_node_id()))
+		return;
 
-				desc_cb->reuse_flag = 1;
-				/* bump ref count on page before it is given*/
-				get_page(desc_cb->priv);
-			}
-			return;
-		}
-#endif
-		/* move offset up to the next cache line */
-		desc_cb->page_offset += truesize;
+	if (twobufs) {
+		/* if we are only owner of page we can reuse it */
+		if (likely(page_count(desc_cb->priv) == 1)) {
+			/* flip page offset to other buffer */
+			desc_cb->page_offset ^= truesize;
 
-		if (desc_cb->page_offset <= last_offset) {
 			desc_cb->reuse_flag = 1;
 			/* bump ref count on page before it is given*/
 			get_page(desc_cb->priv);
 		}
+		return;
+	}
+
+	/* move offset up to the next cache line */
+	desc_cb->page_offset += truesize;
+
+	if (desc_cb->page_offset <= last_offset) {
+		desc_cb->reuse_flag = 1;
+		/* bump ref count on page before it is given*/
+		get_page(desc_cb->priv);
 	}
 }
 
@@ -1805,7 +1802,7 @@ static int hns_nic_try_get_ae(struct net_device *ndev)
 	int ret;
 
 	h = hnae_get_handle(&priv->netdev->dev,
-			    priv->ae_name, priv->port_id, NULL);
+			    priv->ae_node, priv->port_id, NULL);
 	if (IS_ERR_OR_NULL(h)) {
 		ret = PTR_ERR(h);
 		dev_dbg(priv->dev, "has not handle, register notifier!\n");
@@ -1883,13 +1880,16 @@ static int hns_nic_dev_probe(struct platform_device *pdev)
 	else
 		priv->enet_ver = AE_VERSION_2;
 
-	ret = of_property_read_string(node, "ae-name", &priv->ae_name);
-	if (ret)
-		goto out_read_string_fail;
+	priv->ae_node = (void *)of_parse_phandle(node, "ae-handle", 0);
+	if (IS_ERR_OR_NULL(priv->ae_node)) {
+		ret = PTR_ERR(priv->ae_node);
+		dev_err(dev, "not find ae-handle\n");
+		goto out_read_prop_fail;
+	}
 
 	ret = of_property_read_u32(node, "port-id", &priv->port_id);
 	if (ret)
-		goto out_read_string_fail;
+		goto out_read_prop_fail;
 
 	hns_init_mac_addr(ndev);
 
@@ -1948,7 +1948,7 @@ static int hns_nic_dev_probe(struct platform_device *pdev)
 
 out_notify_fail:
 	(void)cancel_work_sync(&priv->service_task);
-out_read_string_fail:
+out_read_prop_fail:
 	free_netdev(ndev);
 	return ret;
 }

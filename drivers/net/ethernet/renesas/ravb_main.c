@@ -343,16 +343,13 @@ error:
 static void ravb_emac_init(struct net_device *ndev)
 {
 	struct ravb_private *priv = netdev_priv(ndev);
-	u32 ecmr;
 
 	/* Receive frame limit set register */
 	ravb_write(ndev, ndev->mtu + ETH_HLEN + VLAN_HLEN + ETH_FCS_LEN, RFLR);
 
 	/* PAUSE prohibition */
-	ecmr =  ravb_read(ndev, ECMR);
-	ecmr &= ECMR_DM;
-	ecmr |= ECMR_ZPF | (priv->duplex ? ECMR_DM : 0) | ECMR_TE | ECMR_RE;
-	ravb_write(ndev, ecmr, ECMR);
+	ravb_write(ndev, ECMR_ZPF | (priv->duplex ? ECMR_DM : 0) |
+		   ECMR_TE | ECMR_RE, ECMR);
 
 	ravb_set_rate(ndev);
 
@@ -927,8 +924,7 @@ static int ravb_phy_init(struct net_device *ndev)
 	/* 10BASE is not supported */
 	phydev->supported &= ~PHY_10BT_FEATURES;
 
-	netdev_info(ndev, "attached PHY %d (IRQ %d) to driver %s\n",
-		    phydev->addr, phydev->irq, phydev->drv->name);
+	phy_attached_info(phydev);
 
 	priv->phydev = phydev;
 

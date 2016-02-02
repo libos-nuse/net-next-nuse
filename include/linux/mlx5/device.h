@@ -223,6 +223,14 @@ enum {
 #define MLX5_UMR_MTT_MASK      (MLX5_UMR_MTT_ALIGNMENT - 1)
 #define MLX5_UMR_MTT_MIN_CHUNK_SIZE MLX5_UMR_MTT_ALIGNMENT
 
+#define MLX5_USER_INDEX_LEN (MLX5_FLD_SZ_BYTES(qpc, user_index) * 8)
+
+enum {
+	MLX5_EVENT_QUEUE_TYPE_QP = 0,
+	MLX5_EVENT_QUEUE_TYPE_RQ = 1,
+	MLX5_EVENT_QUEUE_TYPE_SQ = 2,
+};
+
 enum mlx5_event {
 	MLX5_EVENT_TYPE_COMP		   = 0x0,
 
@@ -277,6 +285,26 @@ enum {
 	MLX5_DEV_CAP_FLAG_DCT		= 1LL << 37,
 	MLX5_DEV_CAP_FLAG_SIG_HAND_OVER	= 1LL << 40,
 	MLX5_DEV_CAP_FLAG_CMDIF_CSUM	= 3LL << 46,
+};
+
+enum {
+	MLX5_ROCE_VERSION_1		= 0,
+	MLX5_ROCE_VERSION_2		= 2,
+};
+
+enum {
+	MLX5_ROCE_VERSION_1_CAP		= 1 << MLX5_ROCE_VERSION_1,
+	MLX5_ROCE_VERSION_2_CAP		= 1 << MLX5_ROCE_VERSION_2,
+};
+
+enum {
+	MLX5_ROCE_L3_TYPE_IPV4		= 0,
+	MLX5_ROCE_L3_TYPE_IPV6		= 1,
+};
+
+enum {
+	MLX5_ROCE_L3_TYPE_IPV4_CAP	= 1 << 1,
+	MLX5_ROCE_L3_TYPE_IPV6_CAP	= 1 << 2,
 };
 
 enum {
@@ -443,9 +471,12 @@ struct mlx5_init_seg {
 	__be32			rsvd1[120];
 	__be32			initializing;
 	struct health_buffer	health;
-	__be32			rsvd2[884];
+	__be32			rsvd2[880];
+	__be32			internal_timer_h;
+	__be32			internal_timer_l;
+	__be32			rsvd3[2];
 	__be32			health_counter;
-	__be32			rsvd3[1019];
+	__be32			rsvd4[1019];
 	__be64			ieee1588_clk;
 	__be32			ieee1588_clk_type;
 	__be32			clr_intx;
@@ -457,7 +488,9 @@ struct mlx5_eqe_comp {
 };
 
 struct mlx5_eqe_qp_srq {
-	__be32	reserved[6];
+	__be32	reserved1[5];
+	u8	type;
+	u8	reserved2[3];
 	__be32	qp_srq_n;
 };
 
@@ -601,7 +634,8 @@ struct mlx5_cqe64 {
 	__be32		imm_inval_pkey;
 	u8		rsvd40[4];
 	__be32		byte_cnt;
-	__be64		timestamp;
+	__be32		timestamp_h;
+	__be32		timestamp_l;
 	__be32		sop_drop_qpn;
 	__be16		wqe_counter;
 	u8		signature;
@@ -623,6 +657,16 @@ static inline int cqe_has_vlan(struct mlx5_cqe64 *cqe)
 	return !!(cqe->l4_hdr_type_etc & 0x1);
 }
 
+static inline u64 get_cqe_ts(struct mlx5_cqe64 *cqe)
+{
+	u32 hi, lo;
+
+	hi = be32_to_cpu(cqe->timestamp_h);
+	lo = be32_to_cpu(cqe->timestamp_l);
+
+	return (u64)lo | ((u64)hi << 32);
+}
+
 enum {
 	CQE_L4_HDR_TYPE_NONE			= 0x0,
 	CQE_L4_HDR_TYPE_TCP_NO_ACK		= 0x1,
@@ -634,6 +678,12 @@ enum {
 enum {
 	CQE_RSS_HTYPE_IP	= 0x3 << 6,
 	CQE_RSS_HTYPE_L4	= 0x3 << 2,
+};
+
+enum {
+	MLX5_CQE_ROCE_L3_HEADER_TYPE_GRH	= 0x0,
+	MLX5_CQE_ROCE_L3_HEADER_TYPE_IPV6	= 0x1,
+	MLX5_CQE_ROCE_L3_HEADER_TYPE_IPV4	= 0x2,
 };
 
 enum {
@@ -1243,5 +1293,7 @@ static inline u16 mlx5_to_sw_pkey_sz(int pkey_sz)
 		return 0;
 	return MLX5_MIN_PKEY_TABLE_SIZE << pkey_sz;
 }
+
+#define MLX5_BY_PASS_NUM_PRIOS 9
 
 #endif /* MLX5_DEVICE_H */

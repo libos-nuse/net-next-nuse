@@ -688,21 +688,29 @@ static u8 update_white_list(struct hci_request *req)
 	 * command to remove it from the controller.
 	 */
 	list_for_each_entry(b, &hdev->le_white_list, list) {
-		struct hci_cp_le_del_from_white_list cp;
+		/* If the device is neither in pend_le_conns nor
+		 * pend_le_reports then remove it from the whitelist.
+		 */
+		if (!hci_pend_le_action_lookup(&hdev->pend_le_conns,
+					       &b->bdaddr, b->bdaddr_type) &&
+		    !hci_pend_le_action_lookup(&hdev->pend_le_reports,
+					       &b->bdaddr, b->bdaddr_type)) {
+			struct hci_cp_le_del_from_white_list cp;
 
-		if (hci_pend_le_action_lookup(&hdev->pend_le_conns,
-					      &b->bdaddr, b->bdaddr_type) ||
-		    hci_pend_le_action_lookup(&hdev->pend_le_reports,
-					      &b->bdaddr, b->bdaddr_type)) {
-			white_list_entries++;
+			cp.bdaddr_type = b->bdaddr_type;
+			bacpy(&cp.bdaddr, &b->bdaddr);
+
+			hci_req_add(req, HCI_OP_LE_DEL_FROM_WHITE_LIST,
+				    sizeof(cp), &cp);
 			continue;
 		}
 
-		cp.bdaddr_type = b->bdaddr_type;
-		bacpy(&cp.bdaddr, &b->bdaddr);
+		if (hci_find_irk_by_addr(hdev, &b->bdaddr, b->bdaddr_type)) {
+			/* White list can not be used with RPAs */
+			return 0x00;
+		}
 
-		hci_req_add(req, HCI_OP_LE_DEL_FROM_WHITE_LIST,
-			    sizeof(cp), &cp);
+		white_list_entries++;
 	}
 
 	/* Since all no longer valid white list entries have been
@@ -1737,8 +1745,8 @@ static int le_scan_disable(struct hci_request *req, unsigned long opt)
 static int bredr_inquiry(struct hci_request *req, unsigned long opt)
 {
 	u8 length = opt;
-	/* General inquiry access code (GIAC) */
-	u8 lap[3] = { 0x33, 0x8b, 0x9e };
+	const u8 giac[3] = { 0x33, 0x8b, 0x9e };
+	const u8 liac[3] = { 0x00, 0x8b, 0x9e };
 	struct hci_cp_inquiry cp;
 
 	BT_DBG("%s", req->hdev->name);
@@ -1748,7 +1756,12 @@ static int bredr_inquiry(struct hci_request *req, unsigned long opt)
 	hci_dev_unlock(req->hdev);
 
 	memset(&cp, 0, sizeof(cp));
-	memcpy(&cp.lap, lap, sizeof(cp.lap));
+
+	if (req->hdev->discovery.limited)
+		memcpy(&cp.lap, liac, sizeof(cp.lap));
+	else
+		memcpy(&cp.lap, giac, sizeof(cp.lap));
+
 	cp.length = length;
 
 	hci_req_add(req, HCI_OP_INQUIRY, sizeof(cp), &cp);

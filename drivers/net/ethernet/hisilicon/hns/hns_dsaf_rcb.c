@@ -369,8 +369,17 @@ int hns_rcb_common_init_hw(struct rcb_common_cb *rcb_common)
 	dsaf_write_dev(rcb_common, RCB_COM_CFG_ENDIAN_REG,
 		       HNS_RCB_COMMON_ENDIAN);
 
-	dsaf_write_dev(rcb_common, RCB_COM_CFG_FNA_REG, 0x0);
-	dsaf_write_dev(rcb_common, RCB_COM_CFG_FA_REG, 0x1);
+	if (AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver)) {
+		dsaf_write_dev(rcb_common, RCB_COM_CFG_FNA_REG, 0x0);
+		dsaf_write_dev(rcb_common, RCB_COM_CFG_FA_REG, 0x1);
+	} else {
+		dsaf_set_dev_bit(rcb_common, RCBV2_COM_CFG_USER_REG,
+				 RCB_COM_CFG_FNA_B, false);
+		dsaf_set_dev_bit(rcb_common, RCBV2_COM_CFG_USER_REG,
+				 RCB_COM_CFG_FA_B, true);
+		dsaf_set_dev_bit(rcb_common, RCBV2_COM_CFG_TSO_MODE_REG,
+				 RCB_COM_TSO_MODE_B, HNS_TSO_MODE_8BD_32K);
+	}
 
 	return 0;
 }
@@ -499,8 +508,7 @@ void hns_rcb_get_cfg(struct rcb_common_cb *rcb_common)
 	int base_irq_idx = hns_rcb_get_base_irq_idx(rcb_common);
 	struct device_node *np = rcb_common->dsaf_dev->dev->of_node;
 	struct platform_device *pdev =
-		container_of(rcb_common->dsaf_dev->dev,
-			     struct platform_device, dev);
+		to_platform_device(rcb_common->dsaf_dev->dev);
 	bool is_ver1 = AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver);
 
 	for (i = 0; i < ring_num; i++) {

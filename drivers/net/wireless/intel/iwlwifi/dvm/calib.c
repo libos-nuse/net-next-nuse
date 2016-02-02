@@ -311,7 +311,7 @@ static int iwl_sens_energy_cck(struct iwl_priv *priv,
 		/* If previous beacon had too many false alarms,
 		 *   give it some extra margin by reducing sensitivity again
 		 *   (but don't go below measured energy of desired Rx) */
-		if (IWL_FA_TOO_MANY == data->nrg_prev_state) {
+		if (data->nrg_prev_state == IWL_FA_TOO_MANY) {
 			IWL_DEBUG_CALIB(priv, "... increasing margin\n");
 			if (data->nrg_th_cck > (max_nrg_cck + NRG_MARGIN))
 				data->nrg_th_cck -= NRG_MARGIN;
@@ -901,7 +901,7 @@ static void iwlagn_gain_computation(struct iwl_priv *priv,
 		/* bound gain by 2 bits value max, 3rd bit is sign */
 		data->delta_gain_code[i] =
 			min(abs(delta_g),
-			(long) CHAIN_NOISE_MAX_DELTA_GAIN_CODE);
+			(s32) CHAIN_NOISE_MAX_DELTA_GAIN_CODE);
 
 		if (delta_g < 0)
 			/*

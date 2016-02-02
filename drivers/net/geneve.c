@@ -388,7 +388,7 @@ static void geneve_notify_add_rx_port(struct geneve_sock *gs)
 	int err;
 
 	if (sa_family == AF_INET) {
-		err = udp_add_offload(&gs->udp_offloads);
+		err = udp_add_offload(sock_net(sk), &gs->udp_offloads);
 		if (err)
 			pr_warn("geneve: udp_add_offload failed with status %d\n",
 				err);
@@ -918,12 +918,11 @@ static netdev_tx_t geneve_xmit_skb(struct sk_buff *skb, struct net_device *dev,
 		ttl = ttl ? : ip4_dst_hoplimit(&rt->dst);
 		df = 0;
 	}
-	err = udp_tunnel_xmit_skb(rt, gs4->sock->sk, skb, fl4.saddr, fl4.daddr,
-				  tos, ttl, df, sport, geneve->dst_port,
-				  !net_eq(geneve->net, dev_net(geneve->dev)),
-				  !(flags & GENEVE_F_UDP_CSUM));
+	udp_tunnel_xmit_skb(rt, gs4->sock->sk, skb, fl4.saddr, fl4.daddr,
+			    tos, ttl, df, sport, geneve->dst_port,
+			    !net_eq(geneve->net, dev_net(geneve->dev)),
+			    !(flags & GENEVE_F_UDP_CSUM));
 
-	iptunnel_xmit_stats(err, &dev->stats, dev->tstats);
 	return NETDEV_TX_OK;
 
 tx_error:
@@ -981,9 +980,9 @@ static netdev_tx_t geneve6_xmit_skb(struct sk_buff *skb, struct net_device *dev,
 			opts = ip_tunnel_info_opts(info);
 
 		if (key->tun_flags & TUNNEL_CSUM)
-			flags |= GENEVE_F_UDP_CSUM;
+			flags &= ~GENEVE_F_UDP_ZERO_CSUM6_TX;
 		else
-			flags &= ~GENEVE_F_UDP_CSUM;
+			flags |= GENEVE_F_UDP_ZERO_CSUM6_TX;
 
 		err = geneve6_build_skb(dst, skb, key->tun_flags, vni,
 					info->options_len, opts,
@@ -1005,10 +1004,10 @@ static netdev_tx_t geneve6_xmit_skb(struct sk_buff *skb, struct net_device *dev,
 			ttl = 1;
 		ttl = ttl ? : ip6_dst_hoplimit(dst);
 	}
-	err = udp_tunnel6_xmit_skb(dst, gs6->sock->sk, skb, dev,
-				   &fl6.saddr, &fl6.daddr, prio, ttl,
-				   sport, geneve->dst_port,
-				   !!(flags & GENEVE_F_UDP_ZERO_CSUM6_TX));
+	udp_tunnel6_xmit_skb(dst, gs6->sock->sk, skb, dev,
+			     &fl6.saddr, &fl6.daddr, prio, ttl,
+			     sport, geneve->dst_port,
+			     !!(flags & GENEVE_F_UDP_ZERO_CSUM6_TX));
 	return NETDEV_TX_OK;
 
 tx_error:

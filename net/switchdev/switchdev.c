@@ -20,6 +20,7 @@
 #include <linux/list.h>
 #include <linux/workqueue.h>
 #include <linux/if_vlan.h>
+#include <linux/rtnetlink.h>
 #include <net/ip_fib.h>
 #include <net/switchdev.h>
 
@@ -345,6 +346,8 @@ static size_t switchdev_obj_size(const struct switchdev_obj *obj)
 		return sizeof(struct switchdev_obj_ipv4_fib);
 	case SWITCHDEV_OBJ_ID_PORT_FDB:
 		return sizeof(struct switchdev_obj_port_fdb);
+	case SWITCHDEV_OBJ_ID_PORT_MDB:
+		return sizeof(struct switchdev_obj_port_mdb);
 	default:
 		BUG();
 	}
@@ -565,7 +568,6 @@ int switchdev_port_obj_dump(struct net_device *dev, struct switchdev_obj *obj,
 }
 EXPORT_SYMBOL_GPL(switchdev_port_obj_dump);
 
-static DEFINE_MUTEX(switchdev_mutex);
 static RAW_NOTIFIER_HEAD(switchdev_notif_chain);
 
 /**
@@ -580,9 +582,9 @@ int register_switchdev_notifier(struct notifier_block *nb)
 {
 	int err;
 
-	mutex_lock(&switchdev_mutex);
+	rtnl_lock();
 	err = raw_notifier_chain_register(&switchdev_notif_chain, nb);
-	mutex_unlock(&switchdev_mutex);
+	rtnl_unlock();
 	return err;
 }
 EXPORT_SYMBOL_GPL(register_switchdev_notifier);
@@ -598,9 +600,9 @@ int unregister_switchdev_notifier(struct notifier_block *nb)
 {
 	int err;
 
-	mutex_lock(&switchdev_mutex);
+	rtnl_lock();
 	err = raw_notifier_chain_unregister(&switchdev_notif_chain, nb);
-	mutex_unlock(&switchdev_mutex);
+	rtnl_unlock();
 	return err;
 }
 EXPORT_SYMBOL_GPL(unregister_switchdev_notifier);
@@ -614,16 +616,17 @@ EXPORT_SYMBOL_GPL(unregister_switchdev_notifier);
  *	Call all network notifier blocks. This should be called by driver
  *	when it needs to propagate hardware event.
  *	Return values are same as for atomic_notifier_call_chain().
+ *	rtnl_lock must be held.
  */
 int call_switchdev_notifiers(unsigned long val, struct net_device *dev,
 			     struct switchdev_notifier_info *info)
 {
 	int err;
 
+	ASSERT_RTNL();
+
 	info->dev = dev;
-	mutex_lock(&switchdev_mutex);
 	err = raw_notifier_call_chain(&switchdev_notif_chain, val, info);
-	mutex_unlock(&switchdev_mutex);
 	return err;
 }
 EXPORT_SYMBOL_GPL(call_switchdev_notifiers);

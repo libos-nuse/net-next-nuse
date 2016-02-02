@@ -26,7 +26,7 @@
  * in the file called COPYING.
  *
  * Contact Information:
- *  Intel Linux Wireless <ilw@linux.intel.com>
+ *  Intel Linux Wireless <linuxwifi@intel.com>
  * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
  *
  * BSD LICENSE
@@ -344,6 +344,12 @@ enum secure_load_status_reg {
 #define TXF_LARC_NUM			(0xa0043c)
 #define TXF_READ_MODIFY_DATA		(0xa00448)
 #define TXF_READ_MODIFY_ADDR		(0xa0044c)
+
+/* Radio registers access */
+#define RSP_RADIO_CMD			(0xa02804)
+#define RSP_RADIO_RDDAT			(0xa02814)
+#define RADIO_RSP_ADDR_POS		(6)
+#define RADIO_RSP_RD_CMD		(3)
 
 /* FW monitor */
 #define MON_BUFF_SAMPLE_CTL		(0xa03c00)

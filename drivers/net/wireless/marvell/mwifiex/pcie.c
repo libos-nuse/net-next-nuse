@@ -2129,14 +2129,14 @@ static irqreturn_t mwifiex_pcie_interrupt(int irq, void *context)
 	struct mwifiex_adapter *adapter;
 
 	if (!pdev) {
-		pr_debug("info: %s: pdev is NULL\n", (u8 *)pdev);
+		pr_err("info: %s: pdev is NULL\n", __func__);
 		goto exit;
 	}
 
 	card = pci_get_drvdata(pdev);
 	if (!card || !card->adapter) {
-		pr_debug("info: %s: card=%p adapter=%p\n", __func__, card,
-			 card ? card->adapter : NULL);
+		pr_err("info: %s: card=%p adapter=%p\n", __func__, card,
+		       card ? card->adapter : NULL);
 		goto exit;
 	}
 	adapter = card->adapter;
@@ -2473,50 +2473,44 @@ static int mwifiex_pcie_init(struct mwifiex_adapter *adapter)
 
 	pci_set_master(pdev);
 
-	mwifiex_dbg(adapter, INFO,
-		    "try set_consistent_dma_mask(32)\n");
+	pr_notice("try set_consistent_dma_mask(32)\n");
 	ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (ret) {
-		mwifiex_dbg(adapter, ERROR,
-			    "set_dma_mask(32) failed\n");
+		pr_err("set_dma_mask(32) failed\n");
 		goto err_set_dma_mask;
 	}
 
 	ret = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (ret) {
-		mwifiex_dbg(adapter, ERROR,
-			    "set_consistent_dma_mask(64) failed\n");
+		pr_err("set_consistent_dma_mask(64) failed\n");
 		goto err_set_dma_mask;
 	}
 
 	ret = pci_request_region(pdev, 0, DRV_NAME);
 	if (ret) {
-		mwifiex_dbg(adapter, ERROR,
-			    "req_reg(0) error\n");
+		pr_err("req_reg(0) error\n");
 		goto err_req_region0;
 	}
 	card->pci_mmap = pci_iomap(pdev, 0, 0);
 	if (!card->pci_mmap) {
-		mwifiex_dbg(adapter, ERROR, "iomap(0) error\n");
+		pr_err("iomap(0) error\n");
 		ret = -EIO;
 		goto err_iomap0;
 	}
 	ret = pci_request_region(pdev, 2, DRV_NAME);
 	if (ret) {
-		mwifiex_dbg(adapter, ERROR, "req_reg(2) error\n");
+		pr_err("req_reg(2) error\n");
 		goto err_req_region2;
 	}
 	card->pci_mmap1 = pci_iomap(pdev, 2, 0);
 	if (!card->pci_mmap1) {
-		mwifiex_dbg(adapter, ERROR,
-			    "iomap(2) error\n");
+		pr_err("iomap(2) error\n");
 		ret = -EIO;
 		goto err_iomap2;
 	}
 
-	mwifiex_dbg(adapter, INFO,
-		    "PCI memory map Virt0: %p PCI memory map Virt2: %p\n",
-		    card->pci_mmap, card->pci_mmap1);
+	pr_notice("PCI memory map Virt0: %p PCI memory map Virt2: %p\n",
+		  card->pci_mmap, card->pci_mmap1);
 
 	card->cmdrsp_buf = NULL;
 	ret = mwifiex_pcie_create_txbd_ring(adapter);
@@ -2599,6 +2593,30 @@ static void mwifiex_pcie_cleanup(struct mwifiex_adapter *adapter)
 	kfree(card);
 }
 
+static int mwifiex_pcie_request_irq(struct mwifiex_adapter *adapter)
+{
+	int ret;
+	struct pcie_service_card *card = adapter->card;
+	struct pci_dev *pdev = card->dev;
+
+	if (pci_enable_msi(pdev) != 0)
+		pci_disable_msi(pdev);
+	else
+		card->msi_enable = 1;
+
+	mwifiex_dbg(adapter, INFO, "msi_enable = %d\n", card->msi_enable);
+
+	ret = request_irq(pdev->irq, mwifiex_pcie_interrupt, IRQF_SHARED,
+			  "MRVL_PCIE", pdev);
+	if (ret) {
+		pr_err("request_irq failed: ret=%d\n", ret);
+		adapter->card = NULL;
+		return -1;
+	}
+
+	return 0;
+}
+
 /*
  * This function registers the PCIE device.
  *
@@ -2606,23 +2624,16 @@ static void mwifiex_pcie_cleanup(struct mwifiex_adapter *adapter)
  */
 static int mwifiex_register_dev(struct mwifiex_adapter *adapter)
 {
-	int ret;
 	struct pcie_service_card *card = adapter->card;
 	struct pci_dev *pdev = card->dev;
 
 	/* save adapter pointer in card */
 	card->adapter = adapter;
-
-	ret = request_irq(pdev->irq, mwifiex_pcie_interrupt, IRQF_SHARED,
-			  "MRVL_PCIE", pdev);
-	if (ret) {
-		mwifiex_dbg(adapter, ERROR,
-			    "request_irq failed: ret=%d\n", ret);
-		adapter->card = NULL;
-		return -1;
-	}
-
 	adapter->dev = &pdev->dev;
+
+	if (mwifiex_pcie_request_irq(adapter))
+		return -1;
+
 	adapter->tx_buf_size = card->pcie.tx_buf_size;
 	adapter->mem_type_mapping_tbl = mem_type_mapping_tbl;
 	adapter->num_mem_types = ARRAY_SIZE(mem_type_mapping_tbl);

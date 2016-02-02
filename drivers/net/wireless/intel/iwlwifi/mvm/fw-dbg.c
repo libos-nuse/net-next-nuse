@@ -113,6 +113,35 @@ static void iwl_mvm_free_coredump(const void *data)
 	kfree(fw_error_dump);
 }
 
+#define RADIO_REG_MAX_READ 0x2ad
+static void iwl_mvm_read_radio_reg(struct iwl_mvm *mvm,
+				   struct iwl_fw_error_dump_data **dump_data)
+{
+	u8 *pos = (void *)(*dump_data)->data;
+	unsigned long flags;
+	int i;
+
+	if (!iwl_trans_grab_nic_access(mvm->trans, &flags))
+		return;
+
+	(*dump_data)->type = cpu_to_le32(IWL_FW_ERROR_DUMP_RADIO_REG);
+	(*dump_data)->len = cpu_to_le32(RADIO_REG_MAX_READ);
+
+	for (i = 0; i < RADIO_REG_MAX_READ; i++) {
+		u32 rd_cmd = RADIO_RSP_RD_CMD;
+
+		rd_cmd |= i << RADIO_RSP_ADDR_POS;
+		iwl_write_prph_no_grab(mvm->trans, RSP_RADIO_CMD, rd_cmd);
+		*pos =  (u8)iwl_read_prph_no_grab(mvm->trans, RSP_RADIO_RDDAT);
+
+		pos++;
+	}
+
+	*dump_data = iwl_fw_error_next_data(*dump_data);
+
+	iwl_trans_release_nic_access(mvm->trans, &flags);
+}
+
 static void iwl_mvm_dump_fifos(struct iwl_mvm *mvm,
 			       struct iwl_fw_error_dump_data **dump_data)
 {
@@ -122,7 +151,7 @@ static void iwl_mvm_dump_fifos(struct iwl_mvm *mvm,
 	unsigned long flags;
 	int i, j;
 
-	if (!iwl_trans_grab_nic_access(mvm->trans, false, &flags))
+	if (!iwl_trans_grab_nic_access(mvm->trans, &flags))
 		return;
 
 	/* Pull RXF data from all RXFs */
@@ -241,8 +270,7 @@ static void iwl_mvm_dump_fifos(struct iwl_mvm *mvm,
 
 void iwl_mvm_free_fw_dump_desc(struct iwl_mvm *mvm)
 {
-	if (mvm->fw_dump_desc == &iwl_mvm_dump_desc_assert ||
-	    !mvm->fw_dump_desc)
+	if (mvm->fw_dump_desc == &iwl_mvm_dump_desc_assert)
 		return;
 
 	kfree(mvm->fw_dump_desc);
@@ -349,6 +377,7 @@ static const struct {
 	{ .start = 0x00a04560, .end = 0x00a0457c },
 	{ .start = 0x00a04590, .end = 0x00a04598 },
 	{ .start = 0x00a045c0, .end = 0x00a045f4 },
+	{ .start = 0x00a44000, .end = 0x00a7bf80 },
 };
 
 static u32 iwl_dump_prph(struct iwl_trans *trans,
@@ -358,7 +387,7 @@ static u32 iwl_dump_prph(struct iwl_trans *trans,
 	unsigned long flags;
 	u32 prph_len = 0, i;
 
-	if (!iwl_trans_grab_nic_access(trans, false, &flags))
+	if (!iwl_trans_grab_nic_access(trans, &flags))
 		return 0;
 
 	for (i = 0; i < ARRAY_SIZE(iwl_prph_dump_addr); i++) {
@@ -383,7 +412,7 @@ static u32 iwl_dump_prph(struct iwl_trans *trans,
 			*val++ = cpu_to_le32(iwl_read_prph_no_grab(trans,
 								   reg));
 
-			*data = iwl_fw_error_next_data(*data);
+		*data = iwl_fw_error_next_data(*data);
 	}
 
 	iwl_trans_release_nic_access(trans, &flags);
@@ -400,7 +429,7 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 	struct iwl_fw_error_dump_trigger_desc *dump_trig;
 	struct iwl_mvm_dump_ptrs *fw_error_dump;
 	u32 sram_len, sram_ofs;
-	u32 file_len, fifo_data_len = 0;
+	u32 file_len, fifo_data_len = 0, prph_len = 0, radio_len = 0;
 	u32 smem_len = mvm->cfg->smem_len;
 	u32 sram2_len = mvm->cfg->dccm2_len;
 	bool monitor_dump_only = false;
@@ -411,7 +440,7 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 	/* there's no point in fw dump if the bus is dead */
 	if (test_bit(STATUS_TRANS_DEAD, &mvm->trans->status)) {
 		IWL_ERR(mvm, "Skip fw error dump since bus is dead\n");
-		return;
+		goto out;
 	}
 
 	if (mvm->fw_dump_trig &&
@@ -420,7 +449,7 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 
 	fw_error_dump = kzalloc(sizeof(*fw_error_dump), GFP_KERNEL);
 	if (!fw_error_dump)
-		return;
+		goto out;
 
 	/* SRAM - include stack CCM if driver knows the values for it */
 	if (!mvm->cfg->dccm_offset || !mvm->cfg->dccm_len) {
@@ -460,12 +489,28 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 					 sizeof(*dump_data) +
 					 sizeof(struct iwl_fw_error_dump_fifo);
 		}
+
+		/* Make room for PRPH registers */
+		for (i = 0; i < ARRAY_SIZE(iwl_prph_dump_addr); i++) {
+			/* The range includes both boundaries */
+			int num_bytes_in_chunk = iwl_prph_dump_addr[i].end -
+				iwl_prph_dump_addr[i].start + 4;
+
+			prph_len += sizeof(*dump_data) +
+				sizeof(struct iwl_fw_error_dump_prph) +
+				num_bytes_in_chunk;
+		}
+
+		if (mvm->cfg->device_family == IWL_DEVICE_FAMILY_7000)
+			radio_len = sizeof(*dump_data) + RADIO_REG_MAX_READ;
 	}
 
 	file_len = sizeof(*dump_file) +
 		   sizeof(*dump_data) * 2 +
 		   sram_len + sizeof(*dump_mem) +
 		   fifo_data_len +
+		   prph_len +
+		   radio_len +
 		   sizeof(*dump_info);
 
 	/* Make room for the SMEM, if it exists */
@@ -489,17 +534,6 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 			   sizeof(*dump_info);
 	}
 
-	/* Make room for PRPH registers */
-	for (i = 0; i < ARRAY_SIZE(iwl_prph_dump_addr); i++) {
-		/* The range includes both boundaries */
-		int num_bytes_in_chunk = iwl_prph_dump_addr[i].end -
-			iwl_prph_dump_addr[i].start + 4;
-
-		file_len += sizeof(*dump_data) +
-			sizeof(struct iwl_fw_error_dump_prph) +
-			num_bytes_in_chunk;
-	}
-
 	/*
 	 * In 8000 HW family B-step include the ICCM (which resides separately)
 	 */
@@ -515,8 +549,7 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 	dump_file = vzalloc(file_len);
 	if (!dump_file) {
 		kfree(fw_error_dump);
-		iwl_mvm_free_fw_dump_desc(mvm);
-		return;
+		goto out;
 	}
 
 	fw_error_dump->op_mode_ptr = dump_file;
@@ -541,8 +574,11 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 
 	dump_data = iwl_fw_error_next_data(dump_data);
 	/* We only dump the FIFOs if the FW is in error state */
-	if (test_bit(STATUS_FW_ERROR, &mvm->trans->status))
+	if (test_bit(STATUS_FW_ERROR, &mvm->trans->status)) {
 		iwl_mvm_dump_fifos(mvm, &dump_data);
+		if (radio_len)
+			iwl_mvm_read_radio_reg(mvm, &dump_data);
+	}
 
 	if (mvm->fw_dump_desc) {
 		dump_data->type = cpu_to_le32(IWL_FW_ERROR_DUMP_ERROR_INFO);
@@ -552,8 +588,6 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 		memcpy(dump_trig, &mvm->fw_dump_desc->trig_desc,
 		       sizeof(*dump_trig) + mvm->fw_dump_desc->len);
 
-		/* now we can free this copy */
-		iwl_mvm_free_fw_dump_desc(mvm);
 		dump_data = iwl_fw_error_next_data(dump_data);
 	}
 
@@ -625,7 +659,8 @@ void iwl_mvm_fw_error_dump(struct iwl_mvm *mvm)
 	}
 
 	dump_data = iwl_fw_error_next_data(dump_data);
-	iwl_dump_prph(mvm->trans, &dump_data);
+	if (prph_len)
+		iwl_dump_prph(mvm->trans, &dump_data);
 
 dump_trans_data:
 	fw_error_dump->trans_ptr = iwl_trans_dump_data(mvm->trans,
@@ -638,19 +673,21 @@ dump_trans_data:
 	dev_coredumpm(mvm->trans->dev, THIS_MODULE, fw_error_dump, 0,
 		      GFP_KERNEL, iwl_mvm_read_coredump, iwl_mvm_free_coredump);
 
+out:
+	iwl_mvm_free_fw_dump_desc(mvm);
 	mvm->fw_dump_trig = NULL;
 	clear_bit(IWL_MVM_STATUS_DUMPING_FW_LOG, &mvm->status);
 }
 
-struct iwl_mvm_dump_desc iwl_mvm_dump_desc_assert = {
+const struct iwl_mvm_dump_desc iwl_mvm_dump_desc_assert = {
 	.trig_desc = {
 		.type = cpu_to_le32(FW_DBG_TRIGGER_FW_ASSERT),
 	},
 };
 
 int iwl_mvm_fw_dbg_collect_desc(struct iwl_mvm *mvm,
-				struct iwl_mvm_dump_desc *desc,
-				struct iwl_fw_dbg_trigger_tlv *trigger)
+				const struct iwl_mvm_dump_desc *desc,
+				const struct iwl_fw_dbg_trigger_tlv *trigger)
 {
 	unsigned int delay = 0;
 
@@ -676,7 +713,7 @@ int iwl_mvm_fw_dbg_collect_desc(struct iwl_mvm *mvm,
 
 int iwl_mvm_fw_dbg_collect(struct iwl_mvm *mvm, enum iwl_fw_dbg_trigger trig,
 			   const char *str, size_t len,
-			   struct iwl_fw_dbg_trigger_tlv *trigger)
+			   const struct iwl_fw_dbg_trigger_tlv *trigger)
 {
 	struct iwl_mvm_dump_desc *desc;
 

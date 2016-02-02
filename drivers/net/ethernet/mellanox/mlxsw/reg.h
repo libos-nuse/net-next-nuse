@@ -99,6 +99,55 @@ static const struct mlxsw_reg_info mlxsw_reg_spad = {
  */
 MLXSW_ITEM_BUF(reg, spad, base_mac, 0x02, 6);
 
+/* SMID - Switch Multicast ID
+ * --------------------------
+ * The MID record maps from a MID (Multicast ID), which is a unique identifier
+ * of the multicast group within the stacking domain, into a list of local
+ * ports into which the packet is replicated.
+ */
+#define MLXSW_REG_SMID_ID 0x2007
+#define MLXSW_REG_SMID_LEN 0x240
+
+static const struct mlxsw_reg_info mlxsw_reg_smid = {
+	.id = MLXSW_REG_SMID_ID,
+	.len = MLXSW_REG_SMID_LEN,
+};
+
+/* reg_smid_swid
+ * Switch partition ID.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, smid, swid, 0x00, 24, 8);
+
+/* reg_smid_mid
+ * Multicast identifier - global identifier that represents the multicast group
+ * across all devices.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, smid, mid, 0x00, 0, 16);
+
+/* reg_smid_port
+ * Local port memebership (1 bit per port).
+ * Access: RW
+ */
+MLXSW_ITEM_BIT_ARRAY(reg, smid, port, 0x20, 0x20, 1);
+
+/* reg_smid_port_mask
+ * Local port mask (1 bit per port).
+ * Access: W
+ */
+MLXSW_ITEM_BIT_ARRAY(reg, smid, port_mask, 0x220, 0x20, 1);
+
+static inline void mlxsw_reg_smid_pack(char *payload, u16 mid,
+				       u8 port, bool set)
+{
+	MLXSW_REG_ZERO(smid, payload);
+	mlxsw_reg_smid_swid_set(payload, 0);
+	mlxsw_reg_smid_mid_set(payload, mid);
+	mlxsw_reg_smid_port_set(payload, port, set);
+	mlxsw_reg_smid_port_mask_set(payload, port, 1);
+}
+
 /* SSPR - Switch System Port Record Register
  * -----------------------------------------
  * Configures the system port to local port mapping.
@@ -287,6 +336,7 @@ MLXSW_ITEM32_INDEXED(reg, sfd, rec_swid, MLXSW_REG_SFD_BASE_LEN, 24, 8,
 enum mlxsw_reg_sfd_rec_type {
 	MLXSW_REG_SFD_REC_TYPE_UNICAST = 0x0,
 	MLXSW_REG_SFD_REC_TYPE_UNICAST_LAG = 0x1,
+	MLXSW_REG_SFD_REC_TYPE_MULTICAST = 0x2,
 };
 
 /* reg_sfd_rec_type
@@ -379,7 +429,6 @@ MLXSW_ITEM32_INDEXED(reg, sfd, uc_system_port, MLXSW_REG_SFD_BASE_LEN, 0, 16,
 
 static inline void mlxsw_reg_sfd_rec_pack(char *payload, int rec_index,
 					  enum mlxsw_reg_sfd_rec_type rec_type,
-					  enum mlxsw_reg_sfd_rec_policy policy,
 					  const char *mac,
 					  enum mlxsw_reg_sfd_rec_action action)
 {
@@ -389,7 +438,6 @@ static inline void mlxsw_reg_sfd_rec_pack(char *payload, int rec_index,
 		mlxsw_reg_sfd_num_rec_set(payload, rec_index + 1);
 	mlxsw_reg_sfd_rec_swid_set(payload, rec_index, 0);
 	mlxsw_reg_sfd_rec_type_set(payload, rec_index, rec_type);
-	mlxsw_reg_sfd_rec_policy_set(payload, rec_index, policy);
 	mlxsw_reg_sfd_rec_mac_memcpy_to(payload, rec_index, mac);
 	mlxsw_reg_sfd_rec_action_set(payload, rec_index, action);
 }
@@ -401,8 +449,8 @@ static inline void mlxsw_reg_sfd_uc_pack(char *payload, int rec_index,
 					 u8 local_port)
 {
 	mlxsw_reg_sfd_rec_pack(payload, rec_index,
-			       MLXSW_REG_SFD_REC_TYPE_UNICAST,
-			       policy, mac, action);
+			       MLXSW_REG_SFD_REC_TYPE_UNICAST, mac, action);
+	mlxsw_reg_sfd_rec_policy_set(payload, rec_index, policy);
 	mlxsw_reg_sfd_uc_sub_port_set(payload, rec_index, 0);
 	mlxsw_reg_sfd_uc_fid_vid_set(payload, rec_index, fid_vid);
 	mlxsw_reg_sfd_uc_system_port_set(payload, rec_index, local_port);
@@ -461,7 +509,8 @@ mlxsw_reg_sfd_uc_lag_pack(char *payload, int rec_index,
 {
 	mlxsw_reg_sfd_rec_pack(payload, rec_index,
 			       MLXSW_REG_SFD_REC_TYPE_UNICAST_LAG,
-			       policy, mac, action);
+			       mac, action);
+	mlxsw_reg_sfd_rec_policy_set(payload, rec_index, policy);
 	mlxsw_reg_sfd_uc_lag_sub_port_set(payload, rec_index, 0);
 	mlxsw_reg_sfd_uc_lag_fid_vid_set(payload, rec_index, fid_vid);
 	mlxsw_reg_sfd_uc_lag_lag_vid_set(payload, rec_index, lag_vid);
@@ -475,6 +524,45 @@ static inline void mlxsw_reg_sfd_uc_lag_unpack(char *payload, int rec_index,
 	mlxsw_reg_sfd_rec_mac_memcpy_from(payload, rec_index, mac);
 	*p_vid = mlxsw_reg_sfd_uc_lag_fid_vid_get(payload, rec_index);
 	*p_lag_id = mlxsw_reg_sfd_uc_lag_lag_id_get(payload, rec_index);
+}
+
+/* reg_sfd_mc_pgi
+ *
+ * Multicast port group index - index into the port group table.
+ * Value 0x1FFF indicates the pgi should point to the MID entry.
+ * For Spectrum this value must be set to 0x1FFF
+ * Access: RW
+ */
+MLXSW_ITEM32_INDEXED(reg, sfd, mc_pgi, MLXSW_REG_SFD_BASE_LEN, 16, 13,
+		     MLXSW_REG_SFD_REC_LEN, 0x08, false);
+
+/* reg_sfd_mc_fid_vid
+ *
+ * Filtering ID or VLAN ID
+ * Access: Index
+ */
+MLXSW_ITEM32_INDEXED(reg, sfd, mc_fid_vid, MLXSW_REG_SFD_BASE_LEN, 0, 16,
+		     MLXSW_REG_SFD_REC_LEN, 0x08, false);
+
+/* reg_sfd_mc_mid
+ *
+ * Multicast identifier - global identifier that represents the multicast
+ * group across all devices.
+ * Access: RW
+ */
+MLXSW_ITEM32_INDEXED(reg, sfd, mc_mid, MLXSW_REG_SFD_BASE_LEN, 0, 16,
+		     MLXSW_REG_SFD_REC_LEN, 0x0C, false);
+
+static inline void
+mlxsw_reg_sfd_mc_pack(char *payload, int rec_index,
+		      const char *mac, u16 fid_vid,
+		      enum mlxsw_reg_sfd_rec_action action, u16 mid)
+{
+	mlxsw_reg_sfd_rec_pack(payload, rec_index,
+			       MLXSW_REG_SFD_REC_TYPE_MULTICAST, mac, action);
+	mlxsw_reg_sfd_mc_pgi_set(payload, rec_index, 0x1FFF);
+	mlxsw_reg_sfd_mc_fid_vid_set(payload, rec_index, fid_vid);
+	mlxsw_reg_sfd_mc_mid_set(payload, rec_index, mid);
 }
 
 /* SFN - Switch FDB Notification Register
@@ -955,6 +1043,92 @@ static inline void mlxsw_reg_sftr_pack(char *payload,
 	mlxsw_reg_sftr_port_set(payload, port, set);
 	mlxsw_reg_sftr_port_mask_set(payload, port, 1);
 }
+
+/* SFDF - Switch Filtering DB Flush
+ * --------------------------------
+ * The switch filtering DB flush register is used to flush the FDB.
+ * Note that FDB notifications are flushed as well.
+ */
+#define MLXSW_REG_SFDF_ID 0x2013
+#define MLXSW_REG_SFDF_LEN 0x14
+
+static const struct mlxsw_reg_info mlxsw_reg_sfdf = {
+	.id = MLXSW_REG_SFDF_ID,
+	.len = MLXSW_REG_SFDF_LEN,
+};
+
+/* reg_sfdf_swid
+ * Switch partition ID.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, sfdf, swid, 0x00, 24, 8);
+
+enum mlxsw_reg_sfdf_flush_type {
+	MLXSW_REG_SFDF_FLUSH_PER_SWID,
+	MLXSW_REG_SFDF_FLUSH_PER_FID,
+	MLXSW_REG_SFDF_FLUSH_PER_PORT,
+	MLXSW_REG_SFDF_FLUSH_PER_PORT_AND_FID,
+	MLXSW_REG_SFDF_FLUSH_PER_LAG,
+	MLXSW_REG_SFDF_FLUSH_PER_LAG_AND_FID,
+};
+
+/* reg_sfdf_flush_type
+ * Flush type.
+ * 0 - All SWID dynamic entries are flushed.
+ * 1 - All FID dynamic entries are flushed.
+ * 2 - All dynamic entries pointing to port are flushed.
+ * 3 - All FID dynamic entries pointing to port are flushed.
+ * 4 - All dynamic entries pointing to LAG are flushed.
+ * 5 - All FID dynamic entries pointing to LAG are flushed.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, sfdf, flush_type, 0x04, 28, 4);
+
+/* reg_sfdf_flush_static
+ * Static.
+ * 0 - Flush only dynamic entries.
+ * 1 - Flush both dynamic and static entries.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, sfdf, flush_static, 0x04, 24, 1);
+
+static inline void mlxsw_reg_sfdf_pack(char *payload,
+				       enum mlxsw_reg_sfdf_flush_type type)
+{
+	MLXSW_REG_ZERO(sfdf, payload);
+	mlxsw_reg_sfdf_flush_type_set(payload, type);
+	mlxsw_reg_sfdf_flush_static_set(payload, true);
+}
+
+/* reg_sfdf_fid
+ * FID to flush.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, sfdf, fid, 0x0C, 0, 16);
+
+/* reg_sfdf_system_port
+ * Port to flush.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, sfdf, system_port, 0x0C, 0, 16);
+
+/* reg_sfdf_port_fid_system_port
+ * Port to flush, pointed to by FID.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, sfdf, port_fid_system_port, 0x08, 0, 16);
+
+/* reg_sfdf_lag_id
+ * LAG ID to flush.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, sfdf, lag_id, 0x0C, 0, 10);
+
+/* reg_sfdf_lag_fid_lag_id
+ * LAG ID to flush, pointed to by FID.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, sfdf, lag_fid_lag_id, 0x08, 0, 10);
 
 /* SLDR - Switch LAG Descriptor Register
  * -----------------------------------------
@@ -1613,20 +1787,20 @@ MLXSW_ITEM32(reg, pmlp, width, 0x00, 0, 8);
  * Module number.
  * Access: RW
  */
-MLXSW_ITEM32_INDEXED(reg, pmlp, module, 0x04, 0, 8, 0x04, 0, false);
+MLXSW_ITEM32_INDEXED(reg, pmlp, module, 0x04, 0, 8, 0x04, 0x00, false);
 
 /* reg_pmlp_tx_lane
  * Tx Lane. When rxtx field is cleared, this field is used for Rx as well.
  * Access: RW
  */
-MLXSW_ITEM32_INDEXED(reg, pmlp, tx_lane, 0x04, 16, 2, 0x04, 16, false);
+MLXSW_ITEM32_INDEXED(reg, pmlp, tx_lane, 0x04, 16, 2, 0x04, 0x00, false);
 
 /* reg_pmlp_rx_lane
  * Rx Lane. When rxtx field is cleared, this field is ignored and Rx lane is
  * equal to Tx lane.
  * Access: RW
  */
-MLXSW_ITEM32_INDEXED(reg, pmlp, rx_lane, 0x04, 24, 2, 0x04, 24, false);
+MLXSW_ITEM32_INDEXED(reg, pmlp, rx_lane, 0x04, 24, 2, 0x04, 0x00, false);
 
 static inline void mlxsw_reg_pmlp_pack(char *payload, u8 local_port)
 {
@@ -3013,6 +3187,8 @@ static inline const char *mlxsw_reg_id_str(u16 reg_id)
 		return "SGCR";
 	case MLXSW_REG_SPAD_ID:
 		return "SPAD";
+	case MLXSW_REG_SMID_ID:
+		return "SMID";
 	case MLXSW_REG_SSPR_ID:
 		return "SSPR";
 	case MLXSW_REG_SFDAT_ID:
@@ -3031,6 +3207,8 @@ static inline const char *mlxsw_reg_id_str(u16 reg_id)
 		return "SFGC";
 	case MLXSW_REG_SFTR_ID:
 		return "SFTR";
+	case MLXSW_REG_SFDF_ID:
+		return "SFDF";
 	case MLXSW_REG_SLDR_ID:
 		return "SLDR";
 	case MLXSW_REG_SLCR_ID:

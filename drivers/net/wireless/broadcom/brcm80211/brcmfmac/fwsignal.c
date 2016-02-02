@@ -36,6 +36,7 @@
 #include "p2p.h"
 #include "cfg80211.h"
 #include "proto.h"
+#include "common.h"
 
 /**
  * DOC: Firmware Signalling
@@ -520,10 +521,6 @@ static const int brcmf_fws_prio2fifo[] = {
 	BRCMF_FWS_FIFO_AC_VO,
 	BRCMF_FWS_FIFO_AC_VO
 };
-
-static int fcmode;
-module_param(fcmode, int, S_IRUSR);
-MODULE_PARM_DESC(fcmode, "mode of firmware signalled flow control");
 
 #define BRCMF_FWS_TLV_DEF(name, id, len) \
 	case BRCMF_FWS_TYPE_ ## name: \
@@ -1609,10 +1606,11 @@ static int brcmf_fws_notify_bcmc_credit_support(struct brcmf_if *ifp,
 {
 	struct brcmf_fws_info *fws = ifp->drvr->fws;
 
-	brcmf_fws_lock(fws);
-	if (fws)
+	if (fws) {
+		brcmf_fws_lock(fws);
 		fws->bcmc_credit_check = true;
-	brcmf_fws_unlock(fws);
+		brcmf_fws_unlock(fws);
+	}
 	return 0;
 }
 
@@ -2133,10 +2131,10 @@ int brcmf_fws_init(struct brcmf_pub *drvr)
 
 	/* set linkage back */
 	fws->drvr = drvr;
-	fws->fcmode = fcmode;
+	fws->fcmode = drvr->settings->fcmode;
 
 	if ((drvr->bus_if->always_use_fws_queue == false) &&
-	    (fcmode == BRCMF_FWS_FCMODE_NONE)) {
+	    (fws->fcmode == BRCMF_FWS_FCMODE_NONE)) {
 		fws->avoid_queueing = true;
 		brcmf_dbg(INFO, "FWS queueing will be avoided\n");
 		return 0;
