@@ -143,7 +143,6 @@ int vm_swappiness = 60;
 int nr_pdflush_threads = 0;
 unsigned long scan_unevictable_pages = 0;
 int suid_dumpable = 0;
-int page_cluster = 0;
 int block_dump = 0;
 int C_A_D = 0;
 #include <linux/nsproxy.h>

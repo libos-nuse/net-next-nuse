@@ -41,6 +41,7 @@ struct page *mem_map = 0;
 int nr_threads = 0;
 /* not very useful in mm/vmstat.c */
 atomic_long_t vm_stat[NR_VM_ZONE_STAT_ITEMS];
+compound_page_dtor * const compound_page_dtors[1];
 
 /* XXX: used in network stack ! */
 unsigned long num_physpages = 0;
@@ -56,8 +57,7 @@ int fs_overflowgid = 0;
 int fs_overflowuid = 0;
 unsigned long sysctl_overcommit_kbytes __read_mostly;
 DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
-static DECLARE_BITMAP(cpu_possible_bits, CONFIG_NR_CPUS) __read_mostly;
-const struct cpumask *const cpu_possible_mask = to_cpumask(cpu_possible_bits);
+struct cpumask __cpu_possible_mask;
 
 struct backing_dev_info noop_backing_dev_info = {
 	.name		= "noop",
@@ -280,5 +280,9 @@ int sysctl_max_threads(struct ctl_table *table, int write,
 
 void on_each_cpu_mask(const struct cpumask *mask,
 		      smp_call_func_t func, void *info, bool wait)
+{
+}
+
+void free_hot_cold_page(struct page *page, bool cold)
 {
 }
