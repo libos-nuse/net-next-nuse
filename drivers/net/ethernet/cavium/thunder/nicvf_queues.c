@@ -78,7 +78,7 @@ static void nicvf_free_q_desc_mem(struct nicvf *nic, struct q_desc_mem *dmem)
 static inline int nicvf_alloc_rcv_buffer(struct nicvf *nic, gfp_t gfp,
 					 u32 buf_len, u64 **rbuf)
 {
-	int order = get_order(buf_len);
+	int order = (PAGE_SIZE <= 4096) ?  PAGE_ALLOC_COSTLY_ORDER : 0;
 
 	/* Check if request can be accomodated in previous allocated page */
 	if (nic->rb_page) {
@@ -96,8 +96,7 @@ static inline int nicvf_alloc_rcv_buffer(struct nicvf *nic, gfp_t gfp,
 		nic->rb_page = alloc_pages(gfp | __GFP_COMP | __GFP_NOWARN,
 					   order);
 		if (!nic->rb_page) {
-			netdev_err(nic->netdev,
-				   "Failed to allocate new rcv buffer\n");
+			nic->drv_stats.rcv_buffer_alloc_failures++;
 			return -ENOMEM;
 		}
 		nic->rb_page_offset = 0;
@@ -1329,16 +1328,12 @@ void nicvf_update_sq_stats(struct nicvf *nic, int sq_idx)
 }
 
 /* Check for errors in the receive cmp.queue entry */
-int nicvf_check_cqe_rx_errs(struct nicvf *nic,
-			    struct cmp_queue *cq, struct cqe_rx_t *cqe_rx)
+int nicvf_check_cqe_rx_errs(struct nicvf *nic, struct cqe_rx_t *cqe_rx)
 {
 	struct nicvf_hw_stats *stats = &nic->hw_stats;
-	struct nicvf_drv_stats *drv_stats = &nic->drv_stats;
 
-	if (!cqe_rx->err_level && !cqe_rx->err_opcode) {
-		drv_stats->rx_frames_ok++;
+	if (!cqe_rx->err_level && !cqe_rx->err_opcode)
 		return 0;
-	}
 
 	if (netif_msg_rx_err(nic))
 		netdev_err(nic->netdev,

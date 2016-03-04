@@ -123,7 +123,6 @@ struct tipc_stats {
 struct tipc_link {
 	u32 addr;
 	char name[TIPC_MAX_LINK_NAME];
-	struct tipc_media_addr *media_addr;
 	struct net *net;
 
 	/* Management and link supervision data */
@@ -904,8 +903,10 @@ int tipc_link_xmit(struct tipc_link *l, struct sk_buff_head *list,
 		if (unlikely(l->backlog[i].len >= l->backlog[i].limit))
 			return link_schedule_user(l, list);
 	}
-	if (unlikely(msg_size(hdr) > mtu))
+	if (unlikely(msg_size(hdr) > mtu)) {
+		skb_queue_purge(list);
 		return -EMSGSIZE;
+	}
 
 	/* Prepare each packet for sending, and add to relevant queue: */
 	while (skb_queue_len(list)) {
@@ -917,8 +918,10 @@ int tipc_link_xmit(struct tipc_link *l, struct sk_buff_head *list,
 
 		if (likely(skb_queue_len(transmq) < maxwin)) {
 			_skb = skb_clone(skb, GFP_ATOMIC);
-			if (!_skb)
+			if (!_skb) {
+				skb_queue_purge(list);
 				return -ENOBUFS;
+			}
 			__skb_dequeue(list);
 			__skb_queue_tail(transmq, skb);
 			__skb_queue_tail(xmitq, _skb);
@@ -1261,26 +1264,6 @@ drop:
 	return rc;
 }
 
-/*
- * Send protocol message to the other endpoint.
- */
-static void tipc_link_proto_xmit(struct tipc_link *l, u32 msg_typ,
-				 int probe_msg, u32 gap, u32 tolerance,
-				 u32 priority)
-{
-	struct sk_buff *skb = NULL;
-	struct sk_buff_head xmitq;
-
-	__skb_queue_head_init(&xmitq);
-	tipc_link_build_proto_msg(l, msg_typ, probe_msg, gap,
-				  tolerance, priority, &xmitq);
-	skb = __skb_dequeue(&xmitq);
-	if (!skb)
-		return;
-	tipc_bearer_xmit_skb(l->net, l->bearer_id, skb, l->media_addr);
-	l->rcv_unacked = 0;
-}
-
 static void tipc_link_build_proto_msg(struct tipc_link *l, int mtyp, bool probe,
 				      u16 rcvgap, int tolerance, int priority,
 				      struct sk_buff_head *xmitq)
@@ -1478,6 +1461,12 @@ static int tipc_link_proto_rcv(struct tipc_link *l, struct sk_buff *skb,
 		/* Update own tolerance if peer indicates a non-zero value */
 		if (in_range(peers_tol, TIPC_MIN_LINK_TOL, TIPC_MAX_LINK_TOL))
 			l->tolerance = peers_tol;
+
+		if (peers_prio && in_range(peers_prio, TIPC_MIN_LINK_PRI,
+					   TIPC_MAX_LINK_PRI)) {
+			l->priority = peers_prio;
+			rc = tipc_link_fsm_evt(l, LINK_FAILURE_EVT);
+		}
 
 		l->silent_intv_cnt = 0;
 		l->stats.recv_states++;
@@ -1973,8 +1962,10 @@ int tipc_nl_add_bc_link(struct net *net, struct tipc_nl_msg *msg)
 
 	hdr = genlmsg_put(msg->skb, msg->portid, msg->seq, &tipc_genl_family,
 			  NLM_F_MULTI, TIPC_NL_LINK_GET);
-	if (!hdr)
+	if (!hdr) {
+		tipc_bcast_unlock(net);
 		return -EMSGSIZE;
+	}
 
 	attrs = nla_nest_start(msg->skb, TIPC_NLA_LINK);
 	if (!attrs)
@@ -2021,16 +2012,18 @@ msg_full:
 	return -EMSGSIZE;
 }
 
-void tipc_link_set_tolerance(struct tipc_link *l, u32 tol)
+void tipc_link_set_tolerance(struct tipc_link *l, u32 tol,
+			     struct sk_buff_head *xmitq)
 {
 	l->tolerance = tol;
-	tipc_link_proto_xmit(l, STATE_MSG, 0, 0, tol, 0);
+	tipc_link_build_proto_msg(l, STATE_MSG, 0, 0, tol, 0, xmitq);
 }
 
-void tipc_link_set_prio(struct tipc_link *l, u32 prio)
+void tipc_link_set_prio(struct tipc_link *l, u32 prio,
+			struct sk_buff_head *xmitq)
 {
 	l->priority = prio;
-	tipc_link_proto_xmit(l, STATE_MSG, 0, 0, 0, prio);
+	tipc_link_build_proto_msg(l, STATE_MSG, 0, 0, 0, prio, xmitq);
 }
 
 void tipc_link_set_abort_limit(struct tipc_link *l, u32 limit)
