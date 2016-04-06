@@ -27,7 +27,6 @@
 #include <linux/cache.h>
 #include <linux/percpu.h>
 #include <linux/skbuff.h>
-#include <linux/crypto.h>
 #include <linux/cryptohash.h>
 #include <linux/kref.h>
 #include <linux/ktime.h>
@@ -755,7 +754,8 @@ struct tcp_skb_cb {
 				TCPCB_REPAIRED)
 
 	__u8		ip_dsfield;	/* IPv4 tos or IPv6 dsfield	*/
-	/* 1 byte hole */
+	__u8		txstamp_ack:1,	/* Record TX timestamp for ack? */
+			unused:7;
 	__u32		ack_seq;	/* Sequence number ACK'd	*/
 	union {
 		struct inet_skb_parm	h4;
@@ -1040,17 +1040,6 @@ static inline __u32 tcp_max_tso_deferred_mss(const struct tcp_sock *tp)
 	return 3;
 }
 
-/* Slow start with delack produces 3 packets of burst, so that
- * it is safe "de facto".  This will be the default - same as
- * the default reordering threshold - but if reordering increases,
- * we must be able to allow cwnd to burst at least this much in order
- * to not pull it back when holes are filled.
- */
-static __inline__ __u32 tcp_max_burst(const struct tcp_sock *tp)
-{
-	return tp->reordering;
-}
-
 /* Returns end sequence number of the receiver's advertised window */
 static inline u32 tcp_wnd_end(const struct tcp_sock *tp)
 {
@@ -1320,9 +1309,6 @@ static inline void tcp_clear_all_retrans_hints(struct tcp_sock *tp)
 	tp->retransmit_skb_hint = NULL;
 }
 
-/* MD5 Signature */
-struct crypto_hash;
-
 union tcp_md5_addr {
 	struct in_addr  a4;
 #if IS_ENABLED(CONFIG_IPV6)
@@ -1371,7 +1357,7 @@ union tcp_md5sum_block {
 
 /* - pool: digest algorithm, hash description and scratch buffer */
 struct tcp_md5sig_pool {
-	struct hash_desc	md5_desc;
+	struct ahash_request	*md5_req;
 	union tcp_md5sum_block	md5_blk;
 };
 
@@ -1814,6 +1800,53 @@ static inline bool skb_is_tcp_pure_ack(const struct sk_buff *skb)
 static inline void skb_set_tcp_pure_ack(struct sk_buff *skb)
 {
 	skb->truesize = 2;
+}
+
+static inline int tcp_inq(struct sock *sk)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	int answ;
+
+	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
+		answ = 0;
+	} else if (sock_flag(sk, SOCK_URGINLINE) ||
+		   !tp->urg_data ||
+		   before(tp->urg_seq, tp->copied_seq) ||
+		   !before(tp->urg_seq, tp->rcv_nxt)) {
+
+		answ = tp->rcv_nxt - tp->copied_seq;
+
+		/* Subtract 1, if FIN was received */
+		if (answ && sock_flag(sk, SOCK_DONE))
+			answ--;
+	} else {
+		answ = tp->urg_seq - tp->copied_seq;
+	}
+
+	return answ;
+}
+
+static inline void tcp_segs_in(struct tcp_sock *tp, const struct sk_buff *skb)
+{
+	u16 segs_in;
+
+	segs_in = max_t(u16, 1, skb_shinfo(skb)->gso_segs);
+	tp->segs_in += segs_in;
+	if (skb->len > tcp_hdrlen(skb))
+		tp->data_segs_in += segs_in;
+}
+
+/*
+ * TCP listen path runs lockless.
+ * We forced "struct sock" to be const qualified to make sure
+ * we don't modify one of its field by mistake.
+ * Here, we increment sk_drops which is an atomic_t, so we can safely
+ * make sock writable again.
+ */
+static inline void tcp_listendrop(const struct sock *sk)
+{
+	atomic_inc(&((struct sock *)sk)->sk_drops);
+	NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_LISTENDROPS);
 }
 
 #endif	/* _TCP_H */

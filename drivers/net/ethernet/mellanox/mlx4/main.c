@@ -105,6 +105,11 @@ module_param(enable_64b_cqe_eqe, bool, 0444);
 MODULE_PARM_DESC(enable_64b_cqe_eqe,
 		 "Enable 64 byte CQEs/EQEs when the FW supports this (default: True)");
 
+static bool enable_4k_uar;
+module_param(enable_4k_uar, bool, 0444);
+MODULE_PARM_DESC(enable_4k_uar,
+		 "Enable using 4K UAR. Should not be enabled if have VFs which do not support 4K UARs (default: false)");
+
 #define PF_CONTEXT_BEHAVIOUR_MASK	(MLX4_FUNC_CAP_64B_EQE_CQE | \
 					 MLX4_FUNC_CAP_EQE_CQE_STRIDE | \
 					 MLX4_FUNC_CAP_DMFS_A0_STATIC)
@@ -423,7 +428,11 @@ static int mlx4_dev_cap(struct mlx4_dev *dev, struct mlx4_dev_cap *dev_cap)
 		/* Virtual PCI function needs to determine UAR page size from
 		 * firmware. Only master PCI function can set the uar page size
 		 */
-		dev->uar_page_shift = DEFAULT_UAR_PAGE_SHIFT;
+		if (enable_4k_uar)
+			dev->uar_page_shift = DEFAULT_UAR_PAGE_SHIFT;
+		else
+			dev->uar_page_shift = PAGE_SHIFT;
+
 		mlx4_set_num_reserved_uars(dev, dev_cap);
 	}
 
@@ -1272,6 +1281,7 @@ err_set_port:
 static int mlx4_mf_bond(struct mlx4_dev *dev)
 {
 	int err = 0;
+	int nvfs;
 	struct mlx4_slaves_pport slaves_port1;
 	struct mlx4_slaves_pport slaves_port2;
 	DECLARE_BITMAP(slaves_port_1_2, MLX4_MFUNC_MAX);
@@ -1288,11 +1298,18 @@ static int mlx4_mf_bond(struct mlx4_dev *dev)
 		return -EINVAL;
 	}
 
+	/* number of virtual functions is number of total functions minus one
+	 * physical function for each port.
+	 */
+	nvfs = bitmap_weight(slaves_port1.slaves, dev->persist->num_vfs + 1) +
+		bitmap_weight(slaves_port2.slaves, dev->persist->num_vfs + 1) - 2;
+
 	/* limit on maximum allowed VFs */
-	if ((bitmap_weight(slaves_port1.slaves, dev->persist->num_vfs + 1) +
-	    bitmap_weight(slaves_port2.slaves, dev->persist->num_vfs + 1)) >
-	    MAX_MF_BOND_ALLOWED_SLAVES)
+	if (nvfs > MAX_MF_BOND_ALLOWED_SLAVES) {
+		mlx4_warn(dev, "HA mode is not supported for %d VFs (max %d are allowed)\n",
+			  nvfs, MAX_MF_BOND_ALLOWED_SLAVES);
 		return -EINVAL;
+	}
 
 	if (dev->caps.steering_mode != MLX4_STEERING_MODE_DEVICE_MANAGED) {
 		mlx4_warn(dev, "HA mode unsupported for NON DMFS steering\n");
@@ -2225,11 +2242,14 @@ static int mlx4_init_hca(struct mlx4_dev *dev)
 
 		dev->caps.max_fmr_maps = (1 << (32 - ilog2(dev->caps.num_mpts))) - 1;
 
-		/* Always set UAR page size 4KB, set log_uar_sz accordingly */
-		init_hca.log_uar_sz = ilog2(dev->caps.num_uars) +
-				      PAGE_SHIFT -
-				      DEFAULT_UAR_PAGE_SHIFT;
-		init_hca.uar_page_sz = DEFAULT_UAR_PAGE_SHIFT - 12;
+		if (enable_4k_uar) {
+			init_hca.log_uar_sz = ilog2(dev->caps.num_uars) +
+						    PAGE_SHIFT - DEFAULT_UAR_PAGE_SHIFT;
+			init_hca.uar_page_sz = DEFAULT_UAR_PAGE_SHIFT - 12;
+		} else {
+			init_hca.log_uar_sz = ilog2(dev->caps.num_uars);
+			init_hca.uar_page_sz = PAGE_SHIFT - 12;
+		}
 
 		init_hca.mw_enabled = 0;
 		if (dev->caps.flags & MLX4_DEV_CAP_FLAG_MEM_WINDOW ||

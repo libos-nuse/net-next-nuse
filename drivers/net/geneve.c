@@ -68,6 +68,7 @@ struct geneve_dev {
 	u8                 tos;		/* TOS override */
 	union geneve_addr  remote;	/* IP address for link partner */
 	struct list_head   next;	/* geneve's per namespace list */
+	__be32		   label;	/* IPv6 flowlabel override */
 	__be16		   dst_port;
 	bool		   collect_md;
 	struct gro_cells   gro_cells;
@@ -462,8 +463,6 @@ static struct sk_buff **geneve_gro_receive(struct sk_buff **head,
 			goto out;
 	}
 
-	flush = 0;
-
 	for (p = *head; p; p = p->next) {
 		if (!NAPI_GRO_CB(p)->same_flow)
 			continue;
@@ -480,14 +479,13 @@ static struct sk_buff **geneve_gro_receive(struct sk_buff **head,
 
 	rcu_read_lock();
 	ptype = gro_find_receive_by_type(type);
-	if (!ptype) {
-		flush = 1;
+	if (!ptype)
 		goto out_unlock;
-	}
 
 	skb_gro_pull(skb, gh_len);
 	skb_gro_postpull_rcsum(skb, gh, gh_len);
 	pp = ptype->callbacks.gro_receive(head, skb);
+	flush = 0;
 
 out_unlock:
 	rcu_read_unlock();
@@ -775,10 +773,10 @@ static struct rtable *geneve_get_v4_rt(struct sk_buff *skb,
 				       struct flowi4 *fl4,
 				       struct ip_tunnel_info *info)
 {
+	bool use_cache = ip_tunnel_dst_cache_usable(skb, info);
 	struct geneve_dev *geneve = netdev_priv(dev);
 	struct dst_cache *dst_cache;
 	struct rtable *rt = NULL;
-	bool use_cache = true;
 	__u8 tos;
 
 	memset(fl4, 0, sizeof(*fl4));
@@ -804,7 +802,6 @@ static struct rtable *geneve_get_v4_rt(struct sk_buff *skb,
 		dst_cache = &geneve->dst_cache;
 	}
 
-	use_cache = use_cache && !skb->mark;
 	if (use_cache) {
 		rt = dst_cache_get_ip4(dst_cache, &fl4->saddr);
 		if (rt)
@@ -832,11 +829,11 @@ static struct dst_entry *geneve_get_v6_dst(struct sk_buff *skb,
 					   struct flowi6 *fl6,
 					   struct ip_tunnel_info *info)
 {
+	bool use_cache = ip_tunnel_dst_cache_usable(skb, info);
 	struct geneve_dev *geneve = netdev_priv(dev);
 	struct geneve_sock *gs6 = geneve->sock6;
 	struct dst_entry *dst = NULL;
 	struct dst_cache *dst_cache;
-	bool use_cache = true;
 	__u8 prio;
 
 	memset(fl6, 0, sizeof(*fl6));
@@ -846,7 +843,8 @@ static struct dst_entry *geneve_get_v6_dst(struct sk_buff *skb,
 	if (info) {
 		fl6->daddr = info->key.u.ipv6.dst;
 		fl6->saddr = info->key.u.ipv6.src;
-		fl6->flowi6_tos = RT_TOS(info->key.tos);
+		fl6->flowlabel = ip6_make_flowinfo(RT_TOS(info->key.tos),
+						   info->key.label);
 		dst_cache = &info->dst_cache;
 	} else {
 		prio = geneve->tos;
@@ -857,12 +855,12 @@ static struct dst_entry *geneve_get_v6_dst(struct sk_buff *skb,
 			use_cache = false;
 		}
 
-		fl6->flowi6_tos = RT_TOS(prio);
+		fl6->flowlabel = ip6_make_flowinfo(RT_TOS(prio),
+						   geneve->label);
 		fl6->daddr = geneve->remote.sin6.sin6_addr;
 		dst_cache = &geneve->dst_cache;
 	}
 
-	use_cache = use_cache && !skb->mark;
 	if (use_cache) {
 		dst = dst_cache_get_ip6(dst_cache, &fl6->saddr);
 		if (dst)
@@ -940,7 +938,7 @@ static netdev_tx_t geneve_xmit_skb(struct sk_buff *skb, struct net_device *dev,
 		u8 vni[3];
 
 		tunnel_id_to_vni(key->tun_id, vni);
-		if (key->tun_flags & TUNNEL_GENEVE_OPT)
+		if (info->options_len)
 			opts = ip_tunnel_info_opts(info);
 
 		if (key->tun_flags & TUNNEL_CSUM)
@@ -1000,6 +998,7 @@ static netdev_tx_t geneve6_xmit_skb(struct sk_buff *skb, struct net_device *dev,
 	struct flowi6 fl6;
 	__u8 prio, ttl;
 	__be16 sport;
+	__be32 label;
 	bool xnet = !net_eq(geneve->net, dev_net(geneve->dev));
 	u32 flags = geneve->flags;
 
@@ -1027,7 +1026,7 @@ static netdev_tx_t geneve6_xmit_skb(struct sk_buff *skb, struct net_device *dev,
 		u8 vni[3];
 
 		tunnel_id_to_vni(key->tun_id, vni);
-		if (key->tun_flags & TUNNEL_GENEVE_OPT)
+		if (info->options_len)
 			opts = ip_tunnel_info_opts(info);
 
 		if (key->tun_flags & TUNNEL_CSUM)
@@ -1043,20 +1042,24 @@ static netdev_tx_t geneve6_xmit_skb(struct sk_buff *skb, struct net_device *dev,
 
 		prio = ip_tunnel_ecn_encap(key->tos, iip, skb);
 		ttl = key->ttl;
+		label = info->key.label;
 	} else {
 		err = geneve6_build_skb(dst, skb, 0, geneve->vni,
 					0, NULL, flags, xnet);
 		if (unlikely(err))
 			goto err;
 
-		prio = ip_tunnel_ecn_encap(fl6.flowi6_tos, iip, skb);
+		prio = ip_tunnel_ecn_encap(ip6_tclass(fl6.flowlabel),
+					   iip, skb);
 		ttl = geneve->ttl;
 		if (!ttl && ipv6_addr_is_multicast(&fl6.daddr))
 			ttl = 1;
 		ttl = ttl ? : ip6_dst_hoplimit(dst);
+		label = geneve->label;
 	}
+
 	udp_tunnel6_xmit_skb(dst, gs6->sock->sk, skb, dev,
-			     &fl6.saddr, &fl6.daddr, prio, ttl,
+			     &fl6.saddr, &fl6.daddr, prio, ttl, label,
 			     sport, geneve->dst_port,
 			     !!(flags & GENEVE_F_UDP_ZERO_CSUM6_TX));
 	return NETDEV_TX_OK;
@@ -1240,6 +1243,7 @@ static const struct nla_policy geneve_policy[IFLA_GENEVE_MAX + 1] = {
 	[IFLA_GENEVE_REMOTE6]		= { .len = sizeof(struct in6_addr) },
 	[IFLA_GENEVE_TTL]		= { .type = NLA_U8 },
 	[IFLA_GENEVE_TOS]		= { .type = NLA_U8 },
+	[IFLA_GENEVE_LABEL]		= { .type = NLA_U32 },
 	[IFLA_GENEVE_PORT]		= { .type = NLA_U16 },
 	[IFLA_GENEVE_COLLECT_METADATA]	= { .type = NLA_FLAG },
 	[IFLA_GENEVE_UDP_CSUM]		= { .type = NLA_U8 },
@@ -1297,8 +1301,8 @@ static struct geneve_dev *geneve_find_dev(struct geneve_net *gn,
 
 static int geneve_configure(struct net *net, struct net_device *dev,
 			    union geneve_addr *remote,
-			    __u32 vni, __u8 ttl, __u8 tos, __be16 dst_port,
-			    bool metadata, u32 flags)
+			    __u32 vni, __u8 ttl, __u8 tos, __be32 label,
+			    __be16 dst_port, bool metadata, u32 flags)
 {
 	struct geneve_net *gn = net_generic(net, geneve_net_id);
 	struct geneve_dev *t, *geneve = netdev_priv(dev);
@@ -1308,7 +1312,7 @@ static int geneve_configure(struct net *net, struct net_device *dev,
 	if (!remote)
 		return -EINVAL;
 	if (metadata &&
-	    (remote->sa.sa_family != AF_UNSPEC || vni || tos || ttl))
+	    (remote->sa.sa_family != AF_UNSPEC || vni || tos || ttl || label))
 		return -EINVAL;
 
 	geneve->net = net;
@@ -1323,10 +1327,14 @@ static int geneve_configure(struct net *net, struct net_device *dev,
 	    (remote->sa.sa_family == AF_INET6 &&
 	     ipv6_addr_is_multicast(&remote->sin6.sin6_addr)))
 		return -EINVAL;
+	if (label && remote->sa.sa_family != AF_INET6)
+		return -EINVAL;
+
 	geneve->remote = *remote;
 
 	geneve->ttl = ttl;
 	geneve->tos = tos;
+	geneve->label = label;
 	geneve->dst_port = dst_port;
 	geneve->collect_md = metadata;
 	geneve->flags = flags;
@@ -1369,6 +1377,7 @@ static int geneve_newlink(struct net *net, struct net_device *dev,
 	__u8 ttl = 0, tos = 0;
 	bool metadata = false;
 	union geneve_addr remote = geneve_remote_unspec;
+	__be32 label = 0;
 	__u32 vni = 0;
 	u32 flags = 0;
 
@@ -1405,6 +1414,10 @@ static int geneve_newlink(struct net *net, struct net_device *dev,
 	if (data[IFLA_GENEVE_TOS])
 		tos = nla_get_u8(data[IFLA_GENEVE_TOS]);
 
+	if (data[IFLA_GENEVE_LABEL])
+		label = nla_get_be32(data[IFLA_GENEVE_LABEL]) &
+			IPV6_FLOWLABEL_MASK;
+
 	if (data[IFLA_GENEVE_PORT])
 		dst_port = nla_get_be16(data[IFLA_GENEVE_PORT]);
 
@@ -1423,8 +1436,8 @@ static int geneve_newlink(struct net *net, struct net_device *dev,
 	    nla_get_u8(data[IFLA_GENEVE_UDP_ZERO_CSUM6_RX]))
 		flags |= GENEVE_F_UDP_ZERO_CSUM6_RX;
 
-	return geneve_configure(net, dev, &remote, vni, ttl, tos, dst_port,
-				metadata, flags);
+	return geneve_configure(net, dev, &remote, vni, ttl, tos, label,
+				dst_port, metadata, flags);
 }
 
 static void geneve_dellink(struct net_device *dev, struct list_head *head)
@@ -1441,6 +1454,7 @@ static size_t geneve_get_size(const struct net_device *dev)
 		nla_total_size(sizeof(struct in6_addr)) + /* IFLA_GENEVE_REMOTE{6} */
 		nla_total_size(sizeof(__u8)) +  /* IFLA_GENEVE_TTL */
 		nla_total_size(sizeof(__u8)) +  /* IFLA_GENEVE_TOS */
+		nla_total_size(sizeof(__be32)) +  /* IFLA_GENEVE_LABEL */
 		nla_total_size(sizeof(__be16)) +  /* IFLA_GENEVE_PORT */
 		nla_total_size(0) +	 /* IFLA_GENEVE_COLLECT_METADATA */
 		nla_total_size(sizeof(__u8)) + /* IFLA_GENEVE_UDP_CSUM */
@@ -1471,7 +1485,8 @@ static int geneve_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	}
 
 	if (nla_put_u8(skb, IFLA_GENEVE_TTL, geneve->ttl) ||
-	    nla_put_u8(skb, IFLA_GENEVE_TOS, geneve->tos))
+	    nla_put_u8(skb, IFLA_GENEVE_TOS, geneve->tos) ||
+	    nla_put_be32(skb, IFLA_GENEVE_LABEL, geneve->label))
 		goto nla_put_failure;
 
 	if (nla_put_be16(skb, IFLA_GENEVE_PORT, geneve->dst_port))
@@ -1523,7 +1538,7 @@ struct net_device *geneve_dev_create_fb(struct net *net, const char *name,
 		return dev;
 
 	err = geneve_configure(net, dev, &geneve_remote_unspec,
-			       0, 0, 0, htons(dst_port), true,
+			       0, 0, 0, 0, htons(dst_port), true,
 			       GENEVE_F_UDP_ZERO_CSUM6_RX);
 	if (err)
 		goto err;

@@ -631,12 +631,30 @@ static int iwl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	/* if RTPM is in use, enable it in our device */
 	if (iwl_trans->runtime_pm_mode != IWL_PLAT_PM_MODE_DISABLED) {
+		/* We explicitly set the device to active here to
+		 * clear contingent errors.
+		 */
 		pm_runtime_set_active(&pdev->dev);
+
 		pm_runtime_set_autosuspend_delay(&pdev->dev,
 					 iwlwifi_mod_params.d0i3_entry_delay);
 		pm_runtime_use_autosuspend(&pdev->dev);
+
+		/* We are not supposed to call pm_runtime_allow() by
+		 * ourselves, but let userspace enable runtime PM via
+		 * sysfs.  However, since we don't enable this from
+		 * userspace yet, we need to allow/forbid() ourselves.
+		*/
 		pm_runtime_allow(&pdev->dev);
 	}
+
+	/* The PCI device starts with a reference taken and we are
+	 * supposed to release it here.  But to simplify the
+	 * interaction with the opmode, we don't do it now, but let
+	 * the opmode release it when it's ready.  To account for this
+	 * reference, we start with ref_count set to 1.
+	 */
+	trans_pcie->ref_count = 1;
 
 	return 0;
 
@@ -652,7 +670,17 @@ static void iwl_pci_remove(struct pci_dev *pdev)
 	struct iwl_trans *trans = pci_get_drvdata(pdev);
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 
+	/* if RTPM was in use, restore it to the state before probe */
+	if (trans->runtime_pm_mode != IWL_PLAT_PM_MODE_DISABLED) {
+		/* We should not call forbid here, but we do for now.
+		 * Check the comment to pm_runtime_allow() in
+		 * iwl_pci_probe().
+		 */
+		pm_runtime_forbid(trans->dev);
+	}
+
 	iwl_drv_stop(trans_pcie->drv);
+
 	iwl_trans_pcie_free(trans);
 }
 
@@ -811,6 +839,45 @@ static int iwl_pci_runtime_resume(struct device *device)
 
 	return 0;
 }
+
+static int iwl_pci_system_prepare(struct device *device)
+{
+	struct pci_dev *pdev = to_pci_dev(device);
+	struct iwl_trans *trans = pci_get_drvdata(pdev);
+
+	IWL_DEBUG_RPM(trans, "preparing for system suspend\n");
+
+	/* This is called before entering system suspend and before
+	 * the runtime resume is called.  Set the suspending flag to
+	 * prevent the wakelock from being taken.
+	 */
+	trans->suspending = true;
+
+	/* Wake the device up from runtime suspend before going to
+	 * platform suspend.  This is needed because we don't know
+	 * whether wowlan any is set and, if it's not, mac80211 will
+	 * disconnect (in which case, we can't be in D0i3).
+	 */
+	pm_runtime_resume(device);
+
+	return 0;
+}
+
+static void iwl_pci_system_complete(struct device *device)
+{
+	struct pci_dev *pdev = to_pci_dev(device);
+	struct iwl_trans *trans = pci_get_drvdata(pdev);
+
+	IWL_DEBUG_RPM(trans, "completing system suspend\n");
+
+	/* This is called as a counterpart to the prepare op.  It is
+	 * called either when suspending fails or when suspend
+	 * completed successfully.  Now there's no risk of grabbing
+	 * the wakelock anymore, so we can release the suspending
+	 * flag.
+	 */
+	trans->suspending = false;
+}
 #endif /* CONFIG_IWLWIFI_PCIE_RTPM */
 
 static const struct dev_pm_ops iwl_dev_pm_ops = {
@@ -820,6 +887,8 @@ static const struct dev_pm_ops iwl_dev_pm_ops = {
 	SET_RUNTIME_PM_OPS(iwl_pci_runtime_suspend,
 			   iwl_pci_runtime_resume,
 			   NULL)
+	.prepare = iwl_pci_system_prepare,
+	.complete = iwl_pci_system_complete,
 #endif /* CONFIG_IWLWIFI_PCIE_RTPM */
 };
 

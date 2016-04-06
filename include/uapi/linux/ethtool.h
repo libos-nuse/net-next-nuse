@@ -13,8 +13,13 @@
 #ifndef _UAPI_LINUX_ETHTOOL_H
 #define _UAPI_LINUX_ETHTOOL_H
 
+#include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/if_ether.h>
+
+#ifndef __KERNEL__
+#include <limits.h> /* for INT_MAX */
+#endif
 
 /* All structures exposed to userland should be defined such that they
  * have the same layout for 32-bit and 64-bit userland.
@@ -1215,7 +1220,7 @@ enum ethtool_sfeatures_retval_bits {
 struct ethtool_per_queue_op {
 	__u32	cmd;
 	__u32	sub_command;
-	__u32	queue_mask[DIV_ROUND_UP(MAX_NUM_QUEUE, 32)];
+	__u32	queue_mask[__KERNEL_DIV_ROUND_UP(MAX_NUM_QUEUE, 32)];
 	char	data[];
 };
 
@@ -1643,9 +1648,9 @@ enum ethtool_reset_flags {
  *	%ETHTOOL_GLINKSETTINGS: on entry, number of words passed by user
  *	(>= 0); on return, if handshake in progress, negative if
  *	request size unsupported by kernel: absolute value indicates
- *	kernel recommended size and cmd field is 0, as well as all the
- *	other fields; otherwise (handshake completed), strictly
- *	positive to indicate size used by kernel and cmd field is
+ *	kernel expected size and all the other fields but cmd
+ *	are 0; otherwise (handshake completed), strictly positive
+ *	to indicate size used by kernel and cmd field stays
  *	%ETHTOOL_GLINKSETTINGS, all other fields populated by driver. For
  *	%ETHTOOL_SLINKSETTINGS: must be valid on entry, ie. a positive
  *	value returned previously by %ETHTOOL_GLINKSETTINGS, otherwise

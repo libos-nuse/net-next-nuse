@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel 10 Gigabit PCI Express Linux driver
-  Copyright(c) 1999 - 2015 Intel Corporation.
+  Copyright(c) 1999 - 2016 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -53,15 +53,6 @@
 #include <net/vxlan.h>
 #include <net/pkt_cls.h>
 #include <net/tc_act/tc_gact.h>
-
-#ifdef CONFIG_OF
-#include <linux/of_net.h>
-#endif
-
-#ifdef CONFIG_SPARC
-#include <asm/idprom.h>
-#include <asm/prom.h>
-#endif
 
 #include "ixgbe.h"
 #include "ixgbe_common.h"
@@ -1087,6 +1078,36 @@ static void ixgbe_tx_timeout_reset(struct ixgbe_adapter *adapter)
 }
 
 /**
+ * ixgbe_tx_maxrate - callback to set the maximum per-queue bitrate
+ **/
+static int ixgbe_tx_maxrate(struct net_device *netdev,
+			    int queue_index, u32 maxrate)
+{
+	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+	struct ixgbe_hw *hw = &adapter->hw;
+	u32 bcnrc_val = ixgbe_link_mbps(adapter);
+
+	if (!maxrate)
+		return 0;
+
+	/* Calculate the rate factor values to set */
+	bcnrc_val <<= IXGBE_RTTBCNRC_RF_INT_SHIFT;
+	bcnrc_val /= maxrate;
+
+	/* clear everything but the rate factor */
+	bcnrc_val &= IXGBE_RTTBCNRC_RF_INT_MASK |
+	IXGBE_RTTBCNRC_RF_DEC_MASK;
+
+	/* enable the rate scheduler */
+	bcnrc_val |= IXGBE_RTTBCNRC_RS_ENA;
+
+	IXGBE_WRITE_REG(hw, IXGBE_RTTDQSEL, queue_index);
+	IXGBE_WRITE_REG(hw, IXGBE_RTTBCNRC, bcnrc_val);
+
+	return 0;
+}
+
+/**
  * ixgbe_clean_tx_irq - Reclaim resources after transmit completes
  * @q_vector: structure containing interrupt and ring information
  * @tx_ring: tx ring to clean
@@ -1945,7 +1966,7 @@ static bool ixgbe_add_rx_frag(struct ixgbe_ring *rx_ring,
 	/* Even if we own the page, we are not allowed to use atomic_set()
 	 * This would break get_page_unless_zero() users.
 	 */
-	atomic_inc(&page->_count);
+	page_ref_inc(page);
 
 	return true;
 }
@@ -3908,7 +3929,9 @@ static int ixgbe_vlan_rx_add_vid(struct net_device *netdev,
 	struct ixgbe_hw *hw = &adapter->hw;
 
 	/* add VID to filter table */
-	hw->mac.ops.set_vfta(&adapter->hw, vid, VMDQ_P(0), true, true);
+	if (!vid || !(adapter->flags2 & IXGBE_FLAG2_VLAN_PROMISC))
+		hw->mac.ops.set_vfta(&adapter->hw, vid, VMDQ_P(0), true, !!vid);
+
 	set_bit(vid, adapter->active_vlans);
 
 	return 0;
@@ -3965,9 +3988,7 @@ static int ixgbe_vlan_rx_kill_vid(struct net_device *netdev,
 	struct ixgbe_hw *hw = &adapter->hw;
 
 	/* remove VID from filter table */
-	if (adapter->flags2 & IXGBE_FLAG2_VLAN_PROMISC)
-		ixgbe_update_pf_promisc_vlvf(adapter, vid);
-	else
+	if (vid && !(adapter->flags2 & IXGBE_FLAG2_VLAN_PROMISC))
 		hw->mac.ops.set_vfta(hw, vid, VMDQ_P(0), false, true);
 
 	clear_bit(vid, adapter->active_vlans);
@@ -4172,11 +4193,11 @@ static void ixgbe_vlan_promisc_disable(struct ixgbe_adapter *adapter)
 
 static void ixgbe_restore_vlan(struct ixgbe_adapter *adapter)
 {
-	u16 vid;
+	u16 vid = 1;
 
 	ixgbe_vlan_rx_add_vid(adapter->netdev, htons(ETH_P_8021Q), 0);
 
-	for_each_set_bit(vid, adapter->active_vlans, VLAN_N_VID)
+	for_each_set_bit_from(vid, adapter->active_vlans, VLAN_N_VID)
 		ixgbe_vlan_rx_add_vid(adapter->netdev, htons(ETH_P_8021Q), vid);
 }
 
@@ -4426,6 +4447,7 @@ void ixgbe_set_rx_mode(struct net_device *netdev)
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
 	u32 fctrl, vmolr = IXGBE_VMOLR_BAM | IXGBE_VMOLR_AUPE;
+	netdev_features_t features = netdev->features;
 	int count;
 
 	/* Check for Promiscuous and All Multicast modes */
@@ -4443,14 +4465,13 @@ void ixgbe_set_rx_mode(struct net_device *netdev)
 		hw->addr_ctrl.user_set_promisc = true;
 		fctrl |= (IXGBE_FCTRL_UPE | IXGBE_FCTRL_MPE);
 		vmolr |= IXGBE_VMOLR_MPE;
-		ixgbe_vlan_promisc_enable(adapter);
+		features &= ~NETIF_F_HW_VLAN_CTAG_FILTER;
 	} else {
 		if (netdev->flags & IFF_ALLMULTI) {
 			fctrl |= IXGBE_FCTRL_MPE;
 			vmolr |= IXGBE_VMOLR_MPE;
 		}
 		hw->addr_ctrl.user_set_promisc = false;
-		ixgbe_vlan_promisc_disable(adapter);
 	}
 
 	/*
@@ -4483,7 +4504,7 @@ void ixgbe_set_rx_mode(struct net_device *netdev)
 	}
 
 	/* This is useful for sniffing bad packets. */
-	if (adapter->netdev->features & NETIF_F_RXALL) {
+	if (features & NETIF_F_RXALL) {
 		/* UPE and MPE will be handled by normal PROMISC logic
 		 * in e1000e_set_rx_mode */
 		fctrl |= (IXGBE_FCTRL_SBP | /* Receive bad packets */
@@ -4496,10 +4517,15 @@ void ixgbe_set_rx_mode(struct net_device *netdev)
 
 	IXGBE_WRITE_REG(hw, IXGBE_FCTRL, fctrl);
 
-	if (netdev->features & NETIF_F_HW_VLAN_CTAG_RX)
+	if (features & NETIF_F_HW_VLAN_CTAG_RX)
 		ixgbe_vlan_strip_enable(adapter);
 	else
 		ixgbe_vlan_strip_disable(adapter);
+
+	if (features & NETIF_F_HW_VLAN_CTAG_FILTER)
+		ixgbe_vlan_promisc_disable(adapter);
+	else
+		ixgbe_vlan_promisc_enable(adapter);
 }
 
 static void ixgbe_napi_enable_all(struct ixgbe_adapter *adapter)
@@ -4531,9 +4557,7 @@ static void ixgbe_clear_vxlan_port(struct ixgbe_adapter *adapter)
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 		IXGBE_WRITE_REG(&adapter->hw, IXGBE_VXLANCTRL, 0);
-#ifdef CONFIG_IXGBE_VXLAN
 		adapter->vxlan_port = 0;
-#endif
 		break;
 	default:
 		break;
@@ -5994,7 +6018,7 @@ static int ixgbe_change_mtu(struct net_device *netdev, int new_mtu)
  * handler is registered with the OS, the watchdog timer is started,
  * and the stack is notified that the interface is ready.
  **/
-static int ixgbe_open(struct net_device *netdev)
+int ixgbe_open(struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
@@ -6096,7 +6120,7 @@ static void ixgbe_close_suspend(struct ixgbe_adapter *adapter)
  * needs to be disabled.  A global MAC reset is issued to stop the
  * hardware, and all transmit and receive resources are freed.
  **/
-static int ixgbe_close(struct net_device *netdev)
+int ixgbe_close(struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 
@@ -7213,103 +7237,61 @@ static int ixgbe_tso(struct ixgbe_ring *tx_ring,
 	return 1;
 }
 
+static inline bool ixgbe_ipv6_csum_is_sctp(struct sk_buff *skb)
+{
+	unsigned int offset = 0;
+
+	ipv6_find_hdr(skb, &offset, IPPROTO_SCTP, NULL, NULL);
+
+	return offset == skb_checksum_start_offset(skb);
+}
+
 static void ixgbe_tx_csum(struct ixgbe_ring *tx_ring,
 			  struct ixgbe_tx_buffer *first)
 {
 	struct sk_buff *skb = first->skb;
 	u32 vlan_macip_lens = 0;
-	u32 mss_l4len_idx = 0;
 	u32 type_tucmd = 0;
 
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
-		if (!(first->tx_flags & IXGBE_TX_FLAGS_HW_VLAN) &&
-		    !(first->tx_flags & IXGBE_TX_FLAGS_CC))
+csum_failed:
+		if (!(first->tx_flags & (IXGBE_TX_FLAGS_HW_VLAN |
+					 IXGBE_TX_FLAGS_CC)))
 			return;
-		vlan_macip_lens = skb_network_offset(skb) <<
-				  IXGBE_ADVTXD_MACLEN_SHIFT;
-	} else {
-		u8 l4_hdr = 0;
-		union {
-			struct iphdr *ipv4;
-			struct ipv6hdr *ipv6;
-			u8 *raw;
-		} network_hdr;
-		union {
-			struct tcphdr *tcphdr;
-			u8 *raw;
-		} transport_hdr;
-		__be16 frag_off;
-
-		if (skb->encapsulation) {
-			network_hdr.raw = skb_inner_network_header(skb);
-			transport_hdr.raw = skb_inner_transport_header(skb);
-			vlan_macip_lens = skb_inner_network_offset(skb) <<
-					  IXGBE_ADVTXD_MACLEN_SHIFT;
-		} else {
-			network_hdr.raw = skb_network_header(skb);
-			transport_hdr.raw = skb_transport_header(skb);
-			vlan_macip_lens = skb_network_offset(skb) <<
-					  IXGBE_ADVTXD_MACLEN_SHIFT;
-		}
-
-		/* use first 4 bits to determine IP version */
-		switch (network_hdr.ipv4->version) {
-		case IPVERSION:
-			vlan_macip_lens |= transport_hdr.raw - network_hdr.raw;
-			type_tucmd |= IXGBE_ADVTXD_TUCMD_IPV4;
-			l4_hdr = network_hdr.ipv4->protocol;
-			break;
-		case 6:
-			vlan_macip_lens |= transport_hdr.raw - network_hdr.raw;
-			l4_hdr = network_hdr.ipv6->nexthdr;
-			if (likely((transport_hdr.raw - network_hdr.raw) ==
-				   sizeof(struct ipv6hdr)))
-				break;
-			ipv6_skip_exthdr(skb, network_hdr.raw - skb->data +
-					      sizeof(struct ipv6hdr),
-					 &l4_hdr, &frag_off);
-			if (unlikely(frag_off))
-				l4_hdr = NEXTHDR_FRAGMENT;
-			break;
-		default:
-			break;
-		}
-
-		switch (l4_hdr) {
-		case IPPROTO_TCP:
-			type_tucmd |= IXGBE_ADVTXD_TUCMD_L4T_TCP;
-			mss_l4len_idx = (transport_hdr.tcphdr->doff * 4) <<
-					IXGBE_ADVTXD_L4LEN_SHIFT;
-			break;
-		case IPPROTO_SCTP:
-			type_tucmd |= IXGBE_ADVTXD_TUCMD_L4T_SCTP;
-			mss_l4len_idx = sizeof(struct sctphdr) <<
-					IXGBE_ADVTXD_L4LEN_SHIFT;
-			break;
-		case IPPROTO_UDP:
-			mss_l4len_idx = sizeof(struct udphdr) <<
-					IXGBE_ADVTXD_L4LEN_SHIFT;
-			break;
-		default:
-			if (unlikely(net_ratelimit())) {
-				dev_warn(tx_ring->dev,
-					 "partial checksum, version=%d, l4 proto=%x\n",
-					 network_hdr.ipv4->version, l4_hdr);
-			}
-			skb_checksum_help(skb);
-			goto no_csum;
-		}
-
-		/* update TX checksum flag */
-		first->tx_flags |= IXGBE_TX_FLAGS_CSUM;
+		goto no_csum;
 	}
 
+	switch (skb->csum_offset) {
+	case offsetof(struct tcphdr, check):
+		type_tucmd = IXGBE_ADVTXD_TUCMD_L4T_TCP;
+		/* fall through */
+	case offsetof(struct udphdr, check):
+		break;
+	case offsetof(struct sctphdr, checksum):
+		/* validate that this is actually an SCTP request */
+		if (((first->protocol == htons(ETH_P_IP)) &&
+		     (ip_hdr(skb)->protocol == IPPROTO_SCTP)) ||
+		    ((first->protocol == htons(ETH_P_IPV6)) &&
+		     ixgbe_ipv6_csum_is_sctp(skb))) {
+			type_tucmd = IXGBE_ADVTXD_TUCMD_L4T_SCTP;
+			break;
+		}
+		/* fall through */
+	default:
+		skb_checksum_help(skb);
+		goto csum_failed;
+	}
+
+	/* update TX checksum flag */
+	first->tx_flags |= IXGBE_TX_FLAGS_CSUM;
+	vlan_macip_lens = skb_checksum_start_offset(skb) -
+			  skb_network_offset(skb);
 no_csum:
 	/* vlan_macip_lens: MACLEN, VLAN tag */
+	vlan_macip_lens |= skb_network_offset(skb) << IXGBE_ADVTXD_MACLEN_SHIFT;
 	vlan_macip_lens |= first->tx_flags & IXGBE_TX_FLAGS_VLAN_MASK;
 
-	ixgbe_tx_ctxtdesc(tx_ring, vlan_macip_lens, 0,
-			  type_tucmd, mss_l4len_idx);
+	ixgbe_tx_ctxtdesc(tx_ring, vlan_macip_lens, 0, type_tucmd, 0);
 }
 
 #define IXGBE_SET_FLAG(_input, _flag, _result) \
@@ -7560,11 +7542,10 @@ static void ixgbe_atr(struct ixgbe_ring *ring,
 		struct ipv6hdr *ipv6;
 	} hdr;
 	struct tcphdr *th;
+	unsigned int hlen;
 	struct sk_buff *skb;
-#ifdef CONFIG_IXGBE_VXLAN
-	u8 encap = false;
-#endif /* CONFIG_IXGBE_VXLAN */
 	__be16 vlan_id;
+	int l4_proto;
 
 	/* if ring doesn't have a interrupt vector, cannot perform ATR */
 	if (!q_vector)
@@ -7576,62 +7557,50 @@ static void ixgbe_atr(struct ixgbe_ring *ring,
 
 	ring->atr_count++;
 
+	/* currently only IPv4/IPv6 with TCP is supported */
+	if ((first->protocol != htons(ETH_P_IP)) &&
+	    (first->protocol != htons(ETH_P_IPV6)))
+		return;
+
 	/* snag network header to get L4 type and address */
 	skb = first->skb;
 	hdr.network = skb_network_header(skb);
-	if (!skb->encapsulation) {
-		th = tcp_hdr(skb);
-	} else {
 #ifdef CONFIG_IXGBE_VXLAN
+	if (skb->encapsulation &&
+	    first->protocol == htons(ETH_P_IP) &&
+	    hdr.ipv4->protocol != IPPROTO_UDP) {
 		struct ixgbe_adapter *adapter = q_vector->adapter;
 
-		if (!adapter->vxlan_port)
-			return;
-		if (first->protocol != htons(ETH_P_IP) ||
-		    hdr.ipv4->version != IPVERSION ||
-		    hdr.ipv4->protocol != IPPROTO_UDP) {
-			return;
-		}
-		if (ntohs(udp_hdr(skb)->dest) != adapter->vxlan_port)
-			return;
-		encap = true;
-		hdr.network = skb_inner_network_header(skb);
-		th = inner_tcp_hdr(skb);
-#else
-		return;
-#endif /* CONFIG_IXGBE_VXLAN */
+		/* verify the port is recognized as VXLAN */
+		if (adapter->vxlan_port &&
+		    udp_hdr(skb)->dest == adapter->vxlan_port)
+			hdr.network = skb_inner_network_header(skb);
 	}
+#endif /* CONFIG_IXGBE_VXLAN */
 
 	/* Currently only IPv4/IPv6 with TCP is supported */
 	switch (hdr.ipv4->version) {
 	case IPVERSION:
-		if (hdr.ipv4->protocol != IPPROTO_TCP)
-			return;
+		/* access ihl as u8 to avoid unaligned access on ia64 */
+		hlen = (hdr.network[0] & 0x0F) << 2;
+		l4_proto = hdr.ipv4->protocol;
 		break;
 	case 6:
-		if (likely((unsigned char *)th - hdr.network ==
-			   sizeof(struct ipv6hdr))) {
-			if (hdr.ipv6->nexthdr != IPPROTO_TCP)
-				return;
-		} else {
-			__be16 frag_off;
-			u8 l4_hdr;
-
-			ipv6_skip_exthdr(skb, hdr.network - skb->data +
-					      sizeof(struct ipv6hdr),
-					 &l4_hdr, &frag_off);
-			if (unlikely(frag_off))
-				return;
-			if (l4_hdr != IPPROTO_TCP)
-				return;
-		}
+		hlen = hdr.network - skb->data;
+		l4_proto = ipv6_find_hdr(skb, &hlen, IPPROTO_TCP, NULL, NULL);
+		hlen -= hdr.network - skb->data;
 		break;
 	default:
 		return;
 	}
 
-	/* skip this packet since it is invalid or the socket is closing */
-	if (!th || th->fin)
+	if (l4_proto != IPPROTO_TCP)
+		return;
+
+	th = (struct tcphdr *)(hdr.network + hlen);
+
+	/* skip this packet since the socket is closing */
+	if (th->fin)
 		return;
 
 	/* sample on all syn packets or once every atr sample count */
@@ -7682,10 +7651,8 @@ static void ixgbe_atr(struct ixgbe_ring *ring,
 		break;
 	}
 
-#ifdef CONFIG_IXGBE_VXLAN
-	if (encap)
+	if (hdr.network != skb_network_header(skb))
 		input.formatted.flow_type |= IXGBE_ATR_L4TYPE_TUNNEL_MASK;
-#endif /* CONFIG_IXGBE_VXLAN */
 
 	/* This assumes the Rx queue and Tx queue are bound to the same CPU */
 	ixgbe_fdir_add_signature_filter_82599(&q_vector->adapter->hw,
@@ -8209,10 +8176,17 @@ int ixgbe_setup_tc(struct net_device *dev, u8 tc)
 static int ixgbe_delete_clsu32(struct ixgbe_adapter *adapter,
 			       struct tc_cls_u32_offload *cls)
 {
+	u32 uhtid = TC_U32_USERHTID(cls->knode.handle);
+	u32 loc;
 	int err;
 
+	if ((uhtid != 0x800) && (uhtid >= IXGBE_MAX_LINK_HANDLE))
+		return -EINVAL;
+
+	loc = cls->knode.handle & 0xfffff;
+
 	spin_lock(&adapter->fdir_perfect_lock);
-	err = ixgbe_update_ethtool_fdir_entry(adapter, NULL, cls->knode.handle);
+	err = ixgbe_update_ethtool_fdir_entry(adapter, NULL, loc);
 	spin_unlock(&adapter->fdir_perfect_lock);
 	return err;
 }
@@ -8221,20 +8195,30 @@ static int ixgbe_configure_clsu32_add_hnode(struct ixgbe_adapter *adapter,
 					    __be16 protocol,
 					    struct tc_cls_u32_offload *cls)
 {
+	u32 uhtid = TC_U32_USERHTID(cls->hnode.handle);
+
+	if (uhtid >= IXGBE_MAX_LINK_HANDLE)
+		return -EINVAL;
+
 	/* This ixgbe devices do not support hash tables at the moment
 	 * so abort when given hash tables.
 	 */
 	if (cls->hnode.divisor > 0)
 		return -EINVAL;
 
-	set_bit(TC_U32_USERHTID(cls->hnode.handle), &adapter->tables);
+	set_bit(uhtid - 1, &adapter->tables);
 	return 0;
 }
 
 static int ixgbe_configure_clsu32_del_hnode(struct ixgbe_adapter *adapter,
 					    struct tc_cls_u32_offload *cls)
 {
-	clear_bit(TC_U32_USERHTID(cls->hnode.handle), &adapter->tables);
+	u32 uhtid = TC_U32_USERHTID(cls->hnode.handle);
+
+	if (uhtid >= IXGBE_MAX_LINK_HANDLE)
+		return -EINVAL;
+
+	clear_bit(uhtid - 1, &adapter->tables);
 	return 0;
 }
 
@@ -8252,46 +8236,46 @@ static int ixgbe_configure_clsu32(struct ixgbe_adapter *adapter,
 #endif
 	int i, err = 0;
 	u8 queue;
-	u32 handle;
+	u32 uhtid, link_uhtid;
 
 	memset(&mask, 0, sizeof(union ixgbe_atr_input));
-	handle = cls->knode.handle;
+	uhtid = TC_U32_USERHTID(cls->knode.handle);
+	link_uhtid = TC_U32_USERHTID(cls->knode.link_handle);
 
-	/* At the moment cls_u32 jumps to transport layer and skips past
+	/* At the moment cls_u32 jumps to network layer and skips past
 	 * L2 headers. The canonical method to match L2 frames is to use
 	 * negative values. However this is error prone at best but really
 	 * just broken because there is no way to "know" what sort of hdr
-	 * is in front of the transport layer. Fix cls_u32 to support L2
+	 * is in front of the network layer. Fix cls_u32 to support L2
 	 * headers when needed.
 	 */
 	if (protocol != htons(ETH_P_IP))
 		return -EINVAL;
 
-	if (cls->knode.link_handle ||
-	    cls->knode.link_handle >= IXGBE_MAX_LINK_HANDLE) {
+	if (link_uhtid) {
 		struct ixgbe_nexthdr *nexthdr = ixgbe_ipv4_jumps;
-		u32 uhtid = TC_U32_USERHTID(cls->knode.link_handle);
 
-		if (!test_bit(uhtid, &adapter->tables))
+		if (link_uhtid >= IXGBE_MAX_LINK_HANDLE)
+			return -EINVAL;
+
+		if (!test_bit(link_uhtid - 1, &adapter->tables))
 			return -EINVAL;
 
 		for (i = 0; nexthdr[i].jump; i++) {
-			if (nexthdr->o != cls->knode.sel->offoff ||
-			    nexthdr->s != cls->knode.sel->offshift ||
-			    nexthdr->m != cls->knode.sel->offmask ||
+			if (nexthdr[i].o != cls->knode.sel->offoff ||
+			    nexthdr[i].s != cls->knode.sel->offshift ||
+			    nexthdr[i].m != cls->knode.sel->offmask ||
 			    /* do not support multiple key jumps its just mad */
 			    cls->knode.sel->nkeys > 1)
 				return -EINVAL;
 
-			if (nexthdr->off != cls->knode.sel->keys[0].off ||
-			    nexthdr->val != cls->knode.sel->keys[0].val ||
-			    nexthdr->mask != cls->knode.sel->keys[0].mask)
-				return -EINVAL;
-
-			if (uhtid >= IXGBE_MAX_LINK_HANDLE)
-				return -EINVAL;
-
-			adapter->jump_tables[uhtid] = nexthdr->jump;
+			if (nexthdr[i].off == cls->knode.sel->keys[0].off &&
+			    nexthdr[i].val == cls->knode.sel->keys[0].val &&
+			    nexthdr[i].mask == cls->knode.sel->keys[0].mask) {
+				adapter->jump_tables[link_uhtid] =
+								nexthdr[i].jump;
+				break;
+			}
 		}
 		return 0;
 	}
@@ -8308,13 +8292,13 @@ static int ixgbe_configure_clsu32(struct ixgbe_adapter *adapter,
 	 * To add support for new nodes update ixgbe_model.h parse structures
 	 * this function _should_ be generic try not to hardcode values here.
 	 */
-	if (TC_U32_USERHTID(handle) == 0x800) {
+	if (uhtid == 0x800) {
 		field_ptr = adapter->jump_tables[0];
 	} else {
-		if (TC_U32_USERHTID(handle) >= ARRAY_SIZE(adapter->jump_tables))
+		if (uhtid >= IXGBE_MAX_LINK_HANDLE)
 			return -EINVAL;
 
-		field_ptr = adapter->jump_tables[TC_U32_USERHTID(handle)];
+		field_ptr = adapter->jump_tables[uhtid];
 	}
 
 	if (!field_ptr)
@@ -8332,8 +8316,7 @@ static int ixgbe_configure_clsu32(struct ixgbe_adapter *adapter,
 		int j;
 
 		for (j = 0; field_ptr[j].val; j++) {
-			if (field_ptr[j].off == off &&
-			    field_ptr[j].mask == m) {
+			if (field_ptr[j].off == off) {
 				field_ptr[j].val(input, &mask, val, m);
 				input->filter.formatted.flow_type |=
 					field_ptr[j].type;
@@ -8393,8 +8376,8 @@ err_out:
 	return -EINVAL;
 }
 
-int __ixgbe_setup_tc(struct net_device *dev, u32 handle, __be16 proto,
-		     struct tc_to_netdev *tc)
+static int __ixgbe_setup_tc(struct net_device *dev, u32 handle, __be16 proto,
+			    struct tc_to_netdev *tc)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(dev);
 
@@ -8517,11 +8500,6 @@ static int ixgbe_set_features(struct net_device *netdev,
 			adapter->flags |= IXGBE_FLAG_FDIR_HASH_CAPABLE;
 	}
 
-	if (features & NETIF_F_HW_VLAN_CTAG_RX)
-		ixgbe_vlan_strip_enable(adapter);
-	else
-		ixgbe_vlan_strip_disable(adapter);
-
 	if (changed & NETIF_F_RXALL)
 		need_reset = true;
 
@@ -8538,6 +8516,9 @@ static int ixgbe_set_features(struct net_device *netdev,
 
 	if (need_reset)
 		ixgbe_do_reset(netdev);
+	else if (changed & (NETIF_F_HW_VLAN_CTAG_RX |
+			    NETIF_F_HW_VLAN_CTAG_FILTER))
+		ixgbe_set_rx_mode(netdev);
 
 	return 0;
 }
@@ -8554,7 +8535,6 @@ static void ixgbe_add_vxlan_port(struct net_device *dev, sa_family_t sa_family,
 {
 	struct ixgbe_adapter *adapter = netdev_priv(dev);
 	struct ixgbe_hw *hw = &adapter->hw;
-	u16 new_port = ntohs(port);
 
 	if (!(adapter->flags & IXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE))
 		return;
@@ -8562,18 +8542,18 @@ static void ixgbe_add_vxlan_port(struct net_device *dev, sa_family_t sa_family,
 	if (sa_family == AF_INET6)
 		return;
 
-	if (adapter->vxlan_port == new_port)
+	if (adapter->vxlan_port == port)
 		return;
 
 	if (adapter->vxlan_port) {
 		netdev_info(dev,
 			    "Hit Max num of VXLAN ports, not adding port %d\n",
-			    new_port);
+			    ntohs(port));
 		return;
 	}
 
-	adapter->vxlan_port = new_port;
-	IXGBE_WRITE_REG(hw, IXGBE_VXLANCTRL, new_port);
+	adapter->vxlan_port = port;
+	IXGBE_WRITE_REG(hw, IXGBE_VXLANCTRL, ntohs(port));
 }
 
 /**
@@ -8586,7 +8566,6 @@ static void ixgbe_del_vxlan_port(struct net_device *dev, sa_family_t sa_family,
 				 __be16 port)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(dev);
-	u16 new_port = ntohs(port);
 
 	if (!(adapter->flags & IXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE))
 		return;
@@ -8594,9 +8573,9 @@ static void ixgbe_del_vxlan_port(struct net_device *dev, sa_family_t sa_family,
 	if (sa_family == AF_INET6)
 		return;
 
-	if (adapter->vxlan_port != new_port) {
+	if (adapter->vxlan_port != port) {
 		netdev_info(dev, "Port %d was not found, not deleting\n",
-			    new_port);
+			    ntohs(port));
 		return;
 	}
 
@@ -8862,6 +8841,7 @@ static const struct net_device_ops ixgbe_netdev_ops = {
 	.ndo_set_mac_address	= ixgbe_set_mac,
 	.ndo_change_mtu		= ixgbe_change_mtu,
 	.ndo_tx_timeout		= ixgbe_tx_timeout,
+	.ndo_set_tx_maxrate	= ixgbe_tx_maxrate,
 	.ndo_vlan_rx_add_vid	= ixgbe_vlan_rx_add_vid,
 	.ndo_vlan_rx_kill_vid	= ixgbe_vlan_rx_kill_vid,
 	.ndo_do_ioctl		= ixgbe_ioctl,
@@ -9015,29 +8995,6 @@ int ixgbe_wol_supported(struct ixgbe_adapter *adapter, u16 device_id,
 }
 
 /**
- * ixgbe_get_platform_mac_addr - Look up MAC address in Open Firmware / IDPROM
- * @adapter: Pointer to adapter struct
- */
-static void ixgbe_get_platform_mac_addr(struct ixgbe_adapter *adapter)
-{
-#ifdef CONFIG_OF
-	struct device_node *dp = pci_device_to_OF_node(adapter->pdev);
-	struct ixgbe_hw *hw = &adapter->hw;
-	const unsigned char *addr;
-
-	addr = of_get_mac_address(dp);
-	if (addr) {
-		ether_addr_copy(hw->mac.perm_addr, addr);
-		return;
-	}
-#endif /* CONFIG_OF */
-
-#ifdef CONFIG_SPARC
-	ether_addr_copy(hw->mac.perm_addr, idprom->id_ethaddr);
-#endif /* CONFIG_SPARC */
-}
-
-/**
  * ixgbe_probe - Device Initialization Routine
  * @pdev: PCI device information struct
  * @ent: entry in ixgbe_pci_tbl
@@ -9140,12 +9097,12 @@ static int ixgbe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	strlcpy(netdev->name, pci_name(pdev), sizeof(netdev->name));
 
 	/* Setup hw api */
-	memcpy(&hw->mac.ops, ii->mac_ops, sizeof(hw->mac.ops));
+	hw->mac.ops   = *ii->mac_ops;
 	hw->mac.type  = ii->mac;
 	hw->mvals     = ii->mvals;
 
 	/* EEPROM */
-	memcpy(&hw->eeprom.ops, ii->eeprom_ops, sizeof(hw->eeprom.ops));
+	hw->eeprom.ops = *ii->eeprom_ops;
 	eec = IXGBE_READ_REG(hw, IXGBE_EEC(hw));
 	if (ixgbe_removed(hw->hw_addr)) {
 		err = -EIO;
@@ -9156,7 +9113,7 @@ static int ixgbe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		hw->eeprom.ops.read = &ixgbe_read_eeprom_bit_bang_generic;
 
 	/* PHY */
-	memcpy(&hw->phy.ops, ii->phy_ops, sizeof(hw->phy.ops));
+	hw->phy.ops = *ii->phy_ops;
 	hw->phy.sfp_type = ixgbe_sfp_type_unknown;
 	/* ixgbe_identify_phy_generic will set prtad and mmds properly */
 	hw->phy.mdio.prtad = MDIO_PRTAD_NONE;
@@ -9172,6 +9129,10 @@ static int ixgbe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	err = ixgbe_sw_init(adapter);
 	if (err)
 		goto err_sw_init;
+
+	/* Make sure the SWFW semaphore is in a valid state */
+	if (hw->mac.ops.init_swfw_sync)
+		hw->mac.ops.init_swfw_sync(hw);
 
 	/* Make it possible the adapter to be woken up via WOL */
 	switch (adapter->hw.mac.type) {
@@ -9219,62 +9180,45 @@ static int ixgbe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto skip_sriov;
 	/* Mailbox */
 	ixgbe_init_mbx_params_pf(hw);
-	memcpy(&hw->mbx.ops, ii->mbx_ops, sizeof(hw->mbx.ops));
+	hw->mbx.ops = ii->mbx_ops;
 	pci_sriov_set_totalvfs(pdev, IXGBE_MAX_VFS_DRV_LIMIT);
 	ixgbe_enable_sriov(adapter);
 skip_sriov:
 
 #endif
 	netdev->features = NETIF_F_SG |
-			   NETIF_F_IP_CSUM |
-			   NETIF_F_IPV6_CSUM |
-			   NETIF_F_HW_VLAN_CTAG_TX |
-			   NETIF_F_HW_VLAN_CTAG_RX |
 			   NETIF_F_TSO |
 			   NETIF_F_TSO6 |
 			   NETIF_F_RXHASH |
-			   NETIF_F_RXCSUM;
+			   NETIF_F_RXCSUM |
+			   NETIF_F_HW_CSUM |
+			   NETIF_F_HW_VLAN_CTAG_TX |
+			   NETIF_F_HW_VLAN_CTAG_RX |
+			   NETIF_F_HW_VLAN_CTAG_FILTER;
 
-	netdev->hw_features = netdev->features | NETIF_F_HW_L2FW_DOFFLOAD;
-
-	switch (adapter->hw.mac.type) {
-	case ixgbe_mac_82599EB:
-	case ixgbe_mac_X540:
-	case ixgbe_mac_X550:
-	case ixgbe_mac_X550EM_x:
+	if (hw->mac.type >= ixgbe_mac_82599EB)
 		netdev->features |= NETIF_F_SCTP_CRC;
-		netdev->hw_features |= NETIF_F_SCTP_CRC |
-				       NETIF_F_NTUPLE |
+
+	/* copy netdev features into list of user selectable features */
+	netdev->hw_features |= netdev->features;
+	netdev->hw_features |= NETIF_F_RXALL |
+			       NETIF_F_HW_L2FW_DOFFLOAD;
+
+	if (hw->mac.type >= ixgbe_mac_82599EB)
+		netdev->hw_features |= NETIF_F_NTUPLE |
 				       NETIF_F_HW_TC;
-		break;
-	default:
-		break;
-	}
 
-	netdev->hw_features |= NETIF_F_RXALL;
-	netdev->features |= NETIF_F_HW_VLAN_CTAG_FILTER;
+	netdev->vlan_features |= NETIF_F_SG |
+				 NETIF_F_TSO |
+				 NETIF_F_TSO6 |
+				 NETIF_F_HW_CSUM |
+				 NETIF_F_SCTP_CRC;
 
-	netdev->vlan_features |= NETIF_F_TSO;
-	netdev->vlan_features |= NETIF_F_TSO6;
-	netdev->vlan_features |= NETIF_F_IP_CSUM;
-	netdev->vlan_features |= NETIF_F_IPV6_CSUM;
-	netdev->vlan_features |= NETIF_F_SG;
-
-	netdev->hw_enc_features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
+	netdev->mpls_features |= NETIF_F_HW_CSUM;
+	netdev->hw_enc_features |= NETIF_F_HW_CSUM;
 
 	netdev->priv_flags |= IFF_UNICAST_FLT;
 	netdev->priv_flags |= IFF_SUPP_NOFCS;
-
-#ifdef CONFIG_IXGBE_VXLAN
-	switch (adapter->hw.mac.type) {
-	case ixgbe_mac_X550:
-	case ixgbe_mac_X550EM_x:
-		netdev->hw_enc_features |= NETIF_F_RXCSUM;
-		break;
-	default:
-		break;
-	}
-#endif /* CONFIG_IXGBE_VXLAN */
 
 #ifdef CONFIG_IXGBE_DCB
 	netdev->dcbnl_ops = &dcbnl_ops;
@@ -9319,7 +9263,8 @@ skip_sriov:
 		goto err_sw_init;
 	}
 
-	ixgbe_get_platform_mac_addr(adapter);
+	eth_platform_get_mac_address(&adapter->pdev->dev,
+				     adapter->hw.mac.perm_addr);
 
 	memcpy(netdev->dev_addr, hw->mac.perm_addr, netdev->addr_len);
 
@@ -9329,6 +9274,8 @@ skip_sriov:
 		goto err_sw_init;
 	}
 
+	/* Set hw->mac.addr to permanent MAC address */
+	ether_addr_copy(hw->mac.addr, hw->mac.perm_addr);
 	ixgbe_mac_set_default_filter(adapter);
 
 	setup_timer(&adapter->service_timer, &ixgbe_service_timer,

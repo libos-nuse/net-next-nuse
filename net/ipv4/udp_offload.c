@@ -40,16 +40,23 @@ static struct sk_buff *__skb_udp_tunnel_segment(struct sk_buff *skb,
 	__be16 protocol = skb->protocol;
 	u16 mac_len = skb->mac_len;
 	int udp_offset, outer_hlen;
-	u32 partial;
+	__wsum partial;
 
 	if (unlikely(!pskb_may_pull(skb, tnl_hlen)))
 		goto out;
 
-	/* adjust partial header checksum to negate old length */
-	partial = (__force u32)uh->check + (__force u16)~uh->len;
+	/* Adjust partial header checksum to negate old length.
+	 * We cannot rely on the value contained in uh->len as it is
+	 * possible that the actual value exceeds the boundaries of the
+	 * 16 bit length field due to the header being added outside of an
+	 * IP or IPv6 frame that was already limited to 64K - 1.
+	 */
+	partial = csum_sub(csum_unfold(uh->check),
+			   (__force __wsum)htonl(skb->len));
 
 	/* setup inner skb. */
 	skb->encapsulation = 0;
+	SKB_GSO_CB(skb)->encap_level = 0;
 	__skb_pull(skb, tnl_hlen);
 	skb_reset_mac_header(skb);
 	skb_set_network_header(skb, skb_inner_network_offset(skb));
@@ -119,8 +126,7 @@ static struct sk_buff *__skb_udp_tunnel_segment(struct sk_buff *skb,
 		if (!need_csum)
 			continue;
 
-		uh->check = ~csum_fold((__force __wsum)
-				       ((__force u32)len + partial));
+		uh->check = ~csum_fold(csum_add(partial, (__force __wsum)len));
 
 		if (skb->encapsulation || !offload_csum) {
 			uh->check = gso_make_checksum(skb, ~uh->check);
@@ -306,14 +312,14 @@ struct sk_buff **udp_gro_receive(struct sk_buff **head, struct sk_buff *skb,
 	unsigned int off = skb_gro_offset(skb);
 	int flush = 1;
 
-	if (NAPI_GRO_CB(skb)->udp_mark ||
+	if (NAPI_GRO_CB(skb)->encap_mark ||
 	    (skb->ip_summed != CHECKSUM_PARTIAL &&
 	     NAPI_GRO_CB(skb)->csum_cnt == 0 &&
 	     !NAPI_GRO_CB(skb)->csum_valid))
 		goto out;
 
-	/* mark that this skb passed once through the udp gro layer */
-	NAPI_GRO_CB(skb)->udp_mark = 1;
+	/* mark that this skb passed once through the tunnel gro layer */
+	NAPI_GRO_CB(skb)->encap_mark = 1;
 
 	rcu_read_lock();
 	uo_priv = rcu_dereference(udp_offload_base);

@@ -253,6 +253,9 @@ config XPS
 	depends on SMP
 	default y
 
+config HWBM
+       bool
+
 config SOCK_CGROUP_DATA
 	bool
 	default n
@@ -360,6 +363,7 @@ source "net/can/Kconfig"
 source "net/irda/Kconfig"
 source "net/bluetooth/Kconfig"
 source "net/rxrpc/Kconfig"
+source "net/kcm/Kconfig"
 
 config FIB_RULES
 	bool
@@ -393,7 +397,7 @@ config LWTUNNEL
 	  with light weight tunnel state associated with fib routes.
 
 config DST_CACHE
-	bool "dst cache"
+	bool
 	default n
 
 config NET_DEVLINK

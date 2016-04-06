@@ -2919,7 +2919,19 @@ struct eth_vport_rx_mode {
 };
 
 struct eth_vport_tpa_param {
-	u64     reserved[2];
+	u8	tpa_ipv4_en_flg;
+	u8	tpa_ipv6_en_flg;
+	u8	tpa_ipv4_tunn_en_flg;
+	u8	tpa_ipv6_tunn_en_flg;
+	u8	tpa_pkt_split_flg;
+	u8	tpa_hdr_data_split_flg;
+	u8	tpa_gro_consistent_flg;
+	u8	tpa_max_aggs_num;
+	u16	tpa_max_size;
+	u16	tpa_min_size_to_start;
+	u16	tpa_min_size_to_cont;
+	u8	max_buff_num;
+	u8	reserved;
 };
 
 struct eth_vport_tx_mode {
@@ -3609,6 +3621,9 @@ struct public_port {
 	u32					fc_npiv_nvram_tbl_addr;
 	u32					fc_npiv_nvram_tbl_size;
 	u32					transceiver_data;
+#define PMM_TRANSCEIVER_STATE_MASK		0x000000FF
+#define PMM_TRANSCEIVER_STATE_SHIFT		0x00000000
+#define PMM_TRANSCEIVER_STATE_PRESENT		0x00000001
 };
 
 /**************************************/
@@ -3943,6 +3958,14 @@ enum MFW_DRV_MSG_TYPE {
 	MFW_DRV_MSG_DCBX_REMOTE_MIB_UPDATED,
 	MFW_DRV_MSG_DCBX_OPERATIONAL_MIB_UPDATED,
 	MFW_DRV_MSG_ERROR_RECOVERY,
+	MFW_DRV_MSG_BW_UPDATE,
+	MFW_DRV_MSG_S_TAG_UPDATE,
+	MFW_DRV_MSG_GET_LAN_STATS,
+	MFW_DRV_MSG_GET_FCOE_STATS,
+	MFW_DRV_MSG_GET_ISCSI_STATS,
+	MFW_DRV_MSG_GET_RDMA_STATS,
+	MFW_DRV_MSG_FAILURE_DETECTED,
+	MFW_DRV_MSG_TRANSCEIVER_STATE_CHANGE,
 	MFW_DRV_MSG_MAX
 };
 

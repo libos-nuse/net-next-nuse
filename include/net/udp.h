@@ -59,7 +59,7 @@ struct udp_skb_cb {
  *	@lock:	spinlock protecting changes to head/count
  */
 struct udp_hslot {
-	struct hlist_nulls_head	head;
+	struct hlist_head	head;
 	int			count;
 	spinlock_t		lock;
 } __attribute__((aligned(2 * sizeof(long))));
@@ -157,6 +157,15 @@ static inline __sum16 udp_v4_check(int len, __be32 saddr,
 
 void udp_set_csum(bool nocheck, struct sk_buff *skb,
 		  __be32 saddr, __be32 daddr, int len);
+
+static inline void udp_csum_pull_header(struct sk_buff *skb)
+{
+	if (skb->ip_summed == CHECKSUM_NONE)
+		skb->csum = csum_partial(udp_hdr(skb), sizeof(struct udphdr),
+					 skb->csum);
+	skb_pull_rcsum(skb, sizeof(struct udphdr));
+	UDP_SKB_CB(skb)->cscov -= sizeof(struct udphdr);
+}
 
 struct sk_buff **udp_gro_receive(struct sk_buff **head, struct sk_buff *skb,
 				 struct udphdr *uh);

@@ -606,7 +606,7 @@ static int build_rdma_recv(struct c4iw_qp *qhp, union t4_recv_wr *wqe,
 }
 
 static int build_memreg(struct t4_sq *sq, union t4_wr *wqe,
-			struct ib_reg_wr *wr, u8 *len16, u8 t5dev)
+			struct ib_reg_wr *wr, u8 *len16, bool dsgl_supported)
 {
 	struct c4iw_mr *mhp = to_c4iw_mr(wr->mr);
 	struct fw_ri_immd *imdp;
@@ -615,7 +615,7 @@ static int build_memreg(struct t4_sq *sq, union t4_wr *wqe,
 	int pbllen = roundup(mhp->mpl_len * sizeof(u64), 32);
 	int rem;
 
-	if (mhp->mpl_len > t4_max_fr_depth(use_dsgl))
+	if (mhp->mpl_len > t4_max_fr_depth(dsgl_supported && use_dsgl))
 		return -EINVAL;
 
 	wqe->fr.qpbinde_to_dcacpu = 0;
@@ -629,7 +629,7 @@ static int build_memreg(struct t4_sq *sq, union t4_wr *wqe,
 	wqe->fr.va_lo_fbo = cpu_to_be32(mhp->ibmr.iova &
 					0xffffffff);
 
-	if (t5dev && use_dsgl && (pbllen > max_fr_immd)) {
+	if (dsgl_supported && use_dsgl && (pbllen > max_fr_immd)) {
 		struct fw_ri_dsgl *sglp;
 
 		for (i = 0; i < mhp->mpl_len; i++)
@@ -808,9 +808,7 @@ int c4iw_post_send(struct ib_qp *ibqp, struct ib_send_wr *wr,
 			fw_opcode = FW_RI_FR_NSMR_WR;
 			swsqe->opcode = FW_RI_FAST_REGISTER;
 			err = build_memreg(&qhp->wq.sq, wqe, reg_wr(wr), &len16,
-					   is_t5(
-					   qhp->rhp->rdev.lldi.adapter_type) ?
-					   1 : 0);
+				qhp->rhp->rdev.lldi.ulptx_memwrite_dsgl);
 			break;
 		case IB_WR_LOCAL_INV:
 			if (wr->send_flags & IB_SEND_FENCE)
@@ -1698,6 +1696,8 @@ struct ib_qp *c4iw_create_qp(struct ib_pd *pd, struct ib_qp_init_attr *attrs,
 	qhp->attr.max_ird = 0;
 	qhp->sq_sig_all = attrs->sq_sig_type == IB_SIGNAL_ALL_WR;
 	spin_lock_init(&qhp->lock);
+	init_completion(&qhp->sq_drained);
+	init_completion(&qhp->rq_drained);
 	mutex_init(&qhp->mutex);
 	init_waitqueue_head(&qhp->wait);
 	atomic_set(&qhp->refcnt, 1);
@@ -1890,4 +1890,18 @@ int c4iw_ib_query_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 	init_attr->cap.max_inline_data = T4_MAX_SEND_INLINE;
 	init_attr->sq_sig_type = qhp->sq_sig_all ? IB_SIGNAL_ALL_WR : 0;
 	return 0;
+}
+
+void c4iw_drain_sq(struct ib_qp *ibqp)
+{
+	struct c4iw_qp *qp = to_c4iw_qp(ibqp);
+
+	wait_for_completion(&qp->sq_drained);
+}
+
+void c4iw_drain_rq(struct ib_qp *ibqp)
+{
+	struct c4iw_qp *qp = to_c4iw_qp(ibqp);
+
+	wait_for_completion(&qp->rq_drained);
 }

@@ -1,6 +1,6 @@
 /* Broadcom NetXtreme-C/E network driver.
  *
- * Copyright (c) 2014-2015 Broadcom Corporation
+ * Copyright (c) 2014-2016 Broadcom Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,7 +11,7 @@
 #define BNXT_H
 
 #define DRV_MODULE_NAME		"bnxt_en"
-#define DRV_MODULE_VERSION	"1.0.0"
+#define DRV_MODULE_VERSION	"1.2.0"
 
 #define DRV_VER_MAJ	1
 #define DRV_VER_MIN	0
@@ -477,6 +477,7 @@ struct rx_tpa_end_cmp_ext {
 #define RING_CMP(idx)		((idx) & bp->cp_ring_mask)
 #define NEXT_CMP(idx)		RING_CMP(ADV_RAW_CMP(idx, 1))
 
+#define BNXT_HWRM_MAX_REQ_LEN		(bp->hwrm_max_req_len)
 #define DFLT_HWRM_CMD_TIMEOUT		500
 #define HWRM_CMD_TIMEOUT		(bp->hwrm_cmd_timeout)
 #define HWRM_RESET_TIMEOUT		((HWRM_CMD_TIMEOUT) * 4)
@@ -757,10 +758,6 @@ struct bnxt_ntuple_filter {
 #define BNXT_FLTR_UPDATE	1
 };
 
-#define BNXT_ALL_COPPER_ETHTOOL_SPEED				\
-	(ADVERTISED_100baseT_Full | ADVERTISED_1000baseT_Full |	\
-	 ADVERTISED_10000baseT_Full)
-
 struct bnxt_link_info {
 	u8			media_type;
 	u8			transceiver;
@@ -780,6 +777,7 @@ struct bnxt_link_info {
 #define BNXT_LINK_PAUSE_RX	PORT_PHY_QCFG_RESP_PAUSE_RX
 #define BNXT_LINK_PAUSE_BOTH	(PORT_PHY_QCFG_RESP_PAUSE_RX | \
 				 PORT_PHY_QCFG_RESP_PAUSE_TX)
+	u8			lp_pause;
 	u8			auto_pause_setting;
 	u8			force_pause_setting;
 	u8			duplex_setting;
@@ -790,7 +788,7 @@ struct bnxt_link_info {
 #define BNXT_LINK_AUTO_ALLSPDS	PORT_PHY_QCFG_RESP_AUTO_MODE_ALL_SPEEDS
 #define BNXT_LINK_AUTO_ONESPD	PORT_PHY_QCFG_RESP_AUTO_MODE_ONE_SPEED
 #define BNXT_LINK_AUTO_ONEORBELOW PORT_PHY_QCFG_RESP_AUTO_MODE_ONE_OR_BELOW
-#define BNXT_LINK_AUTO_MSK	PORT_PHY_QCFG_RESP_AUTO_MODE_MASK
+#define BNXT_LINK_AUTO_MSK	PORT_PHY_QCFG_RESP_AUTO_MODE_SPEED_MASK
 #define PHY_VER_LEN		3
 	u8			phy_ver[PHY_VER_LEN];
 	u16			link_speed;
@@ -814,7 +812,7 @@ struct bnxt_link_info {
 #define BNXT_LINK_SPEED_MSK_25GB PORT_PHY_QCFG_RESP_SUPPORT_SPEEDS_25GB
 #define BNXT_LINK_SPEED_MSK_40GB PORT_PHY_QCFG_RESP_SUPPORT_SPEEDS_40GB
 #define BNXT_LINK_SPEED_MSK_50GB PORT_PHY_QCFG_RESP_SUPPORT_SPEEDS_50GB
-	u16			auto_link_speed;
+	u16			lp_auto_link_speeds;
 	u16			force_link_speed;
 	u32			preemphasis;
 
@@ -827,6 +825,8 @@ struct bnxt_link_info {
 	u16			req_link_speed;
 	u32			advertising;
 	bool			force_link_chng;
+
+	u8			last_port_module_event;
 	/* a copy of phy_qcfg output used to report link
 	 * info to VF
 	 */
@@ -875,6 +875,8 @@ struct bnxt {
 	#define BNXT_FLAG_MSIX_CAP	0x80
 	#define BNXT_FLAG_RFS		0x100
 	#define BNXT_FLAG_SHARED_RINGS	0x200
+	#define BNXT_FLAG_PORT_STATS	0x400
+	#define BNXT_FLAG_EEE_CAP	0x1000
 
 	#define BNXT_FLAG_ALL_CONFIG_FEATS (BNXT_FLAG_TPA |		\
 					    BNXT_FLAG_RFS |		\
@@ -927,7 +929,7 @@ struct bnxt {
 	struct bnxt_queue_info	q_info[BNXT_MAX_QUEUE];
 
 	unsigned int		current_interval;
-#define BNXT_TIMER_INTERVAL	(HZ / 2)
+#define BNXT_TIMER_INTERVAL	HZ
 
 	struct timer_list	timer;
 
@@ -940,6 +942,7 @@ struct bnxt {
 
 	u32			msg_enable;
 
+	u32			hwrm_spec_code;
 	u16			hwrm_cmd_seq;
 	u32			hwrm_intr_seq_id;
 	void			*hwrm_cmd_resp_addr;
@@ -947,6 +950,14 @@ struct bnxt {
 	void			*hwrm_dbg_resp_addr;
 	dma_addr_t		hwrm_dbg_resp_dma_addr;
 #define HWRM_DBG_REG_BUF_SIZE	128
+
+	struct rx_port_stats	*hw_rx_port_stats;
+	struct tx_port_stats	*hw_tx_port_stats;
+	dma_addr_t		hw_rx_port_stats_map;
+	dma_addr_t		hw_tx_port_stats_map;
+	int			hw_port_stats_size;
+
+	u16			hwrm_max_req_len;
 	int			hwrm_cmd_timeout;
 	struct mutex		hwrm_cmd_lock;	/* serialize hwrm messages */
 	struct hwrm_ver_get_output	ver_resp;
@@ -982,6 +993,8 @@ struct bnxt {
 #define BNXT_RESET_TASK_SP_EVENT	6
 #define BNXT_RST_RING_SP_EVENT		7
 #define BNXT_HWRM_PF_UNLOAD_SP_EVENT	8
+#define BNXT_PERIODIC_STATS_SP_EVENT	9
+#define BNXT_HWRM_PORT_MODULE_SP_EVENT	10
 
 	struct bnxt_pf_info	pf;
 #ifdef CONFIG_BNXT_SRIOV
@@ -1002,6 +1015,9 @@ struct bnxt {
 	int			ntp_fltr_count;
 
 	struct bnxt_link_info	link_info;
+	struct ethtool_eee	eee;
+	u32			lpi_tmr_lo;
+	u32			lpi_tmr_hi;
 };
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
@@ -1099,7 +1115,7 @@ int hwrm_send_message_silent(struct bnxt *, void *, u32, int);
 int bnxt_hwrm_set_coal(struct bnxt *);
 int bnxt_hwrm_func_qcaps(struct bnxt *);
 int bnxt_hwrm_set_pause(struct bnxt *);
-int bnxt_hwrm_set_link_setting(struct bnxt *, bool);
+int bnxt_hwrm_set_link_setting(struct bnxt *, bool, bool);
 int bnxt_open_nic(struct bnxt *, bool, bool);
 int bnxt_close_nic(struct bnxt *, bool, bool);
 int bnxt_get_max_rings(struct bnxt *, int *, int *, bool);

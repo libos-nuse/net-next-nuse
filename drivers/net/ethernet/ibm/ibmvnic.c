@@ -61,6 +61,7 @@
 #include <linux/proc_fs.h>
 #include <linux/in.h>
 #include <linux/ip.h>
+#include <linux/ipv6.h>
 #include <linux/irq.h>
 #include <linux/kthread.h>
 #include <linux/seq_file.h>
@@ -94,6 +95,7 @@ static int ibmvnic_reenable_crq_queue(struct ibmvnic_adapter *);
 static int ibmvnic_send_crq(struct ibmvnic_adapter *, union ibmvnic_crq *);
 static int send_subcrq(struct ibmvnic_adapter *adapter, u64 remote_handle,
 		       union sub_crq *sub_crq);
+static int send_subcrq_indirect(struct ibmvnic_adapter *, u64, u64, u64);
 static irqreturn_t ibmvnic_interrupt_rx(int irq, void *instance);
 static int enable_scrq_irq(struct ibmvnic_adapter *,
 			   struct ibmvnic_sub_crq_queue *);
@@ -561,10 +563,141 @@ static int ibmvnic_close(struct net_device *netdev)
 	return 0;
 }
 
+/**
+ * build_hdr_data - creates L2/L3/L4 header data buffer
+ * @hdr_field - bitfield determining needed headers
+ * @skb - socket buffer
+ * @hdr_len - array of header lengths
+ * @tot_len - total length of data
+ *
+ * Reads hdr_field to determine which headers are needed by firmware.
+ * Builds a buffer containing these headers.  Saves individual header
+ * lengths and total buffer length to be used to build descriptors.
+ */
+static int build_hdr_data(u8 hdr_field, struct sk_buff *skb,
+			  int *hdr_len, u8 *hdr_data)
+{
+	int len = 0;
+	u8 *hdr;
+
+	hdr_len[0] = sizeof(struct ethhdr);
+
+	if (skb->protocol == htons(ETH_P_IP)) {
+		hdr_len[1] = ip_hdr(skb)->ihl * 4;
+		if (ip_hdr(skb)->protocol == IPPROTO_TCP)
+			hdr_len[2] = tcp_hdrlen(skb);
+		else if (ip_hdr(skb)->protocol == IPPROTO_UDP)
+			hdr_len[2] = sizeof(struct udphdr);
+	} else if (skb->protocol == htons(ETH_P_IPV6)) {
+		hdr_len[1] = sizeof(struct ipv6hdr);
+		if (ipv6_hdr(skb)->nexthdr == IPPROTO_TCP)
+			hdr_len[2] = tcp_hdrlen(skb);
+		else if (ipv6_hdr(skb)->nexthdr == IPPROTO_UDP)
+			hdr_len[2] = sizeof(struct udphdr);
+	}
+
+	memset(hdr_data, 0, 120);
+	if ((hdr_field >> 6) & 1) {
+		hdr = skb_mac_header(skb);
+		memcpy(hdr_data, hdr, hdr_len[0]);
+		len += hdr_len[0];
+	}
+
+	if ((hdr_field >> 5) & 1) {
+		hdr = skb_network_header(skb);
+		memcpy(hdr_data + len, hdr, hdr_len[1]);
+		len += hdr_len[1];
+	}
+
+	if ((hdr_field >> 4) & 1) {
+		hdr = skb_transport_header(skb);
+		memcpy(hdr_data + len, hdr, hdr_len[2]);
+		len += hdr_len[2];
+	}
+	return len;
+}
+
+/**
+ * create_hdr_descs - create header and header extension descriptors
+ * @hdr_field - bitfield determining needed headers
+ * @data - buffer containing header data
+ * @len - length of data buffer
+ * @hdr_len - array of individual header lengths
+ * @scrq_arr - descriptor array
+ *
+ * Creates header and, if needed, header extension descriptors and
+ * places them in a descriptor array, scrq_arr
+ */
+
+static void create_hdr_descs(u8 hdr_field, u8 *hdr_data, int len, int *hdr_len,
+			     union sub_crq *scrq_arr)
+{
+	union sub_crq hdr_desc;
+	int tmp_len = len;
+	u8 *data, *cur;
+	int tmp;
+
+	while (tmp_len > 0) {
+		cur = hdr_data + len - tmp_len;
+
+		memset(&hdr_desc, 0, sizeof(hdr_desc));
+		if (cur != hdr_data) {
+			data = hdr_desc.hdr_ext.data;
+			tmp = tmp_len > 29 ? 29 : tmp_len;
+			hdr_desc.hdr_ext.first = IBMVNIC_CRQ_CMD;
+			hdr_desc.hdr_ext.type = IBMVNIC_HDR_EXT_DESC;
+			hdr_desc.hdr_ext.len = tmp;
+		} else {
+			data = hdr_desc.hdr.data;
+			tmp = tmp_len > 24 ? 24 : tmp_len;
+			hdr_desc.hdr.first = IBMVNIC_CRQ_CMD;
+			hdr_desc.hdr.type = IBMVNIC_HDR_DESC;
+			hdr_desc.hdr.len = tmp;
+			hdr_desc.hdr.l2_len = (u8)hdr_len[0];
+			hdr_desc.hdr.l3_len = cpu_to_be16((u16)hdr_len[1]);
+			hdr_desc.hdr.l4_len = (u8)hdr_len[2];
+			hdr_desc.hdr.flag = hdr_field << 1;
+		}
+		memcpy(data, cur, tmp);
+		tmp_len -= tmp;
+		*scrq_arr = hdr_desc;
+		scrq_arr++;
+	}
+}
+
+/**
+ * build_hdr_descs_arr - build a header descriptor array
+ * @skb - socket buffer
+ * @num_entries - number of descriptors to be sent
+ * @subcrq - first TX descriptor
+ * @hdr_field - bit field determining which headers will be sent
+ *
+ * This function will build a TX descriptor array with applicable
+ * L2/L3/L4 packet header descriptors to be sent by send_subcrq_indirect.
+ */
+
+static void build_hdr_descs_arr(struct ibmvnic_tx_buff *txbuff,
+				int *num_entries, u8 hdr_field)
+{
+	int hdr_len[3] = {0, 0, 0};
+	int tot_len, len;
+	u8 *hdr_data = txbuff->hdr_data;
+
+	tot_len = build_hdr_data(hdr_field, txbuff->skb, hdr_len,
+				 txbuff->hdr_data);
+	len = tot_len;
+	len -= 24;
+	if (len > 0)
+		num_entries += len % 29 ? len / 29 + 1 : len / 29;
+	create_hdr_descs(hdr_field, hdr_data, tot_len, hdr_len,
+			 txbuff->indir_arr + 1);
+}
+
 static int ibmvnic_xmit(struct sk_buff *skb, struct net_device *netdev)
 {
 	struct ibmvnic_adapter *adapter = netdev_priv(netdev);
 	int queue_num = skb_get_queue_mapping(skb);
+	u8 *hdrs = (u8 *)&adapter->tx_rx_desc_req;
 	struct device *dev = &adapter->vdev->dev;
 	struct ibmvnic_tx_buff *tx_buff = NULL;
 	struct ibmvnic_tx_pool *tx_pool;
@@ -579,6 +712,7 @@ static int ibmvnic_xmit(struct sk_buff *skb, struct net_device *netdev)
 	unsigned long lpar_rc;
 	union sub_crq tx_crq;
 	unsigned int offset;
+	int num_entries = 1;
 	unsigned char *dst;
 	u64 *handle_array;
 	int index = 0;
@@ -644,11 +778,34 @@ static int ibmvnic_xmit(struct sk_buff *skb, struct net_device *netdev)
 			tx_crq.v1.flags1 |= IBMVNIC_TX_PROT_UDP;
 	}
 
-	if (skb->ip_summed == CHECKSUM_PARTIAL)
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
 		tx_crq.v1.flags1 |= IBMVNIC_TX_CHKSUM_OFFLOAD;
-
-	lpar_rc = send_subcrq(adapter, handle_array[0], &tx_crq);
-
+		hdrs += 2;
+	}
+	/* determine if l2/3/4 headers are sent to firmware */
+	if ((*hdrs >> 7) & 1 &&
+	    (skb->protocol == htons(ETH_P_IP) ||
+	     skb->protocol == htons(ETH_P_IPV6))) {
+		build_hdr_descs_arr(tx_buff, &num_entries, *hdrs);
+		tx_crq.v1.n_crq_elem = num_entries;
+		tx_buff->indir_arr[0] = tx_crq;
+		tx_buff->indir_dma = dma_map_single(dev, tx_buff->indir_arr,
+						    sizeof(tx_buff->indir_arr),
+						    DMA_TO_DEVICE);
+		if (dma_mapping_error(dev, tx_buff->indir_dma)) {
+			if (!firmware_has_feature(FW_FEATURE_CMO))
+				dev_err(dev, "tx: unable to map descriptor array\n");
+			tx_map_failed++;
+			tx_dropped++;
+			ret = NETDEV_TX_BUSY;
+			goto out;
+		}
+		lpar_rc = send_subcrq_indirect(adapter, handle_array[0],
+					       (u64)tx_buff->indir_dma,
+					       (u64)num_entries);
+	} else {
+		lpar_rc = send_subcrq(adapter, handle_array[0], &tx_crq);
+	}
 	if (lpar_rc != H_SUCCESS) {
 		dev_err(dev, "tx failed with code %ld\n", lpar_rc);
 
@@ -1159,6 +1316,7 @@ static int ibmvnic_complete_tx(struct ibmvnic_adapter *adapter,
 	union sub_crq *next;
 	int index;
 	int i, j;
+	u8 first;
 
 restart_loop:
 	while (pending_scrq(adapter, scrq)) {
@@ -1180,6 +1338,13 @@ restart_loop:
 
 				txbuff->data_dma[j] = 0;
 				txbuff->used_bounce = false;
+			}
+			/* if sub_crq was sent indirectly */
+			first = txbuff->indir_arr[0].generic.first;
+			if (first == IBMVNIC_CRQ_CMD) {
+				dma_unmap_single(dev, txbuff->indir_dma,
+						 sizeof(txbuff->indir_arr),
+						 DMA_TO_DEVICE);
 			}
 
 			if (txbuff->last_frag)
@@ -1348,44 +1513,44 @@ static void init_sub_crqs(struct ibmvnic_adapter *adapter, int retry)
 	crq.request_capability.cmd = REQUEST_CAPABILITY;
 
 	crq.request_capability.capability = cpu_to_be16(REQ_TX_QUEUES);
-	crq.request_capability.number = cpu_to_be32(adapter->req_tx_queues);
+	crq.request_capability.number = cpu_to_be64(adapter->req_tx_queues);
 	ibmvnic_send_crq(adapter, &crq);
 
 	crq.request_capability.capability = cpu_to_be16(REQ_RX_QUEUES);
-	crq.request_capability.number = cpu_to_be32(adapter->req_rx_queues);
+	crq.request_capability.number = cpu_to_be64(adapter->req_rx_queues);
 	ibmvnic_send_crq(adapter, &crq);
 
 	crq.request_capability.capability = cpu_to_be16(REQ_RX_ADD_QUEUES);
-	crq.request_capability.number = cpu_to_be32(adapter->req_rx_add_queues);
+	crq.request_capability.number = cpu_to_be64(adapter->req_rx_add_queues);
 	ibmvnic_send_crq(adapter, &crq);
 
 	crq.request_capability.capability =
 	    cpu_to_be16(REQ_TX_ENTRIES_PER_SUBCRQ);
 	crq.request_capability.number =
-	    cpu_to_be32(adapter->req_tx_entries_per_subcrq);
+	    cpu_to_be64(adapter->req_tx_entries_per_subcrq);
 	ibmvnic_send_crq(adapter, &crq);
 
 	crq.request_capability.capability =
 	    cpu_to_be16(REQ_RX_ADD_ENTRIES_PER_SUBCRQ);
 	crq.request_capability.number =
-	    cpu_to_be32(adapter->req_rx_add_entries_per_subcrq);
+	    cpu_to_be64(adapter->req_rx_add_entries_per_subcrq);
 	ibmvnic_send_crq(adapter, &crq);
 
 	crq.request_capability.capability = cpu_to_be16(REQ_MTU);
-	crq.request_capability.number = cpu_to_be32(adapter->req_mtu);
+	crq.request_capability.number = cpu_to_be64(adapter->req_mtu);
 	ibmvnic_send_crq(adapter, &crq);
 
 	if (adapter->netdev->flags & IFF_PROMISC) {
 		if (adapter->promisc_supported) {
 			crq.request_capability.capability =
 			    cpu_to_be16(PROMISC_REQUESTED);
-			crq.request_capability.number = cpu_to_be32(1);
+			crq.request_capability.number = cpu_to_be64(1);
 			ibmvnic_send_crq(adapter, &crq);
 		}
 	} else {
 		crq.request_capability.capability =
 		    cpu_to_be16(PROMISC_REQUESTED);
-		crq.request_capability.number = cpu_to_be32(0);
+		crq.request_capability.number = cpu_to_be64(0);
 		ibmvnic_send_crq(adapter, &crq);
 	}
 
@@ -1489,6 +1654,28 @@ static int send_subcrq(struct ibmvnic_adapter *adapter, u64 remote_handle,
 		if (rc == H_CLOSED)
 			dev_warn(dev, "CRQ Queue closed\n");
 		dev_err(dev, "Send error (rc=%d)\n", rc);
+	}
+
+	return rc;
+}
+
+static int send_subcrq_indirect(struct ibmvnic_adapter *adapter,
+				u64 remote_handle, u64 ioba, u64 num_entries)
+{
+	unsigned int ua = adapter->vdev->unit_address;
+	struct device *dev = &adapter->vdev->dev;
+	int rc;
+
+	/* Make sure the hypervisor sees the complete request */
+	mb();
+	rc = plpar_hcall_norets(H_SEND_SUB_CRQ_INDIRECT, ua,
+				cpu_to_be64(remote_handle),
+				ioba, num_entries);
+
+	if (rc) {
+		if (rc == H_CLOSED)
+			dev_warn(dev, "CRQ Queue closed\n");
+		dev_err(dev, "Send (indirect) error (rc=%d)\n", rc);
 	}
 
 	return rc;
@@ -1918,6 +2105,10 @@ static void handle_query_ip_offload_rsp(struct ibmvnic_adapter *adapter)
 	if (buf->tcp_ipv6_chksum || buf->udp_ipv6_chksum)
 		adapter->netdev->features |= NETIF_F_IPV6_CSUM;
 
+	if ((adapter->netdev->features &
+	    (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM)))
+		adapter->netdev->features |= NETIF_F_RXCSUM;
+
 	memset(&crq, 0, sizeof(crq));
 	crq.control_ip_offload.first = IBMVNIC_CRQ_CMD;
 	crq.control_ip_offload.cmd = CONTROL_IP_OFFLOAD;
@@ -2312,93 +2503,93 @@ static void handle_query_cap_rsp(union ibmvnic_crq *crq,
 	switch (be16_to_cpu(crq->query_capability.capability)) {
 	case MIN_TX_QUEUES:
 		adapter->min_tx_queues =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "min_tx_queues = %lld\n",
 			   adapter->min_tx_queues);
 		break;
 	case MIN_RX_QUEUES:
 		adapter->min_rx_queues =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "min_rx_queues = %lld\n",
 			   adapter->min_rx_queues);
 		break;
 	case MIN_RX_ADD_QUEUES:
 		adapter->min_rx_add_queues =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "min_rx_add_queues = %lld\n",
 			   adapter->min_rx_add_queues);
 		break;
 	case MAX_TX_QUEUES:
 		adapter->max_tx_queues =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "max_tx_queues = %lld\n",
 			   adapter->max_tx_queues);
 		break;
 	case MAX_RX_QUEUES:
 		adapter->max_rx_queues =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "max_rx_queues = %lld\n",
 			   adapter->max_rx_queues);
 		break;
 	case MAX_RX_ADD_QUEUES:
 		adapter->max_rx_add_queues =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "max_rx_add_queues = %lld\n",
 			   adapter->max_rx_add_queues);
 		break;
 	case MIN_TX_ENTRIES_PER_SUBCRQ:
 		adapter->min_tx_entries_per_subcrq =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "min_tx_entries_per_subcrq = %lld\n",
 			   adapter->min_tx_entries_per_subcrq);
 		break;
 	case MIN_RX_ADD_ENTRIES_PER_SUBCRQ:
 		adapter->min_rx_add_entries_per_subcrq =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "min_rx_add_entrs_per_subcrq = %lld\n",
 			   adapter->min_rx_add_entries_per_subcrq);
 		break;
 	case MAX_TX_ENTRIES_PER_SUBCRQ:
 		adapter->max_tx_entries_per_subcrq =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "max_tx_entries_per_subcrq = %lld\n",
 			   adapter->max_tx_entries_per_subcrq);
 		break;
 	case MAX_RX_ADD_ENTRIES_PER_SUBCRQ:
 		adapter->max_rx_add_entries_per_subcrq =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "max_rx_add_entrs_per_subcrq = %lld\n",
 			   adapter->max_rx_add_entries_per_subcrq);
 		break;
 	case TCP_IP_OFFLOAD:
 		adapter->tcp_ip_offload =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "tcp_ip_offload = %lld\n",
 			   adapter->tcp_ip_offload);
 		break;
 	case PROMISC_SUPPORTED:
 		adapter->promisc_supported =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "promisc_supported = %lld\n",
 			   adapter->promisc_supported);
 		break;
 	case MIN_MTU:
-		adapter->min_mtu = be32_to_cpu(crq->query_capability.number);
+		adapter->min_mtu = be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "min_mtu = %lld\n", adapter->min_mtu);
 		break;
 	case MAX_MTU:
-		adapter->max_mtu = be32_to_cpu(crq->query_capability.number);
+		adapter->max_mtu = be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "max_mtu = %lld\n", adapter->max_mtu);
 		break;
 	case MAX_MULTICAST_FILTERS:
 		adapter->max_multicast_filters =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "max_multicast_filters = %lld\n",
 			   adapter->max_multicast_filters);
 		break;
 	case VLAN_HEADER_INSERTION:
 		adapter->vlan_header_insertion =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		if (adapter->vlan_header_insertion)
 			netdev->features |= NETIF_F_HW_VLAN_STAG_TX;
 		netdev_dbg(netdev, "vlan_header_insertion = %lld\n",
@@ -2406,43 +2597,43 @@ static void handle_query_cap_rsp(union ibmvnic_crq *crq,
 		break;
 	case MAX_TX_SG_ENTRIES:
 		adapter->max_tx_sg_entries =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "max_tx_sg_entries = %lld\n",
 			   adapter->max_tx_sg_entries);
 		break;
 	case RX_SG_SUPPORTED:
 		adapter->rx_sg_supported =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "rx_sg_supported = %lld\n",
 			   adapter->rx_sg_supported);
 		break;
 	case OPT_TX_COMP_SUB_QUEUES:
 		adapter->opt_tx_comp_sub_queues =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "opt_tx_comp_sub_queues = %lld\n",
 			   adapter->opt_tx_comp_sub_queues);
 		break;
 	case OPT_RX_COMP_QUEUES:
 		adapter->opt_rx_comp_queues =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "opt_rx_comp_queues = %lld\n",
 			   adapter->opt_rx_comp_queues);
 		break;
 	case OPT_RX_BUFADD_Q_PER_RX_COMP_Q:
 		adapter->opt_rx_bufadd_q_per_rx_comp_q =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "opt_rx_bufadd_q_per_rx_comp_q = %lld\n",
 			   adapter->opt_rx_bufadd_q_per_rx_comp_q);
 		break;
 	case OPT_TX_ENTRIES_PER_SUBCRQ:
 		adapter->opt_tx_entries_per_subcrq =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "opt_tx_entries_per_subcrq = %lld\n",
 			   adapter->opt_tx_entries_per_subcrq);
 		break;
 	case OPT_RXBA_ENTRIES_PER_SUBCRQ:
 		adapter->opt_rxba_entries_per_subcrq =
-		    be32_to_cpu(crq->query_capability.number);
+		    be64_to_cpu(crq->query_capability.number);
 		netdev_dbg(netdev, "opt_rxba_entries_per_subcrq = %lld\n",
 			   adapter->opt_rxba_entries_per_subcrq);
 		break;

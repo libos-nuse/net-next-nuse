@@ -591,8 +591,6 @@ static struct sk_buff **vxlan_gro_receive(struct sk_buff **head,
 
 	skb_gro_pull(skb, sizeof(struct vxlanhdr)); /* pull vxlan header */
 
-	flush = 0;
-
 	for (p = *head; p; p = p->next) {
 		if (!NAPI_GRO_CB(p)->same_flow)
 			continue;
@@ -606,6 +604,7 @@ static struct sk_buff **vxlan_gro_receive(struct sk_buff **head,
 	}
 
 	pp = eth_gro_receive(head, skb);
+	flush = 0;
 
 out:
 	skb_gro_remcsum_cleanup(skb, &grc);
@@ -948,8 +947,10 @@ static int vxlan_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb,
 						     cb->nlh->nlmsg_seq,
 						     RTM_NEWNEIGH,
 						     NLM_F_MULTI, rd);
-				if (err < 0)
+				if (err < 0) {
+					cb->args[1] = err;
 					goto out;
+				}
 skip:
 				++idx;
 			}
@@ -1142,7 +1143,7 @@ static int vxlan_igmp_leave(struct vxlan_dev *vxlan)
 static bool vxlan_remcsum(struct vxlanhdr *unparsed,
 			  struct sk_buff *skb, u32 vxflags)
 {
-	size_t start, offset, plen;
+	size_t start, offset;
 
 	if (!(unparsed->vx_flags & VXLAN_HF_RCO) || skb->remcsum_offload)
 		goto out;
@@ -1150,9 +1151,7 @@ static bool vxlan_remcsum(struct vxlanhdr *unparsed,
 	start = vxlan_rco_start(unparsed->vx_vni);
 	offset = start + vxlan_rco_offset(unparsed->vx_vni);
 
-	plen = sizeof(struct vxlanhdr) + offset + sizeof(u16);
-
-	if (!pskb_may_pull(skb, plen))
+	if (!pskb_may_pull(skb, offset + sizeof(u16)))
 		return false;
 
 	skb_remcsum_process(skb, (void *)(vxlan_hdr(skb) + 1), start, offset,
@@ -1176,9 +1175,10 @@ static void vxlan_parse_gbp_hdr(struct vxlanhdr *unparsed,
 	md->gbp = ntohs(gbp->policy_id);
 
 	tun_dst = (struct metadata_dst *)skb_dst(skb);
-	if (tun_dst)
+	if (tun_dst) {
 		tun_dst->u.tun_info.key.tun_flags |= TUNNEL_VXLAN_OPT;
-
+		tun_dst->u.tun_info.options_len = sizeof(*md);
+	}
 	if (gbp->dont_learn)
 		md->gbp |= VXLAN_GBP_DONT_LEARN;
 
@@ -1460,7 +1460,7 @@ static struct sk_buff *vxlan_na_create(struct sk_buff *request,
 	reply->dev = dev;
 	skb_reserve(reply, LL_RESERVED_SPACE(request->dev));
 	skb_push(reply, sizeof(struct ethhdr));
-	skb_set_mac_header(reply, 0);
+	skb_reset_mac_header(reply);
 
 	ns = (struct nd_msg *)skb_transport_header(request);
 
@@ -1480,7 +1480,7 @@ static struct sk_buff *vxlan_na_create(struct sk_buff *request,
 	reply->protocol = htons(ETH_P_IPV6);
 
 	skb_pull(reply, sizeof(struct ethhdr));
-	skb_set_network_header(reply, 0);
+	skb_reset_network_header(reply);
 	skb_put(reply, sizeof(struct ipv6hdr));
 
 	/* IPv6 header */
@@ -1495,7 +1495,7 @@ static struct sk_buff *vxlan_na_create(struct sk_buff *request,
 	pip6->saddr = *(struct in6_addr *)n->primary_key;
 
 	skb_pull(reply, sizeof(struct ipv6hdr));
-	skb_set_transport_header(reply, 0);
+	skb_reset_transport_header(reply);
 
 	na = (struct nd_msg *)skb_put(reply, sizeof(*na) + na_olen);
 
@@ -1753,17 +1753,15 @@ static struct rtable *vxlan_get_route(struct vxlan_dev *vxlan,
 				      struct sk_buff *skb, int oif, u8 tos,
 				      __be32 daddr, __be32 *saddr,
 				      struct dst_cache *dst_cache,
-				      struct ip_tunnel_info *info)
+				      const struct ip_tunnel_info *info)
 {
+	bool use_cache = ip_tunnel_dst_cache_usable(skb, info);
 	struct rtable *rt = NULL;
-	bool use_cache = false;
 	struct flowi4 fl4;
 
-	/* when the ip_tunnel_info is availble, the tos used for lookup is
-	 * packet independent, so we can use the cache
-	 */
-	if (!skb->mark && (!tos || info)) {
-		use_cache = true;
+	if (tos && !info)
+		use_cache = false;
+	if (use_cache) {
 		rt = dst_cache_get_ip4(dst_cache, saddr);
 		if (rt)
 			return rt;
@@ -1788,16 +1786,21 @@ static struct rtable *vxlan_get_route(struct vxlan_dev *vxlan,
 
 #if IS_ENABLED(CONFIG_IPV6)
 static struct dst_entry *vxlan6_get_route(struct vxlan_dev *vxlan,
-					  struct sk_buff *skb, int oif,
+					  struct sk_buff *skb, int oif, u8 tos,
+					  __be32 label,
 					  const struct in6_addr *daddr,
 					  struct in6_addr *saddr,
-					  struct dst_cache *dst_cache)
+					  struct dst_cache *dst_cache,
+					  const struct ip_tunnel_info *info)
 {
+	bool use_cache = ip_tunnel_dst_cache_usable(skb, info);
 	struct dst_entry *ndst;
 	struct flowi6 fl6;
 	int err;
 
-	if (!skb->mark) {
+	if (tos && !info)
+		use_cache = false;
+	if (use_cache) {
 		ndst = dst_cache_get_ip6(dst_cache, saddr);
 		if (ndst)
 			return ndst;
@@ -1807,6 +1810,7 @@ static struct dst_entry *vxlan6_get_route(struct vxlan_dev *vxlan,
 	fl6.flowi6_oif = oif;
 	fl6.daddr = *daddr;
 	fl6.saddr = vxlan->cfg.saddr.sin6.sin6_addr;
+	fl6.flowlabel = ip6_make_flowinfo(RT_TOS(tos), label);
 	fl6.flowi6_mark = skb->mark;
 	fl6.flowi6_proto = IPPROTO_UDP;
 
@@ -1817,7 +1821,7 @@ static struct dst_entry *vxlan6_get_route(struct vxlan_dev *vxlan,
 		return ERR_PTR(err);
 
 	*saddr = fl6.saddr;
-	if (!skb->mark)
+	if (use_cache)
 		dst_cache_set_ip6(dst_cache, ndst, saddr);
 	return ndst;
 }
@@ -1882,7 +1886,7 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 	struct vxlan_metadata _md;
 	struct vxlan_metadata *md = &_md;
 	__be16 src_port = 0, dst_port;
-	__be32 vni;
+	__be32 vni, label;
 	__be16 df = 0;
 	__u8 tos, ttl;
 	int err;
@@ -1933,12 +1937,14 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 	if (tos == 1)
 		tos = ip_tunnel_get_dsfield(old_iph, skb);
 
+	label = vxlan->cfg.label;
 	src_port = udp_flow_src_port(dev_net(dev), skb, vxlan->cfg.port_min,
 				     vxlan->cfg.port_max, true);
 
 	if (info) {
 		ttl = info->key.ttl;
 		tos = info->key.tos;
+		label = info->key.label;
 		udp_sum = !!(info->key.tun_flags & TUNNEL_CSUM);
 
 		if (info->options_len)
@@ -2013,9 +2019,9 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 		sk = vxlan->vn6_sock->sock->sk;
 
 		ndst = vxlan6_get_route(vxlan, skb,
-					rdst ? rdst->remote_ifindex : 0,
-					&dst->sin6.sin6_addr, &saddr,
-					dst_cache);
+					rdst ? rdst->remote_ifindex : 0, tos,
+					label, &dst->sin6.sin6_addr, &saddr,
+					dst_cache, info);
 		if (IS_ERR(ndst)) {
 			netdev_dbg(dev, "no route to %pI6\n",
 				   &dst->sin6.sin6_addr);
@@ -2050,6 +2056,7 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 		if (!info)
 			udp_sum = !(flags & VXLAN_F_UDP_ZERO_CSUM6_TX);
 
+		tos = ip_tunnel_ecn_encap(tos, old_iph, skb);
 		ttl = ttl ? : ip6_dst_hoplimit(ndst);
 		skb_scrub_packet(skb, xnet);
 		err = vxlan_build_skb(skb, ndst, sizeof(struct ipv6hdr),
@@ -2059,8 +2066,8 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 			return;
 		}
 		udp_tunnel6_xmit_skb(ndst, sk, skb, dev,
-				     &saddr, &dst->sin6.sin6_addr,
-				     0, ttl, src_port, dst_port, !udp_sum);
+				     &saddr, &dst->sin6.sin6_addr, tos, ttl,
+				     label, src_port, dst_port, !udp_sum);
 #endif
 	}
 
@@ -2382,9 +2389,9 @@ static int vxlan_fill_metadata_dst(struct net_device *dev, struct sk_buff *skb)
 
 		if (!vxlan->vn6_sock)
 			return -EINVAL;
-		ndst = vxlan6_get_route(vxlan, skb, 0,
-					&info->key.u.ipv6.dst,
-					&info->key.u.ipv6.src, NULL);
+		ndst = vxlan6_get_route(vxlan, skb, 0, info->key.tos,
+					info->key.label, &info->key.u.ipv6.dst,
+					&info->key.u.ipv6.src, NULL, info);
 		if (IS_ERR(ndst))
 			return PTR_ERR(ndst);
 		dst_release(ndst);
@@ -2498,6 +2505,7 @@ static const struct nla_policy vxlan_policy[IFLA_VXLAN_MAX + 1] = {
 	[IFLA_VXLAN_LOCAL6]	= { .len = sizeof(struct in6_addr) },
 	[IFLA_VXLAN_TOS]	= { .type = NLA_U8 },
 	[IFLA_VXLAN_TTL]	= { .type = NLA_U8 },
+	[IFLA_VXLAN_LABEL]	= { .type = NLA_U32 },
 	[IFLA_VXLAN_LEARNING]	= { .type = NLA_U8 },
 	[IFLA_VXLAN_AGEING]	= { .type = NLA_U32 },
 	[IFLA_VXLAN_LIMIT]	= { .type = NLA_U32 },
@@ -2732,6 +2740,11 @@ static int vxlan_dev_configure(struct net *src_net, struct net_device *dev,
 		vxlan->flags |= VXLAN_F_IPV6;
 	}
 
+	if (conf->label && !use_ipv6) {
+		pr_info("label only supported in use with IPv6\n");
+		return -EINVAL;
+	}
+
 	if (conf->remote_ifindex) {
 		lowerdev = __dev_get_by_index(src_net, conf->remote_ifindex);
 		dst->remote_ifindex = conf->remote_ifindex;
@@ -2880,6 +2893,10 @@ static int vxlan_newlink(struct net *src_net, struct net_device *dev,
 	if (data[IFLA_VXLAN_TTL])
 		conf.ttl = nla_get_u8(data[IFLA_VXLAN_TTL]);
 
+	if (data[IFLA_VXLAN_LABEL])
+		conf.label = nla_get_be32(data[IFLA_VXLAN_LABEL]) &
+			     IPV6_FLOWLABEL_MASK;
+
 	if (!data[IFLA_VXLAN_LEARNING] || nla_get_u8(data[IFLA_VXLAN_LEARNING]))
 		conf.flags |= VXLAN_F_LEARN;
 
@@ -2983,6 +3000,7 @@ static size_t vxlan_get_size(const struct net_device *dev)
 		nla_total_size(sizeof(struct in6_addr)) + /* IFLA_VXLAN_LOCAL{6} */
 		nla_total_size(sizeof(__u8)) +	/* IFLA_VXLAN_TTL */
 		nla_total_size(sizeof(__u8)) +	/* IFLA_VXLAN_TOS */
+		nla_total_size(sizeof(__be32)) + /* IFLA_VXLAN_LABEL */
 		nla_total_size(sizeof(__u8)) +	/* IFLA_VXLAN_LEARNING */
 		nla_total_size(sizeof(__u8)) +	/* IFLA_VXLAN_PROXY */
 		nla_total_size(sizeof(__u8)) +	/* IFLA_VXLAN_RSC */
@@ -3046,6 +3064,7 @@ static int vxlan_fill_info(struct sk_buff *skb, const struct net_device *dev)
 
 	if (nla_put_u8(skb, IFLA_VXLAN_TTL, vxlan->cfg.ttl) ||
 	    nla_put_u8(skb, IFLA_VXLAN_TOS, vxlan->cfg.tos) ||
+	    nla_put_be32(skb, IFLA_VXLAN_LABEL, vxlan->cfg.label) ||
 	    nla_put_u8(skb, IFLA_VXLAN_LEARNING,
 			!!(vxlan->flags & VXLAN_F_LEARN)) ||
 	    nla_put_u8(skb, IFLA_VXLAN_PROXY,

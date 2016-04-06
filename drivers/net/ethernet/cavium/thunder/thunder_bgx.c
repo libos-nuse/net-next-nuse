@@ -974,24 +974,20 @@ static int bgx_init_acpi_phy(struct bgx *bgx)
 static int bgx_init_of_phy(struct bgx *bgx)
 {
 	struct fwnode_handle *fwn;
+	struct device_node *node = NULL;
 	u8 lmac = 0;
-	const char *mac;
 
 	device_for_each_child_node(&bgx->pdev->dev, fwn) {
+		struct phy_device *pd;
 		struct device_node *phy_np;
-		struct device_node *node = to_of_node(fwn);
+		const char *mac;
 
-		/* If it is not an OF node we cannot handle it yet, so
-		 * exit the loop.
+		/* Should always be an OF node.  But if it is not, we
+		 * cannot handle it, so exit the loop.
 		 */
+		node = to_of_node(fwn);
 		if (!node)
 			break;
-
-		phy_np = of_parse_phandle(node, "phy-handle", 0);
-		if (!phy_np)
-			continue;
-
-		bgx->lmac[lmac].phydev = of_phy_find_device(phy_np);
 
 		mac = of_get_mac_address(node);
 		if (mac)
@@ -999,13 +995,41 @@ static int bgx_init_of_phy(struct bgx *bgx)
 
 		SET_NETDEV_DEV(&bgx->lmac[lmac].netdev, &bgx->pdev->dev);
 		bgx->lmac[lmac].lmacid = lmac;
-		lmac++;
-		if (lmac == MAX_LMAC_PER_BGX) {
-			of_node_put(node);
-			break;
+
+		phy_np = of_parse_phandle(node, "phy-handle", 0);
+		/* If there is no phy or defective firmware presents
+		 * this cortina phy, for which there is no driver
+		 * support, ignore it.
+		 */
+		if (phy_np &&
+		    !of_device_is_compatible(phy_np, "cortina,cs4223-slice")) {
+			/* Wait until the phy drivers are available */
+			pd = of_phy_find_device(phy_np);
+			if (!pd)
+				goto defer;
+			bgx->lmac[lmac].phydev = pd;
 		}
+
+		lmac++;
+		if (lmac == MAX_LMAC_PER_BGX)
+			break;
 	}
+	of_node_put(node);
 	return 0;
+
+defer:
+	/* We are bailing out, try not to leak device reference counts
+	 * for phy devices we may have already found.
+	 */
+	while (lmac) {
+		if (bgx->lmac[lmac].phydev) {
+			put_device(&bgx->lmac[lmac].phydev->mdio.dev);
+			bgx->lmac[lmac].phydev = NULL;
+		}
+		lmac--;
+	}
+	of_node_put(node);
+	return -EPROBE_DEFER;
 }
 
 #else
@@ -1031,9 +1055,6 @@ static int bgx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct device *dev = &pdev->dev;
 	struct bgx *bgx = NULL;
 	u8 lmac;
-
-	/* Load octeon mdio driver */
-	octeon_mdiobus_force_mod_depencency();
 
 	bgx = devm_kzalloc(dev, sizeof(*bgx), GFP_KERNEL);
 	if (!bgx)

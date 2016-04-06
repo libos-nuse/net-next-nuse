@@ -177,6 +177,7 @@ static netdev_tx_t mlx5e_sq_xmit(struct mlx5e_sq *sq, struct sk_buff *skb)
 	unsigned int skb_len = skb->len;
 	u8  opcode = MLX5_OPCODE_SEND;
 	dma_addr_t dma_addr = 0;
+	unsigned int num_bytes;
 	bool bf = false;
 	u16 headlen;
 	u16 ds_cnt;
@@ -216,15 +217,16 @@ static netdev_tx_t mlx5e_sq_xmit(struct mlx5e_sq *sq, struct sk_buff *skb)
 			sq->stats.tso_bytes += skb->len - ihs;
 		}
 
-		wi->num_bytes = skb->len +
-				(skb_shinfo(skb)->gso_segs - 1) * ihs;
+		num_bytes = skb->len + (skb_shinfo(skb)->gso_segs - 1) * ihs;
 	} else {
 		bf = sq->bf_budget &&
 		     !skb->xmit_more &&
 		     !skb_shinfo(skb)->nr_frags;
 		ihs = mlx5e_get_inline_hdr_size(sq, skb, bf);
-		wi->num_bytes = max_t(unsigned int, skb->len, ETH_ZLEN);
+		num_bytes = max_t(unsigned int, skb->len, ETH_ZLEN);
 	}
+
+	wi->num_bytes = num_bytes;
 
 	if (skb_vlan_tag_present(skb)) {
 		mlx5e_insert_vlan(eseg->inline_hdr_start, skb, ihs, &skb_data,
@@ -317,6 +319,7 @@ static netdev_tx_t mlx5e_sq_xmit(struct mlx5e_sq *sq, struct sk_buff *skb)
 	sq->bf_budget = bf ? sq->bf_budget - 1 : 0;
 
 	sq->stats.packets++;
+	sq->stats.bytes += num_bytes;
 	return NETDEV_TX_OK;
 
 dma_unmap_wqe_err:
@@ -336,7 +339,7 @@ netdev_tx_t mlx5e_xmit(struct sk_buff *skb, struct net_device *dev)
 	return mlx5e_sq_xmit(sq, skb);
 }
 
-bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq)
+bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 {
 	struct mlx5e_sq *sq;
 	u32 dma_fifo_cc;
@@ -344,10 +347,6 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq)
 	u16 npkts;
 	u16 sqcc;
 	int i;
-
-	/* avoid accessing cq (dma coherent memory) if not needed */
-	if (!test_and_clear_bit(MLX5E_CQ_HAS_CQES, &cq->flags))
-		return false;
 
 	sq = container_of(cq, struct mlx5e_sq, cq);
 
@@ -412,7 +411,7 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq)
 			npkts++;
 			nbytes += wi->num_bytes;
 			sqcc += wi->num_wqebbs;
-			dev_kfree_skb(skb);
+			napi_consume_skb(skb, napi_budget);
 		} while (!last_wqe);
 	}
 
@@ -432,10 +431,6 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq)
 				netif_tx_wake_queue(sq->txq);
 				sq->stats.wake++;
 	}
-	if (i == MLX5E_TX_CQ_POLL_BUDGET) {
-		set_bit(MLX5E_CQ_HAS_CQES, &cq->flags);
-		return true;
-	}
 
-	return false;
+	return (i == MLX5E_TX_CQ_POLL_BUDGET);
 }

@@ -108,12 +108,12 @@ struct stmmac_axi {
 };
 
 struct plat_stmmacenet_data {
-	char *phy_bus_name;
 	int bus_id;
 	int phy_addr;
 	int interface;
 	struct stmmac_mdio_bus_data *mdio_bus_data;
 	struct device_node *phy_node;
+	struct device_node *mdio_node;
 	struct stmmac_dma_cfg *dma_cfg;
 	int clk_csr;
 	int has_gmac;
@@ -137,5 +137,7 @@ struct plat_stmmacenet_data {
 	void (*exit)(struct platform_device *pdev, void *priv);
 	void *bsp_priv;
 	struct stmmac_axi *axi;
+	int has_gmac4;
+	bool tso_en;
 };
 #endif

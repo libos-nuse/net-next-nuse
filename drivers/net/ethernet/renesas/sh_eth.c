@@ -447,8 +447,8 @@ static bool sh_eth_is_rz_fast_ether(struct sh_eth_private *mdp)
 
 static void sh_eth_select_mii(struct net_device *ndev)
 {
-	u32 value = 0x0;
 	struct sh_eth_private *mdp = netdev_priv(ndev);
+	u32 value;
 
 	switch (mdp->phy_interface) {
 	case PHY_INTERFACE_MODE_GMII:
@@ -1127,11 +1127,8 @@ static void sh_eth_ring_format(struct net_device *ndev)
 			break;
 		sh_eth_set_receive_align(skb);
 
-		/* RX descriptor */
-		rxdesc = &mdp->rx_ring[i];
 		/* The size of the buffer is a multiple of 32 bytes. */
 		buf_len = ALIGN(mdp->rx_buf_sz, 32);
-		rxdesc->len = cpu_to_le32(buf_len << 16);
 		dma_addr = dma_map_single(&ndev->dev, skb->data, buf_len,
 					  DMA_FROM_DEVICE);
 		if (dma_mapping_error(&ndev->dev, dma_addr)) {
@@ -1139,6 +1136,10 @@ static void sh_eth_ring_format(struct net_device *ndev)
 			break;
 		}
 		mdp->rx_skbuff[i] = skb;
+
+		/* RX descriptor */
+		rxdesc = &mdp->rx_ring[i];
+		rxdesc->len = cpu_to_le32(buf_len << 16);
 		rxdesc->addr = cpu_to_le32(dma_addr);
 		rxdesc->status = cpu_to_le32(RD_RACT | RD_RFP);
 
@@ -1154,7 +1155,8 @@ static void sh_eth_ring_format(struct net_device *ndev)
 	mdp->dirty_rx = (u32) (i - mdp->num_rx_ring);
 
 	/* Mark the last entry as wrapping the ring. */
-	rxdesc->status |= cpu_to_le32(RD_RDLE);
+	if (rxdesc)
+		rxdesc->status |= cpu_to_le32(RD_RDLE);
 
 	memset(mdp->tx_ring, 0, tx_ringsize);
 
@@ -1229,8 +1231,8 @@ ring_free:
 
 static int sh_eth_dev_init(struct net_device *ndev, bool start)
 {
-	int ret = 0;
 	struct sh_eth_private *mdp = netdev_priv(ndev);
+	int ret;
 
 	/* Soft Reset */
 	ret = sh_eth_reset(ndev);
@@ -1310,8 +1312,6 @@ static int sh_eth_dev_init(struct net_device *ndev, bool start)
 	if (start) {
 		/* Setting the Rx mode will start the Rx process. */
 		sh_eth_write(ndev, EDRRR_R, EDRRR);
-
-		netif_start_queue(ndev);
 	}
 
 	return ret;
@@ -1353,7 +1353,7 @@ static int sh_eth_txfree(struct net_device *ndev)
 	struct sh_eth_private *mdp = netdev_priv(ndev);
 	struct sh_eth_txdesc *txdesc;
 	int free_num = 0;
-	int entry = 0;
+	int entry;
 
 	for (; mdp->cur_tx - mdp->dirty_tx > 0; mdp->dirty_tx++) {
 		entry = mdp->dirty_tx % mdp->num_tx_ring;
@@ -1394,10 +1394,10 @@ static int sh_eth_rx(struct net_device *ndev, u32 intr_status, int *quota)
 	int boguscnt = (mdp->dirty_rx + mdp->num_rx_ring) - mdp->cur_rx;
 	int limit;
 	struct sk_buff *skb;
-	u16 pkt_len = 0;
 	u32 desc_status;
 	int skbuff_size = mdp->rx_buf_sz + SH_ETH_RX_ALIGN + 32 - 1;
 	dma_addr_t dma_addr;
+	u16 pkt_len;
 	u32 buf_len;
 
 	boguscnt = min(boguscnt, *quota);
@@ -1776,7 +1776,7 @@ static int sh_eth_phy_init(struct net_device *ndev)
 {
 	struct device_node *np = ndev->dev.parent->of_node;
 	struct sh_eth_private *mdp = netdev_priv(ndev);
-	struct phy_device *phydev = NULL;
+	struct phy_device *phydev;
 
 	mdp->link = 0;
 	mdp->speed = 0;
@@ -2230,8 +2230,8 @@ static const struct ethtool_ops sh_eth_ethtool_ops = {
 /* network device open function */
 static int sh_eth_open(struct net_device *ndev)
 {
-	int ret = 0;
 	struct sh_eth_private *mdp = netdev_priv(ndev);
+	int ret;
 
 	pm_runtime_get_sync(&mdp->pdev->dev);
 
@@ -2258,6 +2258,8 @@ static int sh_eth_open(struct net_device *ndev)
 	ret = sh_eth_phy_start(ndev);
 	if (ret)
 		goto out_free_irq;
+
+	netif_start_queue(ndev);
 
 	mdp->is_opened = 1;
 
@@ -2302,6 +2304,8 @@ static void sh_eth_tx_timeout(struct net_device *ndev)
 
 	/* device init */
 	sh_eth_dev_init(ndev, true);
+
+	netif_start_queue(ndev);
 }
 
 /* Packet transmit function */
@@ -2986,12 +2990,12 @@ static inline struct sh_eth_plat_data *sh_eth_parse_dt(struct device *dev)
 
 static int sh_eth_drv_probe(struct platform_device *pdev)
 {
-	int ret, devno = 0;
 	struct resource *res;
-	struct net_device *ndev = NULL;
-	struct sh_eth_private *mdp = NULL;
 	struct sh_eth_plat_data *pd = dev_get_platdata(&pdev->dev);
 	const struct platform_device_id *id = platform_get_device_id(pdev);
+	struct sh_eth_private *mdp;
+	struct net_device *ndev;
+	int ret, devno;
 
 	/* get base addr */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -3044,15 +3048,11 @@ static int sh_eth_drv_probe(struct platform_device *pdev)
 	mdp->ether_link_active_low = pd->ether_link_active_low;
 
 	/* set cpu data */
-	if (id) {
+	if (id)
 		mdp->cd = (struct sh_eth_cpu_data *)id->driver_data;
-	} else	{
-		const struct of_device_id *match;
+	else
+		mdp->cd = (struct sh_eth_cpu_data *)of_device_get_match_data(&pdev->dev);
 
-		match = of_match_device(of_match_ptr(sh_eth_match_table),
-					&pdev->dev);
-		mdp->cd = (struct sh_eth_cpu_data *)match->data;
-	}
 	mdp->reg_offset = sh_eth_get_register_offset(mdp->cd->register_type);
 	if (!mdp->reg_offset) {
 		dev_err(&pdev->dev, "Unknown register type (%d)\n",
