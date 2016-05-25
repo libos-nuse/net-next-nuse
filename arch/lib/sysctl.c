@@ -91,8 +91,6 @@ int sched_rt_handler(struct ctl_table *table, int write,
 	return 0;
 }
 
-int sysctl_overcommit_memory = OVERCOMMIT_GUESS;
-int sysctl_overcommit_ratio = 50;
 int sysctl_panic_on_oom = 0;
 int sysctl_oom_dump_tasks = 0;
 int sysctl_oom_kill_allocating_task = 0;
@@ -122,7 +120,6 @@ DEFINE_RATELIMIT_STATE(printk_ratelimit_state, 5 * HZ, 10);
 int pid_max = PID_MAX_DEFAULT;
 int pid_max_min = RESERVED_PIDS + 1;
 int pid_max_max = PID_MAX_LIMIT;
-int min_free_kbytes = 1024;
 int max_threads = 100;
 int laptop_mode = 0;
 
@@ -149,8 +146,6 @@ int C_A_D = 0;
 struct nsproxy init_nsproxy;
 #include <linux/reboot.h>
 char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
-unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
-unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 
 int pdflush_proc_obsolete(struct ctl_table *table, int write,
 			  void __user *buffer, size_t *lenp, loff_t *ppos)

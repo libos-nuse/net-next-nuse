@@ -105,7 +105,7 @@ int hrtimer_cancel(struct hrtimer *timer)
 	return ret;
 }
 void hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
-			   unsigned long delta_ns, const enum hrtimer_mode mode)
+			    u64 delta_ns, const enum hrtimer_mode mode)
 {
 	__hrtimer_start_range_ns(timer, tim, delta_ns, mode, 1);
 }

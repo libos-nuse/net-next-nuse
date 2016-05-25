@@ -46,6 +46,15 @@ compound_page_dtor * const compound_page_dtors[1];
 /* XXX: used in network stack ! */
 unsigned long num_physpages = 0;
 unsigned long totalram_pages = 0;
+unsigned long totalreserve_pages = 0;
+
+const struct trace_print_flags pageflag_names[1];
+const struct trace_print_flags gfpflag_names[1];
+const struct trace_print_flags vmaflag_names[1];
+
+int min_free_kbytes;
+int user_min_free_kbytes;
+int watermark_scale_factor;
 
 /* XXX figure out initial value */
 unsigned int interrupt_pending = 0;
@@ -55,7 +64,6 @@ int overflowgid = 0;
 int overflowuid = 0;
 int fs_overflowgid = 0;
 int fs_overflowuid = 0;
-unsigned long sysctl_overcommit_kbytes __read_mostly;
 DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
 struct cpumask __cpu_possible_mask;
 
@@ -285,4 +293,10 @@ void on_each_cpu_mask(const struct cpumask *mask,
 
 void free_hot_cold_page(struct page *page, bool cold)
 {
+}
+
+int watermark_scale_factor_sysctl_handler(struct ctl_table *table, int write,
+	void __user *buffer, size_t *length, loff_t *ppos)
+{
+	return 0;
 }
