@@ -443,9 +443,17 @@ void intel_prepare_ddi_buffer(struct intel_encoder *encoder)
 	} else if (IS_BROADWELL(dev_priv)) {
 		ddi_translations_fdi = bdw_ddi_translations_fdi;
 		ddi_translations_dp = bdw_ddi_translations_dp;
-		ddi_translations_edp = bdw_ddi_translations_edp;
+
+		if (dev_priv->edp_low_vswing) {
+			ddi_translations_edp = bdw_ddi_translations_edp;
+			n_edp_entries = ARRAY_SIZE(bdw_ddi_translations_edp);
+		} else {
+			ddi_translations_edp = bdw_ddi_translations_dp;
+			n_edp_entries = ARRAY_SIZE(bdw_ddi_translations_dp);
+		}
+
 		ddi_translations_hdmi = bdw_ddi_translations_hdmi;
-		n_edp_entries = ARRAY_SIZE(bdw_ddi_translations_edp);
+
 		n_dp_entries = ARRAY_SIZE(bdw_ddi_translations_dp);
 		n_hdmi_entries = ARRAY_SIZE(bdw_ddi_translations_hdmi);
 		hdmi_default_entry = 7;
@@ -3098,23 +3106,6 @@ void intel_ddi_fdi_disable(struct drm_crtc *crtc)
 	I915_WRITE(FDI_RX_CTL(PIPE_A), val);
 }
 
-bool intel_ddi_is_audio_enabled(struct drm_i915_private *dev_priv,
-				 struct intel_crtc *intel_crtc)
-{
-	u32 temp;
-
-	if (intel_display_power_get_if_enabled(dev_priv, POWER_DOMAIN_AUDIO)) {
-		temp = I915_READ(HSW_AUD_PIN_ELD_CP_VLD);
-
-		intel_display_power_put(dev_priv, POWER_DOMAIN_AUDIO);
-
-		if (temp & AUDIO_OUTPUT_ENABLE(intel_crtc->pipe))
-			return true;
-	}
-
-	return false;
-}
-
 void intel_ddi_get_config(struct intel_encoder *encoder,
 			  struct intel_crtc_state *pipe_config)
 {
@@ -3175,8 +3166,11 @@ void intel_ddi_get_config(struct intel_encoder *encoder,
 		break;
 	}
 
-	pipe_config->has_audio =
-		intel_ddi_is_audio_enabled(dev_priv, intel_crtc);
+	if (intel_display_power_is_enabled(dev_priv, POWER_DOMAIN_AUDIO)) {
+		temp = I915_READ(HSW_AUD_PIN_ELD_CP_VLD);
+		if (temp & AUDIO_OUTPUT_ENABLE(intel_crtc->pipe))
+			pipe_config->has_audio = true;
+	}
 
 	if (encoder->type == INTEL_OUTPUT_EDP && dev_priv->vbt.edp_bpp &&
 	    pipe_config->pipe_bpp > dev_priv->vbt.edp_bpp) {
@@ -3201,12 +3195,6 @@ void intel_ddi_get_config(struct intel_encoder *encoder,
 	intel_ddi_clock_get(encoder, pipe_config);
 }
 
-static void intel_ddi_destroy(struct drm_encoder *encoder)
-{
-	/* HDMI has nothing special to destroy, so we can go with this. */
-	intel_dp_encoder_destroy(encoder);
-}
-
 static bool intel_ddi_compute_config(struct intel_encoder *encoder,
 				     struct intel_crtc_state *pipe_config)
 {
@@ -3225,7 +3213,8 @@ static bool intel_ddi_compute_config(struct intel_encoder *encoder,
 }
 
 static const struct drm_encoder_funcs intel_ddi_funcs = {
-	.destroy = intel_ddi_destroy,
+	.reset = intel_dp_encoder_reset,
+	.destroy = intel_dp_encoder_destroy,
 };
 
 static struct intel_connector *
@@ -3324,6 +3313,7 @@ void intel_ddi_init(struct drm_device *dev, enum port port)
 	intel_encoder->post_disable = intel_ddi_post_disable;
 	intel_encoder->get_hw_state = intel_ddi_get_hw_state;
 	intel_encoder->get_config = intel_ddi_get_config;
+	intel_encoder->suspend = intel_dp_encoder_suspend;
 
 	intel_dig_port->port = port;
 	intel_dig_port->saved_port_bits = I915_READ(DDI_BUF_CTL(port)) &

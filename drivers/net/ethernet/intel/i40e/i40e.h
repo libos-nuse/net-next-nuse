@@ -97,12 +97,12 @@
 #define I40E_INT_NAME_STR_LEN        (IFNAMSIZ + 16)
 
 /* Ethtool Private Flags */
-#define I40E_PRIV_FLAGS_NPAR_FLAG	BIT(0)
-#define I40E_PRIV_FLAGS_LINKPOLL_FLAG	BIT(1)
-#define I40E_PRIV_FLAGS_FD_ATR		BIT(2)
-#define I40E_PRIV_FLAGS_VEB_STATS	BIT(3)
-#define I40E_PRIV_FLAGS_PS		BIT(4)
-#define I40E_PRIV_FLAGS_HW_ATR_EVICT	BIT(5)
+#define	I40E_PRIV_FLAGS_MFP_FLAG		BIT(0)
+#define	I40E_PRIV_FLAGS_LINKPOLL_FLAG		BIT(1)
+#define I40E_PRIV_FLAGS_FD_ATR			BIT(2)
+#define I40E_PRIV_FLAGS_VEB_STATS		BIT(3)
+#define I40E_PRIV_FLAGS_HW_ATR_EVICT		BIT(4)
+#define I40E_PRIV_FLAGS_TRUE_PROMISC_SUPPORT	BIT(5)
 
 #define I40E_NVM_VERSION_LO_SHIFT  0
 #define I40E_NVM_VERSION_LO_MASK   (0xff << I40E_NVM_VERSION_LO_SHIFT)
@@ -112,7 +112,9 @@
 #define I40E_OEM_VER_PATCH_MASK    0xff
 #define I40E_OEM_VER_BUILD_SHIFT   8
 #define I40E_OEM_VER_SHIFT         24
-#define I40E_PHY_DEBUG_PORT        BIT(4)
+#define I40E_PHY_DEBUG_ALL \
+	(I40E_AQ_PHY_DEBUG_DISABLE_LINK_FW | \
+	I40E_AQ_PHY_DEBUG_DISABLE_ALL_LINK_FW)
 
 /* The values in here are decimal coded as hex as is the case in the NVM map*/
 #define I40E_CURRENT_NVM_VERSION_HI 0x2
@@ -123,10 +125,7 @@
 #define XSTRINGIFY(bar) STRINGIFY(bar)
 
 #define I40E_RX_DESC(R, i)			\
-	((ring_is_16byte_desc_enabled(R))	\
-		? (union i40e_32byte_rx_desc *)	\
-			(&(((union i40e_16byte_rx_desc *)((R)->desc))[i])) \
-		: (&(((union i40e_32byte_rx_desc *)((R)->desc))[i])))
+	(&(((union i40e_32byte_rx_desc *)((R)->desc))[i]))
 #define I40E_TX_DESC(R, i)			\
 	(&(((struct i40e_tx_desc *)((R)->desc))[i]))
 #define I40E_TX_CTXTDESC(R, i)			\
@@ -202,6 +201,7 @@ struct i40e_lump_tracking {
 
 #define I40E_HKEY_ARRAY_SIZE ((I40E_PFQF_HKEY_MAX_INDEX + 1) * 4)
 #define I40E_HLUT_ARRAY_SIZE ((I40E_PFQF_HLUT_MAX_INDEX + 1) * 4)
+#define I40E_VF_HLUT_ARRAY_SIZE ((I40E_VFQF_HLUT1_MAX_INDEX + 1) * 4)
 
 enum i40e_fd_stat_idx {
 	I40E_FD_STAT_ATR,
@@ -319,8 +319,6 @@ struct i40e_pf {
 #define I40E_FLAG_RX_CSUM_ENABLED		BIT_ULL(1)
 #define I40E_FLAG_MSI_ENABLED			BIT_ULL(2)
 #define I40E_FLAG_MSIX_ENABLED			BIT_ULL(3)
-#define I40E_FLAG_RX_1BUF_ENABLED		BIT_ULL(4)
-#define I40E_FLAG_RX_PS_ENABLED			BIT_ULL(5)
 #define I40E_FLAG_RSS_ENABLED			BIT_ULL(6)
 #define I40E_FLAG_VMDQ_ENABLED			BIT_ULL(7)
 #define I40E_FLAG_FDIR_REQUIRES_REINIT		BIT_ULL(8)
@@ -329,7 +327,6 @@ struct i40e_pf {
 #ifdef I40E_FCOE
 #define I40E_FLAG_FCOE_ENABLED			BIT_ULL(11)
 #endif /* I40E_FCOE */
-#define I40E_FLAG_16BYTE_RX_DESC_ENABLED	BIT_ULL(13)
 #define I40E_FLAG_CLEAN_ADMINQ			BIT_ULL(14)
 #define I40E_FLAG_FILTER_SYNC			BIT_ULL(15)
 #define I40E_FLAG_SERVICE_CLIENT_REQUESTED	BIT_ULL(16)
@@ -362,6 +359,7 @@ struct i40e_pf {
 #define I40E_FLAG_STOP_FW_LLDP			BIT_ULL(47)
 #define I40E_FLAG_HAVE_10GBASET_PHY		BIT_ULL(48)
 #define I40E_FLAG_PF_MAC			BIT_ULL(50)
+#define I40E_FLAG_TRUE_PROMISC_SUPPORT		BIT_ULL(51)
 
 	/* tracks features that get auto disabled by errors */
 	u64 auto_disable_flags;
@@ -533,9 +531,7 @@ struct i40e_vsi {
 	u8  *rss_lut_user;  /* User configured lookup table entries */
 
 	u16 max_frame;
-	u16 rx_hdr_len;
 	u16 rx_buf_len;
-	u8  dtype;
 
 	/* List of q_vectors allocated to this VSI */
 	struct i40e_q_vector **q_vectors;
@@ -553,7 +549,7 @@ struct i40e_vsi {
 	u16 num_queue_pairs; /* Used tx and rx pairs */
 	u16 num_desc;
 	enum i40e_vsi_type type;  /* VSI type, e.g., LAN, FCoE, etc */
-	u16 vf_id;		/* Virtual function ID for SRIOV VSIs */
+	s16 vf_id;		/* Virtual function ID for SRIOV VSIs */
 
 	struct i40e_tc_configuration tc_config;
 	struct i40e_aqc_vsi_properties_data info;

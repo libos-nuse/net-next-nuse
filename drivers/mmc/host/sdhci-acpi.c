@@ -41,6 +41,11 @@
 #include <linux/mmc/pm.h>
 #include <linux/mmc/slot-gpio.h>
 
+#ifdef CONFIG_X86
+#include <asm/cpu_device_id.h>
+#include <asm/iosf_mbi.h>
+#endif
+
 #include "sdhci.h"
 
 enum {
@@ -116,6 +121,75 @@ static const struct sdhci_acpi_chip sdhci_acpi_chip_int = {
 	.ops = &sdhci_acpi_ops_int,
 };
 
+#ifdef CONFIG_X86
+
+static bool sdhci_acpi_byt(void)
+{
+	static const struct x86_cpu_id byt[] = {
+		{ X86_VENDOR_INTEL, 6, 0x37 },
+		{}
+	};
+
+	return x86_match_cpu(byt);
+}
+
+#define BYT_IOSF_SCCEP			0x63
+#define BYT_IOSF_OCP_NETCTRL0		0x1078
+#define BYT_IOSF_OCP_TIMEOUT_BASE	GENMASK(10, 8)
+
+static void sdhci_acpi_byt_setting(struct device *dev)
+{
+	u32 val = 0;
+
+	if (!sdhci_acpi_byt())
+		return;
+
+	if (iosf_mbi_read(BYT_IOSF_SCCEP, MBI_CR_READ, BYT_IOSF_OCP_NETCTRL0,
+			  &val)) {
+		dev_err(dev, "%s read error\n", __func__);
+		return;
+	}
+
+	if (!(val & BYT_IOSF_OCP_TIMEOUT_BASE))
+		return;
+
+	val &= ~BYT_IOSF_OCP_TIMEOUT_BASE;
+
+	if (iosf_mbi_write(BYT_IOSF_SCCEP, MBI_CR_WRITE, BYT_IOSF_OCP_NETCTRL0,
+			   val)) {
+		dev_err(dev, "%s write error\n", __func__);
+		return;
+	}
+
+	dev_dbg(dev, "%s completed\n", __func__);
+}
+
+static bool sdhci_acpi_byt_defer(struct device *dev)
+{
+	if (!sdhci_acpi_byt())
+		return false;
+
+	if (!iosf_mbi_available())
+		return true;
+
+	sdhci_acpi_byt_setting(dev);
+
+	return false;
+}
+
+#else
+
+static inline void sdhci_acpi_byt_setting(struct device *dev)
+{
+}
+
+static inline bool sdhci_acpi_byt_defer(struct device *dev)
+{
+	return false;
+}
+
+#endif
+
 static int bxt_get_cd(struct mmc_host *mmc)
 {
 	int gpio_cd = mmc_gpio_get_cd(mmc);
@@ -126,8 +200,6 @@ static int bxt_get_cd(struct mmc_host *mmc)
 	if (!gpio_cd)
 		return 0;
 
-	pm_runtime_get_sync(mmc->parent);
-
 	spin_lock_irqsave(&host->lock, flags);
 
 	if (host->flags & SDHCI_DEVICE_DEAD)
@@ -136,9 +208,6 @@ static int bxt_get_cd(struct mmc_host *mmc)
 	ret = !!(sdhci_readl(host, SDHCI_PRESENT_STATE) & SDHCI_CARD_PRESENT);
 out:
 	spin_unlock_irqrestore(&host->lock, flags);
-
-	pm_runtime_mark_last_busy(mmc->parent);
-	pm_runtime_put_autosuspend(mmc->parent);
 
 	return ret;
 }
@@ -193,8 +262,10 @@ static int sdhci_acpi_sd_probe_slot(struct platform_device *pdev,
 
 	/* Platform specific code during sd probe slot goes here */
 
-	if (hid && !strcmp(hid, "80865ACA"))
+	if (hid && !strcmp(hid, "80865ACA")) {
 		host->mmc_host_ops.get_cd = bxt_get_cd;
+		host->mmc->caps |= MMC_CAP_AGGRESSIVE_PM;
+	}
 
 	return 0;
 }
@@ -322,6 +393,9 @@ static int sdhci_acpi_probe(struct platform_device *pdev)
 	if (acpi_bus_get_status(device) || !device->status.present)
 		return -ENODEV;
 
+	if (sdhci_acpi_byt_defer(dev))
+		return -EPROBE_DEFER;
+
 	hid = acpi_device_hid(device);
 	uid = device->pnp.unique_id;
 
@@ -447,6 +521,8 @@ static int sdhci_acpi_resume(struct device *dev)
 {
 	struct sdhci_acpi_host *c = dev_get_drvdata(dev);
 
+	sdhci_acpi_byt_setting(&c->pdev->dev);
+
 	return sdhci_resume_host(c->host);
 }
 
@@ -469,6 +545,8 @@ static int sdhci_acpi_runtime_suspend(struct device *dev)
 static int sdhci_acpi_runtime_resume(struct device *dev)
 {
 	struct sdhci_acpi_host *c = dev_get_drvdata(dev);
+
+	sdhci_acpi_byt_setting(&c->pdev->dev);
 
 	return sdhci_runtime_resume_host(c->host);
 }

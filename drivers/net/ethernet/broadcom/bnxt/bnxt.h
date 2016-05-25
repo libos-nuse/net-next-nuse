@@ -407,6 +407,15 @@ struct rx_tpa_end_cmp_ext {
 
 #define BNXT_PAGE_SIZE	(1 << BNXT_PAGE_SHIFT)
 
+/* The RXBD length is 16-bit so we can only support page sizes < 64K */
+#if (PAGE_SHIFT > 15)
+#define BNXT_RX_PAGE_SHIFT 15
+#else
+#define BNXT_RX_PAGE_SHIFT PAGE_SHIFT
+#endif
+
+#define BNXT_RX_PAGE_SIZE (1 << BNXT_RX_PAGE_SHIFT)
+
 #define BNXT_MIN_PKT_SIZE	45
 
 #define BNXT_NUM_TESTS(bp)	0
@@ -416,10 +425,17 @@ struct rx_tpa_end_cmp_ext {
 
 #define MAX_TPA		64
 
+#if (BNXT_PAGE_SHIFT == 16)
+#define MAX_RX_PAGES	1
+#define MAX_RX_AGG_PAGES	4
+#define MAX_TX_PAGES	1
+#define MAX_CP_PAGES	8
+#else
 #define MAX_RX_PAGES	8
 #define MAX_RX_AGG_PAGES	32
 #define MAX_TX_PAGES	8
 #define MAX_CP_PAGES	64
+#endif
 
 #define RX_DESC_CNT (BNXT_PAGE_SIZE / sizeof(struct rx_bd))
 #define TX_DESC_CNT (BNXT_PAGE_SIZE / sizeof(struct tx_bd))
@@ -506,6 +522,7 @@ struct bnxt_sw_rx_bd {
 
 struct bnxt_sw_rx_agg_bd {
 	struct page		*page;
+	unsigned int		offset;
 	dma_addr_t		mapping;
 };
 
@@ -574,6 +591,7 @@ struct bnxt_rx_ring_info {
 	u16			rx_prod;
 	u16			rx_agg_prod;
 	u16			rx_sw_agg_prod;
+	u16			rx_next_cons;
 	void __iomem		*rx_doorbell;
 	void __iomem		*rx_agg_doorbell;
 
@@ -585,6 +603,9 @@ struct bnxt_rx_ring_info {
 
 	unsigned long		*rx_agg_bmap;
 	u16			rx_agg_bmap_size;
+
+	struct page		*rx_page;
+	unsigned int		rx_page_offset;
 
 	dma_addr_t		rx_desc_mapping[MAX_RX_PAGES];
 	dma_addr_t		rx_agg_desc_mapping[MAX_RX_AGG_PAGES];
@@ -623,6 +644,7 @@ struct bnxt_napi {
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	atomic_t		poll_state;
 #endif
+	bool			in_reset;
 };
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
@@ -759,6 +781,7 @@ struct bnxt_ntuple_filter {
 };
 
 struct bnxt_link_info {
+	u8			phy_type;
 	u8			media_type;
 	u8			transceiver;
 	u8			phy_addr;
@@ -815,6 +838,7 @@ struct bnxt_link_info {
 	u16			lp_auto_link_speeds;
 	u16			force_link_speed;
 	u32			preemphasis;
+	u8			module_status;
 
 	/* copy of requested setting from ethtool cmd */
 	u8			autoneg;
@@ -826,7 +850,6 @@ struct bnxt_link_info {
 	u32			advertising;
 	bool			force_link_chng;
 
-	u8			last_port_module_event;
 	/* a copy of phy_qcfg output used to report link
 	 * info to VF
 	 */
@@ -1106,6 +1129,16 @@ static inline void bnxt_disable_poll(struct bnxt_napi *bnapi)
 }
 
 #endif
+
+#define I2C_DEV_ADDR_A0				0xa0
+#define I2C_DEV_ADDR_A2				0xa2
+#define SFP_EEPROM_SFF_8472_COMP_ADDR		0x5e
+#define SFP_EEPROM_SFF_8472_COMP_SIZE		1
+#define SFF_MODULE_ID_SFP			0x3
+#define SFF_MODULE_ID_QSFP			0xc
+#define SFF_MODULE_ID_QSFP_PLUS			0xd
+#define SFF_MODULE_ID_QSFP28			0x11
+#define BNXT_MAX_PHY_I2C_RESP_SIZE		64
 
 void bnxt_set_ring_params(struct bnxt *);
 void bnxt_hwrm_cmd_hdr_init(struct bnxt *, void *, u16, u16, u16);

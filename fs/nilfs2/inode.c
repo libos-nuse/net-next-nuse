@@ -249,7 +249,7 @@ static int nilfs_set_page_dirty(struct page *page)
 		if (nr_dirty)
 			nilfs_set_file_dirty(inode, nr_dirty);
 	} else if (ret) {
-		unsigned nr_dirty = 1 << (PAGE_CACHE_SHIFT - inode->i_blkbits);
+		unsigned nr_dirty = 1 << (PAGE_SHIFT - inode->i_blkbits);
 
 		nilfs_set_file_dirty(inode, nr_dirty);
 	}
@@ -291,7 +291,7 @@ static int nilfs_write_end(struct file *file, struct address_space *mapping,
 			   struct page *page, void *fsdata)
 {
 	struct inode *inode = mapping->host;
-	unsigned start = pos & (PAGE_CACHE_SIZE - 1);
+	unsigned start = pos & (PAGE_SIZE - 1);
 	unsigned nr_dirty;
 	int err;
 
@@ -305,7 +305,7 @@ static int nilfs_write_end(struct file *file, struct address_space *mapping,
 }
 
 static ssize_t
-nilfs_direct_IO(struct kiocb *iocb, struct iov_iter *iter, loff_t offset)
+nilfs_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 {
 	struct inode *inode = file_inode(iocb->ki_filp);
 
@@ -313,7 +313,7 @@ nilfs_direct_IO(struct kiocb *iocb, struct iov_iter *iter, loff_t offset)
 		return 0;
 
 	/* Needs synchronization with the cleaner */
-	return blockdev_direct_IO(iocb, inode, iter, offset, nilfs_get_block);
+	return blockdev_direct_IO(iocb, inode, iter, nilfs_get_block);
 }
 
 const struct address_space_operations nilfs_aops = {

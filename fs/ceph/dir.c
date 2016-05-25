@@ -5,6 +5,7 @@
 #include <linux/namei.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/xattr.h>
 
 #include "super.h"
 #include "mds_client.h"
@@ -129,7 +130,7 @@ static int __dcache_readdir(struct file *file,  struct dir_context *ctx,
 	struct inode *dir = d_inode(parent);
 	struct dentry *dentry, *last = NULL;
 	struct ceph_dentry_info *di;
-	unsigned nsize = PAGE_CACHE_SIZE / sizeof(struct dentry *);
+	unsigned nsize = PAGE_SIZE / sizeof(struct dentry *);
 	int err = 0;
 	loff_t ptr_pos = 0;
 	struct ceph_readdir_cache_control cache_ctl = {};
@@ -154,7 +155,7 @@ static int __dcache_readdir(struct file *file,  struct dir_context *ctx,
 		}
 
 		err = -EAGAIN;
-		pgoff = ptr_pos >> PAGE_CACHE_SHIFT;
+		pgoff = ptr_pos >> PAGE_SHIFT;
 		if (!cache_ctl.page || pgoff != page_index(cache_ctl.page)) {
 			ceph_readdir_cache_release(&cache_ctl);
 			cache_ctl.page = find_lock_page(&dir->i_data, pgoff);
@@ -1342,10 +1343,10 @@ const struct inode_operations ceph_dir_iops = {
 	.permission = ceph_permission,
 	.getattr = ceph_getattr,
 	.setattr = ceph_setattr,
-	.setxattr = ceph_setxattr,
-	.getxattr = ceph_getxattr,
+	.setxattr = generic_setxattr,
+	.getxattr = generic_getxattr,
 	.listxattr = ceph_listxattr,
-	.removexattr = ceph_removexattr,
+	.removexattr = generic_removexattr,
 	.get_acl = ceph_get_acl,
 	.set_acl = ceph_set_acl,
 	.mknod = ceph_mknod,

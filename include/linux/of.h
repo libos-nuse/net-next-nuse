@@ -133,7 +133,7 @@ void of_core_init(void);
 
 static inline bool is_of_node(struct fwnode_handle *fwnode)
 {
-	return fwnode && fwnode->type == FWNODE_OF;
+	return !IS_ERR_OR_NULL(fwnode) && fwnode->type == FWNODE_OF;
 }
 
 static inline struct device_node *to_of_node(struct fwnode_handle *fwnode)
@@ -682,6 +682,15 @@ extern int of_node_to_nid(struct device_node *np);
 static inline int of_node_to_nid(struct device_node *device)
 {
 	return NUMA_NO_NODE;
+}
+#endif
+
+#ifdef CONFIG_OF_NUMA
+extern int of_numa_init(void);
+#else
+static inline int of_numa_init(void)
+{
+	return -ENOSYS;
 }
 #endif
 

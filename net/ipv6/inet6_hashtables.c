@@ -137,7 +137,7 @@ struct sock *inet6_lookup_listener(struct net *net,
 	sk_for_each(sk, &ilb->head) {
 		score = compute_score(sk, net, hnum, daddr, dif);
 		if (score > hiscore) {
-			hiscore = score;
+			reuseport = sk->sk_reuseport;
 			if (reuseport) {
 				phash = inet6_ehashfn(net, daddr, hnum,
 						      saddr, sport);
@@ -148,7 +148,7 @@ struct sock *inet6_lookup_listener(struct net *net,
 				matches = 1;
 			}
 			result = sk;
-			reuseport = sk->sk_reuseport;
+			hiscore = score;
 		} else if (score == hiscore && reuseport) {
 			matches++;
 			if (reciprocal_scale(phash, matches) == 0)
@@ -222,7 +222,7 @@ static int __inet6_check_established(struct inet_timewait_death_row *death_row,
 	__sk_nulls_add_node_rcu(sk, &head->chain);
 	if (tw) {
 		sk_nulls_del_node_init_rcu((struct sock *)tw);
-		NET_INC_STATS_BH(net, LINUX_MIB_TIMEWAITRECYCLED);
+		__NET_INC_STATS(net, LINUX_MIB_TIMEWAITRECYCLED);
 	}
 	spin_unlock(lock);
 	sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);

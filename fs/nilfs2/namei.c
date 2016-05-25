@@ -431,11 +431,11 @@ static int nilfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 out_dir:
 	if (dir_de) {
 		kunmap(dir_page);
-		page_cache_release(dir_page);
+		put_page(dir_page);
 	}
 out_old:
 	kunmap(old_page);
-	page_cache_release(old_page);
+	put_page(old_page);
 out:
 	nilfs_transaction_abort(old_dir->i_sb);
 	return err;
@@ -457,7 +457,7 @@ static struct dentry *nilfs_get_parent(struct dentry *child)
 
 	root = NILFS_I(d_inode(child))->i_root;
 
-	inode = nilfs_iget(d_inode(child)->i_sb, root, ino);
+	inode = nilfs_iget(child->d_sb, root, ino);
 	if (IS_ERR(inode))
 		return ERR_CAST(inode);
 

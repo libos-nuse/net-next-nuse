@@ -123,6 +123,10 @@ static void intel_lvds_get_config(struct intel_encoder *encoder,
 
 	pipe_config->base.adjusted_mode.flags |= flags;
 
+	if (INTEL_INFO(dev)->gen < 5)
+		pipe_config->gmch_pfit.lvds_border_bits =
+			tmp & LVDS_BORDER_ENABLE;
+
 	/* gen2/3 store dither state in pfit control, needs to match */
 	if (INTEL_INFO(dev)->gen < 4) {
 		tmp = I915_READ(PFIT_CONTROL);
@@ -478,11 +482,8 @@ static int intel_lid_notify(struct notifier_block *nb, unsigned long val,
 	 * and as part of the cleanup in the hw state restore we also redisable
 	 * the vga plane.
 	 */
-	if (!HAS_PCH_SPLIT(dev)) {
-		drm_modeset_lock_all(dev);
+	if (!HAS_PCH_SPLIT(dev))
 		intel_display_resume(dev);
-		drm_modeset_unlock_all(dev);
-	}
 
 	dev_priv->modeset_restore = MODESET_DONE;
 

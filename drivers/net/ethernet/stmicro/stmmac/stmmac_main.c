@@ -289,10 +289,6 @@ bool stmmac_eee_init(struct stmmac_priv *priv)
 	    (priv->pcs == STMMAC_PCS_RTBI))
 		goto out;
 
-	/* Never init EEE in case of a switch is attached */
-	if (priv->phydev->is_pseudo_fixed_link)
-		goto out;
-
 	/* MAC core supports the EEE feature. */
 	if (priv->dma_cap.eee) {
 		int tx_lpi_timer = priv->tx_lpi_timer;
@@ -774,10 +770,16 @@ static void stmmac_adjust_link(struct net_device *dev)
 
 	spin_unlock_irqrestore(&priv->lock, flags);
 
-	/* At this stage, it could be needed to setup the EEE or adjust some
-	 * MAC related HW registers.
-	 */
-	priv->eee_enabled = stmmac_eee_init(priv);
+	if (phydev->is_pseudo_fixed_link)
+		/* Stop PHY layer to call the hook to adjust the link in case
+		 * of a switch is attached to the stmmac driver.
+		 */
+		phydev->irq = PHY_IGNORE_INTERRUPT;
+	else
+		/* At this stage, init the EEE if supported.
+		 * Never called in case of fixed_link.
+		 */
+		priv->eee_enabled = stmmac_eee_init(priv);
 }
 
 /**
@@ -867,10 +869,6 @@ static int stmmac_init_phy(struct net_device *dev)
 		phy_disconnect(phydev);
 		return -ENODEV;
 	}
-
-	/* If attached to a switch, there is no reason to poll phy handler */
-	if (phydev->is_pseudo_fixed_link)
-		phydev->irq = PHY_IGNORE_INTERRUPT;
 
 	pr_debug("stmmac_init_phy:  %s: attached to PHY (UID 0x%x)"
 		 " Link = %d\n", dev->name, phydev->phy_id, phydev->link);
@@ -3133,7 +3131,12 @@ static int stmmac_hw_init(struct stmmac_priv *priv)
 		priv->plat->enh_desc = priv->dma_cap.enh_desc;
 		priv->plat->pmt = priv->dma_cap.pmt_remote_wake_up;
 
-		priv->plat->tx_coe = priv->dma_cap.tx_coe;
+		/* TXCOE doesn't work in thresh DMA mode */
+		if (priv->plat->force_thresh_dma_mode)
+			priv->plat->tx_coe = 0;
+		else
+			priv->plat->tx_coe = priv->dma_cap.tx_coe;
+
 		/* In case of GMAC4 rx_coe is from HW cap register. */
 		priv->plat->rx_coe = priv->dma_cap.rx_coe;
 
@@ -3352,12 +3355,13 @@ EXPORT_SYMBOL_GPL(stmmac_dvr_probe);
 
 /**
  * stmmac_dvr_remove
- * @ndev: net device pointer
+ * @dev: device pointer
  * Description: this function resets the TX/RX processes, disables the MAC RX/TX
  * changes the link status, releases the DMA descriptor rings.
  */
-int stmmac_dvr_remove(struct net_device *ndev)
+int stmmac_dvr_remove(struct device *dev)
 {
+	struct net_device *ndev = dev_get_drvdata(dev);
 	struct stmmac_priv *priv = netdev_priv(ndev);
 
 	pr_info("%s:\n\tremoving driver", __func__);
@@ -3383,13 +3387,14 @@ EXPORT_SYMBOL_GPL(stmmac_dvr_remove);
 
 /**
  * stmmac_suspend - suspend callback
- * @ndev: net device pointer
+ * @dev: device pointer
  * Description: this is the function to suspend the device and it is called
  * by the platform driver to stop the network queue, release the resources,
  * program the PMT register (for WoL), clean and release driver resources.
  */
-int stmmac_suspend(struct net_device *ndev)
+int stmmac_suspend(struct device *dev)
 {
+	struct net_device *ndev = dev_get_drvdata(dev);
 	struct stmmac_priv *priv = netdev_priv(ndev);
 	unsigned long flags;
 
@@ -3432,12 +3437,13 @@ EXPORT_SYMBOL_GPL(stmmac_suspend);
 
 /**
  * stmmac_resume - resume callback
- * @ndev: net device pointer
+ * @dev: device pointer
  * Description: when resume this function is invoked to setup the DMA and CORE
  * in a usable state.
  */
-int stmmac_resume(struct net_device *ndev)
+int stmmac_resume(struct device *dev)
 {
+	struct net_device *ndev = dev_get_drvdata(dev);
 	struct stmmac_priv *priv = netdev_priv(ndev);
 	unsigned long flags;
 

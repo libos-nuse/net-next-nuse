@@ -1004,7 +1004,7 @@ static bool transparent_hugepage_adjust(kvm_pfn_t *pfnp, phys_addr_t *ipap)
 	kvm_pfn_t pfn = *pfnp;
 	gfn_t gfn = *ipap >> PAGE_SHIFT;
 
-	if (PageTransCompound(pfn_to_page(pfn))) {
+	if (PageTransCompoundMap(pfn_to_page(pfn))) {
 		unsigned long mask;
 		/*
 		 * The address we faulted on is backed by a transparent huge
@@ -1664,6 +1664,11 @@ phys_addr_t kvm_mmu_get_boot_httbr(void)
 phys_addr_t kvm_get_idmap_vector(void)
 {
 	return hyp_idmap_vector;
+}
+
+phys_addr_t kvm_get_idmap_start(void)
+{
+	return hyp_idmap_start;
 }
 
 int kvm_mmu_init(void)

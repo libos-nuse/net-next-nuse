@@ -307,14 +307,15 @@ static s32 ixgbe_check_for_rst_pf(struct ixgbe_hw *hw, u16 vf_number)
 	case ixgbe_mac_X540:
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
+	case ixgbe_mac_x550em_a:
 		vflre = IXGBE_READ_REG(hw, IXGBE_VFLREC(reg_offset));
 		break;
 	default:
 		break;
 	}
 
-	if (vflre & (1 << vf_shift)) {
-		IXGBE_WRITE_REG(hw, IXGBE_VFLREC(reg_offset), (1 << vf_shift));
+	if (vflre & BIT(vf_shift)) {
+		IXGBE_WRITE_REG(hw, IXGBE_VFLREC(reg_offset), BIT(vf_shift));
 		hw->mbx.stats.rsts++;
 		return 0;
 	}
@@ -430,6 +431,7 @@ void ixgbe_init_mbx_params_pf(struct ixgbe_hw *hw)
 	if (hw->mac.type != ixgbe_mac_82599EB &&
 	    hw->mac.type != ixgbe_mac_X550 &&
 	    hw->mac.type != ixgbe_mac_X550EM_x &&
+	    hw->mac.type != ixgbe_mac_x550em_a &&
 	    hw->mac.type != ixgbe_mac_X540)
 		return;
 

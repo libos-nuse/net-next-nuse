@@ -360,7 +360,7 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 	__sk_nulls_add_node_rcu(sk, &head->chain);
 	if (tw) {
 		sk_nulls_del_node_init_rcu((struct sock *)tw);
-		NET_INC_STATS_BH(net, LINUX_MIB_TIMEWAITRECYCLED);
+		__NET_INC_STATS(net, LINUX_MIB_TIMEWAITRECYCLED);
 	}
 	spin_unlock(lock);
 	sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
@@ -438,15 +438,16 @@ static int inet_reuseport_add_sock(struct sock *sk,
 						     const struct sock *sk2,
 						     bool match_wildcard))
 {
+	struct inet_bind_bucket *tb = inet_csk(sk)->icsk_bind_hash;
 	struct sock *sk2;
-	struct hlist_nulls_node *node;
 	kuid_t uid = sock_i_uid(sk);
 
-	sk_nulls_for_each_rcu(sk2, node, &ilb->head) {
+	sk_for_each_rcu(sk2, &ilb->head) {
 		if (sk2 != sk &&
 		    sk2->sk_family == sk->sk_family &&
 		    ipv6_only_sock(sk2) == ipv6_only_sock(sk) &&
 		    sk2->sk_bound_dev_if == sk->sk_bound_dev_if &&
+		    inet_csk(sk2)->icsk_bind_hash == tb &&
 		    sk2->sk_reuseport && uid_eq(uid, sock_i_uid(sk2)) &&
 		    saddr_same(sk, sk2, false))
 			return reuseport_add_sock(sk, sk2);
@@ -480,7 +481,11 @@ int __inet_hash(struct sock *sk, struct sock *osk,
 		if (err)
 			goto unlock;
 	}
-	hlist_add_head_rcu(&sk->sk_node, &ilb->head);
+	if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
+		sk->sk_family == AF_INET6)
+		hlist_add_tail_rcu(&sk->sk_node, &ilb->head);
+	else
+		hlist_add_head_rcu(&sk->sk_node, &ilb->head);
 	sock_set_flag(sk, SOCK_RCU_FREE);
 	sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
 unlock:
