@@ -85,7 +85,7 @@ ssize_t lib_sock_recvmsg(struct SimSocket *socket,
 	iov_iter_init(&msg_sys.msg_iter, READ,
 		msg->msg_iov, msg->msg_iovlen, iov_size(msg));
 
-	retval = sock_recvmsg(kernel_socket, &msg_sys, iov_size(msg), flags);
+	retval = sock_recvmsg(kernel_socket, &msg_sys, flags);
 
 	msg->msg_name = msg_sys.msg_name;
 	msg->msg_namelen = msg_sys.msg_namelen;

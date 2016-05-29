@@ -400,11 +400,6 @@ unsigned long long __attribute__((weak)) sched_clock(void)
 	       * (NSEC_PER_SEC / HZ);
 }
 
-u64 local_clock(void)
-{
-	return sched_clock();
-}
-
 void __sched schedule_preempt_disabled(void)
 {
 }
