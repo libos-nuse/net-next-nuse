@@ -166,7 +166,7 @@ bool queue_delayed_work_on(int cpu, struct workqueue_struct *wq,
 bool mod_delayed_work_on(int cpu, struct workqueue_struct *wq,
 			 struct delayed_work *dwork, unsigned long delay)
 {
-	del_timer(&dwork->timer);
+	cancel_delayed_work(dwork);
 	__clear_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(&dwork->work));
 	return queue_delayed_work(wq, dwork, delay);
 }
