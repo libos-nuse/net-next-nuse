@@ -73,4 +73,5 @@ int tipc_addr_node_valid(u32 addr);
 int tipc_in_scope(u32 domain, u32 addr);
 int tipc_addr_scope(u32 domain);
 char *tipc_addr_string_fill(char *string, u32 addr);
+
 #endif

@@ -126,31 +126,6 @@
  * are set to NOT_INIT to indicate that they are no longer readable.
  */
 
-/* types of values stored in eBPF registers */
-enum bpf_reg_type {
-	NOT_INIT = 0,		 /* nothing was written into register */
-	UNKNOWN_VALUE,		 /* reg doesn't contain a valid pointer */
-	PTR_TO_CTX,		 /* reg points to bpf_context */
-	CONST_PTR_TO_MAP,	 /* reg points to struct bpf_map */
-	PTR_TO_MAP_VALUE,	 /* reg points to map element value */
-	PTR_TO_MAP_VALUE_OR_NULL,/* points to map elem value or NULL */
-	FRAME_PTR,		 /* reg == frame_pointer */
-	PTR_TO_STACK,		 /* reg == frame_pointer + imm */
-	CONST_IMM,		 /* constant integer value */
-
-	/* PTR_TO_PACKET represents:
-	 * skb->data
-	 * skb->data + imm
-	 * skb->data + (u16) var
-	 * skb->data + (u16) var + imm
-	 * if (range > 0) then [ptr, ptr + range - off) is safe to access
-	 * if (id > 0) means that some 'var' was added
-	 * if (off > 0) menas that 'imm' was added
-	 */
-	PTR_TO_PACKET,
-	PTR_TO_PACKET_END,	 /* skb->data + headlen */
-};
-
 struct reg_state {
 	enum bpf_reg_type type;
 	union {
@@ -683,15 +658,11 @@ static int check_packet_access(struct verifier_env *env, u32 regno, int off,
 {
 	struct reg_state *regs = env->cur_state.regs;
 	struct reg_state *reg = &regs[regno];
-	int linear_size = (int) reg->range - (int) reg->off;
 
-	if (linear_size < 0 || linear_size >= MAX_PACKET_OFF) {
-		verbose("verifier bug\n");
-		return -EFAULT;
-	}
-	if (off < 0 || off + size > linear_size) {
-		verbose("invalid access to packet, off=%d size=%d, allowed=%d\n",
-			off, size, linear_size);
+	off += reg->off;
+	if (off < 0 || off + size > reg->range) {
+		verbose("invalid access to packet, off=%d size=%d, R%d(id=%d,off=%d,r=%d)\n",
+			off, size, regno, reg->id, reg->off, reg->range);
 		return -EACCES;
 	}
 	return 0;
@@ -699,10 +670,10 @@ static int check_packet_access(struct verifier_env *env, u32 regno, int off,
 
 /* check access to 'struct bpf_context' fields */
 static int check_ctx_access(struct verifier_env *env, int off, int size,
-			    enum bpf_access_type t)
+			    enum bpf_access_type t, enum bpf_reg_type *reg_type)
 {
 	if (env->prog->aux->ops->is_valid_access &&
-	    env->prog->aux->ops->is_valid_access(off, size, t)) {
+	    env->prog->aux->ops->is_valid_access(off, size, t, reg_type)) {
 		/* remember the offset of last byte accessed in ctx */
 		if (env->prog->aux->max_ctx_offset < off + size)
 			env->prog->aux->max_ctx_offset = off + size;
@@ -802,21 +773,19 @@ static int check_mem_access(struct verifier_env *env, u32 regno, int off,
 			mark_reg_unknown_value(state->regs, value_regno);
 
 	} else if (reg->type == PTR_TO_CTX) {
+		enum bpf_reg_type reg_type = UNKNOWN_VALUE;
+
 		if (t == BPF_WRITE && value_regno >= 0 &&
 		    is_pointer_value(env, value_regno)) {
 			verbose("R%d leaks addr into ctx\n", value_regno);
 			return -EACCES;
 		}
-		err = check_ctx_access(env, off, size, t);
+		err = check_ctx_access(env, off, size, t, &reg_type);
 		if (!err && t == BPF_READ && value_regno >= 0) {
 			mark_reg_unknown_value(state->regs, value_regno);
-			if (off == offsetof(struct __sk_buff, data) &&
-			    env->allow_ptr_leaks)
+			if (env->allow_ptr_leaks)
 				/* note that reg.[id|off|range] == 0 */
-				state->regs[value_regno].type = PTR_TO_PACKET;
-			else if (off == offsetof(struct __sk_buff, data_end) &&
-				 env->allow_ptr_leaks)
-				state->regs[value_regno].type = PTR_TO_PACKET_END;
+				state->regs[value_regno].type = reg_type;
 		}
 
 	} else if (reg->type == FRAME_PTR || reg->type == PTR_TO_STACK) {
@@ -1066,6 +1035,10 @@ static int check_map_func_compatibility(struct bpf_map *map, int func_id)
 		if (func_id != BPF_FUNC_get_stackid)
 			goto error;
 		break;
+	case BPF_MAP_TYPE_CGROUP_ARRAY:
+		if (func_id != BPF_FUNC_skb_in_cgroup)
+			goto error;
+		break;
 	default:
 		break;
 	}
@@ -1083,6 +1056,10 @@ static int check_map_func_compatibility(struct bpf_map *map, int func_id)
 		break;
 	case BPF_FUNC_get_stackid:
 		if (map->map_type != BPF_MAP_TYPE_STACK_TRACE)
+			goto error;
+		break;
+	case BPF_FUNC_skb_in_cgroup:
+		if (map->map_type != BPF_MAP_TYPE_CGROUP_ARRAY)
 			goto error;
 		break;
 	default:
@@ -1249,6 +1226,7 @@ static int check_packet_ptr_add(struct verifier_env *env, struct bpf_insn *insn)
 	struct reg_state *regs = env->cur_state.regs;
 	struct reg_state *dst_reg = &regs[insn->dst_reg];
 	struct reg_state *src_reg = &regs[insn->src_reg];
+	struct reg_state tmp_reg;
 	s32 imm;
 
 	if (BPF_SRC(insn->code) == BPF_K) {
@@ -1271,6 +1249,19 @@ add_imm:
 		 */
 		dst_reg->off += imm;
 	} else {
+		if (src_reg->type == PTR_TO_PACKET) {
+			/* R6=pkt(id=0,off=0,r=62) R7=imm22; r7 += r6 */
+			tmp_reg = *dst_reg;  /* save r7 state */
+			*dst_reg = *src_reg; /* copy pkt_ptr state r6 into r7 */
+			src_reg = &tmp_reg;  /* pretend it's src_reg state */
+			/* if the checks below reject it, the copy won't matter,
+			 * since we're rejecting the whole program. If all ok,
+			 * then imm22 state will be added to r7
+			 * and r7 will be pkt(id=0,off=22,r=62) while
+			 * r6 will stay as pkt(id=0,off=0,r=62)
+			 */
+		}
+
 		if (src_reg->type == CONST_IMM) {
 			/* pkt_ptr += reg where reg is known constant */
 			imm = src_reg->imm;
@@ -1569,7 +1560,9 @@ static int check_alu_op(struct verifier_env *env, struct bpf_insn *insn)
 			return 0;
 		} else if (opcode == BPF_ADD &&
 			   BPF_CLASS(insn->code) == BPF_ALU64 &&
-			   dst_reg->type == PTR_TO_PACKET) {
+			   (dst_reg->type == PTR_TO_PACKET ||
+			    (BPF_SRC(insn->code) == BPF_X &&
+			     regs[insn->src_reg].type == PTR_TO_PACKET))) {
 			/* ptr_to_packet += K|X */
 			return check_packet_ptr_add(env, insn);
 		} else if (BPF_CLASS(insn->code) == BPF_ALU64 &&

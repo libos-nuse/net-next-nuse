@@ -83,6 +83,11 @@
 #define ANCHOR_NUM_LEVELS 1
 #define ANCHOR_NUM_PRIOS 1
 #define ANCHOR_MIN_LEVEL (BY_PASS_MIN_LEVEL + 1)
+
+#define OFFLOADS_MAX_FT 1
+#define OFFLOADS_NUM_PRIOS 1
+#define OFFLOADS_MIN_LEVEL (ANCHOR_MIN_LEVEL + 1)
+
 struct node_caps {
 	size_t	arr_sz;
 	long	*caps;
@@ -98,7 +103,7 @@ static struct init_tree_node {
 	int num_levels;
 } root_fs = {
 	.type = FS_TYPE_NAMESPACE,
-	.ar_size = 4,
+	.ar_size = 5,
 	.children = (struct init_tree_node[]) {
 		ADD_PRIO(0, BY_PASS_MIN_LEVEL, 0,
 			 FS_REQUIRED_CAPS(FS_CAP(flow_table_properties_nic_receive.flow_modify_en),
@@ -107,6 +112,9 @@ static struct init_tree_node {
 					  FS_CAP(flow_table_properties_nic_receive.flow_table_modify)),
 			 ADD_NS(ADD_MULTIPLE_PRIO(MLX5_BY_PASS_NUM_PRIOS,
 						  BY_PASS_PRIO_NUM_LEVELS))),
+		ADD_PRIO(0, OFFLOADS_MIN_LEVEL, 0, {},
+			 ADD_NS(ADD_MULTIPLE_PRIO(OFFLOADS_NUM_PRIOS, OFFLOADS_MAX_FT))),
+
 		ADD_PRIO(0, KERNEL_MIN_LEVEL, 0, {},
 			 ADD_NS(ADD_MULTIPLE_PRIO(1, 1),
 				ADD_MULTIPLE_PRIO(KERNEL_NIC_NUM_PRIOS,
@@ -1292,8 +1300,8 @@ static int update_root_ft_destroy(struct mlx5_flow_table *ft)
 				       ft->id);
 			return err;
 		}
-		root->root_ft = new_root_ft;
 	}
+	root->root_ft = new_root_ft;
 	return 0;
 }
 
@@ -1369,6 +1377,7 @@ struct mlx5_flow_namespace *mlx5_get_flow_namespace(struct mlx5_core_dev *dev,
 
 	switch (type) {
 	case MLX5_FLOW_NAMESPACE_BYPASS:
+	case MLX5_FLOW_NAMESPACE_OFFLOADS:
 	case MLX5_FLOW_NAMESPACE_KERNEL:
 	case MLX5_FLOW_NAMESPACE_LEFTOVERS:
 	case MLX5_FLOW_NAMESPACE_ANCHOR:
@@ -1767,6 +1776,9 @@ static void cleanup_root_ns(struct mlx5_core_dev *dev)
 
 void mlx5_cleanup_fs(struct mlx5_core_dev *dev)
 {
+	if (MLX5_CAP_GEN(dev, port_type) != MLX5_CAP_PORT_TYPE_ETH)
+		return;
+
 	cleanup_root_ns(dev);
 	cleanup_single_prio_root_ns(dev, dev->priv.fdb_root_ns);
 	cleanup_single_prio_root_ns(dev, dev->priv.esw_egress_root_ns);
@@ -1828,29 +1840,36 @@ int mlx5_init_fs(struct mlx5_core_dev *dev)
 {
 	int err = 0;
 
+	if (MLX5_CAP_GEN(dev, port_type) != MLX5_CAP_PORT_TYPE_ETH)
+		return 0;
+
 	err = mlx5_init_fc_stats(dev);
 	if (err)
 		return err;
 
-	if (MLX5_CAP_GEN(dev, nic_flow_table)) {
+	if (MLX5_CAP_GEN(dev, nic_flow_table) &&
+	    MLX5_CAP_FLOWTABLE_NIC_RX(dev, ft_support)) {
 		err = init_root_ns(dev);
 		if (err)
 			goto err;
 	}
+
 	if (MLX5_CAP_GEN(dev, eswitch_flow_table)) {
-		err = init_fdb_root_ns(dev);
-		if (err)
-			goto err;
-	}
-	if (MLX5_CAP_ESW_EGRESS_ACL(dev, ft_support)) {
-		err = init_egress_acl_root_ns(dev);
-		if (err)
-			goto err;
-	}
-	if (MLX5_CAP_ESW_INGRESS_ACL(dev, ft_support)) {
-		err = init_ingress_acl_root_ns(dev);
-		if (err)
-			goto err;
+		if (MLX5_CAP_ESW_FLOWTABLE_FDB(dev, ft_support)) {
+			err = init_fdb_root_ns(dev);
+			if (err)
+				goto err;
+		}
+		if (MLX5_CAP_ESW_EGRESS_ACL(dev, ft_support)) {
+			err = init_egress_acl_root_ns(dev);
+			if (err)
+				goto err;
+		}
+		if (MLX5_CAP_ESW_INGRESS_ACL(dev, ft_support)) {
+			err = init_ingress_acl_root_ns(dev);
+			if (err)
+				goto err;
+		}
 	}
 
 	return 0;

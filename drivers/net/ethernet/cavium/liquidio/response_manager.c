@@ -54,8 +54,9 @@ int octeon_setup_response_list(struct octeon_device *oct)
 		spin_lock_init(&oct->response_list[i].lock);
 		atomic_set(&oct->response_list[i].pending_req_count, 0);
 	}
+	spin_lock_init(&oct->cmd_resp_wqlock);
 
-	oct->dma_comp_wq.wq = create_workqueue("dma-comp");
+	oct->dma_comp_wq.wq = alloc_workqueue("dma-comp", WQ_MEM_RECLAIM, 0);
 	if (!oct->dma_comp_wq.wq) {
 		dev_err(&oct->pci_dev->dev, "failed to create wq thread\n");
 		return -ENOMEM;
@@ -64,6 +65,7 @@ int octeon_setup_response_list(struct octeon_device *oct)
 	cwq = &oct->dma_comp_wq;
 	INIT_DELAYED_WORK(&cwq->wk.work, oct_poll_req_completion);
 	cwq->wk.ctxptr = oct;
+	oct->cmd_resp_state = OCT_DRV_ONLINE;
 	queue_delayed_work(cwq->wq, &cwq->wk.work, msecs_to_jiffies(100));
 
 	return ret;
@@ -72,7 +74,6 @@ int octeon_setup_response_list(struct octeon_device *oct)
 void octeon_delete_response_list(struct octeon_device *oct)
 {
 	cancel_delayed_work_sync(&oct->dma_comp_wq.wk.work);
-	flush_workqueue(oct->dma_comp_wq.wq);
 	destroy_workqueue(oct->dma_comp_wq.wq);
 }
 
@@ -86,6 +87,7 @@ int lio_process_ordered_list(struct octeon_device *octeon_dev,
 	u32 status;
 	u64 status64;
 	struct octeon_instr_rdp *rdp;
+	u64 rptr;
 
 	ordered_sc_list = &octeon_dev->response_list[OCTEON_ORDERED_SC_LIST];
 
@@ -103,7 +105,8 @@ int lio_process_ordered_list(struct octeon_device *octeon_dev,
 
 		sc = (struct octeon_soft_command *)ordered_sc_list->
 		    head.next;
-		rdp = (struct octeon_instr_rdp *)&sc->cmd.rdp;
+		rdp = (struct octeon_instr_rdp *)&sc->cmd.cmd2.rdp;
+		rptr = sc->cmd.cmd2.rptr;
 
 		status = OCTEON_REQUEST_PENDING;
 
@@ -111,7 +114,7 @@ int lio_process_ordered_list(struct octeon_device *octeon_dev,
 		 * to where rptr is pointing to
 		 */
 		dma_sync_single_for_cpu(&octeon_dev->pci_dev->dev,
-					sc->cmd.rptr, rdp->rlen,
+					rptr, rdp->rlen,
 					DMA_FROM_DEVICE);
 		status64 = *sc->status_word;
 

@@ -154,10 +154,7 @@ static int tcf_bpf_dump(struct sk_buff *skb, struct tc_action *act,
 	if (ret)
 		goto nla_put_failure;
 
-	tm.install = jiffies_to_clock_t(jiffies - prog->tcf_tm.install);
-	tm.lastuse = jiffies_to_clock_t(jiffies - prog->tcf_tm.lastuse);
-	tm.expires = jiffies_to_clock_t(prog->tcf_tm.expires);
-
+	tcf_tm_dump(&tm, &prog->tcf_tm);
 	if (nla_put_64bit(skb, TCA_ACT_BPF_TM, sizeof(tm), &tm,
 			  TCA_ACT_BPF_PAD))
 		goto nla_put_failure;
@@ -172,7 +169,8 @@ nla_put_failure:
 static const struct nla_policy act_bpf_policy[TCA_ACT_BPF_MAX + 1] = {
 	[TCA_ACT_BPF_PARMS]	= { .len = sizeof(struct tc_act_bpf) },
 	[TCA_ACT_BPF_FD]	= { .type = NLA_U32 },
-	[TCA_ACT_BPF_NAME]	= { .type = NLA_NUL_STRING, .len = ACT_BPF_NAME_LEN },
+	[TCA_ACT_BPF_NAME]	= { .type = NLA_NUL_STRING,
+				    .len = ACT_BPF_NAME_LEN },
 	[TCA_ACT_BPF_OPS_LEN]	= { .type = NLA_U16 },
 	[TCA_ACT_BPF_OPS]	= { .type = NLA_BINARY,
 				    .len = sizeof(struct sock_filter) * BPF_MAXINSNS },
@@ -225,14 +223,9 @@ static int tcf_bpf_init_from_efd(struct nlattr **tb, struct tcf_bpf_cfg *cfg)
 
 	bpf_fd = nla_get_u32(tb[TCA_ACT_BPF_FD]);
 
-	fp = bpf_prog_get(bpf_fd);
+	fp = bpf_prog_get_type(bpf_fd, BPF_PROG_TYPE_SCHED_ACT);
 	if (IS_ERR(fp))
 		return PTR_ERR(fp);
-
-	if (fp->type != BPF_PROG_TYPE_SCHED_ACT) {
-		bpf_prog_put(fp);
-		return -EINVAL;
-	}
 
 	if (tb[TCA_ACT_BPF_NAME]) {
 		name = kmemdup(nla_data(tb[TCA_ACT_BPF_NAME]),

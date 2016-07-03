@@ -74,6 +74,8 @@
 
 #define MLXSW_SP_CELL_FACTOR 2	/* 2 * cell_size / (IPG + cell_size + 1) */
 
+#define MLXSW_SP_RIF_MAX 800
+
 static inline u16 mlxsw_sp_pfc_delay_get(int mtu, u16 delay)
 {
 	delay = MLXSW_SP_BYTES_TO_CELLS(DIV_ROUND_UP(delay, BITS_PER_BYTE));
@@ -87,12 +89,18 @@ struct mlxsw_sp_upper {
 	unsigned int ref_count;
 };
 
-struct mlxsw_sp_vfid {
+struct mlxsw_sp_fid {
+	void (*leave)(struct mlxsw_sp_port *mlxsw_sp_vport);
 	struct list_head list;
-	u16 nr_vports;
-	u16 vfid;	/* Starting at 0 */
-	struct net_device *br_dev;
+	unsigned int ref_count;
+	struct net_device *dev;
+	u16 fid;
 	u16 vid;
+};
+
+struct mlxsw_sp_rif {
+	struct net_device *dev;
+	u16 rif;
 };
 
 struct mlxsw_sp_mid {
@@ -155,17 +163,18 @@ struct mlxsw_sp_sb {
 struct mlxsw_sp {
 	struct {
 		struct list_head list;
-		unsigned long mapped[BITS_TO_LONGS(MLXSW_SP_VFID_PORT_MAX)];
+		DECLARE_BITMAP(mapped, MLXSW_SP_VFID_PORT_MAX);
 	} port_vfids;
 	struct {
 		struct list_head list;
-		unsigned long mapped[BITS_TO_LONGS(MLXSW_SP_VFID_BR_MAX)];
+		DECLARE_BITMAP(mapped, MLXSW_SP_VFID_BR_MAX);
 	} br_vfids;
 	struct {
 		struct list_head list;
-		unsigned long mapped[BITS_TO_LONGS(MLXSW_SP_MID_MAX)];
+		DECLARE_BITMAP(mapped, MLXSW_SP_MID_MAX);
 	} br_mids;
-	unsigned long active_fids[BITS_TO_LONGS(VLAN_N_VID)];
+	struct list_head fids;	/* VLAN-aware bridge FIDs */
+	struct mlxsw_sp_rif *rifs[MLXSW_SP_RIF_MAX];
 	struct mlxsw_sp_port **ports;
 	struct mlxsw_core *core;
 	const struct mlxsw_bus_info *bus_info;
@@ -217,7 +226,7 @@ struct mlxsw_sp_port {
 	u16 lag_id;
 	struct {
 		struct list_head list;
-		struct mlxsw_sp_vfid *vfid;
+		struct mlxsw_sp_fid *f;
 		u16 vid;
 	} vport;
 	struct {
@@ -229,6 +238,11 @@ struct mlxsw_sp_port {
 		struct ieee_maxrate *maxrate;
 		struct ieee_pfc *pfc;
 	} dcb;
+	struct {
+		u8 module;
+		u8 width;
+		u8 lane;
+	} mapping;
 	/* 802.1Q bridge VLANs */
 	unsigned long *active_vlans;
 	unsigned long *untagged_vlans;
@@ -254,28 +268,38 @@ mlxsw_sp_port_lagged_get(struct mlxsw_sp *mlxsw_sp, u16 lag_id, u8 port_index)
 	return mlxsw_sp_port && mlxsw_sp_port->lagged ? mlxsw_sp_port : NULL;
 }
 
-static inline bool
-mlxsw_sp_port_is_vport(const struct mlxsw_sp_port *mlxsw_sp_port)
-{
-	return mlxsw_sp_port->vport.vfid;
-}
-
-static inline struct net_device *
-mlxsw_sp_vport_br_get(const struct mlxsw_sp_port *mlxsw_sp_vport)
-{
-	return mlxsw_sp_vport->vport.vfid->br_dev;
-}
-
 static inline u16
 mlxsw_sp_vport_vid_get(const struct mlxsw_sp_port *mlxsw_sp_vport)
 {
 	return mlxsw_sp_vport->vport.vid;
 }
 
-static inline u16
-mlxsw_sp_vport_vfid_get(const struct mlxsw_sp_port *mlxsw_sp_vport)
+static inline bool
+mlxsw_sp_port_is_vport(const struct mlxsw_sp_port *mlxsw_sp_port)
 {
-	return mlxsw_sp_vport->vport.vfid->vfid;
+	u16 vid = mlxsw_sp_vport_vid_get(mlxsw_sp_port);
+
+	return vid != 0;
+}
+
+static inline void mlxsw_sp_vport_fid_set(struct mlxsw_sp_port *mlxsw_sp_vport,
+					  struct mlxsw_sp_fid *f)
+{
+	mlxsw_sp_vport->vport.f = f;
+}
+
+static inline struct mlxsw_sp_fid *
+mlxsw_sp_vport_fid_get(const struct mlxsw_sp_port *mlxsw_sp_vport)
+{
+	return mlxsw_sp_vport->vport.f;
+}
+
+static inline struct net_device *
+mlxsw_sp_vport_br_get(const struct mlxsw_sp_port *mlxsw_sp_vport)
+{
+	struct mlxsw_sp_fid *f = mlxsw_sp_vport_fid_get(mlxsw_sp_vport);
+
+	return f ? f->dev : NULL;
 }
 
 static inline struct mlxsw_sp_port *
@@ -293,16 +317,31 @@ mlxsw_sp_port_vport_find(const struct mlxsw_sp_port *mlxsw_sp_port, u16 vid)
 }
 
 static inline struct mlxsw_sp_port *
-mlxsw_sp_port_vport_find_by_vfid(const struct mlxsw_sp_port *mlxsw_sp_port,
-				 u16 vfid)
+mlxsw_sp_port_vport_find_by_fid(const struct mlxsw_sp_port *mlxsw_sp_port,
+				u16 fid)
 {
 	struct mlxsw_sp_port *mlxsw_sp_vport;
 
 	list_for_each_entry(mlxsw_sp_vport, &mlxsw_sp_port->vports_list,
 			    vport.list) {
-		if (mlxsw_sp_vport_vfid_get(mlxsw_sp_vport) == vfid)
+		struct mlxsw_sp_fid *f = mlxsw_sp_vport_fid_get(mlxsw_sp_vport);
+
+		if (f && f->fid == fid)
 			return mlxsw_sp_vport;
 	}
+
+	return NULL;
+}
+
+static inline struct mlxsw_sp_rif *
+mlxsw_sp_rif_find_by_dev(const struct mlxsw_sp *mlxsw_sp,
+			 const struct net_device *dev)
+{
+	int i;
+
+	for (i = 0; i < MLXSW_SP_RIF_MAX; i++)
+		if (mlxsw_sp->rifs[i] && mlxsw_sp->rifs[i]->dev == dev)
+			return mlxsw_sp->rifs[i];
 
 	return NULL;
 }
@@ -359,12 +398,11 @@ int mlxsw_sp_port_vlan_set(struct mlxsw_sp_port *mlxsw_sp_port, u16 vid_begin,
 			   u16 vid_end, bool is_member, bool untagged);
 int mlxsw_sp_port_add_vid(struct net_device *dev, __be16 __always_unused proto,
 			  u16 vid);
-int mlxsw_sp_port_kill_vid(struct net_device *dev,
-			   __be16 __always_unused proto, u16 vid);
-int mlxsw_sp_vport_flood_set(struct mlxsw_sp_port *mlxsw_sp_vport, u16 vfid,
-			     bool set, bool only_uc);
+int mlxsw_sp_vport_flood_set(struct mlxsw_sp_port *mlxsw_sp_vport, u16 fid,
+			     bool set);
 void mlxsw_sp_port_active_vlans_del(struct mlxsw_sp_port *mlxsw_sp_port);
 int mlxsw_sp_port_pvid_set(struct mlxsw_sp_port *mlxsw_sp_port, u16 vid);
+int mlxsw_sp_port_fdb_flush(struct mlxsw_sp_port *mlxsw_sp_port, u16 fid);
 int mlxsw_sp_port_ets_set(struct mlxsw_sp_port *mlxsw_sp_port,
 			  enum mlxsw_reg_qeec_hr hr, u8 index, u8 next_index,
 			  bool dwrr, u8 dwrr_weight);
@@ -393,5 +431,8 @@ static inline void mlxsw_sp_port_dcb_fini(struct mlxsw_sp_port *mlxsw_sp_port)
 {}
 
 #endif
+
+int mlxsw_sp_router_init(struct mlxsw_sp *mlxsw_sp);
+void mlxsw_sp_router_fini(struct mlxsw_sp *mlxsw_sp);
 
 #endif

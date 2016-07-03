@@ -35,6 +35,7 @@
 #include <linux/in.h>
 #include <net/tcp.h>
 
+#include "rds_single_path.h"
 #include "rds.h"
 #include "tcp.h"
 
@@ -78,7 +79,10 @@ int rds_tcp_accept_one(struct socket *sock)
 	struct inet_sock *inet;
 	struct rds_tcp_connection *rs_tcp = NULL;
 	int conn_state;
-	struct sock *nsk;
+	struct rds_conn_path *cp;
+
+	if (!sock) /* module unload or netns delete in progress */
+		return -ENETUNREACH;
 
 	ret = sock_create_kern(sock_net(sock->sk), sock->sk->sk_family,
 			       sock->sk->sk_type, sock->sk->sk_protocol,
@@ -117,8 +121,9 @@ int rds_tcp_accept_one(struct socket *sock)
 	 * rds_tcp_state_change() will do that cleanup
 	 */
 	rs_tcp = (struct rds_tcp_connection *)conn->c_transport_data;
+	cp = &conn->c_path[0];
 	rds_conn_transition(conn, RDS_CONN_DOWN, RDS_CONN_CONNECTING);
-	mutex_lock(&rs_tcp->t_conn_lock);
+	mutex_lock(&rs_tcp->t_conn_path_lock);
 	conn_state = rds_conn_state(conn);
 	if (conn_state != RDS_CONN_CONNECTING && conn_state != RDS_CONN_UP)
 		goto rst_nsk;
@@ -129,32 +134,29 @@ int rds_tcp_accept_one(struct socket *sock)
 		 * so we must quiesce any send threads before resetting
 		 * c_transport_data.
 		 */
-		wait_event(conn->c_waitq,
-			   !test_bit(RDS_IN_XMIT, &conn->c_flags));
-		if (ntohl(inet->inet_saddr) < ntohl(inet->inet_daddr)) {
+		if (ntohl(inet->inet_saddr) < ntohl(inet->inet_daddr) ||
+		    !conn->c_path[0].cp_outgoing) {
 			goto rst_nsk;
-		} else if (rs_tcp->t_sock) {
-			rds_tcp_restore_callbacks(rs_tcp->t_sock, rs_tcp);
-			conn->c_outgoing = 0;
+		} else {
+			rds_tcp_reset_callbacks(new_sock, cp);
+			conn->c_path[0].cp_outgoing = 0;
+			/* rds_connect_path_complete() marks RDS_CONN_UP */
+			rds_connect_path_complete(cp, RDS_CONN_RESETTING);
 		}
+	} else {
+		rds_tcp_set_callbacks(new_sock, cp);
+		rds_connect_path_complete(cp, RDS_CONN_CONNECTING);
 	}
-	rds_tcp_set_callbacks(new_sock, conn);
-	rds_connect_complete(conn); /* marks RDS_CONN_UP */
 	new_sock = NULL;
 	ret = 0;
 	goto out;
 rst_nsk:
 	/* reset the newly returned accept sock and bail */
-	nsk = new_sock->sk;
-	rds_tcp_stats_inc(s_tcp_listen_closed_stale);
-	nsk->sk_user_data = NULL;
-	nsk->sk_prot->disconnect(nsk, 0);
-	tcp_done(nsk);
-	new_sock = NULL;
+	kernel_sock_shutdown(new_sock, SHUT_RDWR);
 	ret = 0;
 out:
 	if (rs_tcp)
-		mutex_unlock(&rs_tcp->t_conn_lock);
+		mutex_unlock(&rs_tcp->t_conn_path_lock);
 	if (new_sock)
 		sock_release(new_sock);
 	return ret;
@@ -166,7 +168,7 @@ void rds_tcp_listen_data_ready(struct sock *sk)
 
 	rdsdebug("listen data ready sk %p\n", sk);
 
-	read_lock(&sk->sk_callback_lock);
+	read_lock_bh(&sk->sk_callback_lock);
 	ready = sk->sk_user_data;
 	if (!ready) { /* check for teardown race */
 		ready = sk->sk_data_ready;
@@ -183,7 +185,7 @@ void rds_tcp_listen_data_ready(struct sock *sk)
 		rds_tcp_accept_work(sk);
 
 out:
-	read_unlock(&sk->sk_callback_lock);
+	read_unlock_bh(&sk->sk_callback_lock);
 	ready(sk);
 }
 

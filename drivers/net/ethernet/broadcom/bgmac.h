@@ -123,7 +123,7 @@
 #define BGMAC_TX_LEN_1024_TO_1522		0x334
 #define BGMAC_TX_LEN_1523_TO_2047		0x338
 #define BGMAC_TX_LEN_2048_TO_4095		0x33c
-#define BGMAC_TX_LEN_4095_TO_8191		0x340
+#define BGMAC_TX_LEN_4096_TO_8191		0x340
 #define BGMAC_TX_LEN_8192_TO_MAX		0x344
 #define BGMAC_TX_JABBER_PKTS			0x348		/* Error */
 #define BGMAC_TX_OVERSIZE_PKTS			0x34c		/* Error */
@@ -166,7 +166,7 @@
 #define BGMAC_RX_LEN_1024_TO_1522		0x3e4
 #define BGMAC_RX_LEN_1523_TO_2047		0x3e8
 #define BGMAC_RX_LEN_2048_TO_4095		0x3ec
-#define BGMAC_RX_LEN_4095_TO_8191		0x3f0
+#define BGMAC_RX_LEN_4096_TO_8191		0x3f0
 #define BGMAC_RX_LEN_8192_TO_MAX		0x3f4
 #define BGMAC_RX_JABBER_PKTS			0x3f8		/* Error */
 #define BGMAC_RX_OVERSIZE_PKTS			0x3fc		/* Error */
@@ -441,7 +441,6 @@ struct bgmac {
 	struct net_device *net_dev;
 	struct napi_struct napi;
 	struct mii_bus *mii_bus;
-	struct phy_device *phy_dev;
 
 	/* DMA */
 	struct bgmac_dma_ring tx_ring[BGMAC_MAX_TX_RINGS];

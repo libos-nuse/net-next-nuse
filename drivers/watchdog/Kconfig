@@ -661,6 +661,14 @@ config ATLAS7_WATCHDOG
 	  To compile this driver as a module, choose M here: the
 	  module will be called atlas7_wdt.
 
+config RENESAS_WDT
+	tristate "Renesas WDT Watchdog"
+	depends on ARCH_RENESAS || COMPILE_TEST
+	select WATCHDOG_CORE
+	help
+	  This driver adds watchdog support for the integrated watchdogs in the
+	  Renesas R-Car and other SH-Mobile SoCs (usually named RWDT or SWDT).
+
 # AVR32 Architecture
 
 config AT32AP700X_WDT
@@ -738,7 +746,7 @@ config ALIM7101_WDT
 
 config EBC_C384_WDT
 	tristate "WinSystems EBC-C384 Watchdog Timer"
-	depends on X86
+	depends on X86 && ISA_BUS_API
 	select WATCHDOG_CORE
 	help
 	  Enables watchdog timer support for the watchdog timer on the

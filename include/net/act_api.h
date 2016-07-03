@@ -2,8 +2,8 @@
 #define __NET_ACT_API_H
 
 /*
- * Public police action API for classifiers/qdiscs
- */
+ * Public action API for classifiers/qdiscs
+*/
 
 #include <net/sch_generic.h>
 #include <net/pkt_sched.h>
@@ -76,6 +76,16 @@ static inline void tcf_lastuse_update(struct tcf_t *tm)
 
 	if (tm->lastuse != now)
 		tm->lastuse = now;
+	if (unlikely(!tm->firstuse))
+		tm->firstuse = now;
+}
+
+static inline void tcf_tm_dump(struct tcf_t *dtm, const struct tcf_t *stm)
+{
+	dtm->install = jiffies_to_clock_t(jiffies - stm->install);
+	dtm->lastuse = jiffies_to_clock_t(jiffies - stm->lastuse);
+	dtm->firstuse = jiffies_to_clock_t(jiffies - stm->firstuse);
+	dtm->expires = jiffies_to_clock_t(stm->expires);
 }
 
 struct tc_action {
@@ -97,7 +107,8 @@ struct tc_action_ops {
 	char    kind[IFNAMSIZ];
 	__u32   type; /* TBD to match kind */
 	struct module		*owner;
-	int     (*act)(struct sk_buff *, const struct tc_action *, struct tcf_result *);
+	int     (*act)(struct sk_buff *, const struct tc_action *,
+		       struct tcf_result *);
 	int     (*dump)(struct sk_buff *, struct tc_action *, int, int);
 	void	(*cleanup)(struct tc_action *, int bind);
 	int     (*lookup)(struct net *, struct tc_action *, u32);
@@ -115,8 +126,8 @@ struct tc_action_net {
 };
 
 static inline
-int tc_action_net_init(struct tc_action_net *tn, const struct tc_action_ops *ops,
-		       unsigned int mask)
+int tc_action_net_init(struct tc_action_net *tn,
+		       const struct tc_action_ops *ops, unsigned int mask)
 {
 	int err = 0;
 
@@ -144,8 +155,8 @@ int tcf_generic_walker(struct tc_action_net *tn, struct sk_buff *skb,
 		       struct tc_action *a);
 int tcf_hash_search(struct tc_action_net *tn, struct tc_action *a, u32 index);
 u32 tcf_hash_new_index(struct tc_action_net *tn);
-int tcf_hash_check(struct tc_action_net *tn, u32 index, struct tc_action *a,
-		   int bind);
+bool tcf_hash_check(struct tc_action_net *tn, u32 index, struct tc_action *a,
+		    int bind);
 int tcf_hash_create(struct tc_action_net *tn, u32 index, struct nlattr *est,
 		    struct tc_action *a, int size, int bind, bool cpustats);
 void tcf_hash_cleanup(struct tc_action *a, struct nlattr *est);
@@ -159,7 +170,8 @@ static inline int tcf_hash_release(struct tc_action *a, bool bind)
 }
 
 int tcf_register_action(struct tc_action_ops *a, struct pernet_operations *ops);
-int tcf_unregister_action(struct tc_action_ops *a, struct pernet_operations *ops);
+int tcf_unregister_action(struct tc_action_ops *a,
+			  struct pernet_operations *ops);
 int tcf_action_destroy(struct list_head *actions, int bind);
 int tcf_action_exec(struct sk_buff *skb, const struct list_head *actions,
 		    struct tcf_result *res);
@@ -192,7 +204,7 @@ static inline void tcf_action_stats_update(struct tc_action *a, u64 bytes,
 #else /* CONFIG_NET_CLS_ACT */
 
 #define tc_no_actions(_exts) true
-#define tc_for_each_action(_a, _exts) while (0)
+#define tc_for_each_action(_a, _exts) while ((void)(_a), 0)
 #define tcf_action_stats_update(a, bytes, packets, lastuse)
 
 #endif /* CONFIG_NET_CLS_ACT */

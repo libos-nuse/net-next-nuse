@@ -479,47 +479,12 @@ static void ipip6_tunnel_uninit(struct net_device *dev)
 	dev_put(dev);
 }
 
-/* Generate icmpv6 with type/code ICMPV6_DEST_UNREACH/ICMPV6_ADDR_UNREACH
- * if sufficient data bytes are available
- */
-static int ipip6_err_gen_icmpv6_unreach(struct sk_buff *skb)
-{
-	int ihl = ((const struct iphdr *)skb->data)->ihl*4;
-	struct rt6_info *rt;
-	struct sk_buff *skb2;
-
-	if (!pskb_may_pull(skb, ihl + sizeof(struct ipv6hdr) + 8))
-		return 1;
-
-	skb2 = skb_clone(skb, GFP_ATOMIC);
-
-	if (!skb2)
-		return 1;
-
-	skb_dst_drop(skb2);
-	skb_pull(skb2, ihl);
-	skb_reset_network_header(skb2);
-
-	rt = rt6_lookup(dev_net(skb->dev), &ipv6_hdr(skb2)->saddr, NULL, 0, 0);
-
-	if (rt && rt->dst.dev)
-		skb2->dev = rt->dst.dev;
-
-	icmpv6_send(skb2, ICMPV6_DEST_UNREACH, ICMPV6_ADDR_UNREACH, 0);
-
-	if (rt)
-		ip6_rt_put(rt);
-
-	kfree_skb(skb2);
-
-	return 0;
-}
-
 static int ipip6_err(struct sk_buff *skb, u32 info)
 {
 	const struct iphdr *iph = (const struct iphdr *)skb->data;
 	const int type = icmp_hdr(skb)->type;
 	const int code = icmp_hdr(skb)->code;
+	unsigned int data_len = 0;
 	struct ip_tunnel *t;
 	int err;
 
@@ -544,6 +509,7 @@ static int ipip6_err(struct sk_buff *skb, u32 info)
 	case ICMP_TIME_EXCEEDED:
 		if (code != ICMP_EXC_TTL)
 			return 0;
+		data_len = icmp_hdr(skb)->un.reserved[1] * 4; /* RFC 4884 4.1 */
 		break;
 	case ICMP_REDIRECT:
 		break;
@@ -560,22 +526,22 @@ static int ipip6_err(struct sk_buff *skb, u32 info)
 
 	if (type == ICMP_DEST_UNREACH && code == ICMP_FRAG_NEEDED) {
 		ipv4_update_pmtu(skb, dev_net(skb->dev), info,
-				 t->parms.link, 0, IPPROTO_IPV6, 0);
+				 t->parms.link, 0, iph->protocol, 0);
 		err = 0;
 		goto out;
 	}
 	if (type == ICMP_REDIRECT) {
 		ipv4_redirect(skb, dev_net(skb->dev), t->parms.link, 0,
-			      IPPROTO_IPV6, 0);
+			      iph->protocol, 0);
 		err = 0;
 		goto out;
 	}
 
-	if (t->parms.iph.daddr == 0)
+	err = 0;
+	if (!ip6_err_gen_icmpv6_unreach(skb, iph->ihl * 4, type, data_len))
 		goto out;
 
-	err = 0;
-	if (!ipip6_err_gen_icmpv6_unreach(skb))
+	if (t->parms.iph.daddr == 0)
 		goto out;
 
 	if (t->parms.iph.ttl == 0 && type == ICMP_TIME_EXCEEDED)
@@ -825,9 +791,6 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 	u8 protocol = IPPROTO_IPV6;
 	int t_hlen = tunnel->hlen + sizeof(struct iphdr);
 
-	if (skb->protocol != htons(ETH_P_IPV6))
-		goto tx_error;
-
 	if (tos == 1)
 		tos = ipv6_get_dsfield(iph6);
 
@@ -913,7 +876,7 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 		goto tx_error;
 	}
 
-	if (iptunnel_handle_offloads(skb, SKB_GSO_SIT)) {
+	if (iptunnel_handle_offloads(skb, SKB_GSO_IPXIP4)) {
 		ip_rt_put(rt);
 		goto tx_error;
 	}
@@ -1000,7 +963,7 @@ static netdev_tx_t ipip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	const struct iphdr  *tiph = &tunnel->parms.iph;
 
-	if (iptunnel_handle_offloads(skb, SKB_GSO_IPIP))
+	if (iptunnel_handle_offloads(skb, SKB_GSO_IPXIP4))
 		goto tx_error;
 
 	skb_set_inner_ipproto(skb, IPPROTO_IPIP);

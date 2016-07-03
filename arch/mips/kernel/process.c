@@ -73,10 +73,6 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 	regs->regs[29] = sp;
 }
 
-void exit_thread(void)
-{
-}
-
 int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 {
 	/*
@@ -349,7 +345,7 @@ static int get_frame_info(struct mips_frame_info *info)
 		return 0;
 	if (info->pc_offset < 0) /* leaf */
 		return 1;
-	/* prologue seems boggus... */
+	/* prologue seems bogus... */
 err:
 	return -1;
 }

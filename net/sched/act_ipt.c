@@ -34,7 +34,8 @@ static int ipt_net_id;
 
 static int xt_net_id;
 
-static int ipt_init_target(struct xt_entry_target *t, char *table, unsigned int hook)
+static int ipt_init_target(struct xt_entry_target *t, char *table,
+			   unsigned int hook)
 {
 	struct xt_tgchk_param par;
 	struct xt_target *target;
@@ -96,7 +97,8 @@ static int __tcf_ipt_init(struct tc_action_net *tn, struct nlattr *nla,
 	struct tcf_ipt *ipt;
 	struct xt_entry_target *td, *t;
 	char *tname;
-	int ret = 0, err, exists = 0;
+	bool exists = false;
+	int ret = 0, err;
 	u32 hook = 0;
 	u32 index = 0;
 
@@ -121,10 +123,13 @@ static int __tcf_ipt_init(struct tc_action_net *tn, struct nlattr *nla,
 	}
 
 	td = (struct xt_entry_target *)nla_data(tb[TCA_IPT_TARG]);
-	if (nla_len(tb[TCA_IPT_TARG]) < td->u.target_size)
+	if (nla_len(tb[TCA_IPT_TARG]) < td->u.target_size) {
+		if (exists)
+			tcf_hash_release(a, bind);
 		return -EINVAL;
+	}
 
-	if (!tcf_hash_check(tn, index, a, bind)) {
+	if (!exists) {
 		ret = tcf_hash_create(tn, index, est, a, sizeof(*ipt), bind,
 				      false);
 		if (ret)
@@ -212,7 +217,7 @@ static int tcf_ipt(struct sk_buff *skb, const struct tc_action *a,
 
 	spin_lock(&ipt->tcf_lock);
 
-	ipt->tcf_tm.lastuse = jiffies;
+	tcf_lastuse_update(&ipt->tcf_tm);
 	bstats_update(&ipt->tcf_bstats, skb);
 
 	/* yes, we have to worry about both in and out dev
@@ -242,7 +247,7 @@ static int tcf_ipt(struct sk_buff *skb, const struct tc_action *a,
 	default:
 		net_notice_ratelimited("tc filter: Bogus netfilter code %d assume ACCEPT\n",
 				       ret);
-		result = TC_POLICE_OK;
+		result = TC_ACT_OK;
 		break;
 	}
 	spin_unlock(&ipt->tcf_lock);
@@ -250,7 +255,8 @@ static int tcf_ipt(struct sk_buff *skb, const struct tc_action *a,
 
 }
 
-static int tcf_ipt_dump(struct sk_buff *skb, struct tc_action *a, int bind, int ref)
+static int tcf_ipt_dump(struct sk_buff *skb, struct tc_action *a, int bind,
+			int ref)
 {
 	unsigned char *b = skb_tail_pointer(skb);
 	struct tcf_ipt *ipt = a->priv;
@@ -277,11 +283,11 @@ static int tcf_ipt_dump(struct sk_buff *skb, struct tc_action *a, int bind, int 
 	    nla_put(skb, TCA_IPT_CNT, sizeof(struct tc_cnt), &c) ||
 	    nla_put_string(skb, TCA_IPT_TABLE, ipt->tcfi_tname))
 		goto nla_put_failure;
-	tm.install = jiffies_to_clock_t(jiffies - ipt->tcf_tm.install);
-	tm.lastuse = jiffies_to_clock_t(jiffies - ipt->tcf_tm.lastuse);
-	tm.expires = jiffies_to_clock_t(ipt->tcf_tm.expires);
+
+	tcf_tm_dump(&tm, &ipt->tcf_tm);
 	if (nla_put_64bit(skb, TCA_IPT_TM, sizeof(tm), &tm, TCA_IPT_PAD))
 		goto nla_put_failure;
+
 	kfree(t);
 	return skb->len;
 

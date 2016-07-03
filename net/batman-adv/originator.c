@@ -251,10 +251,8 @@ static void batadv_neigh_node_release(struct kref *ref)
 	struct hlist_node *node_tmp;
 	struct batadv_neigh_node *neigh_node;
 	struct batadv_neigh_ifinfo *neigh_ifinfo;
-	struct batadv_algo_ops *bao;
 
 	neigh_node = container_of(ref, struct batadv_neigh_node, refcount);
-	bao = neigh_node->orig_node->bat_priv->bat_algo_ops;
 
 	hlist_for_each_entry_safe(neigh_ifinfo, node_tmp,
 				  &neigh_node->ifinfo_list, list) {
@@ -262,9 +260,6 @@ static void batadv_neigh_node_release(struct kref *ref)
 	}
 
 	batadv_hardif_neigh_put(neigh_node->hardif_neigh);
-
-	if (bao->bat_neigh_free)
-		bao->bat_neigh_free(neigh_node);
 
 	batadv_hardif_put(neigh_node->if_incoming);
 
@@ -602,22 +597,24 @@ batadv_hardif_neigh_get(const struct batadv_hard_iface *hard_iface,
 }
 
 /**
- * batadv_neigh_node_new - create and init a new neigh_node object
+ * batadv_neigh_node_create - create a neigh node object
  * @orig_node: originator object representing the neighbour
  * @hard_iface: the interface where the neighbour is connected to
  * @neigh_addr: the mac address of the neighbour interface
  *
  * Allocates a new neigh_node object and initialises all the generic fields.
  *
- * Return: neighbor when found. Othwerwise NULL
+ * Return: the neighbour node if found or created or NULL otherwise.
  */
-struct batadv_neigh_node *
-batadv_neigh_node_new(struct batadv_orig_node *orig_node,
-		      struct batadv_hard_iface *hard_iface,
-		      const u8 *neigh_addr)
+static struct batadv_neigh_node *
+batadv_neigh_node_create(struct batadv_orig_node *orig_node,
+			 struct batadv_hard_iface *hard_iface,
+			 const u8 *neigh_addr)
 {
 	struct batadv_neigh_node *neigh_node;
 	struct batadv_hardif_neigh_node *hardif_neigh = NULL;
+
+	spin_lock_bh(&orig_node->neigh_list_lock);
 
 	neigh_node = batadv_neigh_node_get(orig_node, hard_iface, neigh_addr);
 	if (neigh_node)
@@ -650,18 +647,41 @@ batadv_neigh_node_new(struct batadv_orig_node *orig_node,
 	kref_init(&neigh_node->refcount);
 	kref_get(&neigh_node->refcount);
 
-	spin_lock_bh(&orig_node->neigh_list_lock);
 	hlist_add_head_rcu(&neigh_node->list, &orig_node->neigh_list);
-	spin_unlock_bh(&orig_node->neigh_list_lock);
 
 	batadv_dbg(BATADV_DBG_BATMAN, orig_node->bat_priv,
 		   "Creating new neighbor %pM for orig_node %pM on interface %s\n",
 		   neigh_addr, orig_node->orig, hard_iface->net_dev->name);
 
 out:
+	spin_unlock_bh(&orig_node->neigh_list_lock);
+
 	if (hardif_neigh)
 		batadv_hardif_neigh_put(hardif_neigh);
 	return neigh_node;
+}
+
+/**
+ * batadv_neigh_node_get_or_create - retrieve or create a neigh node object
+ * @orig_node: originator object representing the neighbour
+ * @hard_iface: the interface where the neighbour is connected to
+ * @neigh_addr: the mac address of the neighbour interface
+ *
+ * Return: the neighbour node if found or created or NULL otherwise.
+ */
+struct batadv_neigh_node *
+batadv_neigh_node_get_or_create(struct batadv_orig_node *orig_node,
+				struct batadv_hard_iface *hard_iface,
+				const u8 *neigh_addr)
+{
+	struct batadv_neigh_node *neigh_node = NULL;
+
+	/* first check without locking to avoid the overhead */
+	neigh_node = batadv_neigh_node_get(orig_node, hard_iface, neigh_addr);
+	if (neigh_node)
+		return neigh_node;
+
+	return batadv_neigh_node_create(orig_node, hard_iface, neigh_addr);
 }
 
 /**

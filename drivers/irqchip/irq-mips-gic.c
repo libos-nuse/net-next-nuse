@@ -746,6 +746,12 @@ static int gic_irq_domain_alloc(struct irq_domain *d, unsigned int virq,
 		/* verify that it doesn't conflict with an IPI irq */
 		if (test_bit(spec->hwirq, ipi_resrv))
 			return -EBUSY;
+
+		hwirq = GIC_SHARED_TO_HWIRQ(spec->hwirq);
+
+		return irq_domain_set_hwirq_and_chip(d, virq, hwirq,
+						     &gic_level_irq_controller,
+						     NULL);
 	} else {
 		base_hwirq = find_first_bit(ipi_resrv, gic_shared_intrs);
 		if (base_hwirq == gic_shared_intrs) {
@@ -867,10 +873,14 @@ static int gic_dev_domain_alloc(struct irq_domain *d, unsigned int virq,
 						    &gic_level_irq_controller,
 						    NULL);
 		if (ret)
-			return ret;
+			goto error;
 	}
 
 	return 0;
+
+error:
+	irq_domain_free_irqs_parent(d, virq, nr_irqs);
+	return ret;
 }
 
 void gic_dev_domain_free(struct irq_domain *d, unsigned int virq,
@@ -968,7 +978,7 @@ static void __init __gic_init(unsigned long gic_base_addr,
 			      unsigned int cpu_vec, unsigned int irqbase,
 			      struct device_node *node)
 {
-	unsigned int gicconfig;
+	unsigned int gicconfig, cpu;
 	unsigned int v[2];
 
 	__gic_base_addr = gic_base_addr;
@@ -985,6 +995,14 @@ static void __init __gic_init(unsigned long gic_base_addr,
 	gic_vpes = gic_vpes + 1;
 
 	if (cpu_has_veic) {
+		/* Set EIC mode for all VPEs */
+		for_each_present_cpu(cpu) {
+			gic_write(GIC_REG(VPE_LOCAL, GIC_VPE_OTHER_ADDR),
+				  mips_cm_vp_id(cpu));
+			gic_write(GIC_REG(VPE_OTHER, GIC_VPE_CTL),
+				  GIC_VPE_CTL_EIC_MODE_MSK);
+		}
+
 		/* Always use vector 1 in EIC mode */
 		gic_cpu_pin = 0;
 		timer_cpu_pin = gic_cpu_pin;

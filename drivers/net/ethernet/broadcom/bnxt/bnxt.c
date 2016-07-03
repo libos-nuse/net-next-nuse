@@ -37,9 +37,7 @@
 #include <net/udp.h>
 #include <net/checksum.h>
 #include <net/ip6_checksum.h>
-#if defined(CONFIG_VXLAN) || defined(CONFIG_VXLAN_MODULE)
-#include <net/vxlan.h>
-#endif
+#include <net/udp_tunnel.h>
 #ifdef CONFIG_NET_RX_BUSY_POLL
 #include <net/busy_poll.h>
 #endif
@@ -75,12 +73,22 @@ enum board_idx {
 	BCM57301,
 	BCM57302,
 	BCM57304,
+	BCM57311,
+	BCM57312,
 	BCM57402,
 	BCM57404,
 	BCM57406,
+	BCM57404_NPAR,
+	BCM57412,
+	BCM57414,
+	BCM57416,
+	BCM57417,
+	BCM57414_NPAR,
 	BCM57314,
 	BCM57304_VF,
 	BCM57404_VF,
+	BCM57414_VF,
+	BCM57314_VF,
 };
 
 /* indexed by enum above */
@@ -90,25 +98,45 @@ static const struct {
 	{ "Broadcom BCM57301 NetXtreme-C Single-port 10Gb Ethernet" },
 	{ "Broadcom BCM57302 NetXtreme-C Dual-port 10Gb/25Gb Ethernet" },
 	{ "Broadcom BCM57304 NetXtreme-C Dual-port 10Gb/25Gb/40Gb/50Gb Ethernet" },
+	{ "Broadcom BCM57311 NetXtreme-C Single-port 10Gb Ethernet" },
+	{ "Broadcom BCM57312 NetXtreme-C Dual-port 10Gb/25Gb Ethernet" },
 	{ "Broadcom BCM57402 NetXtreme-E Dual-port 10Gb Ethernet" },
 	{ "Broadcom BCM57404 NetXtreme-E Dual-port 10Gb/25Gb Ethernet" },
 	{ "Broadcom BCM57406 NetXtreme-E Dual-port 10GBase-T Ethernet" },
+	{ "Broadcom BCM57404 NetXtreme-E Ethernet Partition" },
+	{ "Broadcom BCM57412 NetXtreme-E Dual-port 10Gb Ethernet" },
+	{ "Broadcom BCM57414 NetXtreme-E Dual-port 10Gb/25Gb Ethernet" },
+	{ "Broadcom BCM57416 NetXtreme-E Dual-port 10GBase-T Ethernet" },
+	{ "Broadcom BCM57417 NetXtreme-E Dual-port 10GBase-T Ethernet" },
+	{ "Broadcom BCM57414 NetXtreme-E Ethernet Partition" },
 	{ "Broadcom BCM57314 NetXtreme-C Dual-port 10Gb/25Gb/40Gb/50Gb Ethernet" },
 	{ "Broadcom BCM57304 NetXtreme-C Ethernet Virtual Function" },
 	{ "Broadcom BCM57404 NetXtreme-E Ethernet Virtual Function" },
+	{ "Broadcom BCM57414 NetXtreme-E Ethernet Virtual Function" },
+	{ "Broadcom BCM57314 NetXtreme-E Ethernet Virtual Function" },
 };
 
 static const struct pci_device_id bnxt_pci_tbl[] = {
 	{ PCI_VDEVICE(BROADCOM, 0x16c8), .driver_data = BCM57301 },
 	{ PCI_VDEVICE(BROADCOM, 0x16c9), .driver_data = BCM57302 },
 	{ PCI_VDEVICE(BROADCOM, 0x16ca), .driver_data = BCM57304 },
+	{ PCI_VDEVICE(BROADCOM, 0x16ce), .driver_data = BCM57311 },
+	{ PCI_VDEVICE(BROADCOM, 0x16cf), .driver_data = BCM57312 },
 	{ PCI_VDEVICE(BROADCOM, 0x16d0), .driver_data = BCM57402 },
 	{ PCI_VDEVICE(BROADCOM, 0x16d1), .driver_data = BCM57404 },
 	{ PCI_VDEVICE(BROADCOM, 0x16d2), .driver_data = BCM57406 },
+	{ PCI_VDEVICE(BROADCOM, 0x16d4), .driver_data = BCM57404_NPAR },
+	{ PCI_VDEVICE(BROADCOM, 0x16d6), .driver_data = BCM57412 },
+	{ PCI_VDEVICE(BROADCOM, 0x16d7), .driver_data = BCM57414 },
+	{ PCI_VDEVICE(BROADCOM, 0x16d8), .driver_data = BCM57416 },
+	{ PCI_VDEVICE(BROADCOM, 0x16d9), .driver_data = BCM57417 },
+	{ PCI_VDEVICE(BROADCOM, 0x16de), .driver_data = BCM57414_NPAR },
 	{ PCI_VDEVICE(BROADCOM, 0x16df), .driver_data = BCM57314 },
 #ifdef CONFIG_BNXT_SRIOV
 	{ PCI_VDEVICE(BROADCOM, 0x16cb), .driver_data = BCM57304_VF },
 	{ PCI_VDEVICE(BROADCOM, 0x16d3), .driver_data = BCM57404_VF },
+	{ PCI_VDEVICE(BROADCOM, 0x16dc), .driver_data = BCM57414_VF },
+	{ PCI_VDEVICE(BROADCOM, 0x16e1), .driver_data = BCM57314_VF },
 #endif
 	{ 0 }
 };
@@ -125,12 +153,14 @@ static const u16 bnxt_async_events_arr[] = {
 	HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_STATUS_CHANGE,
 	HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PF_DRVR_UNLOAD,
 	HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PORT_CONN_NOT_ALLOWED,
+	HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE,
 	HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CFG_CHANGE,
 };
 
 static bool bnxt_vf_pciid(enum board_idx idx)
 {
-	return (idx == BCM57304_VF || idx == BCM57404_VF);
+	return (idx == BCM57304_VF || idx == BCM57404_VF ||
+		idx == BCM57314_VF || idx == BCM57414_VF);
 }
 
 #define DB_CP_REARM_FLAGS	(DB_KEY_CP | DB_IDX_VALID)
@@ -286,7 +316,9 @@ static netdev_tx_t bnxt_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			cpu_to_le32(DB_KEY_TX_PUSH | DB_LONG_TX_PUSH | prod);
 		txr->tx_prod = prod;
 
+		tx_buf->is_push = 1;
 		netdev_tx_sent_queue(txq, skb->len);
+		wmb();	/* Sync is_push and byte queue before pushing data */
 
 		push_len = (length + sizeof(*tx_push) + 7) / 8;
 		if (push_len > 16) {
@@ -298,7 +330,6 @@ static netdev_tx_t bnxt_start_xmit(struct sk_buff *skb, struct net_device *dev)
 					 push_len);
 		}
 
-		tx_buf->is_push = 1;
 		goto tx_done;
 	}
 
@@ -919,6 +950,7 @@ static void bnxt_tpa_start(struct bnxt *bp, struct bnxt_rx_ring_info *rxr,
 	}
 	tpa_info->flags2 = le32_to_cpu(tpa_start1->rx_tpa_start_cmp_flags2);
 	tpa_info->metadata = le32_to_cpu(tpa_start1->rx_tpa_start_cmp_metadata);
+	tpa_info->hdr_info = le32_to_cpu(tpa_start1->rx_tpa_start_cmp_hdr_info);
 
 	rxr->rx_prod = NEXT_RX(prod);
 	cons = NEXT_RX(cons);
@@ -937,32 +969,102 @@ static void bnxt_abort_tpa(struct bnxt *bp, struct bnxt_napi *bnapi,
 		bnxt_reuse_rx_agg_bufs(bnapi, cp_cons, agg_bufs);
 }
 
-#define BNXT_IPV4_HDR_SIZE	(sizeof(struct iphdr) + sizeof(struct tcphdr))
-#define BNXT_IPV6_HDR_SIZE	(sizeof(struct ipv6hdr) + sizeof(struct tcphdr))
-
-static inline struct sk_buff *bnxt_gro_skb(struct bnxt_tpa_info *tpa_info,
-					   struct rx_tpa_end_cmp *tpa_end,
-					   struct rx_tpa_end_cmp_ext *tpa_end1,
+static struct sk_buff *bnxt_gro_func_5731x(struct bnxt_tpa_info *tpa_info,
+					   int payload_off, int tcp_ts,
 					   struct sk_buff *skb)
 {
 #ifdef CONFIG_INET
 	struct tcphdr *th;
-	int payload_off, tcp_opt_len = 0;
 	int len, nw_off;
-	u16 segs;
+	u16 outer_ip_off, inner_ip_off, inner_mac_off;
+	u32 hdr_info = tpa_info->hdr_info;
+	bool loopback = false;
 
-	segs = TPA_END_TPA_SEGS(tpa_end);
-	if (segs == 1)
-		return skb;
+	inner_ip_off = BNXT_TPA_INNER_L3_OFF(hdr_info);
+	inner_mac_off = BNXT_TPA_INNER_L2_OFF(hdr_info);
+	outer_ip_off = BNXT_TPA_OUTER_L3_OFF(hdr_info);
 
-	NAPI_GRO_CB(skb)->count = segs;
-	skb_shinfo(skb)->gso_size =
-		le32_to_cpu(tpa_end1->rx_tpa_end_cmp_seg_len);
-	skb_shinfo(skb)->gso_type = tpa_info->gso_type;
-	payload_off = (le32_to_cpu(tpa_end->rx_tpa_end_cmp_misc_v1) &
-		       RX_TPA_END_CMP_PAYLOAD_OFFSET) >>
-		      RX_TPA_END_CMP_PAYLOAD_OFFSET_SHIFT;
-	if (TPA_END_GRO_TS(tpa_end))
+	/* If the packet is an internal loopback packet, the offsets will
+	 * have an extra 4 bytes.
+	 */
+	if (inner_mac_off == 4) {
+		loopback = true;
+	} else if (inner_mac_off > 4) {
+		__be16 proto = *((__be16 *)(skb->data + inner_ip_off -
+					    ETH_HLEN - 2));
+
+		/* We only support inner iPv4/ipv6.  If we don't see the
+		 * correct protocol ID, it must be a loopback packet where
+		 * the offsets are off by 4.
+		 */
+		if (proto != htons(ETH_P_IP) && proto && htons(ETH_P_IPV6))
+			loopback = true;
+	}
+	if (loopback) {
+		/* internal loopback packet, subtract all offsets by 4 */
+		inner_ip_off -= 4;
+		inner_mac_off -= 4;
+		outer_ip_off -= 4;
+	}
+
+	nw_off = inner_ip_off - ETH_HLEN;
+	skb_set_network_header(skb, nw_off);
+	if (tpa_info->flags2 & RX_TPA_START_CMP_FLAGS2_IP_TYPE) {
+		struct ipv6hdr *iph = ipv6_hdr(skb);
+
+		skb_set_transport_header(skb, nw_off + sizeof(struct ipv6hdr));
+		len = skb->len - skb_transport_offset(skb);
+		th = tcp_hdr(skb);
+		th->check = ~tcp_v6_check(len, &iph->saddr, &iph->daddr, 0);
+	} else {
+		struct iphdr *iph = ip_hdr(skb);
+
+		skb_set_transport_header(skb, nw_off + sizeof(struct iphdr));
+		len = skb->len - skb_transport_offset(skb);
+		th = tcp_hdr(skb);
+		th->check = ~tcp_v4_check(len, iph->saddr, iph->daddr, 0);
+	}
+
+	if (inner_mac_off) { /* tunnel */
+		struct udphdr *uh = NULL;
+		__be16 proto = *((__be16 *)(skb->data + outer_ip_off -
+					    ETH_HLEN - 2));
+
+		if (proto == htons(ETH_P_IP)) {
+			struct iphdr *iph = (struct iphdr *)skb->data;
+
+			if (iph->protocol == IPPROTO_UDP)
+				uh = (struct udphdr *)(iph + 1);
+		} else {
+			struct ipv6hdr *iph = (struct ipv6hdr *)skb->data;
+
+			if (iph->nexthdr == IPPROTO_UDP)
+				uh = (struct udphdr *)(iph + 1);
+		}
+		if (uh) {
+			if (uh->check)
+				skb_shinfo(skb)->gso_type |=
+					SKB_GSO_UDP_TUNNEL_CSUM;
+			else
+				skb_shinfo(skb)->gso_type |= SKB_GSO_UDP_TUNNEL;
+		}
+	}
+#endif
+	return skb;
+}
+
+#define BNXT_IPV4_HDR_SIZE	(sizeof(struct iphdr) + sizeof(struct tcphdr))
+#define BNXT_IPV6_HDR_SIZE	(sizeof(struct ipv6hdr) + sizeof(struct tcphdr))
+
+static struct sk_buff *bnxt_gro_func_5730x(struct bnxt_tpa_info *tpa_info,
+					   int payload_off, int tcp_ts,
+					   struct sk_buff *skb)
+{
+#ifdef CONFIG_INET
+	struct tcphdr *th;
+	int len, nw_off, tcp_opt_len;
+
+	if (tcp_ts)
 		tcp_opt_len = 12;
 
 	if (tpa_info->gso_type == SKB_GSO_TCPV4) {
@@ -1015,6 +1117,32 @@ static inline struct sk_buff *bnxt_gro_skb(struct bnxt_tpa_info *tpa_info,
 				skb_shinfo(skb)->gso_type |= SKB_GSO_UDP_TUNNEL;
 		}
 	}
+#endif
+	return skb;
+}
+
+static inline struct sk_buff *bnxt_gro_skb(struct bnxt *bp,
+					   struct bnxt_tpa_info *tpa_info,
+					   struct rx_tpa_end_cmp *tpa_end,
+					   struct rx_tpa_end_cmp_ext *tpa_end1,
+					   struct sk_buff *skb)
+{
+#ifdef CONFIG_INET
+	int payload_off;
+	u16 segs;
+
+	segs = TPA_END_TPA_SEGS(tpa_end);
+	if (segs == 1)
+		return skb;
+
+	NAPI_GRO_CB(skb)->count = segs;
+	skb_shinfo(skb)->gso_size =
+		le32_to_cpu(tpa_end1->rx_tpa_end_cmp_seg_len);
+	skb_shinfo(skb)->gso_type = tpa_info->gso_type;
+	payload_off = (le32_to_cpu(tpa_end->rx_tpa_end_cmp_misc_v1) &
+		       RX_TPA_END_CMP_PAYLOAD_OFFSET) >>
+		      RX_TPA_END_CMP_PAYLOAD_OFFSET_SHIFT;
+	skb = bp->gro_func(tpa_info, payload_off, TPA_END_GRO_TS(tpa_end), skb);
 #endif
 	return skb;
 }
@@ -1112,19 +1240,13 @@ static inline struct sk_buff *bnxt_tpa_end(struct bnxt *bp,
 	if (tpa_info->hash_type != PKT_HASH_TYPE_NONE)
 		skb_set_hash(skb, tpa_info->rss_hash, tpa_info->hash_type);
 
-	if (tpa_info->flags2 & RX_CMP_FLAGS2_META_FORMAT_VLAN) {
-		netdev_features_t features = skb->dev->features;
+	if ((tpa_info->flags2 & RX_CMP_FLAGS2_META_FORMAT_VLAN) &&
+	    (skb->dev->features & NETIF_F_HW_VLAN_CTAG_RX)) {
 		u16 vlan_proto = tpa_info->metadata >>
 			RX_CMP_FLAGS2_METADATA_TPID_SFT;
+		u16 vtag = tpa_info->metadata & RX_CMP_FLAGS2_METADATA_VID_MASK;
 
-		if (((features & NETIF_F_HW_VLAN_CTAG_RX) &&
-		     vlan_proto == ETH_P_8021Q) ||
-		    ((features & NETIF_F_HW_VLAN_STAG_RX) &&
-		     vlan_proto == ETH_P_8021AD)) {
-			__vlan_hwaccel_put_tag(skb, htons(vlan_proto),
-					       tpa_info->metadata &
-					       RX_CMP_FLAGS2_METADATA_VID_MASK);
-		}
+		__vlan_hwaccel_put_tag(skb, htons(vlan_proto), vtag);
 	}
 
 	skb_checksum_none_assert(skb);
@@ -1135,7 +1257,7 @@ static inline struct sk_buff *bnxt_tpa_end(struct bnxt *bp,
 	}
 
 	if (TPA_END_GRO(tpa_end))
-		skb = bnxt_gro_skb(tpa_info, tpa_end, tpa_end1, skb);
+		skb = bnxt_gro_skb(bp, tpa_info, tpa_end, tpa_end1, skb);
 
 	return skb;
 }
@@ -1277,19 +1399,14 @@ static int bnxt_rx_pkt(struct bnxt *bp, struct bnxt_napi *bnapi, u32 *raw_cons,
 
 	skb->protocol = eth_type_trans(skb, dev);
 
-	if (rxcmp1->rx_cmp_flags2 &
-	    cpu_to_le32(RX_CMP_FLAGS2_META_FORMAT_VLAN)) {
-		netdev_features_t features = skb->dev->features;
+	if ((rxcmp1->rx_cmp_flags2 &
+	     cpu_to_le32(RX_CMP_FLAGS2_META_FORMAT_VLAN)) &&
+	    (skb->dev->features & NETIF_F_HW_VLAN_CTAG_RX)) {
 		u32 meta_data = le32_to_cpu(rxcmp1->rx_cmp_meta_data);
+		u16 vtag = meta_data & RX_CMP_FLAGS2_METADATA_VID_MASK;
 		u16 vlan_proto = meta_data >> RX_CMP_FLAGS2_METADATA_TPID_SFT;
 
-		if (((features & NETIF_F_HW_VLAN_CTAG_RX) &&
-		     vlan_proto == ETH_P_8021Q) ||
-		    ((features & NETIF_F_HW_VLAN_STAG_RX) &&
-		     vlan_proto == ETH_P_8021AD))
-			__vlan_hwaccel_put_tag(skb, htons(vlan_proto),
-					       meta_data &
-					       RX_CMP_FLAGS2_METADATA_VID_MASK);
+		__vlan_hwaccel_put_tag(skb, htons(vlan_proto), vtag);
 	}
 
 	skb_checksum_none_assert(skb);
@@ -1368,6 +1485,11 @@ static int bnxt_async_event_process(struct bnxt *bp,
 		set_bit(BNXT_HWRM_PORT_MODULE_SP_EVENT, &bp->sp_event);
 		break;
 	}
+	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE:
+		if (BNXT_PF(bp))
+			goto async_event_process_exit;
+		set_bit(BNXT_RESET_TASK_SILENT_SP_EVENT, &bp->sp_event);
+		break;
 	default:
 		netdev_err(bp->dev, "unhandled ASYNC event (id 0x%x)\n",
 			   event_id);
@@ -2272,7 +2394,7 @@ static void bnxt_set_tpa_flags(struct bnxt *bp)
 	bp->flags &= ~BNXT_FLAG_TPA;
 	if (bp->dev->features & NETIF_F_LRO)
 		bp->flags |= BNXT_FLAG_LRO;
-	if ((bp->dev->features & NETIF_F_GRO) && (bp->pdev->revision > 0))
+	if (bp->dev->features & NETIF_F_GRO)
 		bp->flags |= BNXT_FLAG_GRO;
 }
 
@@ -3287,11 +3409,13 @@ static int bnxt_hwrm_vnic_cfg(struct bnxt *bp, u16 vnic_id)
 	unsigned int ring = 0, grp_idx;
 	struct bnxt_vnic_info *vnic = &bp->vnic_info[vnic_id];
 	struct hwrm_vnic_cfg_input req = {0};
+	u16 def_vlan = 0;
 
 	bnxt_hwrm_cmd_hdr_init(bp, &req, HWRM_VNIC_CFG, -1, -1);
 	/* Only RSS support for now TBD: COS & LB */
 	req.enables = cpu_to_le32(VNIC_CFG_REQ_ENABLES_DFLT_RING_GRP |
-				  VNIC_CFG_REQ_ENABLES_RSS_RULE);
+				  VNIC_CFG_REQ_ENABLES_RSS_RULE |
+				  VNIC_CFG_REQ_ENABLES_MRU);
 	req.rss_rule = cpu_to_le16(vnic->fw_rss_cos_lb_ctx);
 	req.cos_rule = cpu_to_le16(0xffff);
 	if (vnic->flags & BNXT_VNIC_RSS_FLAG)
@@ -3307,7 +3431,11 @@ static int bnxt_hwrm_vnic_cfg(struct bnxt *bp, u16 vnic_id)
 	req.mru = cpu_to_le16(bp->dev->mtu + ETH_HLEN + ETH_FCS_LEN +
 			      VLAN_HLEN);
 
-	if (bp->flags & BNXT_FLAG_STRIP_VLAN)
+#ifdef CONFIG_BNXT_SRIOV
+	if (BNXT_VF(bp))
+		def_vlan = bp->vf.vlan;
+#endif
+	if ((bp->flags & BNXT_FLAG_STRIP_VLAN) || def_vlan)
 		req.flags |= cpu_to_le32(VNIC_CFG_REQ_FLAGS_VLAN_STRIP_MODE);
 
 	return hwrm_send_message(bp, &req, sizeof(req), HWRM_CMD_TIMEOUT);
@@ -3824,7 +3952,7 @@ static int bnxt_hwrm_stat_ctx_alloc(struct bnxt *bp)
 
 	bnxt_hwrm_cmd_hdr_init(bp, &req, HWRM_STAT_CTX_ALLOC, -1, -1);
 
-	req.update_period_ms = cpu_to_le32(1000);
+	req.update_period_ms = cpu_to_le32(bp->stats_coal_ticks / 1000);
 
 	mutex_lock(&bp->hwrm_cmd_lock);
 	for (i = 0; i < bp->cp_nr_rings; i++) {
@@ -3846,6 +3974,39 @@ static int bnxt_hwrm_stat_ctx_alloc(struct bnxt *bp)
 	return 0;
 }
 
+static int bnxt_hwrm_func_qcfg(struct bnxt *bp)
+{
+	struct hwrm_func_qcfg_input req = {0};
+	struct hwrm_func_qcfg_output *resp = bp->hwrm_cmd_resp_addr;
+	int rc;
+
+	bnxt_hwrm_cmd_hdr_init(bp, &req, HWRM_FUNC_QCFG, -1, -1);
+	req.fid = cpu_to_le16(0xffff);
+	mutex_lock(&bp->hwrm_cmd_lock);
+	rc = _hwrm_send_message(bp, &req, sizeof(req), HWRM_CMD_TIMEOUT);
+	if (rc)
+		goto func_qcfg_exit;
+
+#ifdef CONFIG_BNXT_SRIOV
+	if (BNXT_VF(bp)) {
+		struct bnxt_vf_info *vf = &bp->vf;
+
+		vf->vlan = le16_to_cpu(resp->vlan) & VLAN_VID_MASK;
+	}
+#endif
+	switch (resp->port_partition_type) {
+	case FUNC_QCFG_RESP_PORT_PARTITION_TYPE_NPAR1_0:
+	case FUNC_QCFG_RESP_PORT_PARTITION_TYPE_NPAR1_5:
+	case FUNC_QCFG_RESP_PORT_PARTITION_TYPE_NPAR2_0:
+		bp->port_partition_type = resp->port_partition_type;
+		break;
+	}
+
+func_qcfg_exit:
+	mutex_unlock(&bp->hwrm_cmd_lock);
+	return rc;
+}
+
 int bnxt_hwrm_func_qcaps(struct bnxt *bp)
 {
 	int rc = 0;
@@ -3865,6 +4026,7 @@ int bnxt_hwrm_func_qcaps(struct bnxt *bp)
 
 		pf->fw_fid = le16_to_cpu(resp->fid);
 		pf->port_id = le16_to_cpu(resp->port_id);
+		bp->dev->dev_port = pf->port_id;
 		memcpy(pf->mac_addr, resp->mac_address, ETH_ALEN);
 		memcpy(bp->dev->dev_addr, pf->mac_addr, ETH_ALEN);
 		pf->max_rsscos_ctxs = le16_to_cpu(resp->max_rsscos_ctx);
@@ -3999,6 +4161,8 @@ static int bnxt_hwrm_ver_get(struct bnxt *bp)
 
 	if (resp->hwrm_intf_maj >= 1)
 		bp->hwrm_max_req_len = le16_to_cpu(resp->max_req_win_len);
+
+	bp->chip_num = le16_to_cpu(resp->chip_num);
 
 hwrm_ver_get_exit:
 	mutex_unlock(&bp->hwrm_cmd_lock);
@@ -4153,6 +4317,16 @@ static int bnxt_alloc_rfs_vnics(struct bnxt *bp)
 #endif
 }
 
+/* Allow PF and VF with default VLAN to be in promiscuous mode */
+static bool bnxt_promisc_ok(struct bnxt *bp)
+{
+#ifdef CONFIG_BNXT_SRIOV
+	if (BNXT_VF(bp) && !bp->vf.vlan)
+		return false;
+#endif
+	return true;
+}
+
 static int bnxt_cfg_rx_mode(struct bnxt *);
 static bool bnxt_mc_list_updated(struct bnxt *, u32 *);
 
@@ -4218,7 +4392,7 @@ static int bnxt_init_chip(struct bnxt *bp, bool irq_re_init)
 
 	vnic->rx_mask = CFA_L2_SET_RX_MASK_REQ_MASK_BCAST;
 
-	if ((bp->dev->flags & IFF_PROMISC) && BNXT_PF(bp))
+	if ((bp->dev->flags & IFF_PROMISC) && bnxt_promisc_ok(bp))
 		vnic->rx_mask |= CFA_L2_SET_RX_MASK_REQ_MASK_PROMISCUOUS;
 
 	if (bp->dev->flags & IFF_ALLMULTI) {
@@ -4239,6 +4413,11 @@ static int bnxt_init_chip(struct bnxt *bp, bool irq_re_init)
 	if (rc)
 		netdev_warn(bp->dev, "HWRM set coalescing failure rc: %x\n",
 			    rc);
+
+	if (BNXT_VF(bp)) {
+		bnxt_hwrm_func_qcfg(bp);
+		netdev_update_features(bp->dev);
+	}
 
 	return 0;
 
@@ -4654,6 +4833,7 @@ static int bnxt_hwrm_phy_qcaps(struct bnxt *bp)
 	int rc = 0;
 	struct hwrm_port_phy_qcaps_input req = {0};
 	struct hwrm_port_phy_qcaps_output *resp = bp->hwrm_cmd_resp_addr;
+	struct bnxt_link_info *link_info = &bp->link_info;
 
 	if (bp->hwrm_spec_code < 0x10201)
 		return 0;
@@ -4676,6 +4856,8 @@ static int bnxt_hwrm_phy_qcaps(struct bnxt *bp)
 		bp->lpi_tmr_hi = le32_to_cpu(resp->valid_tx_lpi_timer_high) &
 				 PORT_PHY_QCAPS_RESP_TX_LPI_TIMER_HIGH_MASK;
 	}
+	link_info->support_auto_speeds =
+		le16_to_cpu(resp->supported_speeds_auto_mode);
 
 hwrm_phy_qcaps_exit:
 	mutex_unlock(&bp->hwrm_cmd_lock);
@@ -4933,7 +5115,7 @@ static int bnxt_hwrm_shutdown_link(struct bnxt *bp)
 {
 	struct hwrm_port_phy_cfg_input req = {0};
 
-	if (BNXT_VF(bp))
+	if (!BNXT_SINGLE_PF(bp))
 		return 0;
 
 	if (pci_num_vf(bp->pdev))
@@ -5083,15 +5265,8 @@ static int __bnxt_open_nic(struct bnxt *bp, bool irq_re_init, bool link_re_init)
 			netdev_warn(bp->dev, "failed to update phy settings\n");
 	}
 
-	if (irq_re_init) {
-#if defined(CONFIG_VXLAN) || defined(CONFIG_VXLAN_MODULE)
-		vxlan_get_rx_port(bp->dev);
-#endif
-		if (!bnxt_hwrm_tunnel_dst_port_alloc(
-				bp, htons(0x17c1),
-				TUNNEL_DST_PORT_FREE_REQ_TUNNEL_TYPE_GENEVE))
-			bp->nge_port_cnt = 1;
-	}
+	if (irq_re_init)
+		udp_tunnel_get_rx_info(bp->dev);
 
 	set_bit(BNXT_STATE_OPEN, &bp->state);
 	bnxt_enable_int(bp);
@@ -5132,12 +5307,19 @@ static int bnxt_open(struct net_device *dev)
 	struct bnxt *bp = netdev_priv(dev);
 	int rc = 0;
 
-	rc = bnxt_hwrm_func_reset(bp);
-	if (rc) {
-		netdev_err(bp->dev, "hwrm chip reset failure rc: %x\n",
-			   rc);
-		rc = -1;
-		return rc;
+	if (!test_bit(BNXT_STATE_FN_RST_DONE, &bp->state)) {
+		rc = bnxt_hwrm_func_reset(bp);
+		if (rc) {
+			netdev_err(bp->dev, "hwrm chip reset failure rc: %x\n",
+				   rc);
+			rc = -EBUSY;
+			return rc;
+		}
+		/* Do func_reset during the 1st PF open only to prevent killing
+		 * the VFs when the PF is brought down and up.
+		 */
+		if (BNXT_PF(bp))
+			set_bit(BNXT_STATE_FN_RST_DONE, &bp->state);
 	}
 	return __bnxt_open_nic(bp, true, true);
 }
@@ -5357,8 +5539,7 @@ static void bnxt_set_rx_mode(struct net_device *dev)
 		  CFA_L2_SET_RX_MASK_REQ_MASK_MCAST |
 		  CFA_L2_SET_RX_MASK_REQ_MASK_ALL_MCAST);
 
-	/* Only allow PF to be in promiscuous mode */
-	if ((dev->flags & IFF_PROMISC) && BNXT_PF(bp))
+	if ((dev->flags & IFF_PROMISC) && bnxt_promisc_ok(bp))
 		mask |= CFA_L2_SET_RX_MASK_REQ_MASK_PROMISCUOUS;
 
 	uc_update = bnxt_uc_list_updated(bp);
@@ -5466,6 +5647,27 @@ static netdev_features_t bnxt_fix_features(struct net_device *dev,
 
 	if (!bnxt_rfs_capable(bp))
 		features &= ~NETIF_F_NTUPLE;
+
+	/* Both CTAG and STAG VLAN accelaration on the RX side have to be
+	 * turned on or off together.
+	 */
+	if ((features & (NETIF_F_HW_VLAN_CTAG_RX | NETIF_F_HW_VLAN_STAG_RX)) !=
+	    (NETIF_F_HW_VLAN_CTAG_RX | NETIF_F_HW_VLAN_STAG_RX)) {
+		if (dev->features & NETIF_F_HW_VLAN_CTAG_RX)
+			features &= ~(NETIF_F_HW_VLAN_CTAG_RX |
+				      NETIF_F_HW_VLAN_STAG_RX);
+		else
+			features |= NETIF_F_HW_VLAN_CTAG_RX |
+				    NETIF_F_HW_VLAN_STAG_RX;
+	}
+#ifdef CONFIG_BNXT_SRIOV
+	if (BNXT_VF(bp)) {
+		if (bp->vf.vlan) {
+			features &= ~(NETIF_F_HW_VLAN_CTAG_RX |
+				      NETIF_F_HW_VLAN_STAG_RX);
+		}
+	}
+#endif
 	return features;
 }
 
@@ -5581,9 +5783,10 @@ static void bnxt_dbg_dump_states(struct bnxt *bp)
 	}
 }
 
-static void bnxt_reset_task(struct bnxt *bp)
+static void bnxt_reset_task(struct bnxt *bp, bool silent)
 {
-	bnxt_dbg_dump_states(bp);
+	if (!silent)
+		bnxt_dbg_dump_states(bp);
 	if (netif_running(bp->dev)) {
 		bnxt_close_nic(bp, false, false);
 		bnxt_open_nic(bp, false, false);
@@ -5634,6 +5837,23 @@ bnxt_restart_timer:
 	mod_timer(&bp->timer, jiffies + bp->current_interval);
 }
 
+/* Only called from bnxt_sp_task() */
+static void bnxt_reset(struct bnxt *bp, bool silent)
+{
+	/* bnxt_reset_task() calls bnxt_close_nic() which waits
+	 * for BNXT_STATE_IN_SP_TASK to clear.
+	 * If there is a parallel dev_close(), bnxt_close() may be holding
+	 * rtnl() and waiting for BNXT_STATE_IN_SP_TASK to clear.  So we
+	 * must clear BNXT_STATE_IN_SP_TASK before holding rtnl().
+	 */
+	clear_bit(BNXT_STATE_IN_SP_TASK, &bp->state);
+	rtnl_lock();
+	if (test_bit(BNXT_STATE_OPEN, &bp->state))
+		bnxt_reset_task(bp, silent);
+	set_bit(BNXT_STATE_IN_SP_TASK, &bp->state);
+	rtnl_unlock();
+}
+
 static void bnxt_cfg_ntp_filters(struct bnxt *);
 
 static void bnxt_sp_task(struct work_struct *work)
@@ -5670,16 +5890,20 @@ static void bnxt_sp_task(struct work_struct *work)
 		bnxt_hwrm_tunnel_dst_port_free(
 			bp, TUNNEL_DST_PORT_FREE_REQ_TUNNEL_TYPE_VXLAN);
 	}
-	if (test_and_clear_bit(BNXT_RESET_TASK_SP_EVENT, &bp->sp_event)) {
-		/* bnxt_reset_task() calls bnxt_close_nic() which waits
-		 * for BNXT_STATE_IN_SP_TASK to clear.
-		 */
-		clear_bit(BNXT_STATE_IN_SP_TASK, &bp->state);
-		rtnl_lock();
-		bnxt_reset_task(bp);
-		set_bit(BNXT_STATE_IN_SP_TASK, &bp->state);
-		rtnl_unlock();
+	if (test_and_clear_bit(BNXT_GENEVE_ADD_PORT_SP_EVENT, &bp->sp_event)) {
+		bnxt_hwrm_tunnel_dst_port_alloc(
+			bp, bp->nge_port,
+			TUNNEL_DST_PORT_FREE_REQ_TUNNEL_TYPE_GENEVE);
 	}
+	if (test_and_clear_bit(BNXT_GENEVE_DEL_PORT_SP_EVENT, &bp->sp_event)) {
+		bnxt_hwrm_tunnel_dst_port_free(
+			bp, TUNNEL_DST_PORT_FREE_REQ_TUNNEL_TYPE_GENEVE);
+	}
+	if (test_and_clear_bit(BNXT_RESET_TASK_SP_EVENT, &bp->sp_event))
+		bnxt_reset(bp, false);
+
+	if (test_and_clear_bit(BNXT_RESET_TASK_SILENT_SP_EVENT, &bp->sp_event))
+		bnxt_reset(bp, true);
 
 	if (test_and_clear_bit(BNXT_HWRM_PORT_MODULE_SP_EVENT, &bp->sp_event))
 		bnxt_get_port_module_status(bp);
@@ -5770,6 +5994,8 @@ static int bnxt_init_board(struct pci_dev *pdev, struct net_device *dev)
 	bp->tx_coal_ticks_irq = 2;
 	bp->tx_coal_bufs_irq = 2;
 
+	bp->stats_coal_ticks = BNXT_DEF_STATS_COAL_TICKS;
+
 	init_timer(&bp->timer);
 	bp->timer.data = (unsigned long)bp;
 	bp->timer.function = bnxt_timer;
@@ -5835,7 +6061,7 @@ static int bnxt_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct bnxt *bp = netdev_priv(dev);
 
-	if (new_mtu < 60 || new_mtu > 9000)
+	if (new_mtu < 60 || new_mtu > 9500)
 		return -EINVAL;
 
 	if (netif_running(dev))
@@ -6044,47 +6270,83 @@ static void bnxt_cfg_ntp_filters(struct bnxt *bp)
 
 #endif /* CONFIG_RFS_ACCEL */
 
-static void bnxt_add_vxlan_port(struct net_device *dev, sa_family_t sa_family,
-				__be16 port)
+static void bnxt_udp_tunnel_add(struct net_device *dev,
+				struct udp_tunnel_info *ti)
 {
 	struct bnxt *bp = netdev_priv(dev);
+
+	if (ti->sa_family != AF_INET6 && ti->sa_family != AF_INET)
+		return;
 
 	if (!netif_running(dev))
 		return;
 
-	if (sa_family != AF_INET6 && sa_family != AF_INET)
-		return;
+	switch (ti->type) {
+	case UDP_TUNNEL_TYPE_VXLAN:
+		if (bp->vxlan_port_cnt && bp->vxlan_port != ti->port)
+			return;
 
-	if (bp->vxlan_port_cnt && bp->vxlan_port != port)
-		return;
-
-	bp->vxlan_port_cnt++;
-	if (bp->vxlan_port_cnt == 1) {
-		bp->vxlan_port = port;
-		set_bit(BNXT_VXLAN_ADD_PORT_SP_EVENT, &bp->sp_event);
-		schedule_work(&bp->sp_task);
-	}
-}
-
-static void bnxt_del_vxlan_port(struct net_device *dev, sa_family_t sa_family,
-				__be16 port)
-{
-	struct bnxt *bp = netdev_priv(dev);
-
-	if (!netif_running(dev))
-		return;
-
-	if (sa_family != AF_INET6 && sa_family != AF_INET)
-		return;
-
-	if (bp->vxlan_port_cnt && bp->vxlan_port == port) {
-		bp->vxlan_port_cnt--;
-
-		if (bp->vxlan_port_cnt == 0) {
-			set_bit(BNXT_VXLAN_DEL_PORT_SP_EVENT, &bp->sp_event);
+		bp->vxlan_port_cnt++;
+		if (bp->vxlan_port_cnt == 1) {
+			bp->vxlan_port = ti->port;
+			set_bit(BNXT_VXLAN_ADD_PORT_SP_EVENT, &bp->sp_event);
 			schedule_work(&bp->sp_task);
 		}
+		break;
+	case UDP_TUNNEL_TYPE_GENEVE:
+		if (bp->nge_port_cnt && bp->nge_port != ti->port)
+			return;
+
+		bp->nge_port_cnt++;
+		if (bp->nge_port_cnt == 1) {
+			bp->nge_port = ti->port;
+			set_bit(BNXT_GENEVE_ADD_PORT_SP_EVENT, &bp->sp_event);
+		}
+		break;
+	default:
+		return;
 	}
+
+	schedule_work(&bp->sp_task);
+}
+
+static void bnxt_udp_tunnel_del(struct net_device *dev,
+				struct udp_tunnel_info *ti)
+{
+	struct bnxt *bp = netdev_priv(dev);
+
+	if (ti->sa_family != AF_INET6 && ti->sa_family != AF_INET)
+		return;
+
+	if (!netif_running(dev))
+		return;
+
+	switch (ti->type) {
+	case UDP_TUNNEL_TYPE_VXLAN:
+		if (!bp->vxlan_port_cnt || bp->vxlan_port != ti->port)
+			return;
+		bp->vxlan_port_cnt--;
+
+		if (bp->vxlan_port_cnt != 0)
+			return;
+
+		set_bit(BNXT_VXLAN_DEL_PORT_SP_EVENT, &bp->sp_event);
+		break;
+	case UDP_TUNNEL_TYPE_GENEVE:
+		if (!bp->nge_port_cnt || bp->nge_port != ti->port)
+			return;
+		bp->nge_port_cnt--;
+
+		if (bp->nge_port_cnt != 0)
+			return;
+
+		set_bit(BNXT_GENEVE_DEL_PORT_SP_EVENT, &bp->sp_event);
+		break;
+	default:
+		return;
+	}
+
+	schedule_work(&bp->sp_task);
 }
 
 static const struct net_device_ops bnxt_netdev_ops = {
@@ -6115,8 +6377,8 @@ static const struct net_device_ops bnxt_netdev_ops = {
 #ifdef CONFIG_RFS_ACCEL
 	.ndo_rx_flow_steer	= bnxt_rx_flow_steer,
 #endif
-	.ndo_add_vxlan_port	= bnxt_add_vxlan_port,
-	.ndo_del_vxlan_port	= bnxt_del_vxlan_port,
+	.ndo_udp_tunnel_add	= bnxt_udp_tunnel_add,
+	.ndo_udp_tunnel_del	= bnxt_udp_tunnel_del,
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	.ndo_busy_poll		= bnxt_busy_poll,
 #endif
@@ -6164,6 +6426,12 @@ static int bnxt_probe_phy(struct bnxt *bp)
 			   rc);
 		return rc;
 	}
+
+	/* Older firmware does not have supported_auto_speeds, so assume
+	 * that all supported speeds can be autonegotiated.
+	 */
+	if (link_info->auto_link_speeds && !link_info->support_auto_speeds)
+		link_info->support_auto_speeds = link_info->support_speeds;
 
 	/*initialize the ethool setting copy with NVM settings */
 	if (BNXT_AUTO_MODE(link_info->auto_mode)) {
@@ -6311,7 +6579,7 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	dev->hw_features = NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM | NETIF_F_SG |
 			   NETIF_F_TSO | NETIF_F_TSO6 |
 			   NETIF_F_GSO_UDP_TUNNEL | NETIF_F_GSO_GRE |
-			   NETIF_F_GSO_IPIP | NETIF_F_GSO_SIT |
+			   NETIF_F_GSO_IPXIP4 |
 			   NETIF_F_GSO_UDP_TUNNEL_CSUM | NETIF_F_GSO_GRE_CSUM |
 			   NETIF_F_GSO_PARTIAL | NETIF_F_RXHASH |
 			   NETIF_F_RXCSUM | NETIF_F_LRO | NETIF_F_GRO;
@@ -6321,8 +6589,7 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 			NETIF_F_TSO | NETIF_F_TSO6 |
 			NETIF_F_GSO_UDP_TUNNEL | NETIF_F_GSO_GRE |
 			NETIF_F_GSO_UDP_TUNNEL_CSUM | NETIF_F_GSO_GRE_CSUM |
-			NETIF_F_GSO_IPIP | NETIF_F_GSO_SIT |
-			NETIF_F_GSO_PARTIAL;
+			NETIF_F_GSO_IPXIP4 | NETIF_F_GSO_PARTIAL;
 	dev->gso_partial_features = NETIF_F_GSO_UDP_TUNNEL_CSUM |
 				    NETIF_F_GSO_GRE_CSUM;
 	dev->vlan_features = dev->hw_features | NETIF_F_HIGHDMA;
@@ -6339,7 +6606,13 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto init_err;
 
 	mutex_init(&bp->hwrm_cmd_lock);
-	bnxt_hwrm_ver_get(bp);
+	rc = bnxt_hwrm_ver_get(bp);
+	if (rc)
+		goto init_err;
+
+	bp->gro_func = bnxt_gro_func_5730x;
+	if (BNXT_CHIP_NUM_57X1X(bp->chip_num))
+		bp->gro_func = bnxt_gro_func_5731x;
 
 	rc = bnxt_hwrm_func_drv_rgtr(bp);
 	if (rc)
@@ -6361,6 +6634,8 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		rc = -1;
 		goto init_err;
 	}
+
+	bnxt_hwrm_func_qcfg(bp);
 
 	bnxt_set_tpa_flags(bp);
 	bnxt_set_ring_params(bp);
@@ -6421,6 +6696,7 @@ static pci_ers_result_t bnxt_io_error_detected(struct pci_dev *pdev,
 					       pci_channel_state_t state)
 {
 	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct bnxt *bp = netdev_priv(netdev);
 
 	netdev_info(netdev, "PCI I/O error detected\n");
 
@@ -6435,6 +6711,8 @@ static pci_ers_result_t bnxt_io_error_detected(struct pci_dev *pdev,
 	if (netif_running(netdev))
 		bnxt_close(netdev);
 
+	/* So that func_reset will be done during slot_reset */
+	clear_bit(BNXT_STATE_FN_RST_DONE, &bp->state);
 	pci_disable_device(pdev);
 	rtnl_unlock();
 

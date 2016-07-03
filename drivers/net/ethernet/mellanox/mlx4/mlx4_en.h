@@ -270,6 +270,7 @@ struct mlx4_en_tx_ring {
 	unsigned long		tx_csum;
 	unsigned long		tso_packets;
 	unsigned long		xmit_more;
+	unsigned int		tx_dropped;
 	struct mlx4_bf		bf;
 	unsigned long		queue_stopped;
 
@@ -447,6 +448,27 @@ struct mlx4_en_frag_info {
 
 #define MLX4_EN_TC_ETS 7
 
+enum dcb_pfc_type {
+	pfc_disabled = 0,
+	pfc_enabled_full,
+	pfc_enabled_tx,
+	pfc_enabled_rx
+};
+
+struct tc_configuration {
+	enum dcb_pfc_type  dcb_pfc;
+};
+
+struct mlx4_en_cee_config {
+	bool	pfc_state;
+	struct	tc_configuration tc_config[MLX4_EN_NUM_UP];
+};
+
+struct mlx4_en_cee_params {
+	u8 dcbx_cap;
+	struct mlx4_en_cee_config dcb_cfg;
+};
+
 #endif
 
 struct ethtool_flow_id {
@@ -466,6 +488,9 @@ enum {
 	MLX4_EN_FLAG_RX_FILTER_NEEDED	= (1 << 3),
 	MLX4_EN_FLAG_FORCE_PROMISC	= (1 << 4),
 	MLX4_EN_FLAG_RX_CSUM_NON_TCP_UDP	= (1 << 5),
+#ifdef CONFIG_MLX4_EN_DCB
+	MLX4_EN_FLAG_DCB_ENABLED        = (1 << 6),
+#endif
 };
 
 #define PORT_BEACON_MAX_LIMIT (65535)
@@ -482,8 +507,6 @@ struct mlx4_en_priv {
 	struct mlx4_en_port_profile *prof;
 	struct net_device *dev;
 	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
-	struct net_device_stats stats;
-	struct net_device_stats ret_stats;
 	struct mlx4_en_port_state port_state;
 	spinlock_t stats_lock;
 	struct ethtool_flow_id ethtool_rules[MAX_NUM_OF_FS_RULES];
@@ -546,10 +569,8 @@ struct mlx4_en_priv {
 	struct work_struct linkstate_task;
 	struct delayed_work stats_task;
 	struct delayed_work service_task;
-#ifdef CONFIG_MLX4_EN_VXLAN
 	struct work_struct vxlan_add_task;
 	struct work_struct vxlan_del_task;
-#endif
 	struct mlx4_en_perf_stats pstats;
 	struct mlx4_en_pkt_stats pkstats;
 	struct mlx4_en_counter_stats pf_stats;
@@ -571,9 +592,11 @@ struct mlx4_en_priv {
 	u32 counter_index;
 
 #ifdef CONFIG_MLX4_EN_DCB
+#define MLX4_EN_DCB_ENABLED	0x3
 	struct ieee_ets ets;
 	u16 maxrate[IEEE_8021QAZ_MAX_TCS];
 	enum dcbnl_cndd_states cndd_state[IEEE_8021QAZ_MAX_TCS];
+	struct mlx4_en_cee_params cee_params;
 #endif
 #ifdef CONFIG_RFS_ACCEL
 	spinlock_t filters_lock;

@@ -535,6 +535,13 @@ enum ath10k_fw_features {
 	 */
 	ATH10K_FW_FEATURE_PEER_FLOW_CONTROL = 13,
 
+	/* Firmware supports BT-Coex without reloading firmware via pdev param.
+	 * To support Bluetooth coexistence pdev param, WMI_COEX_GPIO_SUPPORT of
+	 * extended resource config should be enabled always. This firmware IE
+	 * is used to configure WMI_COEX_GPIO_SUPPORT.
+	 */
+	ATH10K_FW_FEATURE_BTCOEX_PARAM = 14,
+
 	/* keep last */
 	ATH10K_FW_FEATURE_COUNT,
 };
@@ -571,6 +578,7 @@ enum ath10k_cal_mode {
 	ATH10K_CAL_MODE_DT,
 	ATH10K_PRE_CAL_MODE_FILE,
 	ATH10K_PRE_CAL_MODE_DT,
+	ATH10K_CAL_MODE_EEPROM,
 };
 
 enum ath10k_crypt_mode {
@@ -593,6 +601,8 @@ static inline const char *ath10k_cal_mode_str(enum ath10k_cal_mode mode)
 		return "pre-cal-file";
 	case ATH10K_PRE_CAL_MODE_DT:
 		return "pre-cal-dt";
+	case ATH10K_CAL_MODE_EEPROM:
+		return "eeprom";
 	}
 
 	return "unknown";
@@ -703,18 +713,22 @@ struct ath10k {
 		int uart_pin;
 		u32 otp_exe_param;
 
-		/* This is true if given HW chip has a quirky Cycle Counter
-		 * wraparound which resets to 0x7fffffff instead of 0. All
-		 * other CC related counters (e.g. Rx Clear Count) are divided
-		 * by 2 so they never wraparound themselves.
+		/* Type of hw cycle counter wraparound logic, for more info
+		 * refer enum ath10k_hw_cc_wraparound_type.
 		 */
-		bool has_shifted_cc_wraparound;
+		enum ath10k_hw_cc_wraparound_type cc_wraparound_type;
 
 		/* Some of chip expects fragment descriptor to be continuous
 		 * memory for any TX operation. Set continuous_frag_desc flag
 		 * for the hardware which have such requirement.
 		 */
 		bool continuous_frag_desc;
+
+		/* CCK hardware rate table mapping for the newer chipsets
+		 * like QCA99X0, QCA4019 got revised. The CCK h/w rate values
+		 * are in a proper order with respect to the rate/preamble
+		 */
+		bool cck_rate_map_rev2;
 
 		u32 channel_counters_freq_hz;
 
@@ -876,6 +890,7 @@ struct ath10k {
 	 * avoid reporting garbage data.
 	 */
 	bool ch_info_can_report_survey;
+	struct completion bss_survey_done;
 
 	struct dfs_pattern_detector *dfs_detector;
 
@@ -883,8 +898,6 @@ struct ath10k {
 
 #ifdef CONFIG_ATH10K_DEBUGFS
 	struct ath10k_debug debug;
-#endif
-
 	struct {
 		/* relay(fs) channel for spectral scan */
 		struct rchan *rfs_chan_spec_scan;
@@ -893,6 +906,7 @@ struct ath10k {
 		enum ath10k_spectral_mode mode;
 		struct ath10k_spec_scan config;
 	} spectral;
+#endif
 
 	struct {
 		/* protected by conf_mutex */
