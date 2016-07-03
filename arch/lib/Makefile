@@ -109,7 +109,7 @@ find_last_bit.o find_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
-rhashtable.o iov_iter.o cmdline.o kobject_uevent.o once.o
+rhashtable.o iov_iter.o cmdline.o kobject_uevent.o once.o uuid.o
 fs/_to_keep=read_write.o libfs.o namei.o filesystems.o file.o file_table.o \
 dcache.o inode.o pipe.o char_dev.o splice.o no-block.o seq_file.o super.o \
 fcntl.o coredump.o

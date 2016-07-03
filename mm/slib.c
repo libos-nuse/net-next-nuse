@@ -130,7 +130,7 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 		lib_memset(p, 0, sizeof(struct page) + (1 << PAGE_SHIFT));
 	page = (struct page *)p;
 
-	atomic_set(&page->_count, 1);
+	atomic_set(&page->_refcount, 1);
 	page->flags = 0;
 	pointer = (unsigned long)page;
 	pointer += sizeof(struct page);
@@ -146,7 +146,7 @@ void __free_pages(struct page *page, unsigned int order)
 
 void put_page(struct page *page)
 {
-	if (atomic_dec_and_test(&page->_count))
+	if (atomic_dec_and_test(&page->_refcount))
 		lib_free(page);
 }
 unsigned long get_zeroed_page(gfp_t gfp_mask)
