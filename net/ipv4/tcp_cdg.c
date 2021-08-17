@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * CAIA Delay-Gradient (CDG) congestion control
  *
@@ -27,6 +28,8 @@
 #include <linux/kernel.h>
 #include <linux/random.h>
 #include <linux/module.h>
+#include <linux/sched/clock.h>
+
 #include <net/tcp.h>
 
 #define HYSTART_ACK_TRAIN	1
@@ -56,7 +59,7 @@ MODULE_PARM_DESC(use_shadow, "use shadow window heuristic");
 module_param(use_tolerance, bool, 0644);
 MODULE_PARM_DESC(use_tolerance, "use loss tolerance heuristic");
 
-struct minmax {
+struct cdg_minmax {
 	union {
 		struct {
 			s32 min;
@@ -74,16 +77,15 @@ enum cdg_state {
 };
 
 struct cdg {
-	struct minmax rtt;
-	struct minmax rtt_prev;
-	struct minmax *gradients;
-	struct minmax gsum;
+	struct cdg_minmax rtt;
+	struct cdg_minmax rtt_prev;
+	struct cdg_minmax *gradients;
+	struct cdg_minmax gsum;
 	bool gfilled;
 	u8  tail;
 	u8  state;
 	u8  delack;
 	u32 rtt_seq;
-	u32 undo_cwnd;
 	u32 shadow_wnd;
 	u16 backoff_cnt;
 	u16 sample_cnt;
@@ -145,7 +147,7 @@ static void tcp_cdg_hystart_update(struct sock *sk)
 		return;
 
 	if (hystart_detect & HYSTART_ACK_TRAIN) {
-		u32 now_us = div_u64(local_clock(), NSEC_PER_USEC);
+		u32 now_us = tp->tcp_mstamp;
 
 		if (ca->last_ack == 0 || !tcp_is_cwnd_limited(sk)) {
 			ca->last_ack = now_us;
@@ -328,8 +330,6 @@ static u32 tcp_cdg_ssthresh(struct sock *sk)
 	struct cdg *ca = inet_csk_ca(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
-	ca->undo_cwnd = tp->snd_cwnd;
-
 	if (ca->state == CDG_BACKOFF)
 		return max(2U, (tp->snd_cwnd * min(1024U, backoff_beta)) >> 10);
 
@@ -342,18 +342,11 @@ static u32 tcp_cdg_ssthresh(struct sock *sk)
 	return max(2U, tp->snd_cwnd >> 1);
 }
 
-static u32 tcp_cdg_undo_cwnd(struct sock *sk)
-{
-	struct cdg *ca = inet_csk_ca(sk);
-
-	return max(tcp_sk(sk)->snd_cwnd, ca->undo_cwnd);
-}
-
 static void tcp_cdg_cwnd_event(struct sock *sk, const enum tcp_ca_event ev)
 {
 	struct cdg *ca = inet_csk_ca(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
-	struct minmax *gradients;
+	struct cdg_minmax *gradients;
 
 	switch (ev) {
 	case CA_EVENT_CWND_RESTART:
@@ -397,11 +390,11 @@ static void tcp_cdg_release(struct sock *sk)
 	kfree(ca->gradients);
 }
 
-struct tcp_congestion_ops tcp_cdg __read_mostly = {
+static struct tcp_congestion_ops tcp_cdg __read_mostly = {
 	.cong_avoid = tcp_cdg_cong_avoid,
 	.cwnd_event = tcp_cdg_cwnd_event,
 	.pkts_acked = tcp_cdg_acked,
-	.undo_cwnd = tcp_cdg_undo_cwnd,
+	.undo_cwnd = tcp_reno_undo_cwnd,
 	.ssthresh = tcp_cdg_ssthresh,
 	.release = tcp_cdg_release,
 	.init = tcp_cdg_init,

@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/vmalloc.h>
@@ -19,7 +16,7 @@ static inline bool arc_uncached_addr_space(phys_addr_t paddr)
 	if (is_isa_arcompact()) {
 		if (paddr >= ARC_UNCACHED_ADDR_SPACE)
 			return true;
-	} else if (paddr >= perip_base && paddr <= 0xFFFFFFFF) {
+	} else if (paddr >= perip_base && paddr <= perip_end) {
 		return true;
 	}
 
@@ -49,16 +46,17 @@ EXPORT_SYMBOL(ioremap);
 /*
  * ioremap with access flags
  * Cache semantics wise it is same as ioremap - "forced" uncached.
- * However unline vanilla ioremap which bypasses ARC MMU for addresses in
+ * However unlike vanilla ioremap which bypasses ARC MMU for addresses in
  * ARC hardware uncached region, this one still goes thru the MMU as caller
  * might need finer access control (R/W/X)
  */
 void __iomem *ioremap_prot(phys_addr_t paddr, unsigned long size,
 			   unsigned long flags)
 {
+	unsigned int off;
 	unsigned long vaddr;
 	struct vm_struct *area;
-	phys_addr_t off, end;
+	phys_addr_t end;
 	pgprot_t prot = __pgprot(flags);
 
 	/* Don't allow wraparound, zero size */
@@ -75,7 +73,7 @@ void __iomem *ioremap_prot(phys_addr_t paddr, unsigned long size,
 
 	/* Mappings have to be page-aligned */
 	off = paddr & ~PAGE_MASK;
-	paddr &= PAGE_MASK;
+	paddr &= PAGE_MASK_PHYS;
 	size = PAGE_ALIGN(end + 1) - paddr;
 
 	/*

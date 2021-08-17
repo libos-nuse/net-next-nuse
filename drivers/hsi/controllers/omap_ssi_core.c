@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* OMAP SSI driver.
  *
  * Copyright (C) 2010 Nokia Corporation. All rights reserved.
  * Copyright (C) 2014 Sebastian Reichel <sre@kernel.org>
  *
  * Contact: Carlos Chinea <carlos.chinea@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
  */
 
 #include <linux/compiler.h>
@@ -48,7 +35,7 @@
 static DEFINE_IDA(platform_omap_ssi_ida);
 
 #ifdef CONFIG_DEBUG_FS
-static int ssi_debug_show(struct seq_file *m, void *p __maybe_unused)
+static int ssi_regs_show(struct seq_file *m, void *p __maybe_unused)
 {
 	struct hsi_controller *ssi = m->private;
 	struct omap_ssi_controller *omap_ssi = hsi_controller_drvdata(ssi);
@@ -58,12 +45,12 @@ static int ssi_debug_show(struct seq_file *m, void *p __maybe_unused)
 	seq_printf(m, "REVISION\t: 0x%08x\n",  readl(sys + SSI_REVISION_REG));
 	seq_printf(m, "SYSCONFIG\t: 0x%08x\n", readl(sys + SSI_SYSCONFIG_REG));
 	seq_printf(m, "SYSSTATUS\t: 0x%08x\n", readl(sys + SSI_SYSSTATUS_REG));
-	pm_runtime_put_sync(ssi->device.parent);
+	pm_runtime_put(ssi->device.parent);
 
 	return 0;
 }
 
-static int ssi_debug_gdd_show(struct seq_file *m, void *p __maybe_unused)
+static int ssi_gdd_regs_show(struct seq_file *m, void *p __maybe_unused)
 {
 	struct hsi_controller *ssi = m->private;
 	struct omap_ssi_controller *omap_ssi = hsi_controller_drvdata(ssi);
@@ -112,34 +99,13 @@ static int ssi_debug_gdd_show(struct seq_file *m, void *p __maybe_unused)
 				readw(gdd + SSI_GDD_CLNK_CTRL_REG(lch)));
 	}
 
-	pm_runtime_put_sync(ssi->device.parent);
+	pm_runtime_put(ssi->device.parent);
 
 	return 0;
 }
 
-static int ssi_regs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ssi_debug_show, inode->i_private);
-}
-
-static int ssi_gdd_regs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ssi_debug_gdd_show, inode->i_private);
-}
-
-static const struct file_operations ssi_regs_fops = {
-	.open		= ssi_regs_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
-static const struct file_operations ssi_gdd_regs_fops = {
-	.open		= ssi_gdd_regs_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(ssi_regs);
+DEFINE_SHOW_ATTRIBUTE(ssi_gdd_regs);
 
 static int ssi_debug_add_ctrl(struct hsi_controller *ssi)
 {
@@ -193,7 +159,7 @@ void ssi_waketest(struct hsi_client *cl, unsigned int enable)
 	} else {
 		writel_relaxed(SSI_WAKE(0),
 				omap_ssi->sys +	SSI_CLEAR_WAKE_REG(port->num));
-		pm_runtime_put_sync(ssi->device.parent);
+		pm_runtime_put(ssi->device.parent);
 	}
 }
 EXPORT_SYMBOL_GPL(ssi_waketest);
@@ -217,7 +183,7 @@ static void ssi_gdd_complete(struct hsi_controller *ssi, unsigned int lch)
 	if (msg->ttype == HSI_MSG_READ) {
 		dir = DMA_FROM_DEVICE;
 		val = SSI_DATAAVAILABLE(msg->channel);
-		pm_runtime_put_sync(ssi->device.parent);
+		pm_runtime_put(omap_port->pdev);
 	} else {
 		dir = DMA_TO_DEVICE;
 		val = SSI_DATAACCEPT(msg->channel);
@@ -235,7 +201,9 @@ static void ssi_gdd_complete(struct hsi_controller *ssi, unsigned int lch)
 		spin_lock(&omap_port->lock);
 		list_del(&msg->link); /* Dequeue msg */
 		spin_unlock(&omap_port->lock);
-		msg->complete(msg);
+
+		list_add_tail(&msg->link, &omap_port->errqueue);
+		schedule_delayed_work(&omap_port->errqueue_work, 0);
 		return;
 	}
 	spin_lock(&omap_port->lock);
@@ -255,7 +223,13 @@ static void ssi_gdd_tasklet(unsigned long dev)
 	unsigned int lch;
 	u32 status_reg;
 
-	pm_runtime_get_sync(ssi->device.parent);
+	pm_runtime_get(ssi->device.parent);
+
+	if (!pm_runtime_active(ssi->device.parent)) {
+		dev_warn(ssi->device.parent, "ssi_gdd_tasklet called without runtime PM!\n");
+		pm_runtime_put(ssi->device.parent);
+		return;
+	}
 
 	status_reg = readl(sys + SSI_GDD_MPU_IRQ_STATUS_REG);
 	for (lch = 0; lch < SSI_MAX_GDD_LCH; lch++) {
@@ -265,7 +239,7 @@ static void ssi_gdd_tasklet(unsigned long dev)
 	writel_relaxed(status_reg, sys + SSI_GDD_MPU_IRQ_STATUS_REG);
 	status_reg = readl(sys + SSI_GDD_MPU_IRQ_STATUS_REG);
 
-	pm_runtime_put_sync(ssi->device.parent);
+	pm_runtime_put(ssi->device.parent);
 
 	if (status_reg)
 		tasklet_hi_schedule(&omap_ssi->gdd_tasklet);
@@ -312,7 +286,7 @@ static int ssi_clk_event(struct notifier_block *nb, unsigned long event,
 				continue;
 
 			/* Workaround for SWBREAK + CAwake down race in CMT */
-			tasklet_disable(&omap_port->wake_tasklet);
+			disable_irq(omap_port->wake_irq);
 
 			/* stop all ssi communication */
 			pinctrl_pm_select_idle_state(omap_port->pdev);
@@ -322,11 +296,11 @@ static int ssi_clk_event(struct notifier_block *nb, unsigned long event,
 		break;
 	case ABORT_RATE_CHANGE:
 		dev_dbg(&ssi->device, "abort rate change\n");
-		/* Fall through */
+		fallthrough;
 	case POST_RATE_CHANGE:
 		dev_dbg(&ssi->device, "post rate change (%lu -> %lu)\n",
 			clk_data->old_rate, clk_data->new_rate);
-		omap_ssi->fck_rate = DIV_ROUND_CLOSEST(clk_data->new_rate, 1000); /* KHz */
+		omap_ssi->fck_rate = DIV_ROUND_CLOSEST(clk_data->new_rate, 1000); /* kHz */
 
 		for (i = 0; i < ssi->num_ports; i++) {
 			omap_port = omap_ssi->port[i];
@@ -338,7 +312,7 @@ static int ssi_clk_event(struct notifier_block *nb, unsigned long event,
 
 			/* resume ssi communication */
 			pinctrl_pm_select_default_state(omap_port->pdev);
-			tasklet_enable(&omap_port->wake_tasklet);
+			enable_irq(omap_port->wake_irq);
 		}
 
 		break;
@@ -376,14 +350,12 @@ static int ssi_add_controller(struct hsi_controller *ssi,
 	int err;
 
 	omap_ssi = devm_kzalloc(&ssi->device, sizeof(*omap_ssi), GFP_KERNEL);
-	if (!omap_ssi) {
-		dev_err(&pd->dev, "not enough memory for omap ssi\n");
+	if (!omap_ssi)
 		return -ENOMEM;
-	}
 
 	err = ida_simple_get(&platform_omap_ssi_ida, 0, 0, GFP_KERNEL);
 	if (err < 0)
-		goto out_err;
+		return err;
 	ssi->id = err;
 
 	ssi->owner = THIS_MODULE;
@@ -398,10 +370,8 @@ static int ssi_add_controller(struct hsi_controller *ssi,
 	if (err < 0)
 		goto out_err;
 	err = platform_get_irq_byname(pd, "gdd_mpu");
-	if (err < 0) {
-		dev_err(&pd->dev, "GDD IRQ resource missing\n");
+	if (err < 0)
 		goto out_err;
-	}
 	omap_ssi->gdd_irq = err;
 	tasklet_init(&omap_ssi->gdd_tasklet, ssi_gdd_tasklet,
 							(unsigned long)ssi);
@@ -413,8 +383,8 @@ static int ssi_add_controller(struct hsi_controller *ssi,
 		goto out_err;
 	}
 
-	omap_ssi->port = devm_kzalloc(&ssi->device,
-		sizeof(struct omap_ssi_port *) * ssi->num_ports, GFP_KERNEL);
+	omap_ssi->port = devm_kcalloc(&ssi->device, ssi->num_ports,
+				      sizeof(*omap_ssi->port), GFP_KERNEL);
 	if (!omap_ssi->port) {
 		err = -ENOMEM;
 		goto out_err;
@@ -452,36 +422,19 @@ out_err:
 static int ssi_hw_init(struct hsi_controller *ssi)
 {
 	struct omap_ssi_controller *omap_ssi = hsi_controller_drvdata(ssi);
-	unsigned int i;
-	u32 val;
 	int err;
 
-	err = pm_runtime_get_sync(ssi->device.parent);
+	err = pm_runtime_resume_and_get(ssi->device.parent);
 	if (err < 0) {
 		dev_err(&ssi->device, "runtime PM failed %d\n", err);
 		return err;
 	}
-	/* Reseting SSI controller */
-	writel_relaxed(SSI_SOFTRESET, omap_ssi->sys + SSI_SYSCONFIG_REG);
-	val = readl(omap_ssi->sys + SSI_SYSSTATUS_REG);
-	for (i = 0; ((i < 20) && !(val & SSI_RESETDONE)); i++) {
-		msleep(20);
-		val = readl(omap_ssi->sys + SSI_SYSSTATUS_REG);
-	}
-	if (!(val & SSI_RESETDONE)) {
-		dev_err(&ssi->device, "SSI HW reset failed\n");
-		pm_runtime_put_sync(ssi->device.parent);
-		return -EIO;
-	}
-	/* Reseting GDD */
+	/* Resetting GDD */
 	writel_relaxed(SSI_SWRESET, omap_ssi->gdd + SSI_GDD_GRST_REG);
-	/* Get FCK rate in KHz */
+	/* Get FCK rate in kHz */
 	omap_ssi->fck_rate = DIV_ROUND_CLOSEST(ssi_get_clk_rate(ssi), 1000);
-	dev_dbg(&ssi->device, "SSI fck rate %lu KHz\n", omap_ssi->fck_rate);
-	/* Set default PM settings */
-	val = SSI_AUTOIDLE | SSI_SIDLEMODE_SMART | SSI_MIDLEMODE_SMART;
-	writel_relaxed(val, omap_ssi->sys + SSI_SYSCONFIG_REG);
-	omap_ssi->sysconfig = val;
+	dev_dbg(&ssi->device, "SSI fck rate %lu kHz\n", omap_ssi->fck_rate);
+
 	writel_relaxed(SSI_CLK_AUTOGATING_ON, omap_ssi->sys + SSI_GDD_GCR_REG);
 	omap_ssi->gdd_gcr = SSI_CLK_AUTOGATING_ON;
 	pm_runtime_put_sync(ssi->device.parent);
@@ -552,7 +505,6 @@ static int ssi_probe(struct platform_device *pd)
 	if (err < 0)
 		goto out1;
 
-	pm_runtime_irq_safe(&pd->dev);
 	pm_runtime_enable(&pd->dev);
 
 	err = ssi_hw_init(ssi);

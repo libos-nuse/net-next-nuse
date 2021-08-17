@@ -1,24 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Hisilicon Reset Controller Driver
  *
  * Copyright (c) 2015-2016 HiSilicon Technologies Co., Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/io.h>
 #include <linux/of_address.h>
+#include <linux/platform_device.h>
 #include <linux/reset-controller.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -98,25 +87,22 @@ static const struct reset_control_ops hisi_reset_ops = {
 	.deassert	= hisi_reset_deassert,
 };
 
-struct hisi_reset_controller *hisi_reset_init(struct device_node *np)
+struct hisi_reset_controller *hisi_reset_init(struct platform_device *pdev)
 {
 	struct hisi_reset_controller *rstc;
 
-	rstc = kzalloc(sizeof(*rstc), GFP_KERNEL);
+	rstc = devm_kmalloc(&pdev->dev, sizeof(*rstc), GFP_KERNEL);
 	if (!rstc)
 		return NULL;
 
-	rstc->membase = of_iomap(np, 0);
-	if (!rstc->membase) {
-		kfree(rstc);
+	rstc->membase = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(rstc->membase))
 		return NULL;
-	}
 
 	spin_lock_init(&rstc->lock);
-
 	rstc->rcdev.owner = THIS_MODULE;
 	rstc->rcdev.ops = &hisi_reset_ops;
-	rstc->rcdev.of_node = np;
+	rstc->rcdev.of_node = pdev->dev.of_node;
 	rstc->rcdev.of_reset_n_cells = 2;
 	rstc->rcdev.of_xlate = hisi_reset_of_xlate;
 	reset_controller_register(&rstc->rcdev);
@@ -128,7 +114,5 @@ EXPORT_SYMBOL_GPL(hisi_reset_init);
 void hisi_reset_exit(struct hisi_reset_controller *rstc)
 {
 	reset_controller_unregister(&rstc->rcdev);
-	iounmap(rstc->membase);
-	kfree(rstc);
 }
 EXPORT_SYMBOL_GPL(hisi_reset_exit);

@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/drivers/pinctrl/pinmux-xway.c
  *  based on linux/drivers/pinctrl/pinmux-pxa910.c
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  publishhed by the Free Software Foundation.
- *
- *  Copyright (C) 2012 John Crispin <blogic@openwrt.org>
+ *  Copyright (C) 2012 John Crispin <john@phrozen.org>
  *  Copyright (C) 2015 Martin Schiller <mschiller@tdt.de>
  */
 
@@ -1028,7 +1025,7 @@ static const struct ltq_pin_group xrx200_grps[] = {
 	GRP_MUX("spi_cs5", SPI, xrx200_pins_spi_cs5),
 	GRP_MUX("spi_cs6", SPI, xrx200_pins_spi_cs6),
 	GRP_MUX("usif uart_rx", USIF, xrx200_pins_usif_uart_rx),
-	GRP_MUX("usif uart_rx", USIF, xrx200_pins_usif_uart_tx),
+	GRP_MUX("usif uart_tx", USIF, xrx200_pins_usif_uart_tx),
 	GRP_MUX("usif uart_rts", USIF, xrx200_pins_usif_uart_rts),
 	GRP_MUX("usif uart_cts", USIF, xrx200_pins_usif_uart_cts),
 	GRP_MUX("usif uart_dtr", USIF, xrx200_pins_usif_uart_dtr),
@@ -1616,50 +1613,74 @@ struct pinctrl_xway_soc {
 
 /* xway xr9 series (DEPRECATED: Use XWAY xRX100/xRX200 Family) */
 static struct pinctrl_xway_soc xr9_pinctrl = {
-	XR9_MAX_PIN, xway_mfp,
-	xway_grps, ARRAY_SIZE(xway_grps),
-	xrx_funcs, ARRAY_SIZE(xrx_funcs),
-	xway_exin_pin_map, 6
+	.pin_count = XR9_MAX_PIN,
+	.mfp = xway_mfp,
+	.grps = xway_grps,
+	.num_grps = ARRAY_SIZE(xway_grps),
+	.funcs = xrx_funcs,
+	.num_funcs = ARRAY_SIZE(xrx_funcs),
+	.exin = xway_exin_pin_map,
+	.num_exin = 6
 };
 
 /* XWAY AMAZON Family */
 static struct pinctrl_xway_soc ase_pinctrl = {
-	ASE_MAX_PIN, ase_mfp,
-	ase_grps, ARRAY_SIZE(ase_grps),
-	ase_funcs, ARRAY_SIZE(ase_funcs),
-	ase_exin_pin_map, 3
+	.pin_count = ASE_MAX_PIN,
+	.mfp = ase_mfp,
+	.grps = ase_grps,
+	.num_grps = ARRAY_SIZE(ase_grps),
+	.funcs = ase_funcs,
+	.num_funcs = ARRAY_SIZE(ase_funcs),
+	.exin = ase_exin_pin_map,
+	.num_exin = 3
 };
 
 /* XWAY DANUBE Family */
 static struct pinctrl_xway_soc danube_pinctrl = {
-	DANUBE_MAX_PIN, danube_mfp,
-	danube_grps, ARRAY_SIZE(danube_grps),
-	danube_funcs, ARRAY_SIZE(danube_funcs),
-	danube_exin_pin_map, 3
+	.pin_count = DANUBE_MAX_PIN,
+	.mfp = danube_mfp,
+	.grps = danube_grps,
+	.num_grps = ARRAY_SIZE(danube_grps),
+	.funcs = danube_funcs,
+	.num_funcs = ARRAY_SIZE(danube_funcs),
+	.exin = danube_exin_pin_map,
+	.num_exin = 3
 };
 
 /* XWAY xRX100 Family */
 static struct pinctrl_xway_soc xrx100_pinctrl = {
-	XRX100_MAX_PIN, xrx100_mfp,
-	xrx100_grps, ARRAY_SIZE(xrx100_grps),
-	xrx100_funcs, ARRAY_SIZE(xrx100_funcs),
-	xrx100_exin_pin_map, 6
+	.pin_count = XRX100_MAX_PIN,
+	.mfp = xrx100_mfp,
+	.grps = xrx100_grps,
+	.num_grps = ARRAY_SIZE(xrx100_grps),
+	.funcs = xrx100_funcs,
+	.num_funcs = ARRAY_SIZE(xrx100_funcs),
+	.exin = xrx100_exin_pin_map,
+	.num_exin = 6
 };
 
 /* XWAY xRX200 Family */
 static struct pinctrl_xway_soc xrx200_pinctrl = {
-	XRX200_MAX_PIN, xrx200_mfp,
-	xrx200_grps, ARRAY_SIZE(xrx200_grps),
-	xrx200_funcs, ARRAY_SIZE(xrx200_funcs),
-	xrx200_exin_pin_map, 6
+	.pin_count = XRX200_MAX_PIN,
+	.mfp = xrx200_mfp,
+	.grps = xrx200_grps,
+	.num_grps = ARRAY_SIZE(xrx200_grps),
+	.funcs = xrx200_funcs,
+	.num_funcs = ARRAY_SIZE(xrx200_funcs),
+	.exin = xrx200_exin_pin_map,
+	.num_exin = 6
 };
 
 /* XWAY xRX300 Family */
 static struct pinctrl_xway_soc xrx300_pinctrl = {
-	XRX300_MAX_PIN, xrx300_mfp,
-	xrx300_grps, ARRAY_SIZE(xrx300_grps),
-	xrx300_funcs, ARRAY_SIZE(xrx300_funcs),
-	xrx300_exin_pin_map, 5
+	.pin_count = XRX300_MAX_PIN,
+	.mfp = xrx300_mfp,
+	.grps = xrx300_grps,
+	.num_grps = ARRAY_SIZE(xrx300_grps),
+	.funcs = xrx300_funcs,
+	.num_funcs = ARRAY_SIZE(xrx300_funcs),
+	.exin = xrx300_exin_pin_map,
+	.num_exin = 5
 };
 
 static struct pinctrl_gpio_range xway_gpio_range = {
@@ -1684,12 +1705,10 @@ static int pinmux_xway_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *match;
 	const struct pinctrl_xway_soc *xway_soc;
-	struct resource *res;
 	int ret, i;
 
 	/* get and remap our register range */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	xway_info.membase[0] = devm_ioremap_resource(&pdev->dev, res);
+	xway_info.membase[0] = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(xway_info.membase[0]))
 		return PTR_ERR(xway_info.membase[0]);
 
@@ -1703,34 +1722,22 @@ static int pinmux_xway_probe(struct platform_device *pdev)
 	xway_chip.ngpio = xway_soc->pin_count;
 
 	/* load our pad descriptors */
-	xway_info.pads = devm_kzalloc(&pdev->dev,
-			sizeof(struct pinctrl_pin_desc) * xway_chip.ngpio,
+	xway_info.pads = devm_kcalloc(&pdev->dev,
+			xway_chip.ngpio, sizeof(struct pinctrl_pin_desc),
 			GFP_KERNEL);
-	if (!xway_info.pads) {
-		dev_err(&pdev->dev, "Failed to allocate pads\n");
+	if (!xway_info.pads)
 		return -ENOMEM;
-	}
-	for (i = 0; i < xway_chip.ngpio; i++) {
-		/* strlen("ioXY") + 1 = 5 */
-		char *name = devm_kzalloc(&pdev->dev, 5, GFP_KERNEL);
 
-		if (!name) {
-			dev_err(&pdev->dev, "Failed to allocate pad name\n");
+	for (i = 0; i < xway_chip.ngpio; i++) {
+		char *name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "io%d", i);
+
+		if (!name)
 			return -ENOMEM;
-		}
-		snprintf(name, 5, "io%d", i);
+
 		xway_info.pads[i].number = GPIO0 + i;
 		xway_info.pads[i].name = name;
 	}
 	xway_pctrl_desc.pins = xway_info.pads;
-
-	/* load the gpio chip */
-	xway_chip.parent = &pdev->dev;
-	ret = gpiochip_add(&xway_chip);
-	if (ret) {
-		dev_err(&pdev->dev, "Failed to register gpio chip\n");
-		return ret;
-	}
 
 	/* setup the data needed by pinctrl */
 	xway_pctrl_desc.name	= dev_name(&pdev->dev);
@@ -1749,15 +1756,37 @@ static int pinmux_xway_probe(struct platform_device *pdev)
 	/* register with the generic lantiq layer */
 	ret = ltq_pinctrl_register(pdev, &xway_info);
 	if (ret) {
-		gpiochip_remove(&xway_chip);
 		dev_err(&pdev->dev, "Failed to register pinctrl driver\n");
 		return ret;
 	}
 
-	/* finish with registering the gpio range in pinctrl */
-	xway_gpio_range.npins = xway_chip.ngpio;
-	xway_gpio_range.base = xway_chip.base;
-	pinctrl_add_gpio_range(xway_info.pctrl, &xway_gpio_range);
+	/* register the gpio chip */
+	xway_chip.parent = &pdev->dev;
+	xway_chip.owner = THIS_MODULE;
+	xway_chip.of_node = pdev->dev.of_node;
+	ret = devm_gpiochip_add_data(&pdev->dev, &xway_chip, NULL);
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to register gpio chip\n");
+		return ret;
+	}
+
+	/*
+	 * For DeviceTree-supported systems, the gpio core checks the
+	 * pinctrl's device node for the "gpio-ranges" property.
+	 * If it is present, it takes care of adding the pin ranges
+	 * for the driver. In this case the driver can skip ahead.
+	 *
+	 * In order to remain compatible with older, existing DeviceTree
+	 * files which don't set the "gpio-ranges" property or systems that
+	 * utilize ACPI the driver has to call gpiochip_add_pin_range().
+	 */
+	if (!of_property_read_bool(pdev->dev.of_node, "gpio-ranges")) {
+		/* finish with registering the gpio range in pinctrl */
+		xway_gpio_range.npins = xway_chip.ngpio;
+		xway_gpio_range.base = xway_chip.base;
+		pinctrl_add_gpio_range(xway_info.pctrl, &xway_gpio_range);
+	}
+
 	dev_info(&pdev->dev, "Init done\n");
 	return 0;
 }

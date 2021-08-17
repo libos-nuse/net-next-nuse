@@ -1,19 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _BGMAC_H
 #define _BGMAC_H
 
-#define pr_fmt(fmt)		KBUILD_MODNAME ": " fmt
-
-#define bgmac_err(bgmac, fmt, ...) \
-	dev_err(&(bgmac)->core->dev, fmt, ##__VA_ARGS__)
-#define bgmac_warn(bgmac, fmt, ...) \
-	dev_warn(&(bgmac)->core->dev, fmt,  ##__VA_ARGS__)
-#define bgmac_info(bgmac, fmt, ...) \
-	dev_info(&(bgmac)->core->dev, fmt,  ##__VA_ARGS__)
-#define bgmac_dbg(bgmac, fmt, ...) \
-	dev_dbg(&(bgmac)->core->dev, fmt, ##__VA_ARGS__)
-
-#include <linux/bcma/bcma.h>
-#include <linux/brcmphy.h>
 #include <linux/netdevice.h>
 
 #define BGMAC_DEV_CTL				0x000
@@ -201,7 +189,6 @@
 #define  BGMAC_CMDCFG_HD_SHIFT			10
 #define  BGMAC_CMDCFG_SR_REV0			0x00000800	/* Set to reset mode, for core rev 0-3 */
 #define  BGMAC_CMDCFG_SR_REV4			0x00002000	/* Set to reset mode, for core rev >= 4 */
-#define  BGMAC_CMDCFG_SR(rev)  ((rev >= 4) ? BGMAC_CMDCFG_SR_REV4 : BGMAC_CMDCFG_SR_REV0)
 #define  BGMAC_CMDCFG_ML			0x00008000	/* Set to activate mac loopback mode */
 #define  BGMAC_CMDCFG_AE			0x00400000
 #define  BGMAC_CMDCFG_CFE			0x00800000
@@ -227,6 +214,22 @@
 /* BCMA GMAC core specific IO Control (BCMA_IOCTL) flags */
 #define BGMAC_BCMA_IOCTL_SW_CLKEN		0x00000004	/* PHY Clock Enable */
 #define BGMAC_BCMA_IOCTL_SW_RESET		0x00000008	/* PHY Reset */
+/* The IOCTL values appear to be different in NS, NSP, and NS2, and do not match
+ * the values directly above
+ */
+#define BGMAC_CLK_EN				BIT(0)
+#define BGMAC_RESERVED_0			BIT(1)
+#define BGMAC_SOURCE_SYNC_MODE_EN		BIT(2)
+#define BGMAC_DEST_SYNC_MODE_EN			BIT(3)
+#define BGMAC_TX_CLK_OUT_INVERT_EN		BIT(4)
+#define BGMAC_DIRECT_GMII_MODE			BIT(5)
+#define BGMAC_CLK_250_SEL			BIT(6)
+#define BGMAC_AWCACHE				(0xf << 7)
+#define BGMAC_RESERVED_1			(0x1f << 11)
+#define BGMAC_ARCACHE				(0xf << 16)
+#define BGMAC_AWUSER				(0x3f << 20)
+#define BGMAC_ARUSER				(0x3f << 26)
+#define BGMAC_RESERVED				BIT(31)
 
 /* BCMA GMAC core specific IO status (BCMA_IOST) flags */
 #define BGMAC_BCMA_IOST_ATTACHED		0x00000800
@@ -348,7 +351,7 @@
 #define BGMAC_DESC_CTL0_IOC			0x20000000	/* IRQ on complete */
 #define BGMAC_DESC_CTL0_EOF			0x40000000	/* End of frame */
 #define BGMAC_DESC_CTL0_SOF			0x80000000	/* Start of frame */
-#define BGMAC_DESC_CTL1_LEN			0x00001FFF
+#define BGMAC_DESC_CTL1_LEN			0x00003FFF
 
 #define BGMAC_PHY_NOREGS			BRCM_PSEUDO_PHY_ADDR
 #define BGMAC_PHY_MASK				0x1F
@@ -363,7 +366,8 @@
 #define BGMAC_RX_FRAME_OFFSET			30		/* There are 2 unused bytes between header and real data */
 #define BGMAC_RX_BUF_OFFSET			(NET_SKB_PAD + NET_IP_ALIGN - \
 						 BGMAC_RX_FRAME_OFFSET)
-#define BGMAC_RX_MAX_FRAME_SIZE			1536		/* Copied from b44/tg3 */
+/* Jumbo frame size with FCS */
+#define BGMAC_RX_MAX_FRAME_SIZE			9724
 #define BGMAC_RX_BUF_SIZE			(BGMAC_RX_FRAME_OFFSET + BGMAC_RX_MAX_FRAME_SIZE)
 #define BGMAC_RX_ALLOC_SIZE			(SKB_DATA_ALIGN(BGMAC_RX_BUF_SIZE + BGMAC_RX_BUF_OFFSET) + \
 						 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
@@ -383,9 +387,47 @@
 #define BGMAC_CHIPCTL_1_SW_TYPE_RGMII		0x000000C0
 #define BGMAC_CHIPCTL_1_RXC_DLL_BYPASS		0x00010000
 
+#define BGMAC_CHIPCTL_4_IF_TYPE_MASK		0x00003000
+#define BGMAC_CHIPCTL_4_IF_TYPE_RMII		0x00000000
+#define BGMAC_CHIPCTL_4_IF_TYPE_MII		0x00001000
+#define BGMAC_CHIPCTL_4_IF_TYPE_RGMII		0x00002000
+#define BGMAC_CHIPCTL_4_SW_TYPE_MASK		0x0000C000
+#define BGMAC_CHIPCTL_4_SW_TYPE_EPHY		0x00000000
+#define BGMAC_CHIPCTL_4_SW_TYPE_EPHYMII		0x00004000
+#define BGMAC_CHIPCTL_4_SW_TYPE_EPHYRMII	0x00008000
+#define BGMAC_CHIPCTL_4_SW_TYPE_RGMII		0x0000C000
+
+#define BGMAC_CHIPCTL_7_IF_TYPE_MASK		0x000000C0
+#define BGMAC_CHIPCTL_7_IF_TYPE_RMII		0x00000000
+#define BGMAC_CHIPCTL_7_IF_TYPE_MII		0x00000040
+#define BGMAC_CHIPCTL_7_IF_TYPE_RGMII		0x00000080
+
 #define BGMAC_WEIGHT	64
 
-#define ETHER_MAX_LEN   1518
+#define ETHER_MAX_LEN	(ETH_FRAME_LEN + ETH_FCS_LEN)
+
+/* Feature Flags */
+#define BGMAC_FEAT_TX_MASK_SETUP	BIT(0)
+#define BGMAC_FEAT_RX_MASK_SETUP	BIT(1)
+#define BGMAC_FEAT_IOST_ATTACHED	BIT(2)
+#define BGMAC_FEAT_NO_RESET		BIT(3)
+#define BGMAC_FEAT_MISC_PLL_REQ		BIT(4)
+#define BGMAC_FEAT_SW_TYPE_PHY		BIT(5)
+#define BGMAC_FEAT_SW_TYPE_EPHYRMII	BIT(6)
+#define BGMAC_FEAT_SW_TYPE_RGMII	BIT(7)
+#define BGMAC_FEAT_CMN_PHY_CTL		BIT(8)
+#define BGMAC_FEAT_FLW_CTRL1		BIT(9)
+#define BGMAC_FEAT_FLW_CTRL2		BIT(10)
+#define BGMAC_FEAT_SET_RXQ_CLK		BIT(11)
+#define BGMAC_FEAT_CLKCTLST		BIT(12)
+#define BGMAC_FEAT_NO_CLR_MIB		BIT(13)
+#define BGMAC_FEAT_FORCE_SPEED_2500	BIT(14)
+#define BGMAC_FEAT_CMDCFG_SR_REV4	BIT(15)
+#define BGMAC_FEAT_IRQ_ID_OOB_6		BIT(16)
+#define BGMAC_FEAT_CC4_IF_SW_TYPE	BIT(17)
+#define BGMAC_FEAT_CC4_IF_SW_TYPE_RGMII	BIT(18)
+#define BGMAC_FEAT_CC7_IF_TYPE_RGMII	BIT(19)
+#define BGMAC_FEAT_IDM_MASK		BIT(20)
 
 struct bgmac_slot_info {
 	union {
@@ -436,8 +478,23 @@ struct bgmac_rx_header {
 };
 
 struct bgmac {
-	struct bcma_device *core;
-	struct bcma_device *cmn; /* Reference to CMN core for BCM4706 */
+	union {
+		struct {
+			void __iomem *base;
+			void __iomem *idm_base;
+			void __iomem *nicpm_base;
+		} plat;
+		struct {
+			struct bcma_device *core;
+			/* Reference to CMN core for BCM4706 */
+			struct bcma_device *cmn;
+		} bcma;
+	};
+
+	struct device *dev;
+	struct device *dma_dev;
+	u32 feature_flags;
+
 	struct net_device *net_dev;
 	struct napi_struct napi;
 	struct mii_bus *mii_bus;
@@ -452,6 +509,7 @@ struct bgmac {
 	u32 mib_rx_regs[BGMAC_NUM_MIB_RX_REGS];
 
 	/* Int */
+	int irq;
 	u32 int_mask;
 
 	/* Current MAC state */
@@ -462,16 +520,77 @@ struct bgmac {
 	bool has_robosw;
 
 	bool loopback;
+
+	u32 (*read)(struct bgmac *bgmac, u16 offset);
+	void (*write)(struct bgmac *bgmac, u16 offset, u32 value);
+	u32 (*idm_read)(struct bgmac *bgmac, u16 offset);
+	void (*idm_write)(struct bgmac *bgmac, u16 offset, u32 value);
+	bool (*clk_enabled)(struct bgmac *bgmac);
+	void (*clk_enable)(struct bgmac *bgmac, u32 flags);
+	void (*cco_ctl_maskset)(struct bgmac *bgmac, u32 offset, u32 mask,
+				u32 set);
+	u32 (*get_bus_clock)(struct bgmac *bgmac);
+	void (*cmn_maskset32)(struct bgmac *bgmac, u16 offset, u32 mask,
+			      u32 set);
+	int (*phy_connect)(struct bgmac *bgmac);
 };
+
+struct bgmac *bgmac_alloc(struct device *dev);
+int bgmac_enet_probe(struct bgmac *bgmac);
+void bgmac_enet_remove(struct bgmac *bgmac);
+void bgmac_adjust_link(struct net_device *net_dev);
+int bgmac_phy_connect_direct(struct bgmac *bgmac);
+int bgmac_enet_suspend(struct bgmac *bgmac);
+int bgmac_enet_resume(struct bgmac *bgmac);
+
+struct mii_bus *bcma_mdio_mii_register(struct bgmac *bgmac);
+void bcma_mdio_mii_unregister(struct mii_bus *mii_bus);
 
 static inline u32 bgmac_read(struct bgmac *bgmac, u16 offset)
 {
-	return bcma_read32(bgmac->core, offset);
+	return bgmac->read(bgmac, offset);
 }
 
 static inline void bgmac_write(struct bgmac *bgmac, u16 offset, u32 value)
 {
-	bcma_write32(bgmac->core, offset, value);
+	bgmac->write(bgmac, offset, value);
+}
+
+static inline u32 bgmac_idm_read(struct bgmac *bgmac, u16 offset)
+{
+	return bgmac->idm_read(bgmac, offset);
+}
+
+static inline void bgmac_idm_write(struct bgmac *bgmac, u16 offset, u32 value)
+{
+	bgmac->idm_write(bgmac, offset, value);
+}
+
+static inline bool bgmac_clk_enabled(struct bgmac *bgmac)
+{
+	return bgmac->clk_enabled(bgmac);
+}
+
+static inline void bgmac_clk_enable(struct bgmac *bgmac, u32 flags)
+{
+	bgmac->clk_enable(bgmac, flags);
+}
+
+static inline void bgmac_cco_ctl_maskset(struct bgmac *bgmac, u32 offset,
+					 u32 mask, u32 set)
+{
+	bgmac->cco_ctl_maskset(bgmac, offset, mask, set);
+}
+
+static inline u32 bgmac_get_bus_clock(struct bgmac *bgmac)
+{
+	return bgmac->get_bus_clock(bgmac);
+}
+
+static inline void bgmac_cmn_maskset32(struct bgmac *bgmac, u16 offset,
+				       u32 mask, u32 set)
+{
+	bgmac->cmn_maskset32(bgmac, offset, mask, set);
 }
 
 static inline void bgmac_maskset(struct bgmac *bgmac, u16 offset, u32 mask,
@@ -490,4 +609,8 @@ static inline void bgmac_set(struct bgmac *bgmac, u16 offset, u32 set)
 	bgmac_maskset(bgmac, offset, ~0, set);
 }
 
+static inline int bgmac_phy_connect(struct bgmac *bgmac)
+{
+	return bgmac->phy_connect(bgmac);
+}
 #endif /* _BGMAC_H */

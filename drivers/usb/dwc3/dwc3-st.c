@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /**
  * dwc3-st.c Support for dwc3 platform devices on ST Microelectronics platforms
  *
@@ -9,11 +10,6 @@
  * Author: Giuseppe Cavallaro <peppe.cavallaro@st.com>
  * Contributors: Aymen Bouattay <aymen.bouattay@st.com>
  *               Peter Griffin <peter.griffin@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
  * Inspired by dwc3-omap.c and dwc3-exynos.c.
  */
@@ -31,6 +27,7 @@
 #include <linux/slab.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
+#include <linux/pinctrl/consumer.h>
 #include <linux/usb/of.h>
 
 #include "core.h"
@@ -209,8 +206,8 @@ static int st_dwc3_probe(struct platform_device *pdev)
 	if (!dwc3_data)
 		return -ENOMEM;
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "reg-glue");
-	dwc3_data->glue_base = devm_ioremap_resource(dev, res);
+	dwc3_data->glue_base =
+		devm_platform_ioremap_resource_byname(pdev, "reg-glue");
 	if (IS_ERR(dwc3_data->glue_base))
 		return PTR_ERR(dwc3_data->glue_base);
 
@@ -218,7 +215,6 @@ static int st_dwc3_probe(struct platform_device *pdev)
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
-	dma_set_coherent_mask(dev, dev->coherent_dma_mask);
 	dwc3_data->dev = dev;
 	dwc3_data->regmap = regmap;
 
@@ -230,10 +226,11 @@ static int st_dwc3_probe(struct platform_device *pdev)
 
 	dwc3_data->syscfg_reg_off = res->start;
 
-	dev_vdbg(&pdev->dev, "glue-logic addr 0x%p, syscfg-reg offset 0x%x\n",
+	dev_vdbg(&pdev->dev, "glue-logic addr 0x%pK, syscfg-reg offset 0x%x\n",
 		 dwc3_data->glue_base, dwc3_data->syscfg_reg_off);
 
-	dwc3_data->rstc_pwrdn = devm_reset_control_get(dev, "powerdown");
+	dwc3_data->rstc_pwrdn =
+		devm_reset_control_get_exclusive(dev, "powerdown");
 	if (IS_ERR(dwc3_data->rstc_pwrdn)) {
 		dev_err(&pdev->dev, "could not get power controller\n");
 		ret = PTR_ERR(dwc3_data->rstc_pwrdn);
@@ -243,7 +240,8 @@ static int st_dwc3_probe(struct platform_device *pdev)
 	/* Manage PowerDown */
 	reset_control_deassert(dwc3_data->rstc_pwrdn);
 
-	dwc3_data->rstc_rst = devm_reset_control_get(dev, "softreset");
+	dwc3_data->rstc_rst =
+		devm_reset_control_get_shared(dev, "softreset");
 	if (IS_ERR(dwc3_data->rstc_rst)) {
 		dev_err(&pdev->dev, "could not get reset controller\n");
 		ret = PTR_ERR(dwc3_data->rstc_rst);
@@ -257,24 +255,26 @@ static int st_dwc3_probe(struct platform_device *pdev)
 	if (!child) {
 		dev_err(&pdev->dev, "failed to find dwc3 core node\n");
 		ret = -ENODEV;
-		goto undo_softreset;
+		goto err_node_put;
 	}
 
 	/* Allocate and initialize the core */
 	ret = of_platform_populate(node, NULL, NULL, dev);
 	if (ret) {
 		dev_err(dev, "failed to add dwc3 core\n");
-		goto undo_softreset;
+		goto err_node_put;
 	}
 
 	child_pdev = of_find_device_by_node(child);
 	if (!child_pdev) {
 		dev_err(dev, "failed to find dwc3 core device\n");
 		ret = -ENODEV;
-		goto undo_softreset;
+		goto err_node_put;
 	}
 
 	dwc3_data->dr_mode = usb_get_dr_mode(&child_pdev->dev);
+	of_node_put(child);
+	of_dev_put(child_pdev);
 
 	/*
 	 * Configure the USB port as device or host according to the static
@@ -294,6 +294,8 @@ static int st_dwc3_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, dwc3_data);
 	return 0;
 
+err_node_put:
+	of_node_put(child);
 undo_softreset:
 	reset_control_assert(dwc3_data->rstc_rst);
 undo_powerdown:

@@ -1,25 +1,34 @@
+// SPDX-License-Identifier: GPL-2.0
+#include <errno.h>
 #include <sched.h>
-#include "util.h"
-#include "../perf.h"
+#include "util.h" // for sched_getcpu()
+#include "../perf-sys.h"
 #include "cloexec.h"
+#include "event.h"
 #include "asm/bug.h"
 #include "debug.h"
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <linux/string.h>
 
 static unsigned long flag = PERF_FLAG_FD_CLOEXEC;
 
-#ifdef __GLIBC_PREREQ
-#if !__GLIBC_PREREQ(2, 6)
 int __weak sched_getcpu(void)
 {
+#ifdef __NR_getcpu
+	unsigned cpu;
+	int err = syscall(__NR_getcpu, &cpu, NULL, NULL);
+	if (!err)
+		return cpu;
+#else
 	errno = ENOSYS;
+#endif
 	return -1;
 }
-#endif
-#endif
 
 static int perf_flag_probe(void)
 {
-	/* use 'safest' configuration as used in perf_evsel__fallback() */
+	/* use 'safest' configuration as used in evsel__fallback() */
 	struct perf_event_attr attr = {
 		.type = PERF_TYPE_SOFTWARE,
 		.config = PERF_COUNT_SW_CPU_CLOCK,
@@ -56,9 +65,9 @@ static int perf_flag_probe(void)
 		return 1;
 	}
 
-	WARN_ONCE(err != EINVAL && err != EBUSY,
+	WARN_ONCE(err != EINVAL && err != EBUSY && err != EACCES,
 		  "perf_event_open(..., PERF_FLAG_FD_CLOEXEC) failed with unexpected error %d (%s)\n",
-		  err, strerror_r(err, sbuf, sizeof(sbuf)));
+		  err, str_error_r(err, sbuf, sizeof(sbuf)));
 
 	/* not supported, confirm error related to PERF_FLAG_FD_CLOEXEC */
 	while (1) {
@@ -74,9 +83,9 @@ static int perf_flag_probe(void)
 	if (fd >= 0)
 		close(fd);
 
-	if (WARN_ONCE(fd < 0 && err != EBUSY,
+	if (WARN_ONCE(fd < 0 && err != EBUSY && err != EACCES,
 		      "perf_event_open(..., 0) failed unexpectedly with error %d (%s)\n",
-		      err, strerror_r(err, sbuf, sizeof(sbuf))))
+		      err, str_error_r(err, sbuf, sizeof(sbuf))))
 		return -1;
 
 	return 0;

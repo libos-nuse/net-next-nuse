@@ -1,17 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * AFE440X Heart Rate Monitors and Low-Cost Pulse Oximeters
  *
- * Copyright (C) 2015 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2015 Texas Instruments Incorporated - https://www.ti.com/
  *	Andrew F. Davis <afd@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 
 #ifndef _AFE440X_H
@@ -71,8 +63,7 @@
 #define AFE440X_CONTROL1_TIMEREN	BIT(8)
 
 /* TIAGAIN register fields */
-#define AFE440X_TIAGAIN_ENSEPGAIN_MASK	BIT(15)
-#define AFE440X_TIAGAIN_ENSEPGAIN_SHIFT	15
+#define AFE440X_TIAGAIN_ENSEPGAIN	BIT(15)
 
 /* CONTROL2 register fields */
 #define AFE440X_CONTROL2_PDN_AFE	BIT(0)
@@ -89,22 +80,7 @@
 #define AFE440X_CONTROL0_WRITE		0x0
 #define AFE440X_CONTROL0_READ		0x1
 
-struct afe440x_reg_info {
-	unsigned int reg;
-	unsigned int offreg;
-	unsigned int shift;
-	unsigned int mask;
-};
-
-#define AFE440X_REG_INFO(_reg, _offreg, _sm)			\
-	{							\
-		.reg = _reg,					\
-		.offreg = _offreg,				\
-		.shift = _sm ## _SHIFT,				\
-		.mask = _sm ## _MASK,				\
-	}
-
-#define AFE440X_INTENSITY_CHAN(_index, _name, _mask)		\
+#define AFE440X_INTENSITY_CHAN(_index, _mask)			\
 	{							\
 		.type = IIO_INTENSITY,				\
 		.channel = _index,				\
@@ -116,28 +92,22 @@ struct afe440x_reg_info {
 				.storagebits = 32,		\
 				.endianness = IIO_CPU,		\
 		},						\
-		.extend_name = _name,				\
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |	\
 			_mask,					\
+		.indexed = true,				\
 	}
 
-#define AFE440X_CURRENT_CHAN(_index, _name)			\
+#define AFE440X_CURRENT_CHAN(_index)				\
 	{							\
 		.type = IIO_CURRENT,				\
 		.channel = _index,				\
 		.address = _index,				\
-		.scan_index = _index,				\
-		.extend_name = _name,				\
+		.scan_index = -1,				\
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |	\
 			BIT(IIO_CHAN_INFO_SCALE),		\
+		.indexed = true,				\
 		.output = true,					\
 	}
-
-enum afe440x_reg_type {
-	SIMPLE,
-	RESISTANCE,
-	CAPACITANCE,
-};
 
 struct afe440x_val_table {
 	int integer;
@@ -164,10 +134,7 @@ static DEVICE_ATTR_RO(_name)
 
 struct afe440x_attr {
 	struct device_attribute dev_attr;
-	unsigned int reg;
-	unsigned int shift;
-	unsigned int mask;
-	enum afe440x_reg_type type;
+	unsigned int field;
 	const struct afe440x_val_table *val_table;
 	unsigned int table_size;
 };
@@ -175,17 +142,14 @@ struct afe440x_attr {
 #define to_afe440x_attr(_dev_attr)				\
 	container_of(_dev_attr, struct afe440x_attr, dev_attr)
 
-#define AFE440X_ATTR(_name, _reg, _field, _type, _table, _size)	\
+#define AFE440X_ATTR(_name, _field, _table)			\
 	struct afe440x_attr afe440x_attr_##_name = {		\
 		.dev_attr = __ATTR(_name, (S_IRUGO | S_IWUSR),	\
 				   afe440x_show_register,	\
 				   afe440x_store_register),	\
-		.reg = _reg,					\
-		.shift = _field ## _SHIFT,			\
-		.mask = _field ## _MASK,			\
-		.type = _type,					\
+		.field = _field,				\
 		.val_table = _table,				\
-		.table_size = _size,				\
+		.table_size = ARRAY_SIZE(_table),		\
 	}
 
 #endif /* _AFE440X_H */

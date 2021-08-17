@@ -29,14 +29,18 @@
  */
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/slab.h>
+#include <linux/vmalloc.h>
 
 #include <asm/xen/hypercall.h>
 #include <asm/xen/hypervisor.h>
 
 #include <xen/xen.h>
+#include <xen/xen-ops.h>
 #include <xen/page.h>
 #include <xen/interface/xen.h>
 #include <xen/interface/memory.h>
+#include <xen/balloon.h>
 
 typedef void (*xen_gfn_fn_t)(unsigned long gfn, void *data);
 
@@ -89,8 +93,7 @@ static void setup_hparams(unsigned long gfn, void *data)
 	info->fgfn++;
 }
 
-static int remap_pte_fn(pte_t *ptep, pgtable_t token, unsigned long addr,
-			void *data)
+static int remap_pte_fn(pte_t *ptep, unsigned long addr, void *data)
 {
 	struct remap_data *info = data;
 	struct page *page = info->pages[info->index++];
@@ -185,3 +188,109 @@ int xen_xlate_unmap_gfn_range(struct vm_area_struct *vma,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(xen_xlate_unmap_gfn_range);
+
+struct map_balloon_pages {
+	xen_pfn_t *pfns;
+	unsigned int idx;
+};
+
+static void setup_balloon_gfn(unsigned long gfn, void *data)
+{
+	struct map_balloon_pages *info = data;
+
+	info->pfns[info->idx++] = gfn;
+}
+
+/**
+ * xen_xlate_map_ballooned_pages - map a new set of ballooned pages
+ * @gfns: returns the array of corresponding GFNs
+ * @virt: returns the virtual address of the mapped region
+ * @nr_grant_frames: number of GFNs
+ * @return 0 on success, error otherwise
+ *
+ * This allocates a set of ballooned pages and maps them into the
+ * kernel's address space.
+ */
+int __init xen_xlate_map_ballooned_pages(xen_pfn_t **gfns, void **virt,
+					 unsigned long nr_grant_frames)
+{
+	struct page **pages;
+	xen_pfn_t *pfns;
+	void *vaddr;
+	struct map_balloon_pages data;
+	int rc;
+	unsigned long nr_pages;
+
+	BUG_ON(nr_grant_frames == 0);
+	nr_pages = DIV_ROUND_UP(nr_grant_frames, XEN_PFN_PER_PAGE);
+	pages = kcalloc(nr_pages, sizeof(pages[0]), GFP_KERNEL);
+	if (!pages)
+		return -ENOMEM;
+
+	pfns = kcalloc(nr_grant_frames, sizeof(pfns[0]), GFP_KERNEL);
+	if (!pfns) {
+		kfree(pages);
+		return -ENOMEM;
+	}
+	rc = xen_alloc_unpopulated_pages(nr_pages, pages);
+	if (rc) {
+		pr_warn("%s Couldn't balloon alloc %ld pages rc:%d\n", __func__,
+			nr_pages, rc);
+		kfree(pages);
+		kfree(pfns);
+		return rc;
+	}
+
+	data.pfns = pfns;
+	data.idx = 0;
+	xen_for_each_gfn(pages, nr_grant_frames, setup_balloon_gfn, &data);
+
+	vaddr = vmap(pages, nr_pages, 0, PAGE_KERNEL);
+	if (!vaddr) {
+		pr_warn("%s Couldn't map %ld pages rc:%d\n", __func__,
+			nr_pages, rc);
+		xen_free_unpopulated_pages(nr_pages, pages);
+		kfree(pages);
+		kfree(pfns);
+		return -ENOMEM;
+	}
+	kfree(pages);
+
+	*gfns = pfns;
+	*virt = vaddr;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(xen_xlate_map_ballooned_pages);
+
+struct remap_pfn {
+	struct mm_struct *mm;
+	struct page **pages;
+	pgprot_t prot;
+	unsigned long i;
+};
+
+static int remap_pfn_fn(pte_t *ptep, unsigned long addr, void *data)
+{
+	struct remap_pfn *r = data;
+	struct page *page = r->pages[r->i];
+	pte_t pte = pte_mkspecial(pfn_pte(page_to_pfn(page), r->prot));
+
+	set_pte_at(r->mm, addr, ptep, pte);
+	r->i++;
+
+	return 0;
+}
+
+/* Used by the privcmd module, but has to be built-in on ARM */
+int xen_remap_vma_range(struct vm_area_struct *vma, unsigned long addr, unsigned long len)
+{
+	struct remap_pfn r = {
+		.mm = vma->vm_mm,
+		.pages = vma->vm_private_data,
+		.prot = vma->vm_page_prot,
+	};
+
+	return apply_to_page_range(vma->vm_mm, addr, len, remap_pfn_fn, &r);
+}
+EXPORT_SYMBOL_GPL(xen_remap_vma_range);

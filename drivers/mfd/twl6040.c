@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * MFD driver for TWL6040 audio device
  *
@@ -6,21 +7,6 @@
  *		Peter Ujfalusi <peter.ujfalusi@ti.com>
  *
  * Copyright:	(C) 2011 Texas Instruments, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include <linux/module.h>
@@ -97,12 +83,16 @@ static struct reg_sequence twl6040_patch[] = {
 };
 
 
-static bool twl6040_has_vibra(struct device_node *node)
+static bool twl6040_has_vibra(struct device_node *parent)
 {
-#ifdef CONFIG_OF
-	if (of_find_node_by_name(node, "vibra"))
+	struct device_node *node;
+
+	node = of_get_child_by_name(parent, "vibra");
+	if (node) {
+		of_node_put(node);
 		return true;
-#endif
+	}
+
 	return false;
 }
 
@@ -318,13 +308,23 @@ int twl6040_power(struct twl6040 *twl6040, int on)
 			}
 		}
 
+		/*
+		 * Register access can produce errors after power-up unless we
+		 * wait at least 8ms based on measurements on duovero.
+		 */
+		usleep_range(10000, 12000);
+
 		/* Sync with the HW */
-		regcache_sync(twl6040->regmap);
+		ret = regcache_sync(twl6040->regmap);
+		if (ret) {
+			dev_err(twl6040->dev, "Failed to sync with the HW: %i\n",
+				ret);
+			goto out;
+		}
 
 		/* Default PLL configuration after power up */
 		twl6040->pll = TWL6040_SYSCLK_SEL_LPPLL;
-		twl6040->sysclk = 19200000;
-		twl6040->mclk = 32768;
+		twl6040->sysclk_rate = 19200000;
 	} else {
 		/* already powered-down */
 		if (!twl6040->power_count) {
@@ -352,8 +352,12 @@ int twl6040_power(struct twl6040 *twl6040, int on)
 		regcache_cache_only(twl6040->regmap, true);
 		regcache_mark_dirty(twl6040->regmap);
 
-		twl6040->sysclk = 0;
-		twl6040->mclk = 0;
+		twl6040->sysclk_rate = 0;
+
+		if (twl6040->pll == TWL6040_SYSCLK_SEL_HPPLL) {
+			clk_disable_unprepare(twl6040->mclk);
+			twl6040->mclk_rate = 0;
+		}
 
 		clk_disable_unprepare(twl6040->clk32k);
 	}
@@ -377,15 +381,15 @@ int twl6040_set_pll(struct twl6040 *twl6040, int pll_id,
 
 	/* Force full reconfiguration when switching between PLL */
 	if (pll_id != twl6040->pll) {
-		twl6040->sysclk = 0;
-		twl6040->mclk = 0;
+		twl6040->sysclk_rate = 0;
+		twl6040->mclk_rate = 0;
 	}
 
 	switch (pll_id) {
 	case TWL6040_SYSCLK_SEL_LPPLL:
 		/* low-power PLL divider */
 		/* Change the sysclk configuration only if it has been canged */
-		if (twl6040->sysclk != freq_out) {
+		if (twl6040->sysclk_rate != freq_out) {
 			switch (freq_out) {
 			case 17640000:
 				lppllctl |= TWL6040_LPLLFIN;
@@ -427,6 +431,8 @@ int twl6040_set_pll(struct twl6040 *twl6040, int pll_id,
 			ret = -EINVAL;
 			goto pll_out;
 		}
+
+		clk_disable_unprepare(twl6040->mclk);
 		break;
 	case TWL6040_SYSCLK_SEL_HPPLL:
 		/* high-performance PLL can provide only 19.2 MHz */
@@ -437,7 +443,7 @@ int twl6040_set_pll(struct twl6040 *twl6040, int pll_id,
 			goto pll_out;
 		}
 
-		if (twl6040->mclk != freq_in) {
+		if (twl6040->mclk_rate != freq_in) {
 			hppllctl &= ~TWL6040_MCLK_MSK;
 
 			switch (freq_in) {
@@ -468,6 +474,9 @@ int twl6040_set_pll(struct twl6040 *twl6040, int pll_id,
 				goto pll_out;
 			}
 
+			/* When switching to HPPLL, enable the mclk first */
+			if (pll_id != twl6040->pll)
+				clk_prepare_enable(twl6040->mclk);
 			/*
 			 * enable clock slicer to ensure input waveform is
 			 * square
@@ -483,6 +492,8 @@ int twl6040_set_pll(struct twl6040 *twl6040, int pll_id,
 			lppllctl &= ~TWL6040_LPLLENA;
 			twl6040_reg_write(twl6040, TWL6040_REG_LPPLLCTL,
 					  lppllctl);
+
+			twl6040->mclk_rate = freq_in;
 		}
 		break;
 	default:
@@ -491,8 +502,7 @@ int twl6040_set_pll(struct twl6040 *twl6040, int pll_id,
 		goto pll_out;
 	}
 
-	twl6040->sysclk = freq_out;
-	twl6040->mclk = freq_in;
+	twl6040->sysclk_rate = freq_out;
 	twl6040->pll = pll_id;
 
 pll_out:
@@ -512,7 +522,7 @@ EXPORT_SYMBOL(twl6040_get_pll);
 
 unsigned int twl6040_get_sysclk(struct twl6040 *twl6040)
 {
-	return twl6040->sysclk;
+	return twl6040->sysclk_rate;
 }
 EXPORT_SYMBOL(twl6040_get_sysclk);
 
@@ -600,6 +610,8 @@ static const struct regmap_config twl6040_regmap_config = {
 	.writeable_reg = twl6040_writeable_reg,
 
 	.cache_type = REGCACHE_RBTREE,
+	.use_single_read = true,
+	.use_single_write = true,
 };
 
 static const struct regmap_irq twl6040_irqs[] = {
@@ -655,8 +667,16 @@ static int twl6040_probe(struct i2c_client *client,
 	if (IS_ERR(twl6040->clk32k)) {
 		if (PTR_ERR(twl6040->clk32k) == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
-		dev_info(&client->dev, "clk32k is not handled\n");
+		dev_dbg(&client->dev, "clk32k is not handled\n");
 		twl6040->clk32k = NULL;
+	}
+
+	twl6040->mclk = devm_clk_get(&client->dev, "mclk");
+	if (IS_ERR(twl6040->mclk)) {
+		if (PTR_ERR(twl6040->mclk) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		dev_dbg(&client->dev, "mclk is not handled\n");
+		twl6040->mclk = NULL;
 	}
 
 	twl6040->supplies[0].supply = "vio";
@@ -763,6 +783,11 @@ static int twl6040_probe(struct i2c_client *client,
 	/* GPO support */
 	cell = &twl6040->cells[children];
 	cell->name = "twl6040-gpo";
+	children++;
+
+	/* PDM clock support  */
+	cell = &twl6040->cells[children];
+	cell->name = "twl6040-pdmclk";
 	children++;
 
 	/* The chip is powered down so mark regmap to cache only and dirty */

@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ARC On-Chip(fpga) UART Driver
  *
  * Copyright (C) 2010-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * vineetg: July 10th 2012
  *  -Decoupled the driver from arch/arc
@@ -23,10 +20,6 @@
  * TODO:
  *  -check if sysreq works
  */
-
-#if defined(CONFIG_SERIAL_ARC_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
-#define SUPPORT_SYSRQ
-#endif
 
 #include <linux/module.h>
 #include <linux/serial.h>
@@ -464,7 +457,7 @@ static int arc_serial_poll_getchar(struct uart_port *port)
 }
 #endif
 
-static struct uart_ops arc_serial_pops = {
+static const struct uart_ops arc_serial_pops = {
 	.tx_empty	= arc_serial_tx_empty,
 	.set_mctrl	= arc_serial_set_mctrl,
 	.get_mctrl	= arc_serial_get_mctrl,
@@ -549,8 +542,8 @@ static struct console arc_console = {
 	.data	= &arc_uart_driver
 };
 
-static __init void arc_early_serial_write(struct console *con, const char *s,
-					  unsigned int n)
+static void arc_early_serial_write(struct console *con, const char *s,
+				   unsigned int n)
 {
 	struct earlycon_device *dev = con->data;
 
@@ -596,6 +589,11 @@ static int arc_serial_probe(struct platform_device *pdev)
 	if (dev_id < 0)
 		dev_id = 0;
 
+	if (dev_id >= ARRAY_SIZE(arc_uart_ports)) {
+		dev_err(&pdev->dev, "serial%d out of range\n", dev_id);
+		return -EINVAL;
+	}
+
 	uart = &arc_uart_ports[dev_id];
 	port = &uart->port;
 
@@ -623,6 +621,7 @@ static int arc_serial_probe(struct platform_device *pdev)
 	port->flags = UPF_BOOT_AUTOCONF;
 	port->line = dev_id;
 	port->ops = &arc_serial_pops;
+	port->has_sysrq = IS_ENABLED(CONFIG_SERIAL_ARC_CONSOLE);
 
 	port->fifosize = ARC_UART_TX_FIFO_SIZE;
 

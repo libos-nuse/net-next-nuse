@@ -20,7 +20,7 @@ Optional properties:
 		      chipselect register and offset of that register.
 
 NOTE: TI QSPI controller requires different pinmux and IODelay
-paramaters for Mode-0 and Mode-3 operations, which needs to be set up by
+parameters for Mode-0 and Mode-3 operations, which needs to be set up by
 the bootloader (U-Boot). Default configuration only supports Mode-0
 operation. Hence, "spi-cpol" and "spi-cpha" DT properties cannot be
 specified in the slave nodes of TI QSPI controller without appropriate
@@ -29,7 +29,7 @@ modification to bootloader.
 Example:
 
 For am4372:
-qspi: qspi@4b300000 {
+qspi: qspi@47900000 {
 	compatible = "ti,am4372-qspi";
 	reg = <0x47900000 0x100>, <0x30000000 0x4000000>;
 	reg-names = "qspi_base", "qspi_mmap";

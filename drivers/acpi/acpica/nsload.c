@@ -1,51 +1,18 @@
+// SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0
 /******************************************************************************
  *
  * Module Name: nsload - namespace loading/expanding/contracting procedures
  *
+ * Copyright (C) 2000 - 2020, Intel Corp.
+ *
  *****************************************************************************/
-
-/*
- * Copyright (C) 2000 - 2016, Intel Corp.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions, and the following disclaimer,
- *    without modification.
- * 2. Redistributions in binary form must reproduce at minimum a disclaimer
- *    substantially similar to the "NO WARRANTY" disclaimer below
- *    ("Disclaimer") and any redistribution must be conditioned upon
- *    including a substantially similar Disclaimer requirement for further
- *    binary redistribution.
- * 3. Neither the names of the above-listed copyright holders nor the names
- *    of any contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * Alternatively, this software may be distributed under the terms of the
- * GNU General Public License ("GPL") version 2 as published by the Free
- * Software Foundation.
- *
- * NO WARRANTY
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGES.
- */
 
 #include <acpi/acpi.h>
 #include "accommon.h"
 #include "acnamesp.h"
 #include "acdispat.h"
 #include "actables.h"
+#include "acinterp.h"
 
 #define _COMPONENT          ACPI_NAMESPACE
 ACPI_MODULE_NAME("nsload")
@@ -57,7 +24,6 @@ acpi_status acpi_ns_unload_namespace(acpi_handle handle);
 static acpi_status acpi_ns_delete_subtree(acpi_handle start_handle);
 #endif
 
-#ifndef ACPI_NO_METHOD_EXECUTION
 /*******************************************************************************
  *
  * FUNCTION:    acpi_ns_load_table
@@ -78,20 +44,6 @@ acpi_ns_load_table(u32 table_index, struct acpi_namespace_node *node)
 
 	ACPI_FUNCTION_TRACE(ns_load_table);
 
-	/*
-	 * Parse the table and load the namespace with all named
-	 * objects found within. Control methods are NOT parsed
-	 * at this time. In fact, the control methods cannot be
-	 * parsed until the entire namespace is loaded, because
-	 * if a control method makes a forward reference (call)
-	 * to another control method, we can't continue parsing
-	 * because we don't know how many arguments to parse next!
-	 */
-	status = acpi_ut_acquire_mutex(ACPI_MTX_NAMESPACE);
-	if (ACPI_FAILURE(status)) {
-		return_ACPI_STATUS(status);
-	}
-
 	/* If table already loaded into namespace, just return */
 
 	if (acpi_tb_is_table_loaded(table_index)) {
@@ -107,6 +59,15 @@ acpi_ns_load_table(u32 table_index, struct acpi_namespace_node *node)
 		goto unlock;
 	}
 
+	/*
+	 * Parse the table and load the namespace with all named
+	 * objects found within. Control methods are NOT parsed
+	 * at this time. In fact, the control methods cannot be
+	 * parsed until the entire namespace is loaded, because
+	 * if a control method makes a forward reference (call)
+	 * to another control method, we can't continue parsing
+	 * because we don't know how many arguments to parse next!
+	 */
 	status = acpi_ns_parse_table(table_index, node);
 	if (ACPI_SUCCESS(status)) {
 		acpi_tb_set_table_loaded_flag(table_index, TRUE);
@@ -114,13 +75,12 @@ acpi_ns_load_table(u32 table_index, struct acpi_namespace_node *node)
 		/*
 		 * On error, delete any namespace objects created by this table.
 		 * We cannot initialize these objects, so delete them. There are
-		 * a couple of expecially bad cases:
+		 * a couple of especially bad cases:
 		 * AE_ALREADY_EXISTS - namespace collision.
 		 * AE_NOT_FOUND - the target of a Scope operator does not
 		 * exist. This target of Scope must already exist in the
 		 * namespace, as per the ACPI specification.
 		 */
-		(void)acpi_ut_release_mutex(ACPI_MTX_NAMESPACE);
 		acpi_ns_delete_namespace_by_owner(acpi_gbl_root_table_list.
 						  tables[table_index].owner_id);
 
@@ -129,8 +89,6 @@ acpi_ns_load_table(u32 table_index, struct acpi_namespace_node *node)
 	}
 
 unlock:
-	(void)acpi_ut_release_mutex(ACPI_MTX_NAMESPACE);
-
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
@@ -144,27 +102,12 @@ unlock:
 	ACPI_DEBUG_PRINT((ACPI_DB_INFO,
 			  "**** Begin Table Object Initialization\n"));
 
+	acpi_ex_enter_interpreter();
 	status = acpi_ds_initialize_objects(table_index, node);
+	acpi_ex_exit_interpreter();
 
 	ACPI_DEBUG_PRINT((ACPI_DB_INFO,
 			  "**** Completed Table Object Initialization\n"));
-
-	/*
-	 * Execute any module-level code that was detected during the table load
-	 * phase. Although illegal since ACPI 2.0, there are many machines that
-	 * contain this type of code. Each block of detected executable AML code
-	 * outside of any control method is wrapped with a temporary control
-	 * method object and placed on a global list. The methods on this list
-	 * are executed below.
-	 *
-	 * This case executes the module-level code for each table immediately
-	 * after the table has been loaded. This provides compatibility with
-	 * other ACPI implementations. Optionally, the execution can be deferred
-	 * until later, see acpi_initialize_objects.
-	 */
-	if (!acpi_gbl_group_module_level_code) {
-		acpi_ns_exec_module_code_list();
-	}
 
 	return_ACPI_STATUS(status);
 }
@@ -340,5 +283,4 @@ acpi_status acpi_ns_unload_namespace(acpi_handle handle)
 	status = acpi_ns_delete_subtree(handle);
 	return_ACPI_STATUS(status);
 }
-#endif
 #endif

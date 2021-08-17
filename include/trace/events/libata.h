@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM libata
 
@@ -126,6 +127,7 @@
 		ata_protocol_name(ATA_PROT_PIO),	\
 		ata_protocol_name(ATA_PROT_DMA),	\
 		ata_protocol_name(ATA_PROT_NCQ),	\
+		ata_protocol_name(ATA_PROT_NCQ_NODATA),	\
 		ata_protocol_name(ATAPI_PROT_NODATA),	\
 		ata_protocol_name(ATAPI_PROT_PIO),	\
 		ata_protocol_name(ATAPI_PROT_DMA))

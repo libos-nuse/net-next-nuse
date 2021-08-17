@@ -44,7 +44,7 @@ static int __init storcenter_add_bridge(struct device_node *dev)
 	struct pci_controller *hose;
 	const int *bus_range;
 
-	printk("Adding PCI host bridge %s\n", dev->full_name);
+	printk("Adding PCI host bridge %pOF\n", dev);
 
 	hose = pcibios_alloc_controller(dev);
 	if (hose == NULL)
@@ -96,12 +96,13 @@ static void __init storcenter_init_IRQ(void)
 	mpic_init(mpic);
 }
 
-static void storcenter_restart(char *cmd)
+static void __noreturn storcenter_restart(char *cmd)
 {
 	local_irq_disable();
 
 	/* Set exception prefix high - to the firmware */
-	_nmask_and_or_msr(0, MSR_IP);
+	mtmsr(mfmsr() | MSR_IP);
+	isync();
 
 	/* Wait for reset to happen */
 	for (;;) ;
@@ -109,9 +110,7 @@ static void storcenter_restart(char *cmd)
 
 static int __init storcenter_probe(void)
 {
-	unsigned long root = of_get_flat_dt_root();
-
-	return of_flat_dt_is_compatible(root, "iomega,storcenter");
+	return of_machine_is_compatible("iomega,storcenter");
 }
 
 define_machine(storcenter){

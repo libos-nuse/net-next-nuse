@@ -1,10 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) STMicroelectronics SA 2014
  * Author: Vincent Abriou <vincent.abriou@st.com> for STMicroelectronics.
- * License terms:  GNU General Public License (GPL), version 2
  */
 
+#include <drm/drm_print.h>
+
 #include "sti_awg_utils.h"
+
+#define AWG_DELAY (-5)
 
 #define AWG_OPCODE_OFFSET 10
 #define AWG_MAX_ARG       0x3ff
@@ -125,7 +129,7 @@ static int awg_generate_line_signal(
 		val = timing->blanking_level;
 		ret |= awg_generate_instr(RPLSET, val, 0, 0, fwparams);
 
-		val = timing->trailing_pixels - 1;
+		val = timing->trailing_pixels - 1 + AWG_DELAY;
 		ret |= awg_generate_instr(SKIP, val, 0, 0, fwparams);
 	}
 

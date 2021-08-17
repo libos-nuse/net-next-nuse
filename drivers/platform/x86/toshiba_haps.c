@@ -1,18 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Toshiba HDD Active Protection Sensor (HAPS) driver
  *
  * Copyright (C) 2014 Azael Avalos <coproscefalo@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -59,7 +49,7 @@ static int toshiba_haps_protection_level(acpi_handle handle, int level)
 		return -EIO;
 	}
 
-	pr_info("HDD protection level set to: %d\n", level);
+	pr_debug("HDD protection level set to: %d\n", level);
 
 	return 0;
 }
@@ -132,7 +122,7 @@ static struct attribute *haps_attributes[] = {
 	NULL,
 };
 
-static struct attribute_group haps_attr_group = {
+static const struct attribute_group haps_attr_group = {
 	.attrs = haps_attributes,
 };
 
@@ -141,7 +131,7 @@ static struct attribute_group haps_attr_group = {
  */
 static void toshiba_haps_notify(struct acpi_device *device, u32 event)
 {
-	pr_info("Received event: 0x%x", event);
+	pr_debug("Received event: 0x%x", event);
 
 	acpi_bus_generate_netlink_event(device->pnp.device_class,
 					dev_name(&device->dev),
@@ -168,9 +158,13 @@ static int toshiba_haps_available(acpi_handle handle)
 	 * A non existent device as well as having (only)
 	 * Solid State Drives can cause the call to fail.
 	 */
-	status = acpi_evaluate_integer(handle, "_STA", NULL,
-				       &hdd_present);
-	if (ACPI_FAILURE(status) || !hdd_present) {
+	status = acpi_evaluate_integer(handle, "_STA", NULL, &hdd_present);
+	if (ACPI_FAILURE(status)) {
+		pr_err("ACPI call to query HDD protection failed\n");
+		return 0;
+	}
+
+	if (!hdd_present) {
 		pr_info("HDD protection not available or using SSD\n");
 		return 0;
 	}

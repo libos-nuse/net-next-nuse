@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-omap1/board-sx1-mmc.c
  *
@@ -6,10 +7,6 @@
  *
  * This code is based on linux/arch/arm/mach-omap1/board-h2-mmc.c, which is:
  * Copyright (C) 2007 Instituto Nokia de Tecnologia - INdT
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/gpio.h>
@@ -20,7 +17,7 @@
 
 #include "mmc.h"
 
-#if defined(CONFIG_MMC_OMAP) || defined(CONFIG_MMC_OMAP_MODULE)
+#if IS_ENABLED(CONFIG_MMC_OMAP)
 
 static int mmc_set_power(struct device *dev, int slot, int power_on,
 				int vdd)

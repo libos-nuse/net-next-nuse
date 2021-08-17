@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Device Tree Source for the KZM-A9-GT board
  *
@@ -5,10 +6,6 @@
  *
  * Based on sh73a0-kzm9g.dts
  * Copyright (C) 2012 Renesas Solutions Corp.
- *
- * This file is licensed under the terms of the GNU General Public License
- * version 2.  This program is licensed "as is" without any warranty of any
- * kind, whether express or implied.
  */
 
 /dts-v1/;
@@ -22,33 +19,30 @@
 	compatible = "renesas,kzm9g", "renesas,sh73a0";
 
 	aliases {
-		serial4 = &scifa4;
+		serial0 = &scifa4;
 	};
 
 	cpus {
 		cpu@0 {
 			cpu0-supply = <&vdd_dvfs>;
-			operating-points = <
-				/* kHz  uV */
-				1196000 1315000
-				 598000 1175000
-				 398667 1065000
-			>;
+			operating-points = <1196000 1315000>,	/* kHz  uV */
+					   < 598000 1175000>,
+					   < 398667 1065000>;
 			voltage-tolerance = <1>; /* 1% */
 		};
 	};
 
 	chosen {
-		bootargs = "console=tty0 console=ttySC4,115200 root=/dev/nfs ip=dhcp ignore_loglevel rw";
-		stdout-path = &scifa4;
+		bootargs = "root=/dev/nfs ip=on ignore_loglevel rw";
+		stdout-path = "serial0:115200n8";
 	};
 
-	memory {
+	memory@40000000 {
 		device_type = "memory";
 		reg = <0x40000000 0x20000000>;
 	};
 
-	reg_1p8v: regulator@0 {
+	reg_1p8v: regulator-1p8v {
 		compatible = "regulator-fixed";
 		regulator-name = "fixed-1.8V";
 		regulator-min-microvolt = <1800000>;
@@ -57,7 +51,7 @@
 		regulator-boot-on;
 	};
 
-	reg_3p3v: regulator@1 {
+	reg_3p3v: regulator-3p3v {
 		compatible = "regulator-fixed";
 		regulator-name = "fixed-3.3V";
 		regulator-min-microvolt = <3300000>;
@@ -66,7 +60,7 @@
 		regulator-boot-on;
 	};
 
-	vmmc_sdhi0: regulator@2 {
+	vmmc_sdhi0: regulator-vmmc-sdhi0 {
 		compatible = "regulator-fixed";
 		regulator-name = "SDHI0 Vcc";
 		regulator-min-microvolt = <3300000>;
@@ -75,7 +69,7 @@
 		enable-active-high;
 	};
 
-	vmmc_sdhi2: regulator@3 {
+	vmmc_sdhi2: regulator-vmmc-sdhi2 {
 		compatible = "regulator-fixed";
 		regulator-name = "SDHI2 Vcc";
 		regulator-min-microvolt = <3300000>;
@@ -352,7 +346,7 @@
 		};
 	};
 
-	scifa4_pins: serial4 {
+	scifa4_pins: scifa4 {
 		groups = "scifa4_data", "scifa4_ctrl";
 		function = "scifa4";
 	};
@@ -378,6 +372,7 @@
 	pinctrl-0 = <&scifa4_pins>;
 	pinctrl-names = "default";
 
+	uart-has-rtscts;
 	status = "okay";
 };
 

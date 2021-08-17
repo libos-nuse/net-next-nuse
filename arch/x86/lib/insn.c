@@ -1,19 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * x86 instruction analysis
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  * Copyright (C) IBM Corporation, 2002, 2004, 2009
  */
@@ -25,6 +12,8 @@
 #endif
 #include <asm/inat.h>
 #include <asm/insn.h>
+
+#include <asm/emulate_prefix.h>
 
 /* Verify next sizeof(t) bytes can be on the same instruction */
 #define validate_next(t, insn, n)	\
@@ -71,6 +60,36 @@ void insn_init(struct insn *insn, const void *kaddr, int buf_len, int x86_64)
 		insn->addr_bytes = 4;
 }
 
+static const insn_byte_t xen_prefix[] = { __XEN_EMULATE_PREFIX };
+static const insn_byte_t kvm_prefix[] = { __KVM_EMULATE_PREFIX };
+
+static int __insn_get_emulate_prefix(struct insn *insn,
+				     const insn_byte_t *prefix, size_t len)
+{
+	size_t i;
+
+	for (i = 0; i < len; i++) {
+		if (peek_nbyte_next(insn_byte_t, insn, i) != prefix[i])
+			goto err_out;
+	}
+
+	insn->emulate_prefix_size = len;
+	insn->next_byte += len;
+
+	return 1;
+
+err_out:
+	return 0;
+}
+
+static void insn_get_emulate_prefix(struct insn *insn)
+{
+	if (__insn_get_emulate_prefix(insn, xen_prefix, sizeof(xen_prefix)))
+		return;
+
+	__insn_get_emulate_prefix(insn, kvm_prefix, sizeof(kvm_prefix));
+}
+
 /**
  * insn_get_prefixes - scan x86 instruction prefix bytes
  * @insn:	&struct insn containing instruction
@@ -88,6 +107,8 @@ void insn_get_prefixes(struct insn *insn)
 
 	if (prefixes->got)
 		return;
+
+	insn_get_emulate_prefix(insn);
 
 	nb = 0;
 	lb = 0;
@@ -155,14 +176,24 @@ found:
 			/*
 			 * In 32-bits mode, if the [7:6] bits (mod bits of
 			 * ModRM) on the second byte are not 11b, it is
-			 * LDS or LES.
+			 * LDS or LES or BOUND.
 			 */
 			if (X86_MODRM_MOD(b2) != 3)
 				goto vex_end;
 		}
 		insn->vex_prefix.bytes[0] = b;
 		insn->vex_prefix.bytes[1] = b2;
-		if (inat_is_vex3_prefix(attr)) {
+		if (inat_is_evex_prefix(attr)) {
+			b2 = peek_nbyte_next(insn_byte_t, insn, 2);
+			insn->vex_prefix.bytes[2] = b2;
+			b2 = peek_nbyte_next(insn_byte_t, insn, 3);
+			insn->vex_prefix.bytes[3] = b2;
+			insn->vex_prefix.nbytes = 4;
+			insn->next_byte += 4;
+			if (insn->x86_64 && X86_VEX_W(b2))
+				/* VEX.W overrides opnd_size */
+				insn->opnd_bytes = 8;
+		} else if (inat_is_vex3_prefix(attr)) {
 			b2 = peek_nbyte_next(insn_byte_t, insn, 2);
 			insn->vex_prefix.bytes[2] = b2;
 			insn->vex_prefix.nbytes = 3;
@@ -221,7 +252,9 @@ void insn_get_opcode(struct insn *insn)
 		m = insn_vex_m_bits(insn);
 		p = insn_vex_p_bits(insn);
 		insn->attr = inat_get_avx_attribute(op, m, p);
-		if (!inat_accept_vex(insn->attr) && !inat_is_group(insn->attr))
+		if ((inat_must_evex(insn->attr) && !insn_is_evex(insn)) ||
+		    (!inat_accept_vex(insn->attr) &&
+		     !inat_is_group(insn->attr)))
 			insn->attr = 0;	/* This instruction is bad */
 		goto end;	/* VEX has only 1 byte for opcode */
 	}

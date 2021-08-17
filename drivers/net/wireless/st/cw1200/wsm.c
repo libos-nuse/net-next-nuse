@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * WSM host interface (HI) implementation for
  * ST-Ericsson CW1200 mac80211 drivers.
  *
  * Copyright (c) 2010, ST-Ericsson
  * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/skbuff.h>
@@ -379,7 +376,6 @@ static int wsm_multi_tx_confirm(struct cw1200_common *priv,
 {
 	int ret;
 	int count;
-	int i;
 
 	count = WSM_GET32(buf);
 	if (WARN_ON(count <= 0))
@@ -395,11 +391,10 @@ static int wsm_multi_tx_confirm(struct cw1200_common *priv,
 	}
 
 	cw1200_debug_txed_multi(priv, count);
-	for (i = 0; i < count; ++i) {
+	do {
 		ret = wsm_tx_confirm(priv, buf, link_id);
-		if (ret)
-			return ret;
-	}
+	} while (!ret && --count);
+
 	return ret;
 
 underflow:
@@ -1033,14 +1028,12 @@ static int wsm_find_complete_indication(struct cw1200_common *priv,
 static int wsm_ba_timeout_indication(struct cw1200_common *priv,
 				     struct wsm_buf *buf)
 {
-	u32 dummy;
 	u8 tid;
-	u8 dummy2;
 	u8 addr[ETH_ALEN];
 
-	dummy = WSM_GET32(buf);
+	WSM_GET32(buf);
 	tid = WSM_GET8(buf);
-	dummy2 = WSM_GET8(buf);
+	WSM_GET8(buf);
 	WSM_GET(buf, addr, ETH_ALEN);
 
 	pr_info("BlockACK timeout, tid %d, addr %pM\n",
@@ -1807,16 +1800,18 @@ static int wsm_buf_reserve(struct wsm_buf *buf, size_t extra_size)
 {
 	size_t pos = buf->data - buf->begin;
 	size_t size = pos + extra_size;
+	u8 *tmp;
 
 	size = round_up(size, FWLOAD_BLOCK_SIZE);
 
-	buf->begin = krealloc(buf->begin, size, GFP_KERNEL | GFP_DMA);
-	if (buf->begin) {
-		buf->data = &buf->begin[pos];
-		buf->end = &buf->begin[size];
-		return 0;
-	} else {
-		buf->end = buf->data = buf->begin;
+	tmp = krealloc(buf->begin, size, GFP_KERNEL | GFP_DMA);
+	if (!tmp) {
+		wsm_buf_deinit(buf);
 		return -ENOMEM;
 	}
+
+	buf->begin = tmp;
+	buf->data = &buf->begin[pos];
+	buf->end = &buf->begin[size];
+	return 0;
 }

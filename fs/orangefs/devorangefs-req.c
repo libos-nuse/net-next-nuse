@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * (C) 2001 Clemson University and The University of Chicago
  *
@@ -11,13 +12,18 @@
 #include "orangefs-kernel.h"
 #include "orangefs-dev-proto.h"
 #include "orangefs-bufmap.h"
+#include "orangefs-debugfs.h"
 
 #include <linux/debugfs.h>
 #include <linux/slab.h>
 
 /* this file implements the /dev/pvfs2-req device node */
 
+uint32_t orangefs_userspace_version;
+
 static int open_access_count;
+
+static DEFINE_MUTEX(devreq_mutex);
 
 #define DUMP_DEVICE_ERROR()                                                   \
 do {                                                                          \
@@ -43,7 +49,7 @@ static void orangefs_devreq_add_op(struct orangefs_kernel_op_s *op)
 {
 	int index = hash_func(op->tag, hash_table_size);
 
-	list_add_tail(&op->list, &htable_ops_in_progress[index]);
+	list_add_tail(&op->list, &orangefs_htable_ops_in_progress[index]);
 }
 
 /*
@@ -57,20 +63,20 @@ static struct orangefs_kernel_op_s *orangefs_devreq_remove_op(__u64 tag)
 
 	index = hash_func(tag, hash_table_size);
 
-	spin_lock(&htable_ops_in_progress_lock);
+	spin_lock(&orangefs_htable_ops_in_progress_lock);
 	list_for_each_entry_safe(op,
 				 next,
-				 &htable_ops_in_progress[index],
+				 &orangefs_htable_ops_in_progress[index],
 				 list) {
 		if (op->tag == tag && !op_state_purged(op) &&
 		    !op_state_given_up(op)) {
 			list_del_init(&op->list);
-			spin_unlock(&htable_ops_in_progress_lock);
+			spin_unlock(&orangefs_htable_ops_in_progress_lock);
 			return op;
 		}
 	}
 
-	spin_unlock(&htable_ops_in_progress_lock);
+	spin_unlock(&orangefs_htable_ops_in_progress_lock);
 	return NULL;
 }
 
@@ -116,6 +122,13 @@ static int orangefs_devreq_open(struct inode *inode, struct file *file)
 {
 	int ret = -EINVAL;
 
+	/* in order to ensure that the filesystem driver sees correct UIDs */
+	if (file->f_cred->user_ns != &init_user_ns) {
+		gossip_err("%s: device cannot be opened outside init_user_ns\n",
+			   __func__);
+		goto out;
+	}
+
 	if (!(file->f_flags & O_NONBLOCK)) {
 		gossip_err("%s: device cannot be opened in blocking mode\n",
 			   __func__);
@@ -149,7 +162,7 @@ static ssize_t orangefs_devreq_read(struct file *file,
 	struct orangefs_kernel_op_s *op, *temp;
 	__s32 proto_ver = ORANGEFS_KERNEL_PROTO_VERSION;
 	static __s32 magic = ORANGEFS_DEVREQ_MAGIC;
-	struct orangefs_kernel_op_s *cur_op = NULL;
+	struct orangefs_kernel_op_s *cur_op;
 	unsigned long ret;
 
 	/* We do not support blocking IO. */
@@ -168,7 +181,12 @@ static ssize_t orangefs_devreq_read(struct file *file,
 		return -EINVAL;
 	}
 
+	/* Check for an empty list before locking. */
+	if (list_empty(&orangefs_request_list))
+		return -EAGAIN;
+
 restart:
+	cur_op = NULL;
 	/* Get next op (if any) from top of list. */
 	spin_lock(&orangefs_request_list_lock);
 	list_for_each_entry_safe(op, temp, &orangefs_request_list, list) {
@@ -196,14 +214,19 @@ restart:
 				continue;
 			/*
 			 * Skip ops whose filesystem we don't know about unless
-			 * it is being mounted.
+			 * it is being mounted or unmounted.  It is possible for
+			 * a filesystem we don't know about to be unmounted if
+			 * it fails to mount in the kernel after userspace has
+			 * been sent the mount request.
 			 */
 			/* XXX: is there a better way to detect this? */
 			} else if (ret == -1 &&
 				   !(op->upcall.type ==
 					ORANGEFS_VFS_OP_FS_MOUNT ||
 				     op->upcall.type ==
-					ORANGEFS_VFS_OP_GETATTR)) {
+					ORANGEFS_VFS_OP_GETATTR ||
+				     op->upcall.type ==
+					ORANGEFS_VFS_OP_FS_UMOUNT)) {
 				gossip_debug(GOSSIP_DEV_DEBUG,
 				    "orangefs: skipping op tag %llu %s\n",
 				    llu(op->tag), get_opname_string(op));
@@ -258,22 +281,25 @@ restart:
 	ret = copy_to_user(buf, &proto_ver, sizeof(__s32));
 	if (ret != 0)
 		goto error;
-	ret = copy_to_user(buf+sizeof(__s32), &magic, sizeof(__s32));
+	ret = copy_to_user(buf + sizeof(__s32), &magic, sizeof(__s32));
 	if (ret != 0)
 		goto error;
-	ret = copy_to_user(buf+2 * sizeof(__s32), &cur_op->tag, sizeof(__u64));
+	ret = copy_to_user(buf + 2 * sizeof(__s32),
+		&cur_op->tag,
+		sizeof(__u64));
 	if (ret != 0)
 		goto error;
-	ret = copy_to_user(buf+2*sizeof(__s32)+sizeof(__u64), &cur_op->upcall,
-			   sizeof(struct orangefs_upcall_s));
+	ret = copy_to_user(buf + 2 * sizeof(__s32) + sizeof(__u64),
+		&cur_op->upcall,
+		sizeof(struct orangefs_upcall_s));
 	if (ret != 0)
 		goto error;
 
-	spin_lock(&htable_ops_in_progress_lock);
+	spin_lock(&orangefs_htable_ops_in_progress_lock);
 	spin_lock(&cur_op->lock);
 	if (unlikely(op_state_given_up(cur_op))) {
 		spin_unlock(&cur_op->lock);
-		spin_unlock(&htable_ops_in_progress_lock);
+		spin_unlock(&orangefs_htable_ops_in_progress_lock);
 		complete(&cur_op->waitq);
 		goto restart;
 	}
@@ -291,7 +317,7 @@ restart:
 		     current->comm);
 	orangefs_devreq_add_op(cur_op);
 	spin_unlock(&cur_op->lock);
-	spin_unlock(&htable_ops_in_progress_lock);
+	spin_unlock(&orangefs_htable_ops_in_progress_lock);
 
 	/* The client only asks to read one size buffer. */
 	return MAX_DEV_REQ_UPSIZE;
@@ -343,7 +369,6 @@ static ssize_t orangefs_devreq_write_iter(struct kiocb *iocb,
 		__u64 tag;
 	} head;
 	int total = ret = iov_iter_count(iter);
-	int n;
 	int downcall_size = sizeof(struct orangefs_downcall_s);
 	int head_size = sizeof(head);
 
@@ -359,9 +384,8 @@ static ssize_t orangefs_devreq_write_iter(struct kiocb *iocb,
 			   (unsigned int) MAX_DEV_REQ_DOWNSIZE);
 		return -EFAULT;
 	}
-     
-	n = copy_from_iter(&head, head_size, iter);
-	if (n < head_size) {
+
+	if (!copy_from_iter_full(&head, head_size, iter)) {
 		gossip_err("%s: failed to copy head.\n", __func__);
 		return -EFAULT;
 	}
@@ -380,16 +404,23 @@ static ssize_t orangefs_devreq_write_iter(struct kiocb *iocb,
 		return -EPROTO;
 	}
 
+	if (!orangefs_userspace_version) {
+		orangefs_userspace_version = head.version;
+	} else if (orangefs_userspace_version != head.version) {
+		gossip_err("Error: userspace version changes\n");
+		return -EPROTO;
+	}
+
 	/* remove the op from the in progress hash table */
 	op = orangefs_devreq_remove_op(head.tag);
 	if (!op) {
-		gossip_err("WARNING: No one's waiting for tag %llu\n",
-			   llu(head.tag));
+		gossip_debug(GOSSIP_DEV_DEBUG,
+			     "%s: No one's waiting for tag %llu\n",
+			     __func__, llu(head.tag));
 		return ret;
 	}
 
-	n = copy_from_iter(&op->downcall, downcall_size, iter);
-	if (n != downcall_size) {
+	if (!copy_from_iter_full(&op->downcall, downcall_size, iter)) {
 		gossip_err("%s: failed to copy downcall.\n", __func__);
 		goto Efault;
 	}
@@ -398,7 +429,7 @@ static ssize_t orangefs_devreq_write_iter(struct kiocb *iocb,
 		goto wakeup;
 
 	/*
-	 * We've successfully peeled off the head and the downcall. 
+	 * We've successfully peeled off the head and the downcall.
 	 * Something has gone awry if total doesn't equal the
 	 * sum of head_size, downcall_size and trailer_size.
 	 */
@@ -435,18 +466,12 @@ static ssize_t orangefs_devreq_write_iter(struct kiocb *iocb,
 	if (op->downcall.type != ORANGEFS_VFS_OP_READDIR)
 		goto wakeup;
 
-	op->downcall.trailer_buf =
-		vmalloc(op->downcall.trailer_size);
-	if (op->downcall.trailer_buf == NULL) {
-		gossip_err("%s: failed trailer vmalloc.\n",
-			   __func__);
+	op->downcall.trailer_buf = vzalloc(op->downcall.trailer_size);
+	if (!op->downcall.trailer_buf)
 		goto Enomem;
-	}
-	memset(op->downcall.trailer_buf, 0, op->downcall.trailer_size);
-	n = copy_from_iter(op->downcall.trailer_buf,
-			   op->downcall.trailer_size,
-			   iter);
-	if (n != op->downcall.trailer_size) {
+
+	if (!copy_from_iter_full(op->downcall.trailer_buf,
+			         op->downcall.trailer_size, iter)) {
 		gossip_err("%s: failed to copy trailer.\n", __func__);
 		vfree(op->downcall.trailer_buf);
 		goto Efault;
@@ -455,7 +480,7 @@ static ssize_t orangefs_devreq_write_iter(struct kiocb *iocb,
 wakeup:
 	/*
 	 * Return to vfs waitqueue, and back to service_operation
-	 * through wait_for_matching_downcall. 
+	 * through wait_for_matching_downcall.
 	 */
 	spin_lock(&op->lock);
 	if (unlikely(op_is_cancel(op))) {
@@ -520,6 +545,7 @@ static int orangefs_devreq_release(struct inode *inode, struct file *file)
 	gossip_debug(GOSSIP_DEV_DEBUG,
 		     "pvfs2-client-core: device close complete\n");
 	open_access_count = 0;
+	orangefs_userspace_version = 0;
 	mutex_unlock(&devreq_mutex);
 	return 0;
 }
@@ -569,8 +595,6 @@ static long dispatch_ioctl_command(unsigned int command, unsigned long arg)
 	static __s32 max_down_size = MAX_DEV_REQ_DOWNSIZE;
 	struct ORANGEFS_dev_map_desc user_desc;
 	int ret = 0;
-	struct dev_mask_info_s mask_info = { 0 };
-	struct dev_mask2_info_s mask2_info = { 0, 0 };
 	int upstream_kmod = 1;
 	struct orangefs_sb_info_s *orangefs_sb;
 
@@ -612,7 +636,7 @@ static long dispatch_ioctl_command(unsigned int command, unsigned long arg)
 		 * all of the remounts are serviced (to avoid ops between
 		 * mounts to fail)
 		 */
-		ret = mutex_lock_interruptible(&request_mutex);
+		ret = mutex_lock_interruptible(&orangefs_request_mutex);
 		if (ret < 0)
 			return ret;
 		gossip_debug(GOSSIP_DEV_DEBUG,
@@ -647,7 +671,7 @@ static long dispatch_ioctl_command(unsigned int command, unsigned long arg)
 		gossip_debug(GOSSIP_DEV_DEBUG,
 			     "%s: priority remount complete\n",
 			     __func__);
-		mutex_unlock(&request_mutex);
+		mutex_unlock(&orangefs_request_mutex);
 		return ret;
 
 	case ORANGEFS_DEV_UPSTREAM:
@@ -661,134 +685,11 @@ static long dispatch_ioctl_command(unsigned int command, unsigned long arg)
 			return ret;
 
 	case ORANGEFS_DEV_CLIENT_MASK:
-		ret = copy_from_user(&mask2_info,
-				     (void __user *)arg,
-				     sizeof(struct dev_mask2_info_s));
-
-		if (ret != 0)
-			return -EIO;
-
-		client_debug_mask.mask1 = mask2_info.mask1_value;
-		client_debug_mask.mask2 = mask2_info.mask2_value;
-
-		pr_info("%s: client debug mask has been been received "
-			":%llx: :%llx:\n",
-			__func__,
-			(unsigned long long)client_debug_mask.mask1,
-			(unsigned long long)client_debug_mask.mask2);
-
-		return ret;
-
+		return orangefs_debugfs_new_client_mask((void __user *)arg);
 	case ORANGEFS_DEV_CLIENT_STRING:
-		ret = copy_from_user(&client_debug_array_string,
-				     (void __user *)arg,
-				     ORANGEFS_MAX_DEBUG_STRING_LEN);
-		/*
-		 * The real client-core makes an effort to ensure
-		 * that actual strings that aren't too long to fit in
-		 * this buffer is what we get here. We're going to use
-		 * string functions on the stuff we got, so we'll make
-		 * this extra effort to try and keep from
-		 * flowing out of this buffer when we use the string
-		 * functions, even if somehow the stuff we end up
-		 * with here is garbage.
-		 */
-		client_debug_array_string[ORANGEFS_MAX_DEBUG_STRING_LEN - 1] =
-			'\0';
-		
-		if (ret != 0) {
-			pr_info("%s: CLIENT_STRING: copy_from_user failed\n",
-				__func__);
-			return -EIO;
-		}
-
-		pr_info("%s: client debug array string has been received.\n",
-			__func__);
-
-		if (!help_string_initialized) {
-
-			/* Free the "we don't know yet" default string... */
-			kfree(debug_help_string);
-
-			/* build a proper debug help string */
-			if (orangefs_prepare_debugfs_help_string(0)) {
-				gossip_err("%s: no debug help string \n",
-					   __func__);
-				return -EIO;
-			}
-
-			/* Replace the boilerplate boot-time debug-help file. */
-			debugfs_remove(help_file_dentry);
-
-			help_file_dentry =
-				debugfs_create_file(
-					ORANGEFS_KMOD_DEBUG_HELP_FILE,
-					0444,
-					debug_dir,
-					debug_help_string,
-					&debug_help_fops);
-
-			if (!help_file_dentry) {
-				gossip_err("%s: debugfs_create_file failed for"
-					   " :%s:!\n",
-					   __func__,
-					   ORANGEFS_KMOD_DEBUG_HELP_FILE);
-				return -EIO;
-			}
-		}
-
-		debug_mask_to_string(&client_debug_mask, 1);
-
-		debugfs_remove(client_debug_dentry);
-
-		orangefs_client_debug_init();
-
-		help_string_initialized++;
-
-		return ret;
-
+		return orangefs_debugfs_new_client_string((void __user *)arg);
 	case ORANGEFS_DEV_DEBUG:
-		ret = copy_from_user(&mask_info,
-				     (void __user *)arg,
-				     sizeof(mask_info));
-
-		if (ret != 0)
-			return -EIO;
-
-		if (mask_info.mask_type == KERNEL_MASK) {
-			if ((mask_info.mask_value == 0)
-			    && (kernel_mask_set_mod_init)) {
-				/*
-				 * the kernel debug mask was set when the
-				 * kernel module was loaded; don't override
-				 * it if the client-core was started without
-				 * a value for ORANGEFS_KMODMASK.
-				 */
-				return 0;
-			}
-			debug_mask_to_string(&mask_info.mask_value,
-					     mask_info.mask_type);
-			gossip_debug_mask = mask_info.mask_value;
-			pr_info("%s: kernel debug mask has been modified to "
-				":%s: :%llx:\n",
-				__func__,
-				kernel_debug_string,
-				(unsigned long long)gossip_debug_mask);
-		} else if (mask_info.mask_type == CLIENT_MASK) {
-			debug_mask_to_string(&mask_info.mask_value,
-					     mask_info.mask_type);
-			pr_info("%s: client debug mask has been modified to"
-				":%s: :%llx:\n",
-				__func__,
-				client_debug_string,
-				llu(mask_info.mask_value));
-		} else {
-			gossip_lerr("Invalid mask type....\n");
-			return -EINVAL;
-		}
-
-		return ret;
-
+		return orangefs_debugfs_new_debug((void __user *)arg);
 	default:
 		return -ENOIOCTLCMD;
 	}
@@ -818,37 +719,6 @@ struct ORANGEFS_dev_map_desc32 {
 	__s32 count;
 };
 
-static unsigned long translate_dev_map26(unsigned long args, long *error)
-{
-	struct ORANGEFS_dev_map_desc32 __user *p32 = (void __user *)args;
-	/*
-	 * Depending on the architecture, allocate some space on the
-	 * user-call-stack based on our expected layout.
-	 */
-	struct ORANGEFS_dev_map_desc __user *p =
-	    compat_alloc_user_space(sizeof(*p));
-	compat_uptr_t addr;
-
-	*error = 0;
-	/* get the ptr from the 32 bit user-space */
-	if (get_user(addr, &p32->ptr))
-		goto err;
-	/* try to put that into a 64-bit layout */
-	if (put_user(compat_ptr(addr), &p->ptr))
-		goto err;
-	/* copy the remaining fields */
-	if (copy_in_user(&p->total_size, &p32->total_size, sizeof(__s32)))
-		goto err;
-	if (copy_in_user(&p->size, &p32->size, sizeof(__s32)))
-		goto err;
-	if (copy_in_user(&p->count, &p32->count, sizeof(__s32)))
-		goto err;
-	return (unsigned long)p;
-err:
-	*error = -EFAULT;
-	return 0;
-}
-
 /*
  * 32 bit user-space apps' ioctl handlers when kernel modules
  * is compiled as a 64 bit one
@@ -857,31 +727,58 @@ static long orangefs_devreq_compat_ioctl(struct file *filp, unsigned int cmd,
 				      unsigned long args)
 {
 	long ret;
-	unsigned long arg = args;
 
 	/* Check for properly constructed commands */
 	ret = check_ioctl_command(cmd);
 	if (ret < 0)
 		return ret;
 	if (cmd == ORANGEFS_DEV_MAP) {
-		/*
-		 * convert the arguments to what we expect internally
-		 * in kernel space
-		 */
-		arg = translate_dev_map26(args, &ret);
-		if (ret < 0) {
-			gossip_err("Could not translate dev map\n");
-			return ret;
-		}
+		struct ORANGEFS_dev_map_desc desc;
+		struct ORANGEFS_dev_map_desc32 d32;
+
+		if (copy_from_user(&d32, (void __user *)args, sizeof(d32)))
+			return -EFAULT;
+
+		desc.ptr = compat_ptr(d32.ptr);
+		desc.total_size = d32.total_size;
+		desc.size = d32.size;
+		desc.count = d32.count;
+		return orangefs_bufmap_initialize(&desc);
 	}
 	/* no other ioctl requires translation */
-	return dispatch_ioctl_command(cmd, arg);
+	return dispatch_ioctl_command(cmd, args);
 }
 
 #endif /* CONFIG_COMPAT is in .config */
 
+static __poll_t orangefs_devreq_poll(struct file *file,
+				      struct poll_table_struct *poll_table)
+{
+	__poll_t poll_revent_mask = 0;
+
+	poll_wait(file, &orangefs_request_list_waitq, poll_table);
+
+	if (!list_empty(&orangefs_request_list))
+		poll_revent_mask |= EPOLLIN;
+	return poll_revent_mask;
+}
+
 /* the assigned character device major number */
 static int orangefs_dev_major;
+
+static const struct file_operations orangefs_devreq_file_operations = {
+	.owner = THIS_MODULE,
+	.read = orangefs_devreq_read,
+	.write_iter = orangefs_devreq_write_iter,
+	.open = orangefs_devreq_open,
+	.release = orangefs_devreq_release,
+	.unlocked_ioctl = orangefs_devreq_ioctl,
+
+#ifdef CONFIG_COMPAT		/* CONFIG_COMPAT is in .config */
+	.compat_ioctl = orangefs_devreq_compat_ioctl,
+#endif
+	.poll = orangefs_devreq_poll
+};
 
 /*
  * Initialize orangefs device specific state:
@@ -915,29 +812,3 @@ void orangefs_dev_cleanup(void)
 		     "*** /dev/%s character device unregistered ***\n",
 		     ORANGEFS_REQDEVICE_NAME);
 }
-
-static unsigned int orangefs_devreq_poll(struct file *file,
-				      struct poll_table_struct *poll_table)
-{
-	int poll_revent_mask = 0;
-
-	poll_wait(file, &orangefs_request_list_waitq, poll_table);
-
-	if (!list_empty(&orangefs_request_list))
-		poll_revent_mask |= POLL_IN;
-	return poll_revent_mask;
-}
-
-const struct file_operations orangefs_devreq_file_operations = {
-	.owner = THIS_MODULE,
-	.read = orangefs_devreq_read,
-	.write_iter = orangefs_devreq_write_iter,
-	.open = orangefs_devreq_open,
-	.release = orangefs_devreq_release,
-	.unlocked_ioctl = orangefs_devreq_ioctl,
-
-#ifdef CONFIG_COMPAT		/* CONFIG_COMPAT is in .config */
-	.compat_ioctl = orangefs_devreq_compat_ioctl,
-#endif
-	.poll = orangefs_devreq_poll
-};

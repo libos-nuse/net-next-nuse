@@ -1,13 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef _ASM_POWERPC_MACHDEP_H
 #define _ASM_POWERPC_MACHDEP_H
 #ifdef __KERNEL__
-
-/*
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
- */
 
 #include <linux/seq_file.h>
 #include <linux/init.h>
@@ -34,46 +28,6 @@ struct pci_host_bridge;
 struct machdep_calls {
 	char		*name;
 #ifdef CONFIG_PPC64
-	void            (*hpte_invalidate)(unsigned long slot,
-					   unsigned long vpn,
-					   int bpsize, int apsize,
-					   int ssize, int local);
-	long		(*hpte_updatepp)(unsigned long slot, 
-					 unsigned long newpp, 
-					 unsigned long vpn,
-					 int bpsize, int apsize,
-					 int ssize, unsigned long flags);
-	void            (*hpte_updateboltedpp)(unsigned long newpp, 
-					       unsigned long ea,
-					       int psize, int ssize);
-	long		(*hpte_insert)(unsigned long hpte_group,
-				       unsigned long vpn,
-				       unsigned long prpn,
-				       unsigned long rflags,
-				       unsigned long vflags,
-				       int psize, int apsize,
-				       int ssize);
-	long		(*hpte_remove)(unsigned long hpte_group);
-	int             (*hpte_removebolted)(unsigned long ea,
-					     int psize, int ssize);
-	void		(*flush_hash_range)(unsigned long number, int local);
-	void		(*hugepage_invalidate)(unsigned long vsid,
-					       unsigned long addr,
-					       unsigned char *hpte_slot_array,
-					       int psize, int ssize, int local);
-	/*
-	 * Special for kexec.
-	 * To be called in real mode with interrupts disabled. No locks are
-	 * taken as such, concurrent access on pre POWER5 hardware could result
-	 * in a deadlock.
-	 * The linear mapping is destroyed as well.
-	 */
-	void		(*hpte_clear_all)(void);
-
-	void __iomem *	(*ioremap)(phys_addr_t addr, unsigned long size,
-				   unsigned long flags, void *caller);
-	void		(*iounmap)(volatile void __iomem *token);
-
 #ifdef CONFIG_PM
 	void		(*iommu_save)(void);
 	void		(*iommu_restore)(void);
@@ -83,13 +37,10 @@ struct machdep_calls {
 #endif
 #endif /* CONFIG_PPC64 */
 
-	/* Platform set_dma_mask and dma_get_required_mask overrides */
-	int		(*dma_set_mask)(struct device *dev, u64 dma_mask);
-	u64		(*dma_get_required_mask)(struct device *dev);
+	void		(*dma_set_mask)(struct device *dev, u64 dma_mask);
 
 	int		(*probe)(void);
 	void		(*setup_arch)(void); /* Optional, may be NULL */
-	void		(*init_early)(void);
 	/* Optional, may be NULL. */
 	void		(*show_cpuinfo)(struct seq_file *m);
 	void		(*show_percpuinfo)(struct seq_file *m, int i);
@@ -98,7 +49,7 @@ struct machdep_calls {
 
 	void		(*init_IRQ)(void);
 
-	/* Return an irq, or NO_IRQ to indicate there are none pending. */
+	/* Return an irq, or 0 to indicate there are none pending. */
 	unsigned int	(*get_irq)(void);
 
 	/* PCI stuff */
@@ -108,19 +59,21 @@ struct machdep_calls {
 	int		(*pcibios_root_bridge_prepare)(struct pci_host_bridge
 				*bridge);
 
+	/* finds all the pci_controllers present at boot */
+	void 		(*discover_phbs)(void);
+
 	/* To setup PHBs when using automatic OF platform driver for PCI */
 	int		(*pci_setup_phb)(struct pci_controller *host);
 
-	void		(*restart)(char *cmd);
-	void		(*halt)(void);
+	void __noreturn	(*restart)(char *cmd);
+	void __noreturn (*halt)(void);
 	void		(*panic)(char *str);
-	void		(*cpu_die)(void);
 
 	long		(*time_init)(void); /* Optional, may be NULL */
 
 	int		(*set_rtc_time)(struct rtc_time *);
 	void		(*get_rtc_time)(struct rtc_time *);
-	unsigned long	(*get_boot_time)(void);
+	time64_t	(*get_boot_time)(void);
 	unsigned char 	(*rtc_read_val)(int addr);
 	void		(*rtc_write_val)(int addr, unsigned char val);
 
@@ -145,6 +98,7 @@ struct machdep_calls {
 
 	/* Early exception handlers called in realmode */
 	int		(*hmi_exception_early)(struct pt_regs *regs);
+	long		(*machine_check_early)(struct pt_regs *regs);
 
 	/* Called during machine check exception to retrive fixup address. */
 	bool		(*mce_check_early_recovery)(struct pt_regs *regs);
@@ -179,7 +133,7 @@ struct machdep_calls {
 				    unsigned long dabrx);
 
 	/* Set DAWR for this platform, leave empty for default implementation */
-	int		(*set_dawr)(unsigned long dawr,
+	int		(*set_dawr)(int nr, unsigned long dawr,
 				    unsigned long dawrx);
 
 #ifdef CONFIG_PPC32	/* XXX for now */
@@ -210,9 +164,19 @@ struct machdep_calls {
 	/* Called after scan and before resource survey */
 	void (*pcibios_fixup_phb)(struct pci_controller *hose);
 
+	/*
+	 * Called after device has been added to bus and
+	 * before sysfs has been created.
+	 */
+	void (*pcibios_bus_add_device)(struct pci_dev *pdev);
+
+	resource_size_t (*pcibios_default_alignment)(void);
+
 #ifdef CONFIG_PCI_IOV
 	void (*pcibios_fixup_sriov)(struct pci_dev *pdev);
 	resource_size_t (*pcibios_iov_resource_alignment)(struct pci_dev *, int resno);
+	int (*pcibios_sriov_enable)(struct pci_dev *pdev, u16 num_vfs);
+	int (*pcibios_sriov_disable)(struct pci_dev *pdev);
 #endif /* CONFIG_PCI_IOV */
 
 	/* Called to shutdown machine specific hardware not already controlled
@@ -220,7 +184,7 @@ struct machdep_calls {
 	 */
 	void (*machine_shutdown)(void);
 
-#ifdef CONFIG_KEXEC
+#ifdef CONFIG_KEXEC_CORE
 	void (*kexec_cpu_down)(int crash_shutdown, int secondary);
 
 	/* Called to do what every setup is needed on image and the
@@ -235,7 +199,7 @@ struct machdep_calls {
 	 * no return.
 	 */
 	void (*machine_kexec)(struct kimage *image);
-#endif /* CONFIG_KEXEC */
+#endif /* CONFIG_KEXEC_CORE */
 
 #ifdef CONFIG_SUSPEND
 	/* These are called to disable and enable, respectively, IRQs when
@@ -256,12 +220,10 @@ struct machdep_calls {
 #ifdef CONFIG_ARCH_RANDOM
 	int (*get_random_seed)(unsigned long *v);
 #endif
-	int (*update_partition_table)(u64);
 };
 
 extern void e500_idle(void);
 extern void power4_idle(void);
-extern void power7_idle(void);
 extern void ppc6xx_idle(void);
 extern void book3e_idle(void);
 
@@ -273,7 +235,7 @@ extern void book3e_idle(void);
 extern struct machdep_calls ppc_md;
 extern struct machdep_calls *machine_id;
 
-#define __machine_desc __attribute__ ((__section__ (".machine.desc")))
+#define __machine_desc __section(".machine.desc")
 
 #define define_machine(name)					\
 	extern struct machdep_calls mach_##name;		\

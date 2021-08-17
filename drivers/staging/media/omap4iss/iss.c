@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * TI OMAP4 ISS V4L2 Driver
  *
  * Copyright (C) 2012, Texas Instruments
  *
  * Author: Sergio Aguirre <sergio.a.aguirre@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -59,9 +55,9 @@ static void iss_print_status(struct iss_device *iss)
  * readback the same register, in this case the revision register.
  *
  * See this link for reference:
- *   http://www.mail-archive.com/linux-omap@vger.kernel.org/msg08149.html
+ *   https://www.mail-archive.com/linux-omap@vger.kernel.org/msg08149.html
  */
-void omap4iss_flush(struct iss_device *iss)
+static void omap4iss_flush(struct iss_device *iss)
 {
 	iss_reg_write(iss, OMAP4_ISS_MEM_TOP, ISS_HL_REVISION, 0);
 	iss_reg_read(iss, OMAP4_ISS_MEM_TOP, ISS_HL_REVISION);
@@ -361,6 +357,10 @@ static irqreturn_t iss_isr(int irq, void *_iss)
 
 	return IRQ_HANDLED;
 }
+
+static const struct media_device_ops iss_media_ops = {
+	.link_notify = v4l2_pipeline_link_notify,
+};
 
 /* -----------------------------------------------------------------------------
  * Pipeline stream management
@@ -889,7 +889,7 @@ void omap4iss_put(struct iss_device *iss)
 		return;
 
 	mutex_lock(&iss->iss_mutex);
-	BUG_ON(iss->ref_count == 0);
+	WARN_ON(iss->ref_count == 0);
 	if (--iss->ref_count == 0) {
 		iss_disable_interrupts(iss);
 		/* Reset the ISS if an entity has failed to stop. This is the
@@ -908,11 +908,7 @@ static int iss_map_mem_resource(struct platform_device *pdev,
 				struct iss_device *iss,
 				enum iss_mem_resources res)
 {
-	struct resource *mem;
-
-	mem = platform_get_resource(pdev, IORESOURCE_MEM, res);
-
-	iss->regs[res] = devm_ioremap_resource(iss->dev, mem);
+	iss->regs[res] = devm_platform_ioremap_resource(pdev, res);
 
 	return PTR_ERR_OR_ZERO(iss->regs[res]);
 }
@@ -985,10 +981,10 @@ static int iss_register_entities(struct iss_device *iss)
 	int ret;
 
 	iss->media_dev.dev = iss->dev;
-	strlcpy(iss->media_dev.model, "TI OMAP4 ISS",
+	strscpy(iss->media_dev.model, "TI OMAP4 ISS",
 		sizeof(iss->media_dev.model));
 	iss->media_dev.hw_revision = iss->revision;
-	iss->media_dev.link_notify = v4l2_pipeline_link_notify;
+	iss->media_dev.ops = &iss_media_ops;
 	ret = media_device_register(&iss->media_dev);
 	if (ret < 0) {
 		dev_err(iss->dev, "Media device registration failed (%d)\n",
@@ -1240,8 +1236,10 @@ static int iss_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto error;
 
-	if (!omap4iss_get(iss))
+	if (!omap4iss_get(iss)) {
+		ret = -EINVAL;
 		goto error;
+	}
 
 	ret = iss_reset(iss);
 	if (ret < 0)
@@ -1276,7 +1274,6 @@ static int iss_probe(struct platform_device *pdev)
 	/* Interrupt */
 	ret = platform_get_irq(pdev, 0);
 	if (ret <= 0) {
-		dev_err(iss->dev, "No IRQ resource\n");
 		ret = -ENODEV;
 		goto error_iss;
 	}

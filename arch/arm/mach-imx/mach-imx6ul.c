@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2015 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/irqchip.h>
 #include <linux/mfd/syscon.h>
@@ -16,6 +13,7 @@
 #include <asm/mach/map.h>
 
 #include "common.h"
+#include "cpuidle.h"
 
 static void __init imx6ul_enet_clk_init(void)
 {
@@ -27,7 +25,6 @@ static void __init imx6ul_enet_clk_init(void)
 				   IMX6UL_GPR1_ENET_CLK_OUTPUT);
 	else
 		pr_err("failed to find fsl,imx6ul-iomux-gpr regmap\n");
-
 }
 
 static int ksz8081_phy_fixup(struct phy_device *dev)
@@ -58,13 +55,7 @@ static inline void imx6ul_enet_init(void)
 
 static void __init imx6ul_init_machine(void)
 {
-	struct device *parent;
-
-	parent = imx_soc_device_init();
-	if (parent == NULL)
-		pr_warn("failed to initialize soc device\n");
-
-	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
+	of_platform_default_populate(NULL, NULL, NULL);
 	imx6ul_enet_init();
 	imx_anatop_init();
 	imx6ul_pm_init();
@@ -80,12 +71,15 @@ static void __init imx6ul_init_irq(void)
 
 static void __init imx6ul_init_late(void)
 {
+	imx6sx_cpuidle_init();
+
 	if (IS_ENABLED(CONFIG_ARM_IMX6Q_CPUFREQ))
 		platform_device_register_simple("imx6q-cpufreq", -1, NULL, 0);
 }
 
 static const char * const imx6ul_dt_compat[] __initconst = {
 	"fsl,imx6ul",
+	"fsl,imx6ull",
 	NULL,
 };
 

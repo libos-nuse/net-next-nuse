@@ -1,9 +1,6 @@
-/**
+// SPDX-License-Identifier: GPL-2.0-only
+/*
  * Copyright (c) 2011 Jonathan Cameron
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  *
  * A reference industrial I/O driver to illustrate the functionality available.
  *
@@ -17,26 +14,18 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
+#include <linux/string.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 #include <linux/iio/events.h>
 #include <linux/iio/buffer.h>
+#include <linux/iio/sw_device.h>
 #include "iio_simple_dummy.h"
 
-/*
- * A few elements needed to fake a bus for this driver
- * Note instances parameter controls how many of these
- * dummy devices are registered.
- */
-static unsigned instances = 1;
-module_param(instances, uint, 0);
-
-/* Pointer array used to fake bus elements */
-static struct iio_dev **iio_dummy_devs;
-
-/* Fake a name for the part number, usually obtained from the id table */
-static const char *iio_dummy_part_number = "iio_dummy_part_no";
+static const struct config_item_type iio_dummy_type = {
+	.ct_owner = THIS_MODULE,
+};
 
 /**
  * struct iio_dummy_accel_calibscale - realworld to register mapping
@@ -527,7 +516,6 @@ static int iio_dummy_write_raw(struct iio_dev *indio_dev,
  * Device type specific information.
  */
 static const struct iio_info iio_dummy_info = {
-	.driver_module = THIS_MODULE,
 	.read_raw = &iio_dummy_read_raw,
 	.write_raw = &iio_dummy_write_raw,
 #ifdef CONFIG_IIO_SIMPLE_DUMMY_EVENTS
@@ -565,19 +553,32 @@ static int iio_dummy_init_device(struct iio_dev *indio_dev)
 
 /**
  * iio_dummy_probe() - device instance probe
- * @index: an id number for this instance.
+ * @name: name of this instance.
  *
  * Arguments are bus type specific.
  * I2C: iio_dummy_probe(struct i2c_client *client,
  *                      const struct i2c_device_id *id)
  * SPI: iio_dummy_probe(struct spi_device *spi)
  */
-static int iio_dummy_probe(int index)
+static struct iio_sw_device *iio_dummy_probe(const char *name)
 {
 	int ret;
 	struct iio_dev *indio_dev;
 	struct iio_dummy_state *st;
+	struct iio_sw_device *swd;
+	struct device *parent = NULL;
 
+	/*
+	 * With hardware: Set the parent device.
+	 * parent = &spi->dev;
+	 * parent = &client->dev;
+	 */
+
+	swd = kzalloc(sizeof(*swd), GFP_KERNEL);
+	if (!swd) {
+		ret = -ENOMEM;
+		goto error_kzalloc;
+	}
 	/*
 	 * Allocate an IIO device.
 	 *
@@ -586,7 +587,7 @@ static int iio_dummy_probe(int index)
 	 * It also has a region (accessed by iio_priv()
 	 * for chip specific state information.
 	 */
-	indio_dev = iio_device_alloc(sizeof(*st));
+	indio_dev = iio_device_alloc(parent, sizeof(*st));
 	if (!indio_dev) {
 		ret = -ENOMEM;
 		goto error_ret;
@@ -596,11 +597,6 @@ static int iio_dummy_probe(int index)
 	mutex_init(&st->lock);
 
 	iio_dummy_init_device(indio_dev);
-	/*
-	 * With hardware: Set the parent device.
-	 * indio_dev->dev.parent = &spi->dev;
-	 * indio_dev->dev.parent = &client->dev;
-	 */
 
 	 /*
 	 * Make the iio_dev struct available to remove function.
@@ -608,7 +604,7 @@ static int iio_dummy_probe(int index)
 	 * i2c_set_clientdata(client, indio_dev);
 	 * spi_set_drvdata(spi, indio_dev);
 	 */
-	iio_dummy_devs[index] = indio_dev;
+	swd->device = indio_dev;
 
 	/*
 	 * Set the device name.
@@ -619,7 +615,7 @@ static int iio_dummy_probe(int index)
 	 *    indio_dev->name = id->name;
 	 *    indio_dev->name = spi_get_device_id(spi)->name;
 	 */
-	indio_dev->name = iio_dummy_part_number;
+	indio_dev->name = kstrdup(name, GFP_KERNEL);
 
 	/* Provide description of available channels */
 	indio_dev->channels = iio_dummy_channels;
@@ -646,7 +642,9 @@ static int iio_dummy_probe(int index)
 	if (ret < 0)
 		goto error_unconfigure_buffer;
 
-	return 0;
+	iio_swd_group_init_type_name(swd, name, &iio_dummy_type);
+
+	return swd;
 error_unconfigure_buffer:
 	iio_simple_dummy_unconfigure_buffer(indio_dev);
 error_unregister_events:
@@ -654,16 +652,18 @@ error_unregister_events:
 error_free_device:
 	iio_device_free(indio_dev);
 error_ret:
-	return ret;
+	kfree(swd);
+error_kzalloc:
+	return ERR_PTR(ret);
 }
 
 /**
  * iio_dummy_remove() - device instance removal function
- * @index: device index.
+ * @swd: pointer to software IIO device abstraction
  *
  * Parameters follow those of iio_dummy_probe for buses.
  */
-static void iio_dummy_remove(int index)
+static int iio_dummy_remove(struct iio_sw_device *swd)
 {
 	/*
 	 * Get a pointer to the device instance iio_dev structure
@@ -671,7 +671,7 @@ static void iio_dummy_remove(int index)
 	 * struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	 * struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	 */
-	struct iio_dev *indio_dev = iio_dummy_devs[index];
+	struct iio_dev *indio_dev = swd->device;
 
 	/* Unregister the device */
 	iio_device_unregister(indio_dev);
@@ -684,63 +684,34 @@ static void iio_dummy_remove(int index)
 	iio_simple_dummy_events_unregister(indio_dev);
 
 	/* Free all structures */
+	kfree(indio_dev->name);
 	iio_device_free(indio_dev);
+
+	return 0;
 }
 
-/**
- * iio_dummy_init() -  device driver registration
+/*
+ * module_iio_sw_device_driver() -  device driver registration
  *
  * Varies depending on bus type of the device. As there is no device
  * here, call probe directly. For information on device registration
  * i2c:
- * Documentation/i2c/writing-clients
+ * Documentation/i2c/writing-clients.rst
  * spi:
- * Documentation/spi/spi-summary
+ * Documentation/spi/spi-summary.rst
  */
-static __init int iio_dummy_init(void)
-{
-	int i, ret;
+static const struct iio_sw_device_ops iio_dummy_device_ops = {
+	.probe = iio_dummy_probe,
+	.remove = iio_dummy_remove,
+};
 
-	if (instances > 10) {
-		instances = 1;
-		return -EINVAL;
-	}
+static struct iio_sw_device_type iio_dummy_device = {
+	.name = "dummy",
+	.owner = THIS_MODULE,
+	.ops = &iio_dummy_device_ops,
+};
 
-	/* Fake a bus */
-	iio_dummy_devs = kcalloc(instances, sizeof(*iio_dummy_devs),
-				 GFP_KERNEL);
-	/* Here we have no actual device so call probe */
-	for (i = 0; i < instances; i++) {
-		ret = iio_dummy_probe(i);
-		if (ret < 0)
-			goto error_remove_devs;
-	}
-	return 0;
-
-error_remove_devs:
-	while (i--)
-		iio_dummy_remove(i);
-
-	kfree(iio_dummy_devs);
-	return ret;
-}
-module_init(iio_dummy_init);
-
-/**
- * iio_dummy_exit() - device driver removal
- *
- * Varies depending on bus type of the device.
- * As there is no device here, call remove directly.
- */
-static __exit void iio_dummy_exit(void)
-{
-	int i;
-
-	for (i = 0; i < instances; i++)
-		iio_dummy_remove(i);
-	kfree(iio_dummy_devs);
-}
-module_exit(iio_dummy_exit);
+module_iio_sw_device_driver(iio_dummy_device);
 
 MODULE_AUTHOR("Jonathan Cameron <jic23@kernel.org>");
 MODULE_DESCRIPTION("IIO dummy driver");

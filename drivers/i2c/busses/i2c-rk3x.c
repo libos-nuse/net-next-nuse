@@ -1,18 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for I2C adapter in Rockchip RK3xxx SoC
  *
  * Max Schwarz <max.schwarz@online.de>
  * based on the patches by Rockchip Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
+#include <linux/iopoll.h>
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
@@ -58,6 +56,12 @@ enum {
 #define REG_CON_LASTACK   BIT(5) /* 1: send NACK after last received byte */
 #define REG_CON_ACTACK    BIT(6) /* 1: stop if NACK is received */
 
+#define REG_CON_TUNING_MASK GENMASK_ULL(15, 8)
+
+#define REG_CON_SDA_CFG(cfg) ((cfg) << 8)
+#define REG_CON_STA_CFG(cfg) ((cfg) << 12)
+#define REG_CON_STO_CFG(cfg) ((cfg) << 14)
+
 /* REG_MRXADDR bits */
 #define REG_MRXADDR_VALID(x) BIT(24 + (x)) /* [x*8+7:x*8] of MRX[R]ADDR valid */
 
@@ -75,6 +79,77 @@ enum {
 #define WAIT_TIMEOUT      1000 /* ms */
 #define DEFAULT_SCL_RATE  (100 * 1000) /* Hz */
 
+/**
+ * struct i2c_spec_values:
+ * @min_hold_start_ns: min hold time (repeated) START condition
+ * @min_low_ns: min LOW period of the SCL clock
+ * @min_high_ns: min HIGH period of the SCL cloc
+ * @min_setup_start_ns: min set-up time for a repeated START conditio
+ * @max_data_hold_ns: max data hold time
+ * @min_data_setup_ns: min data set-up time
+ * @min_setup_stop_ns: min set-up time for STOP condition
+ * @min_hold_buffer_ns: min bus free time between a STOP and
+ * START condition
+ */
+struct i2c_spec_values {
+	unsigned long min_hold_start_ns;
+	unsigned long min_low_ns;
+	unsigned long min_high_ns;
+	unsigned long min_setup_start_ns;
+	unsigned long max_data_hold_ns;
+	unsigned long min_data_setup_ns;
+	unsigned long min_setup_stop_ns;
+	unsigned long min_hold_buffer_ns;
+};
+
+static const struct i2c_spec_values standard_mode_spec = {
+	.min_hold_start_ns = 4000,
+	.min_low_ns = 4700,
+	.min_high_ns = 4000,
+	.min_setup_start_ns = 4700,
+	.max_data_hold_ns = 3450,
+	.min_data_setup_ns = 250,
+	.min_setup_stop_ns = 4000,
+	.min_hold_buffer_ns = 4700,
+};
+
+static const struct i2c_spec_values fast_mode_spec = {
+	.min_hold_start_ns = 600,
+	.min_low_ns = 1300,
+	.min_high_ns = 600,
+	.min_setup_start_ns = 600,
+	.max_data_hold_ns = 900,
+	.min_data_setup_ns = 100,
+	.min_setup_stop_ns = 600,
+	.min_hold_buffer_ns = 1300,
+};
+
+static const struct i2c_spec_values fast_mode_plus_spec = {
+	.min_hold_start_ns = 260,
+	.min_low_ns = 500,
+	.min_high_ns = 260,
+	.min_setup_start_ns = 260,
+	.max_data_hold_ns = 400,
+	.min_data_setup_ns = 50,
+	.min_setup_stop_ns = 260,
+	.min_hold_buffer_ns = 500,
+};
+
+/**
+ * struct rk3x_i2c_calced_timings:
+ * @div_low: Divider output for low
+ * @div_high: Divider output for high
+ * @tuning: Used to adjust setup/hold data time,
+ * setup/hold start time and setup stop time for
+ * v1's calc_timings, the tuning should all be 0
+ * for old hardware anyone using v0's calc_timings.
+ */
+struct rk3x_i2c_calced_timings {
+	unsigned long div_low;
+	unsigned long div_high;
+	unsigned int tuning;
+};
+
 enum rk3x_i2c_state {
 	STATE_IDLE,
 	STATE_START,
@@ -84,20 +159,46 @@ enum rk3x_i2c_state {
 };
 
 /**
+ * struct rk3x_i2c_soc_data:
  * @grf_offset: offset inside the grf regmap for setting the i2c type
+ * @calc_timings: Callback function for i2c timing information calculated
  */
 struct rk3x_i2c_soc_data {
 	int grf_offset;
+	int (*calc_timings)(unsigned long, struct i2c_timings *,
+			    struct rk3x_i2c_calced_timings *);
 };
 
+/**
+ * struct rk3x_i2c - private data of the controller
+ * @adap: corresponding I2C adapter
+ * @dev: device for this controller
+ * @soc_data: related soc data struct
+ * @regs: virtual memory area
+ * @clk: function clk for rk3399 or function & Bus clks for others
+ * @pclk: Bus clk for rk3399
+ * @clk_rate_nb: i2c clk rate change notify
+ * @t: I2C known timing information
+ * @lock: spinlock for the i2c bus
+ * @wait: the waitqueue to wait for i2c transfer
+ * @busy: the condition for the event to wait for
+ * @msg: current i2c message
+ * @addr: addr of i2c slave device
+ * @mode: mode of i2c transfer
+ * @is_last_msg: flag determines whether it is the last msg in this transfer
+ * @state: state of i2c transfer
+ * @processed: byte length which has been send or received
+ * @error: error code for i2c transfer
+ */
 struct rk3x_i2c {
 	struct i2c_adapter adap;
 	struct device *dev;
-	struct rk3x_i2c_soc_data *soc_data;
+	const struct rk3x_i2c_soc_data *soc_data;
 
 	/* Hardware resources */
 	void __iomem *regs;
 	struct clk *clk;
+	struct clk *pclk;
 	struct notifier_block clk_rate_nb;
 
 	/* Settings */
@@ -116,7 +217,7 @@ struct rk3x_i2c {
 
 	/* I2C state machine */
 	enum rk3x_i2c_state state;
-	unsigned int processed; /* sent/received bytes */
+	unsigned int processed;
 	int error;
 };
 
@@ -142,13 +243,12 @@ static inline void rk3x_i2c_clean_ipd(struct rk3x_i2c *i2c)
  */
 static void rk3x_i2c_start(struct rk3x_i2c *i2c)
 {
-	u32 val;
+	u32 val = i2c_readl(i2c, REG_CON) & REG_CON_TUNING_MASK;
 
-	rk3x_i2c_clean_ipd(i2c);
 	i2c_writel(i2c, REG_INT_START, REG_IEN);
 
 	/* enable adapter with correct mode, send START condition */
-	val = REG_CON_EN | REG_CON_MOD(i2c->mode) | REG_CON_START;
+	val |= REG_CON_EN | REG_CON_MOD(i2c->mode) | REG_CON_START;
 
 	/* if we want to react to NACK, set ACTACK bit */
 	if (!(i2c->msg->flags & I2C_M_IGNORE_NAK))
@@ -189,7 +289,8 @@ static void rk3x_i2c_stop(struct rk3x_i2c *i2c, int error)
 		 * get the intended effect by resetting its internal state
 		 * and issuing an ordinary START.
 		 */
-		i2c_writel(i2c, 0, REG_CON);
+		ctrl = i2c_readl(i2c, REG_CON) & REG_CON_TUNING_MASK;
+		i2c_writel(i2c, ctrl, REG_CON);
 
 		/* signal that we are finished with the current msg */
 		wake_up(&i2c->wait);
@@ -315,7 +416,7 @@ static void rk3x_i2c_handle_read(struct rk3x_i2c *i2c, unsigned int ipd)
 {
 	unsigned int i;
 	unsigned int len = i2c->msg->len - i2c->processed;
-	u32 uninitialized_var(val);
+	u32 val;
 	u8 byte;
 
 	/* we only care for MBRF here. */
@@ -431,26 +532,37 @@ out:
 }
 
 /**
+ * Get timing values of I2C specification
+ *
+ * @speed: Desired SCL frequency
+ *
+ * Returns: Matched i2c spec values.
+ */
+static const struct i2c_spec_values *rk3x_i2c_get_spec(unsigned int speed)
+{
+	if (speed <= I2C_MAX_STANDARD_MODE_FREQ)
+		return &standard_mode_spec;
+	else if (speed <= I2C_MAX_FAST_MODE_FREQ)
+		return &fast_mode_spec;
+	else
+		return &fast_mode_plus_spec;
+}
+
+/**
  * Calculate divider values for desired SCL frequency
  *
  * @clk_rate: I2C input clock rate
- * @t: Known I2C timing information.
- * @div_low: Divider output for low
- * @div_high: Divider output for high
+ * @t: Known I2C timing information
+ * @t_calc: Caculated rk3x private timings that would be written into regs
  *
  * Returns: 0 on success, -EINVAL if the goal SCL rate is too slow. In that case
  * a best-effort divider value is returned in divs. If the target rate is
  * too high, we silently use the highest possible rate.
  */
-static int rk3x_i2c_calc_divs(unsigned long clk_rate,
-			      struct i2c_timings *t,
-			      unsigned long *div_low,
-			      unsigned long *div_high)
+static int rk3x_i2c_v0_calc_timings(unsigned long clk_rate,
+				    struct i2c_timings *t,
+				    struct rk3x_i2c_calced_timings *t_calc)
 {
-	unsigned long spec_min_low_ns, spec_min_high_ns;
-	unsigned long spec_setup_start, spec_max_data_hold_ns;
-	unsigned long data_hold_buffer_ns;
-
 	unsigned long min_low_ns, min_high_ns;
 	unsigned long max_low_ns, min_total_ns;
 
@@ -462,11 +574,13 @@ static int rk3x_i2c_calc_divs(unsigned long clk_rate,
 	unsigned long min_div_for_hold, min_total_div;
 	unsigned long extra_div, extra_low_div, ideal_low_div;
 
+	unsigned long data_hold_buffer_ns = 50;
+	const struct i2c_spec_values *spec;
 	int ret = 0;
 
 	/* Only support standard-mode and fast-mode */
-	if (WARN_ON(t->bus_freq_hz > 400000))
-		t->bus_freq_hz = 400000;
+	if (WARN_ON(t->bus_freq_hz > I2C_MAX_FAST_MODE_FREQ))
+		t->bus_freq_hz = I2C_MAX_FAST_MODE_FREQ;
 
 	/* prevent scl_rate_khz from becoming 0 */
 	if (WARN_ON(t->bus_freq_hz < 1000))
@@ -484,22 +598,8 @@ static int rk3x_i2c_calc_divs(unsigned long clk_rate,
 	 *	 This is because the i2c host on Rockchip holds the data line
 	 *	 for half the low time.
 	 */
-	if (t->bus_freq_hz <= 100000) {
-		/* Standard-mode */
-		spec_min_low_ns = 4700;
-		spec_setup_start = 4700;
-		spec_min_high_ns = 4000;
-		spec_max_data_hold_ns = 3450;
-		data_hold_buffer_ns = 50;
-	} else {
-		/* Fast-mode */
-		spec_min_low_ns = 1300;
-		spec_setup_start = 600;
-		spec_min_high_ns = 600;
-		spec_max_data_hold_ns = 900;
-		data_hold_buffer_ns = 50;
-	}
-	min_high_ns = t->scl_rise_ns + spec_min_high_ns;
+	spec = rk3x_i2c_get_spec(t->bus_freq_hz);
+	min_high_ns = t->scl_rise_ns + spec->min_high_ns;
 
 	/*
 	 * Timings for repeated start:
@@ -509,14 +609,14 @@ static int rk3x_i2c_calc_divs(unsigned long clk_rate,
 	 * We need to account for those rules in picking our "high" time so
 	 * we meet tSU;STA and tHD;STA times.
 	 */
-	min_high_ns = max(min_high_ns,
-		DIV_ROUND_UP((t->scl_rise_ns + spec_setup_start) * 1000, 875));
-	min_high_ns = max(min_high_ns,
-		DIV_ROUND_UP((t->scl_rise_ns + spec_setup_start +
-			      t->sda_fall_ns + spec_min_high_ns), 2));
+	min_high_ns = max(min_high_ns, DIV_ROUND_UP(
+		(t->scl_rise_ns + spec->min_setup_start_ns) * 1000, 875));
+	min_high_ns = max(min_high_ns, DIV_ROUND_UP(
+		(t->scl_rise_ns + spec->min_setup_start_ns + t->sda_fall_ns +
+		spec->min_high_ns), 2));
 
-	min_low_ns = t->scl_fall_ns + spec_min_low_ns;
-	max_low_ns = spec_max_data_hold_ns * 2 - data_hold_buffer_ns;
+	min_low_ns = t->scl_fall_ns + spec->min_low_ns;
+	max_low_ns =  spec->max_data_hold_ns * 2 - data_hold_buffer_ns;
 	min_total_ns = min_low_ns + min_high_ns;
 
 	/* Adjust to avoid overflow */
@@ -552,8 +652,8 @@ static int rk3x_i2c_calc_divs(unsigned long clk_rate,
 		 * Time needed to meet hold requirements is important.
 		 * Just use that.
 		 */
-		*div_low = min_low_div;
-		*div_high = min_high_div;
+		t_calc->div_low = min_low_div;
+		t_calc->div_high = min_high_div;
 	} else {
 		/*
 		 * We've got to distribute some time among the low and high
@@ -582,25 +682,187 @@ static int rk3x_i2c_calc_divs(unsigned long clk_rate,
 
 		/* Give low the "ideal" and give high whatever extra is left */
 		extra_low_div = ideal_low_div - min_low_div;
-		*div_low = ideal_low_div;
-		*div_high = min_high_div + (extra_div - extra_low_div);
+		t_calc->div_low = ideal_low_div;
+		t_calc->div_high = min_high_div + (extra_div - extra_low_div);
 	}
 
 	/*
 	 * Adjust to the fact that the hardware has an implicit "+1".
 	 * NOTE: Above calculations always produce div_low > 0 and div_high > 0.
 	 */
-	*div_low = *div_low - 1;
-	*div_high = *div_high - 1;
+	t_calc->div_low--;
+	t_calc->div_high--;
 
+	/* Give the tuning value 0, that would not update con register */
+	t_calc->tuning = 0;
 	/* Maximum divider supported by hw is 0xffff */
-	if (*div_low > 0xffff) {
-		*div_low = 0xffff;
+	if (t_calc->div_low > 0xffff) {
+		t_calc->div_low = 0xffff;
 		ret = -EINVAL;
 	}
 
-	if (*div_high > 0xffff) {
-		*div_high = 0xffff;
+	if (t_calc->div_high > 0xffff) {
+		t_calc->div_high = 0xffff;
+		ret = -EINVAL;
+	}
+
+	return ret;
+}
+
+/**
+ * Calculate timing values for desired SCL frequency
+ *
+ * @clk_rate: I2C input clock rate
+ * @t: Known I2C timing information
+ * @t_calc: Caculated rk3x private timings that would be written into regs
+ *
+ * Returns: 0 on success, -EINVAL if the goal SCL rate is too slow. In that case
+ * a best-effort divider value is returned in divs. If the target rate is
+ * too high, we silently use the highest possible rate.
+ * The following formulas are v1's method to calculate timings.
+ *
+ * l = divl + 1;
+ * h = divh + 1;
+ * s = sda_update_config + 1;
+ * u = start_setup_config + 1;
+ * p = stop_setup_config + 1;
+ * T = Tclk_i2c;
+ *
+ * tHigh = 8 * h * T;
+ * tLow = 8 * l * T;
+ *
+ * tHD;sda = (l * s + 1) * T;
+ * tSU;sda = [(8 - s) * l + 1] * T;
+ * tI2C = 8 * (l + h) * T;
+ *
+ * tSU;sta = (8h * u + 1) * T;
+ * tHD;sta = [8h * (u + 1) - 1] * T;
+ * tSU;sto = (8h * p + 1) * T;
+ */
+static int rk3x_i2c_v1_calc_timings(unsigned long clk_rate,
+				    struct i2c_timings *t,
+				    struct rk3x_i2c_calced_timings *t_calc)
+{
+	unsigned long min_low_ns, min_high_ns;
+	unsigned long min_setup_start_ns, min_setup_data_ns;
+	unsigned long min_setup_stop_ns, max_hold_data_ns;
+
+	unsigned long clk_rate_khz, scl_rate_khz;
+
+	unsigned long min_low_div, min_high_div;
+
+	unsigned long min_div_for_hold, min_total_div;
+	unsigned long extra_div, extra_low_div;
+	unsigned long sda_update_cfg, stp_sta_cfg, stp_sto_cfg;
+
+	const struct i2c_spec_values *spec;
+	int ret = 0;
+
+	/* Support standard-mode, fast-mode and fast-mode plus */
+	if (WARN_ON(t->bus_freq_hz > I2C_MAX_FAST_MODE_PLUS_FREQ))
+		t->bus_freq_hz = I2C_MAX_FAST_MODE_PLUS_FREQ;
+
+	/* prevent scl_rate_khz from becoming 0 */
+	if (WARN_ON(t->bus_freq_hz < 1000))
+		t->bus_freq_hz = 1000;
+
+	/*
+	 * min_low_ns: The minimum number of ns we need to hold low to
+	 *	       meet I2C specification, should include fall time.
+	 * min_high_ns: The minimum number of ns we need to hold high to
+	 *	        meet I2C specification, should include rise time.
+	 */
+	spec = rk3x_i2c_get_spec(t->bus_freq_hz);
+
+	/* calculate min-divh and min-divl */
+	clk_rate_khz = DIV_ROUND_UP(clk_rate, 1000);
+	scl_rate_khz = t->bus_freq_hz / 1000;
+	min_total_div = DIV_ROUND_UP(clk_rate_khz, scl_rate_khz * 8);
+
+	min_high_ns = t->scl_rise_ns + spec->min_high_ns;
+	min_high_div = DIV_ROUND_UP(clk_rate_khz * min_high_ns, 8 * 1000000);
+
+	min_low_ns = t->scl_fall_ns + spec->min_low_ns;
+	min_low_div = DIV_ROUND_UP(clk_rate_khz * min_low_ns, 8 * 1000000);
+
+	/*
+	 * Final divh and divl must be greater than 0, otherwise the
+	 * hardware would not output the i2c clk.
+	 */
+	min_high_div = (min_high_div < 1) ? 2 : min_high_div;
+	min_low_div = (min_low_div < 1) ? 2 : min_low_div;
+
+	/* These are the min dividers needed for min hold times. */
+	min_div_for_hold = (min_low_div + min_high_div);
+
+	/*
+	 * This is the maximum divider so we don't go over the maximum.
+	 * We don't round up here (we round down) since this is a maximum.
+	 */
+	if (min_div_for_hold >= min_total_div) {
+		/*
+		 * Time needed to meet hold requirements is important.
+		 * Just use that.
+		 */
+		t_calc->div_low = min_low_div;
+		t_calc->div_high = min_high_div;
+	} else {
+		/*
+		 * We've got to distribute some time among the low and high
+		 * so we don't run too fast.
+		 * We'll try to split things up by the scale of min_low_div and
+		 * min_high_div, biasing slightly towards having a higher div
+		 * for low (spend more time low).
+		 */
+		extra_div = min_total_div - min_div_for_hold;
+		extra_low_div = DIV_ROUND_UP(min_low_div * extra_div,
+					     min_div_for_hold);
+
+		t_calc->div_low = min_low_div + extra_low_div;
+		t_calc->div_high = min_high_div + (extra_div - extra_low_div);
+	}
+
+	/*
+	 * calculate sda data hold count by the rules, data_upd_st:3
+	 * is a appropriate value to reduce calculated times.
+	 */
+	for (sda_update_cfg = 3; sda_update_cfg > 0; sda_update_cfg--) {
+		max_hold_data_ns =  DIV_ROUND_UP((sda_update_cfg
+						 * (t_calc->div_low) + 1)
+						 * 1000000, clk_rate_khz);
+		min_setup_data_ns =  DIV_ROUND_UP(((8 - sda_update_cfg)
+						 * (t_calc->div_low) + 1)
+						 * 1000000, clk_rate_khz);
+		if ((max_hold_data_ns < spec->max_data_hold_ns) &&
+		    (min_setup_data_ns > spec->min_data_setup_ns))
+			break;
+	}
+
+	/* calculate setup start config */
+	min_setup_start_ns = t->scl_rise_ns + spec->min_setup_start_ns;
+	stp_sta_cfg = DIV_ROUND_UP(clk_rate_khz * min_setup_start_ns
+			   - 1000000, 8 * 1000000 * (t_calc->div_high));
+
+	/* calculate setup stop config */
+	min_setup_stop_ns = t->scl_rise_ns + spec->min_setup_stop_ns;
+	stp_sto_cfg = DIV_ROUND_UP(clk_rate_khz * min_setup_stop_ns
+			   - 1000000, 8 * 1000000 * (t_calc->div_high));
+
+	t_calc->tuning = REG_CON_SDA_CFG(--sda_update_cfg) |
+			 REG_CON_STA_CFG(--stp_sta_cfg) |
+			 REG_CON_STO_CFG(--stp_sto_cfg);
+
+	t_calc->div_low--;
+	t_calc->div_high--;
+
+	/* Maximum divider supported by hw is 0xffff */
+	if (t_calc->div_low > 0xffff) {
+		t_calc->div_low = 0xffff;
+		ret = -EINVAL;
+	}
+
+	if (t_calc->div_high > 0xffff) {
+		t_calc->div_high = 0xffff;
 		ret = -EINVAL;
 	}
 
@@ -610,19 +872,31 @@ static int rk3x_i2c_calc_divs(unsigned long clk_rate,
 static void rk3x_i2c_adapt_div(struct rk3x_i2c *i2c, unsigned long clk_rate)
 {
 	struct i2c_timings *t = &i2c->t;
-	unsigned long div_low, div_high;
+	struct rk3x_i2c_calced_timings calc;
 	u64 t_low_ns, t_high_ns;
+	unsigned long flags;
+	u32 val;
 	int ret;
 
-	ret = rk3x_i2c_calc_divs(clk_rate, t, &div_low, &div_high);
+	ret = i2c->soc_data->calc_timings(clk_rate, t, &calc);
 	WARN_ONCE(ret != 0, "Could not reach SCL freq %u", t->bus_freq_hz);
 
-	clk_enable(i2c->clk);
-	i2c_writel(i2c, (div_high << 16) | (div_low & 0xffff), REG_CLKDIV);
-	clk_disable(i2c->clk);
+	clk_enable(i2c->pclk);
 
-	t_low_ns = div_u64(((u64)div_low + 1) * 8 * 1000000000, clk_rate);
-	t_high_ns = div_u64(((u64)div_high + 1) * 8 * 1000000000, clk_rate);
+	spin_lock_irqsave(&i2c->lock, flags);
+	val = i2c_readl(i2c, REG_CON);
+	val &= ~REG_CON_TUNING_MASK;
+	val |= calc.tuning;
+	i2c_writel(i2c, val, REG_CON);
+	i2c_writel(i2c, (calc.div_high << 16) | (calc.div_low & 0xffff),
+		   REG_CLKDIV);
+	spin_unlock_irqrestore(&i2c->lock, flags);
+
+	clk_disable(i2c->pclk);
+
+	t_low_ns = div_u64(((u64)calc.div_low + 1) * 8 * 1000000000, clk_rate);
+	t_high_ns = div_u64(((u64)calc.div_high + 1) * 8 * 1000000000,
+			    clk_rate);
 	dev_dbg(i2c->dev,
 		"CLK %lukhz, Req %uns, Act low %lluns high %lluns\n",
 		clk_rate / 1000,
@@ -644,7 +918,7 @@ static void rk3x_i2c_adapt_div(struct rk3x_i2c *i2c, unsigned long clk_rate)
  * Code adapted from i2c-cadence.c.
  *
  * Return:	NOTIFY_STOP if the rate change should be aborted, NOTIFY_OK
- *		to acknowedge the change, NOTIFY_DONE if the notification is
+ *		to acknowledge the change, NOTIFY_DONE if the notification is
  *		considered irrelevant.
  */
 static int rk3x_i2c_clk_notifier_cb(struct notifier_block *nb, unsigned long
@@ -652,12 +926,17 @@ static int rk3x_i2c_clk_notifier_cb(struct notifier_block *nb, unsigned long
 {
 	struct clk_notifier_data *ndata = data;
 	struct rk3x_i2c *i2c = container_of(nb, struct rk3x_i2c, clk_rate_nb);
-	unsigned long div_low, div_high;
+	struct rk3x_i2c_calced_timings calc;
 
 	switch (event) {
 	case PRE_RATE_CHANGE:
-		if (rk3x_i2c_calc_divs(ndata->new_rate, &i2c->t,
-				       &div_low, &div_high) != 0)
+		/*
+		 * Try the calculation (but don't store the result) ahead of
+		 * time to see if we need to block the clock change.  Timings
+		 * shouldn't actually take effect until rk3x_i2c_adapt_div().
+		 */
+		if (i2c->soc_data->calc_timings(ndata->new_rate, &i2c->t,
+						&calc) != 0)
 			return NOTIFY_STOP;
 
 		/* scale up */
@@ -762,17 +1041,32 @@ static int rk3x_i2c_setup(struct rk3x_i2c *i2c, struct i2c_msg *msgs, int num)
 	return ret;
 }
 
-static int rk3x_i2c_xfer(struct i2c_adapter *adap,
-			 struct i2c_msg *msgs, int num)
+static int rk3x_i2c_wait_xfer_poll(struct rk3x_i2c *i2c)
+{
+	ktime_t timeout = ktime_add_ms(ktime_get(), WAIT_TIMEOUT);
+
+	while (READ_ONCE(i2c->busy) &&
+	       ktime_compare(ktime_get(), timeout) < 0) {
+		udelay(5);
+		rk3x_i2c_irq(0, i2c);
+	}
+
+	return !i2c->busy;
+}
+
+static int rk3x_i2c_xfer_common(struct i2c_adapter *adap,
+				struct i2c_msg *msgs, int num, bool polling)
 {
 	struct rk3x_i2c *i2c = (struct rk3x_i2c *)adap->algo_data;
 	unsigned long timeout, flags;
+	u32 val;
 	int ret = 0;
 	int i;
 
 	spin_lock_irqsave(&i2c->lock, flags);
 
 	clk_enable(i2c->clk);
+	clk_enable(i2c->pclk);
 
 	i2c->is_last_msg = false;
 
@@ -795,8 +1089,12 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 
 		rk3x_i2c_start(i2c);
 
-		timeout = wait_event_timeout(i2c->wait, !i2c->busy,
-					     msecs_to_jiffies(WAIT_TIMEOUT));
+		if (!polling) {
+			timeout = wait_event_timeout(i2c->wait, !i2c->busy,
+						     msecs_to_jiffies(WAIT_TIMEOUT));
+		} else {
+			timeout = rk3x_i2c_wait_xfer_poll(i2c);
+		}
 
 		spin_lock_irqsave(&i2c->lock, flags);
 
@@ -806,7 +1104,9 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 
 			/* Force a STOP condition without interrupt */
 			i2c_writel(i2c, 0, REG_IEN);
-			i2c_writel(i2c, REG_CON_EN | REG_CON_STOP, REG_CON);
+			val = i2c_readl(i2c, REG_CON) & REG_CON_TUNING_MASK;
+			val |= REG_CON_EN | REG_CON_STOP;
+			i2c_writel(i2c, val, REG_CON);
 
 			i2c->state = STATE_IDLE;
 
@@ -820,10 +1120,33 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 		}
 	}
 
+	clk_disable(i2c->pclk);
 	clk_disable(i2c->clk);
+
 	spin_unlock_irqrestore(&i2c->lock, flags);
 
 	return ret < 0 ? ret : num;
+}
+
+static int rk3x_i2c_xfer(struct i2c_adapter *adap,
+			 struct i2c_msg *msgs, int num)
+{
+	return rk3x_i2c_xfer_common(adap, msgs, num, false);
+}
+
+static int rk3x_i2c_xfer_polling(struct i2c_adapter *adap,
+				 struct i2c_msg *msgs, int num)
+{
+	return rk3x_i2c_xfer_common(adap, msgs, num, true);
+}
+
+static __maybe_unused int rk3x_i2c_resume(struct device *dev)
+{
+	struct rk3x_i2c *i2c = dev_get_drvdata(dev);
+
+	rk3x_i2c_adapt_div(i2c, clk_get_rate(i2c->clk));
+
+	return 0;
 }
 
 static u32 rk3x_i2c_func(struct i2c_adapter *adap)
@@ -833,20 +1156,65 @@ static u32 rk3x_i2c_func(struct i2c_adapter *adap)
 
 static const struct i2c_algorithm rk3x_i2c_algorithm = {
 	.master_xfer		= rk3x_i2c_xfer,
+	.master_xfer_atomic	= rk3x_i2c_xfer_polling,
 	.functionality		= rk3x_i2c_func,
 };
 
-static struct rk3x_i2c_soc_data soc_data[3] = {
-	{ .grf_offset = 0x154 }, /* rk3066 */
-	{ .grf_offset = 0x0a4 }, /* rk3188 */
-	{ .grf_offset = -1 },    /* no I2C switching needed */
+static const struct rk3x_i2c_soc_data rv1108_soc_data = {
+	.grf_offset = -1,
+	.calc_timings = rk3x_i2c_v1_calc_timings,
+};
+
+static const struct rk3x_i2c_soc_data rk3066_soc_data = {
+	.grf_offset = 0x154,
+	.calc_timings = rk3x_i2c_v0_calc_timings,
+};
+
+static const struct rk3x_i2c_soc_data rk3188_soc_data = {
+	.grf_offset = 0x0a4,
+	.calc_timings = rk3x_i2c_v0_calc_timings,
+};
+
+static const struct rk3x_i2c_soc_data rk3228_soc_data = {
+	.grf_offset = -1,
+	.calc_timings = rk3x_i2c_v0_calc_timings,
+};
+
+static const struct rk3x_i2c_soc_data rk3288_soc_data = {
+	.grf_offset = -1,
+	.calc_timings = rk3x_i2c_v0_calc_timings,
+};
+
+static const struct rk3x_i2c_soc_data rk3399_soc_data = {
+	.grf_offset = -1,
+	.calc_timings = rk3x_i2c_v1_calc_timings,
 };
 
 static const struct of_device_id rk3x_i2c_match[] = {
-	{ .compatible = "rockchip,rk3066-i2c", .data = (void *)&soc_data[0] },
-	{ .compatible = "rockchip,rk3188-i2c", .data = (void *)&soc_data[1] },
-	{ .compatible = "rockchip,rk3228-i2c", .data = (void *)&soc_data[2] },
-	{ .compatible = "rockchip,rk3288-i2c", .data = (void *)&soc_data[2] },
+	{
+		.compatible = "rockchip,rv1108-i2c",
+		.data = &rv1108_soc_data
+	},
+	{
+		.compatible = "rockchip,rk3066-i2c",
+		.data = &rk3066_soc_data
+	},
+	{
+		.compatible = "rockchip,rk3188-i2c",
+		.data = &rk3188_soc_data
+	},
+	{
+		.compatible = "rockchip,rk3228-i2c",
+		.data = &rk3228_soc_data
+	},
+	{
+		.compatible = "rockchip,rk3288-i2c",
+		.data = &rk3288_soc_data
+	},
+	{
+		.compatible = "rockchip,rk3399-i2c",
+		.data = &rk3399_soc_data
+	},
 	{},
 };
 MODULE_DEVICE_TABLE(of, rk3x_i2c_match);
@@ -856,7 +1224,6 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	const struct of_device_id *match;
 	struct rk3x_i2c *i2c;
-	struct resource *mem;
 	int ret = 0;
 	int bus_nr;
 	u32 value;
@@ -868,7 +1235,7 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	match = of_match_node(rk3x_i2c_match, np);
-	i2c->soc_data = (struct rk3x_i2c_soc_data *)match->data;
+	i2c->soc_data = match->data;
 
 	/* use common interface to get I2C timing properties */
 	i2c_parse_fw_timings(&pdev->dev, &i2c->t, true);
@@ -886,14 +1253,7 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 	spin_lock_init(&i2c->lock);
 	init_waitqueue_head(&i2c->wait);
 
-	i2c->clk = devm_clk_get(&pdev->dev, NULL);
-	if (IS_ERR(i2c->clk)) {
-		dev_err(&pdev->dev, "cannot get clock\n");
-		return PTR_ERR(i2c->clk);
-	}
-
-	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	i2c->regs = devm_ioremap_resource(&pdev->dev, mem);
+	i2c->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(i2c->regs))
 		return PTR_ERR(i2c->regs);
 
@@ -931,10 +1291,8 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 
 	/* IRQ setup */
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "cannot find rk3x IRQ\n");
+	if (irq < 0)
 		return irq;
-	}
 
 	ret = devm_request_irq(&pdev->dev, irq, rk3x_i2c_irq,
 			       0, dev_name(&pdev->dev), i2c);
@@ -945,34 +1303,54 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, i2c);
 
+	if (i2c->soc_data->calc_timings == rk3x_i2c_v0_calc_timings) {
+		/* Only one clock to use for bus clock and peripheral clock */
+		i2c->clk = devm_clk_get(&pdev->dev, NULL);
+		i2c->pclk = i2c->clk;
+	} else {
+		i2c->clk = devm_clk_get(&pdev->dev, "i2c");
+		i2c->pclk = devm_clk_get(&pdev->dev, "pclk");
+	}
+
+	if (IS_ERR(i2c->clk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(i2c->clk),
+				     "Can't get bus clk\n");
+
+	if (IS_ERR(i2c->pclk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(i2c->pclk),
+				     "Can't get periph clk\n");
+
 	ret = clk_prepare(i2c->clk);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "Could not prepare clock\n");
+		dev_err(&pdev->dev, "Can't prepare bus clk: %d\n", ret);
 		return ret;
+	}
+	ret = clk_prepare(i2c->pclk);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "Can't prepare periph clock: %d\n", ret);
+		goto err_clk;
 	}
 
 	i2c->clk_rate_nb.notifier_call = rk3x_i2c_clk_notifier_cb;
 	ret = clk_notifier_register(i2c->clk, &i2c->clk_rate_nb);
 	if (ret != 0) {
 		dev_err(&pdev->dev, "Unable to register clock notifier\n");
-		goto err_clk;
+		goto err_pclk;
 	}
 
 	clk_rate = clk_get_rate(i2c->clk);
 	rk3x_i2c_adapt_div(i2c, clk_rate);
 
 	ret = i2c_add_adapter(&i2c->adap);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "Could not register adapter\n");
+	if (ret < 0)
 		goto err_clk_notifier;
-	}
-
-	dev_info(&pdev->dev, "Initialized RK3xxx I2C bus at %p\n", i2c->regs);
 
 	return 0;
 
 err_clk_notifier:
 	clk_notifier_unregister(i2c->clk, &i2c->clk_rate_nb);
+err_pclk:
+	clk_unprepare(i2c->pclk);
 err_clk:
 	clk_unprepare(i2c->clk);
 	return ret;
@@ -985,10 +1363,13 @@ static int rk3x_i2c_remove(struct platform_device *pdev)
 	i2c_del_adapter(&i2c->adap);
 
 	clk_notifier_unregister(i2c->clk, &i2c->clk_rate_nb);
+	clk_unprepare(i2c->pclk);
 	clk_unprepare(i2c->clk);
 
 	return 0;
 }
+
+static SIMPLE_DEV_PM_OPS(rk3x_i2c_pm_ops, NULL, rk3x_i2c_resume);
 
 static struct platform_driver rk3x_i2c_driver = {
 	.probe   = rk3x_i2c_probe,
@@ -996,6 +1377,7 @@ static struct platform_driver rk3x_i2c_driver = {
 	.driver  = {
 		.name  = "rk3x-i2c",
 		.of_match_table = rk3x_i2c_match,
+		.pm = &rk3x_i2c_pm_ops,
 	},
 };
 

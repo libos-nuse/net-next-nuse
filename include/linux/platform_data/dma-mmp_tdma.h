@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  SRAM Memory Management
  *
  *  Copyright (c) 2011 Marvell Semiconductors Inc.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
- *
  */
 
 #ifndef __DMA_MMP_TDMA_H
@@ -28,7 +24,7 @@ struct sram_platdata {
 	int granularity;
 };
 
-#ifdef CONFIG_ARM
+#ifdef CONFIG_MMP_SRAM
 extern struct gen_pool *sram_get_gpool(char *pool_name);
 #else
 static inline struct gen_pool *sram_get_gpool(char *pool_name)

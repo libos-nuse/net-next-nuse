@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  pci_link.c - ACPI PCI Interrupt Link Device Driver ($Revision: 34 $)
  *
@@ -5,22 +6,8 @@
  *  Copyright (C) 2001, 2002 Paul Diefenbaugh <paul.s.diefenbaugh@intel.com>
  *  Copyright (C) 2002       Dominik Brodowski <devel@brodo.de>
  *
- * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or (at
- *  your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful, but
- *  WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  General Public License for more details.
- *
- * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- *
- * TBD: 
- *      1. Support more than one IRQ resource entry per link device (index).
+ * TBD:
+ *	1. Support more than one IRQ resource entry per link device (index).
  *	2. Implement start/stop mechanism and use ACPI Bus Driver facilities
  *	   for IRQ management (e.g. start()->_SRS).
  */
@@ -44,8 +31,6 @@
 ACPI_MODULE_NAME("pci_link");
 #define ACPI_PCI_LINK_CLASS		"pci_irq_routing"
 #define ACPI_PCI_LINK_DEVICE_NAME	"PCI Interrupt Link"
-#define ACPI_PCI_LINK_FILE_INFO		"info"
-#define ACPI_PCI_LINK_FILE_STATUS	"state"
 #define ACPI_PCI_LINK_MAX_POSSIBLE	16
 
 static int acpi_pci_link_add(struct acpi_device *device,
@@ -87,6 +72,7 @@ struct acpi_pci_link {
 
 static LIST_HEAD(acpi_link_list);
 static DEFINE_MUTEX(acpi_link_lock);
+static int sci_irq = -1, sci_penalty;
 
 /* --------------------------------------------------------------------------
                             PCI Link Device Management
@@ -172,8 +158,8 @@ static int acpi_pci_link_get_possible(struct acpi_pci_link *link)
 	status = acpi_walk_resources(link->device->handle, METHOD_NAME__PRS,
 				     acpi_pci_link_check_possible, link);
 	if (ACPI_FAILURE(status)) {
-		ACPI_EXCEPTION((AE_INFO, status, "Evaluating _PRS"));
-		return -ENODEV;
+		acpi_handle_debug(link->device->handle, "_PRS not present or invalid");
+		return 0;
 	}
 
 	ACPI_DEBUG_PRINT((ACPI_DB_INFO,
@@ -263,8 +249,8 @@ static int acpi_pci_link_get_current(struct acpi_pci_link *link)
 		}
 	}
 
-	/* 
-	 * Query and parse _CRS to get the current IRQ assignment. 
+	/*
+	 * Query and parse _CRS to get the current IRQ assignment.
 	 */
 
 	status = acpi_walk_resources(link->device->handle, METHOD_NAME__CRS,
@@ -316,10 +302,10 @@ static int acpi_pci_link_set(struct acpi_pci_link *link, int irq)
 		resource->res.data.irq.polarity =
 		    link->irq.polarity;
 		if (link->irq.triggering == ACPI_EDGE_SENSITIVE)
-			resource->res.data.irq.sharable =
+			resource->res.data.irq.shareable =
 			    ACPI_EXCLUSIVE;
 		else
-			resource->res.data.irq.sharable = ACPI_SHARED;
+			resource->res.data.irq.shareable = ACPI_SHARED;
 		resource->res.data.irq.interrupt_count = 1;
 		resource->res.data.irq.interrupts[0] = irq;
 		break;
@@ -334,10 +320,10 @@ static int acpi_pci_link_set(struct acpi_pci_link *link, int irq)
 		resource->res.data.extended_irq.polarity =
 		    link->irq.polarity;
 		if (link->irq.triggering == ACPI_EDGE_SENSITIVE)
-			resource->res.data.irq.sharable =
+			resource->res.data.extended_irq.shareable =
 			    ACPI_EXCLUSIVE;
 		else
-			resource->res.data.irq.sharable = ACPI_SHARED;
+			resource->res.data.extended_irq.shareable = ACPI_SHARED;
 		resource->res.data.extended_irq.interrupt_count = 1;
 		resource->res.data.extended_irq.interrupts[0] = irq;
 		/* ignore resource_source, it's optional */
@@ -410,7 +396,7 @@ static int acpi_pci_link_set(struct acpi_pci_link *link, int irq)
 /*
  * "acpi_irq_balance" (default in APIC mode) enables ACPI to use PIC Interrupt
  * Link Devices to move the PIRQs around to minimize sharing.
- * 
+ *
  * "acpi_irq_nobalance" (default in PIC mode) tells ACPI not to move any PIC IRQs
  * that the BIOS has already set to active.  This is necessary because
  * ACPI has no automatic means of knowing what ISA IRQs are used.  Note that
@@ -428,7 +414,7 @@ static int acpi_pci_link_set(struct acpi_pci_link *link, int irq)
  *
  * Note that PCI IRQ routers have a list of possible IRQs,
  * which may not include the IRQs this table says are available.
- * 
+ *
  * Since this heuristic can't tell the difference between a link
  * that no device will attach to, vs. a link which may be shared
  * by multiple active devices -- it is not optimal.
@@ -470,6 +456,7 @@ static int acpi_irq_pci_sharing_penalty(int irq)
 {
 	struct acpi_pci_link *link;
 	int penalty = 0;
+	int i;
 
 	list_for_each_entry(link, &acpi_link_list, list) {
 		/*
@@ -478,18 +465,14 @@ static int acpi_irq_pci_sharing_penalty(int irq)
 		 */
 		if (link->irq.active && link->irq.active == irq)
 			penalty += PIRQ_PENALTY_PCI_USING;
-		else {
-			int i;
 
-			/*
-			 * If a link is inactive, penalize the IRQs it
-			 * might use, but not as severely.
-			 */
-			for (i = 0; i < link->irq.possible_count; i++)
-				if (link->irq.possible[i] == irq)
-					penalty += PIRQ_PENALTY_PCI_POSSIBLE /
-						link->irq.possible_count;
-		}
+		/*
+		 * penalize the IRQs PCI might use, but not as severely.
+		 */
+		for (i = 0; i < link->irq.possible_count; i++)
+			if (link->irq.possible[i] == irq)
+				penalty += PIRQ_PENALTY_PCI_POSSIBLE /
+					link->irq.possible_count;
 	}
 
 	return penalty;
@@ -499,25 +482,49 @@ static int acpi_irq_get_penalty(int irq)
 {
 	int penalty = 0;
 
+	if (irq == sci_irq)
+		penalty += sci_penalty;
+
 	if (irq < ACPI_MAX_ISA_IRQS)
-		penalty += acpi_isa_irq_penalty[irq];
+		return penalty + acpi_isa_irq_penalty[irq];
+
+	return penalty + acpi_irq_pci_sharing_penalty(irq);
+}
+
+int __init acpi_irq_penalty_init(void)
+{
+	struct acpi_pci_link *link;
+	int i;
 
 	/*
-	* Penalize IRQ used by ACPI SCI. If ACPI SCI pin attributes conflict
-	* with PCI IRQ attributes, mark ACPI SCI as ISA_ALWAYS so it won't be
-	* use for PCI IRQs.
-	*/
-	if (irq == acpi_gbl_FADT.sci_interrupt) {
-		u32 type = irq_get_trigger_type(irq) & IRQ_TYPE_SENSE_MASK;
+	 * Update penalties to facilitate IRQ balancing.
+	 */
+	list_for_each_entry(link, &acpi_link_list, list) {
 
-		if (type != IRQ_TYPE_LEVEL_LOW)
-			penalty += PIRQ_PENALTY_ISA_ALWAYS;
-		else
-			penalty += PIRQ_PENALTY_PCI_USING;
+		/*
+		 * reflect the possible and active irqs in the penalty table --
+		 * useful for breaking ties.
+		 */
+		if (link->irq.possible_count) {
+			int penalty =
+			    PIRQ_PENALTY_PCI_POSSIBLE /
+			    link->irq.possible_count;
+
+			for (i = 0; i < link->irq.possible_count; i++) {
+				if (link->irq.possible[i] < ACPI_MAX_ISA_IRQS)
+					acpi_isa_irq_penalty[link->irq.
+							 possible[i]] +=
+					    penalty;
+			}
+
+		} else if (link->irq.active &&
+				(link->irq.active < ACPI_MAX_ISA_IRQS)) {
+			acpi_isa_irq_penalty[link->irq.active] +=
+			    PIRQ_PENALTY_PCI_POSSIBLE;
+		}
 	}
 
-	penalty += acpi_irq_pci_sharing_penalty(irq);
-	return penalty;
+	return 0;
 }
 
 static int acpi_irq_balance = -1;	/* 0: static, 1: balance */
@@ -586,7 +593,11 @@ static int acpi_pci_link_allocate(struct acpi_pci_link *link)
 			    acpi_device_bid(link->device));
 		return -ENODEV;
 	} else {
-		printk(KERN_WARNING PREFIX "%s [%s] enabled at IRQ %d\n",
+		if (link->irq.active < ACPI_MAX_ISA_IRQS)
+			acpi_isa_irq_penalty[link->irq.active] +=
+				PIRQ_PENALTY_PCI_USING;
+
+		pr_info("%s [%s] enabled at IRQ %d\n",
 		       acpi_device_name(link->device),
 		       acpi_device_bid(link->device), link->irq.active);
 	}
@@ -648,7 +659,7 @@ int acpi_pci_link_allocate_irq(acpi_handle handle, int index, int *triggering,
 	ACPI_DEBUG_PRINT((ACPI_DB_INFO,
 			  "Link %s is referenced\n",
 			  acpi_device_bid(link->device)));
-	return (link->irq.active);
+	return link->irq.active;
 }
 
 /*
@@ -699,7 +710,7 @@ int acpi_pci_link_free_irq(acpi_handle handle)
 		acpi_evaluate_object(link->device->handle, "_DIS", NULL, NULL);
 
 	mutex_unlock(&acpi_link_lock);
-	return (link->irq.active);
+	return link->irq.active;
 }
 
 /* --------------------------------------------------------------------------
@@ -816,7 +827,7 @@ static int __init acpi_irq_penalty_update(char *str, int used)
 			continue;
 
 		if (used)
-			new_penalty = acpi_irq_get_penalty(irq) +
+			new_penalty = acpi_isa_irq_penalty[irq] +
 					PIRQ_PENALTY_ISA_USED;
 		else
 			new_penalty = 0;
@@ -838,14 +849,25 @@ static int __init acpi_irq_penalty_update(char *str, int used)
 void acpi_penalize_isa_irq(int irq, int active)
 {
 	if ((irq >= 0) && (irq < ARRAY_SIZE(acpi_isa_irq_penalty)))
-		acpi_isa_irq_penalty[irq] = acpi_irq_get_penalty(irq) +
-			active ? PIRQ_PENALTY_ISA_USED : PIRQ_PENALTY_PCI_USING;
+		acpi_isa_irq_penalty[irq] +=
+		  (active ? PIRQ_PENALTY_ISA_USED : PIRQ_PENALTY_PCI_USING);
 }
 
 bool acpi_isa_irq_available(int irq)
 {
 	return irq >= 0 && (irq >= ARRAY_SIZE(acpi_isa_irq_penalty) ||
 		    acpi_irq_get_penalty(irq) < PIRQ_PENALTY_ISA_ALWAYS);
+}
+
+void acpi_penalize_sci_irq(int irq, int trigger, int polarity)
+{
+	sci_irq = irq;
+
+	if (trigger == ACPI_MADT_TRIGGER_LEVEL &&
+	    polarity == ACPI_MADT_POLARITY_ACTIVE_LOW)
+		sci_penalty = PIRQ_PENALTY_PCI_USING;
+	else
+		sci_penalty = PIRQ_PENALTY_ISA_ALWAYS;
 }
 
 /*

@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * NOP USB transceiver for all USB transceiver which are either built-in
  * into USB IP or which are mostly autonomous.
  *
  * Copyright (C) 2009 Texas Instruments Inc
  * Author: Ajay Kumar Gupta <ajay.gupta@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
  * Current status:
  *	This provides a "nop" transceiver for PHYs which are
@@ -34,8 +21,7 @@
 #include <linux/clk.h>
 #include <linux/regulator/consumer.h>
 #include <linux/of.h>
-#include <linux/of_gpio.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/delay.h>
 
 #include "phy-generic.h"
@@ -59,6 +45,15 @@ EXPORT_SYMBOL_GPL(usb_phy_generic_unregister);
 
 static int nop_set_suspend(struct usb_phy *x, int suspend)
 {
+	struct usb_phy_generic *nop = dev_get_drvdata(x->dev);
+
+	if (!IS_ERR(nop->clk)) {
+		if (suspend)
+			clk_disable_unprepare(nop->clk);
+		else
+			clk_prepare_enable(nop->clk);
+	}
+
 	return 0;
 }
 
@@ -67,9 +62,9 @@ static void nop_reset(struct usb_phy_generic *nop)
 	if (!nop->gpiod_reset)
 		return;
 
-	gpiod_set_value(nop->gpiod_reset, 1);
+	gpiod_set_value_cansleep(nop->gpiod_reset, 1);
 	usleep_range(10000, 20000);
-	gpiod_set_value(nop->gpiod_reset, 0);
+	gpiod_set_value_cansleep(nop->gpiod_reset, 0);
 }
 
 /* interface to regulator framework */
@@ -118,8 +113,6 @@ static irqreturn_t nop_gpio_vbus_thread(int irq, void *data)
 		status = USB_EVENT_VBUS;
 		otg->state = OTG_STATE_B_PERIPHERAL;
 		nop->phy.last_event = status;
-		if (otg->gadget)
-			usb_gadget_vbus_connect(otg->gadget);
 
 		/* drawing a "unit load" is *always* OK, except for OTG */
 		nop_set_vbus_draw(nop, 100);
@@ -129,8 +122,6 @@ static irqreturn_t nop_gpio_vbus_thread(int irq, void *data)
 	} else {
 		nop_set_vbus_draw(nop, 0);
 
-		if (otg->gadget)
-			usb_gadget_vbus_disconnect(otg->gadget);
 		status = USB_EVENT_NONE;
 		otg->state = OTG_STATE_B_IDLE;
 		nop->phy.last_event = status;
@@ -144,14 +135,18 @@ static irqreturn_t nop_gpio_vbus_thread(int irq, void *data)
 int usb_gen_phy_init(struct usb_phy *phy)
 {
 	struct usb_phy_generic *nop = dev_get_drvdata(phy->dev);
+	int ret;
 
 	if (!IS_ERR(nop->vcc)) {
 		if (regulator_enable(nop->vcc))
 			dev_err(phy->dev, "Failed to enable power\n");
 	}
 
-	if (!IS_ERR(nop->clk))
-		clk_prepare_enable(nop->clk);
+	if (!IS_ERR(nop->clk)) {
+		ret = clk_prepare_enable(nop->clk);
+		if (ret)
+			return ret;
+	}
 
 	nop_reset(nop);
 
@@ -163,7 +158,7 @@ void usb_gen_phy_shutdown(struct usb_phy *phy)
 {
 	struct usb_phy_generic *nop = dev_get_drvdata(phy->dev);
 
-	gpiod_set_value(nop->gpiod_reset, 1);
+	gpiod_set_value_cansleep(nop->gpiod_reset, 1);
 
 	if (!IS_ERR(nop->clk))
 		clk_disable_unprepare(nop->clk);
@@ -187,7 +182,8 @@ static int nop_set_peripheral(struct usb_otg *otg, struct usb_gadget *gadget)
 
 	otg->gadget = gadget;
 	if (otg->state == OTG_STATE_B_PERIPHERAL)
-		usb_gadget_vbus_connect(gadget);
+		atomic_notifier_call_chain(&otg->usb_phy->notifier,
+					   USB_EVENT_VBUS, otg->gadget);
 	else
 		otg->state = OTG_STATE_B_IDLE;
 	return 0;
@@ -207,14 +203,13 @@ static int nop_set_host(struct usb_otg *otg, struct usb_bus *host)
 	return 0;
 }
 
-int usb_phy_gen_create_phy(struct device *dev, struct usb_phy_generic *nop,
-		struct usb_phy_generic_platform_data *pdata)
+int usb_phy_gen_create_phy(struct device *dev, struct usb_phy_generic *nop)
 {
 	enum usb_phy_type type = USB_PHY_TYPE_USB2;
 	int err = 0;
 
 	u32 clk_rate = 0;
-	bool needs_vcc = false;
+	bool needs_vcc = false, needs_clk = false;
 
 	if (dev->of_node) {
 		struct device_node *node = dev->of_node;
@@ -223,28 +218,16 @@ int usb_phy_gen_create_phy(struct device *dev, struct usb_phy_generic *nop,
 			clk_rate = 0;
 
 		needs_vcc = of_property_read_bool(node, "vcc-supply");
-		nop->gpiod_reset = devm_gpiod_get_optional(dev, "reset",
-							   GPIOD_ASIS);
-		err = PTR_ERR_OR_ZERO(nop->gpiod_reset);
-		if (!err) {
-			nop->gpiod_vbus = devm_gpiod_get_optional(dev,
-							 "vbus-detect",
-							 GPIOD_ASIS);
-			err = PTR_ERR_OR_ZERO(nop->gpiod_vbus);
-		}
-	} else if (pdata) {
-		type = pdata->type;
-		clk_rate = pdata->clk_rate;
-		needs_vcc = pdata->needs_vcc;
-		if (gpio_is_valid(pdata->gpio_reset)) {
-			err = devm_gpio_request_one(dev, pdata->gpio_reset,
-						    GPIOF_ACTIVE_LOW,
-						    dev_name(dev));
-			if (!err)
-				nop->gpiod_reset =
-					gpio_to_desc(pdata->gpio_reset);
-		}
-		nop->gpiod_vbus = pdata->gpiod_vbus;
+		needs_clk = of_property_read_bool(node, "clocks");
+	}
+	nop->gpiod_reset = devm_gpiod_get_optional(dev, "reset",
+						   GPIOD_ASIS);
+	err = PTR_ERR_OR_ZERO(nop->gpiod_reset);
+	if (!err) {
+		nop->gpiod_vbus = devm_gpiod_get_optional(dev,
+						 "vbus-detect",
+						 GPIOD_ASIS);
+		err = PTR_ERR_OR_ZERO(nop->gpiod_vbus);
 	}
 
 	if (err == -EPROBE_DEFER)
@@ -265,6 +248,8 @@ int usb_phy_gen_create_phy(struct device *dev, struct usb_phy_generic *nop,
 	if (IS_ERR(nop->clk)) {
 		dev_dbg(dev, "Can't get phy clock: %ld\n",
 					PTR_ERR(nop->clk));
+		if (needs_clk)
+			return PTR_ERR(nop->clk);
 	}
 
 	if (!IS_ERR(nop->clk) && clk_rate) {
@@ -308,7 +293,7 @@ static int usb_phy_generic_probe(struct platform_device *pdev)
 	if (!nop)
 		return -ENOMEM;
 
-	err = usb_phy_gen_create_phy(dev, nop, dev_get_platdata(&pdev->dev));
+	err = usb_phy_gen_create_phy(dev, nop);
 	if (err)
 		return err;
 	if (nop->gpiod_vbus) {
@@ -322,6 +307,8 @@ static int usb_phy_generic_probe(struct platform_device *pdev)
 				gpiod_to_irq(nop->gpiod_vbus), err);
 			return err;
 		}
+		nop->phy.otg->state = gpiod_get_value(nop->gpiod_vbus) ?
+			OTG_STATE_B_PERIPHERAL : OTG_STATE_B_IDLE;
 	}
 
 	nop->phy.init		= usb_gen_phy_init;

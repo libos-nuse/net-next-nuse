@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * LEDs driver for GPIOs
  *
  * Copyright (C) 2007 8D Technologies inc.
  * Raphael Assenat <raph@8d.com>
  * Copyright (C) 2008 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 #include <linux/err.h>
 #include <linux/gpio.h>
@@ -26,15 +22,19 @@ struct gpio_led_data {
 	struct gpio_desc *gpiod;
 	u8 can_sleep;
 	u8 blinking;
-	int (*platform_gpio_blink_set)(struct gpio_desc *desc, int state,
-			unsigned long *delay_on, unsigned long *delay_off);
+	gpio_blink_set_t platform_gpio_blink_set;
 };
+
+static inline struct gpio_led_data *
+			cdev_to_gpio_led_data(struct led_classdev *led_cdev)
+{
+	return container_of(led_cdev, struct gpio_led_data, cdev);
+}
 
 static void gpio_led_set(struct led_classdev *led_cdev,
 	enum led_brightness value)
 {
-	struct gpio_led_data *led_dat =
-		container_of(led_cdev, struct gpio_led_data, cdev);
+	struct gpio_led_data *led_dat = cdev_to_gpio_led_data(led_cdev);
 	int level;
 
 	if (value == LED_OFF)
@@ -64,8 +64,7 @@ static int gpio_led_set_blocking(struct led_classdev *led_cdev,
 static int gpio_blink_set(struct led_classdev *led_cdev,
 	unsigned long *delay_on, unsigned long *delay_off)
 {
-	struct gpio_led_data *led_dat =
-		container_of(led_cdev, struct gpio_led_data, cdev);
+	struct gpio_led_data *led_dat = cdev_to_gpio_led_data(led_cdev);
 
 	led_dat->blinking = 1;
 	return led_dat->platform_gpio_blink_set(led_dat->gpiod, GPIO_LED_BLINK,
@@ -74,41 +73,11 @@ static int gpio_blink_set(struct led_classdev *led_cdev,
 
 static int create_gpio_led(const struct gpio_led *template,
 	struct gpio_led_data *led_dat, struct device *parent,
-	int (*blink_set)(struct gpio_desc *, int, unsigned long *,
-			 unsigned long *))
+	struct fwnode_handle *fwnode, gpio_blink_set_t blink_set)
 {
+	struct led_init_data init_data = {};
 	int ret, state;
 
-	led_dat->gpiod = template->gpiod;
-	if (!led_dat->gpiod) {
-		/*
-		 * This is the legacy code path for platform code that
-		 * still uses GPIO numbers. Ultimately we would like to get
-		 * rid of this block completely.
-		 */
-		unsigned long flags = GPIOF_OUT_INIT_LOW;
-
-		/* skip leds that aren't available */
-		if (!gpio_is_valid(template->gpio)) {
-			dev_info(parent, "Skipping unavailable LED gpio %d (%s)\n",
-					template->gpio, template->name);
-			return 0;
-		}
-
-		if (template->active_low)
-			flags |= GPIOF_ACTIVE_LOW;
-
-		ret = devm_gpio_request_one(parent, template->gpio, flags,
-					    template->name);
-		if (ret < 0)
-			return ret;
-
-		led_dat->gpiod = gpio_to_desc(template->gpio);
-		if (!led_dat->gpiod)
-			return -EINVAL;
-	}
-
-	led_dat->cdev.name = template->name;
 	led_dat->cdev.default_trigger = template->default_trigger;
 	led_dat->can_sleep = gpiod_cansleep(led_dat->gpiod);
 	if (!led_dat->can_sleep)
@@ -120,21 +89,35 @@ static int create_gpio_led(const struct gpio_led *template,
 		led_dat->platform_gpio_blink_set = blink_set;
 		led_dat->cdev.blink_set = gpio_blink_set;
 	}
-	if (template->default_state == LEDS_GPIO_DEFSTATE_KEEP)
-		state = !!gpiod_get_value_cansleep(led_dat->gpiod);
-	else
+	if (template->default_state == LEDS_GPIO_DEFSTATE_KEEP) {
+		state = gpiod_get_value_cansleep(led_dat->gpiod);
+		if (state < 0)
+			return state;
+	} else {
 		state = (template->default_state == LEDS_GPIO_DEFSTATE_ON);
+	}
 	led_dat->cdev.brightness = state ? LED_FULL : LED_OFF;
 	if (!template->retain_state_suspended)
 		led_dat->cdev.flags |= LED_CORE_SUSPENDRESUME;
 	if (template->panic_indicator)
 		led_dat->cdev.flags |= LED_PANIC_INDICATOR;
+	if (template->retain_state_shutdown)
+		led_dat->cdev.flags |= LED_RETAIN_AT_SHUTDOWN;
 
 	ret = gpiod_direction_output(led_dat->gpiod, state);
 	if (ret < 0)
 		return ret;
 
-	return led_classdev_register(parent, &led_dat->cdev);
+	if (template->name) {
+		led_dat->cdev.name = template->name;
+		ret = devm_led_classdev_register(parent, &led_dat->cdev);
+	} else {
+		init_data.fwnode = fwnode;
+		ret = devm_led_classdev_register_ext(parent, &led_dat->cdev,
+						     &init_data);
+	}
+
+	return ret;
 }
 
 struct gpio_leds_priv {
@@ -142,53 +125,40 @@ struct gpio_leds_priv {
 	struct gpio_led_data leds[];
 };
 
-static inline int sizeof_gpio_leds_priv(int num_leds)
-{
-	return sizeof(struct gpio_leds_priv) +
-		(sizeof(struct gpio_led_data) * num_leds);
-}
-
 static struct gpio_leds_priv *gpio_leds_create(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct fwnode_handle *child;
 	struct gpio_leds_priv *priv;
 	int count, ret;
-	struct device_node *np;
 
 	count = device_get_child_node_count(dev);
 	if (!count)
 		return ERR_PTR(-ENODEV);
 
-	priv = devm_kzalloc(dev, sizeof_gpio_leds_priv(count), GFP_KERNEL);
+	priv = devm_kzalloc(dev, struct_size(priv, leds, count), GFP_KERNEL);
 	if (!priv)
 		return ERR_PTR(-ENOMEM);
 
 	device_for_each_child_node(dev, child) {
+		struct gpio_led_data *led_dat = &priv->leds[priv->num_leds];
 		struct gpio_led led = {};
 		const char *state = NULL;
 
-		led.gpiod = devm_get_gpiod_from_child(dev, NULL, child);
+		/*
+		 * Acquire gpiod from DT with uninitialized label, which
+		 * will be updated after LED class device is registered,
+		 * Only then the final LED name is known.
+		 */
+		led.gpiod = devm_fwnode_get_gpiod_from_child(dev, NULL, child,
+							     GPIOD_ASIS,
+							     NULL);
 		if (IS_ERR(led.gpiod)) {
 			fwnode_handle_put(child);
-			ret = PTR_ERR(led.gpiod);
-			goto err;
+			return ERR_CAST(led.gpiod);
 		}
 
-		np = to_of_node(child);
-
-		if (fwnode_property_present(child, "label")) {
-			fwnode_property_read_string(child, "label", &led.name);
-		} else {
-			if (IS_ENABLED(CONFIG_OF) && !led.name && np)
-				led.name = np->name;
-			if (!led.name) {
-				ret = -EINVAL;
-				goto err;
-			}
-		}
-		fwnode_property_read_string(child, "linux,default-trigger",
-					    &led.default_trigger);
+		led_dat->gpiod = led.gpiod;
 
 		if (!fwnode_property_read_string(child, "default-state",
 						 &state)) {
@@ -202,24 +172,23 @@ static struct gpio_leds_priv *gpio_leds_create(struct platform_device *pdev)
 
 		if (fwnode_property_present(child, "retain-state-suspended"))
 			led.retain_state_suspended = 1;
+		if (fwnode_property_present(child, "retain-state-shutdown"))
+			led.retain_state_shutdown = 1;
 		if (fwnode_property_present(child, "panic-indicator"))
 			led.panic_indicator = 1;
 
-		ret = create_gpio_led(&led, &priv->leds[priv->num_leds],
-				      dev, NULL);
+		ret = create_gpio_led(&led, led_dat, dev, child, NULL);
 		if (ret < 0) {
 			fwnode_handle_put(child);
-			goto err;
+			return ERR_PTR(ret);
 		}
+		/* Set gpiod label to match the corresponding LED name. */
+		gpiod_set_consumer_name(led_dat->gpiod,
+					led_dat->cdev.dev->kobj.name);
 		priv->num_leds++;
 	}
 
 	return priv;
-
-err:
-	for (count = priv->num_leds - 1; count >= 0; count--)
-		led_classdev_unregister(&priv->leds[count].cdev);
-	return ERR_PTR(ret);
 }
 
 static const struct of_device_id of_gpio_leds_match[] = {
@@ -229,6 +198,52 @@ static const struct of_device_id of_gpio_leds_match[] = {
 
 MODULE_DEVICE_TABLE(of, of_gpio_leds_match);
 
+static struct gpio_desc *gpio_led_get_gpiod(struct device *dev, int idx,
+					    const struct gpio_led *template)
+{
+	struct gpio_desc *gpiod;
+	unsigned long flags = GPIOF_OUT_INIT_LOW;
+	int ret;
+
+	/*
+	 * This means the LED does not come from the device tree
+	 * or ACPI, so let's try just getting it by index from the
+	 * device, this will hit the board file, if any and get
+	 * the GPIO from there.
+	 */
+	gpiod = devm_gpiod_get_index(dev, NULL, idx, GPIOD_OUT_LOW);
+	if (!IS_ERR(gpiod)) {
+		gpiod_set_consumer_name(gpiod, template->name);
+		return gpiod;
+	}
+	if (PTR_ERR(gpiod) != -ENOENT)
+		return gpiod;
+
+	/*
+	 * This is the legacy code path for platform code that
+	 * still uses GPIO numbers. Ultimately we would like to get
+	 * rid of this block completely.
+	 */
+
+	/* skip leds that aren't available */
+	if (!gpio_is_valid(template->gpio))
+		return ERR_PTR(-ENOENT);
+
+	if (template->active_low)
+		flags |= GPIOF_ACTIVE_LOW;
+
+	ret = devm_gpio_request_one(dev, template->gpio, flags,
+				    template->name);
+	if (ret < 0)
+		return ERR_PTR(ret);
+
+	gpiod = gpio_to_desc(template->gpio);
+	if (!gpiod)
+		return ERR_PTR(-EINVAL);
+
+	return gpiod;
+}
+
 static int gpio_led_probe(struct platform_device *pdev)
 {
 	struct gpio_led_platform_data *pdata = dev_get_platdata(&pdev->dev);
@@ -236,24 +251,33 @@ static int gpio_led_probe(struct platform_device *pdev)
 	int i, ret = 0;
 
 	if (pdata && pdata->num_leds) {
-		priv = devm_kzalloc(&pdev->dev,
-				sizeof_gpio_leds_priv(pdata->num_leds),
-					GFP_KERNEL);
+		priv = devm_kzalloc(&pdev->dev, struct_size(priv, leds, pdata->num_leds),
+				    GFP_KERNEL);
 		if (!priv)
 			return -ENOMEM;
 
 		priv->num_leds = pdata->num_leds;
 		for (i = 0; i < priv->num_leds; i++) {
-			ret = create_gpio_led(&pdata->leds[i],
-					      &priv->leds[i],
-					      &pdev->dev, pdata->gpio_blink_set);
-			if (ret < 0) {
-				/* On failure: unwind the led creations */
-				for (i = i - 1; i >= 0; i--)
-					led_classdev_unregister(
-							&priv->leds[i].cdev);
-				return ret;
+			const struct gpio_led *template = &pdata->leds[i];
+			struct gpio_led_data *led_dat = &priv->leds[i];
+
+			if (template->gpiod)
+				led_dat->gpiod = template->gpiod;
+			else
+				led_dat->gpiod =
+					gpio_led_get_gpiod(&pdev->dev,
+							   i, template);
+			if (IS_ERR(led_dat->gpiod)) {
+				dev_info(&pdev->dev, "Skipping unavailable LED gpio %d (%s)\n",
+					 template->gpio, template->name);
+				continue;
 			}
+
+			ret = create_gpio_led(template, led_dat,
+					      &pdev->dev, NULL,
+					      pdata->gpio_blink_set);
+			if (ret < 0)
+				return ret;
 		}
 	} else {
 		priv = gpio_leds_create(pdev);
@@ -266,17 +290,6 @@ static int gpio_led_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int gpio_led_remove(struct platform_device *pdev)
-{
-	struct gpio_leds_priv *priv = platform_get_drvdata(pdev);
-	int i;
-
-	for (i = 0; i < priv->num_leds; i++)
-		led_classdev_unregister(&priv->leds[i].cdev);
-
-	return 0;
-}
-
 static void gpio_led_shutdown(struct platform_device *pdev)
 {
 	struct gpio_leds_priv *priv = platform_get_drvdata(pdev);
@@ -285,13 +298,13 @@ static void gpio_led_shutdown(struct platform_device *pdev)
 	for (i = 0; i < priv->num_leds; i++) {
 		struct gpio_led_data *led = &priv->leds[i];
 
-		gpio_led_set(&led->cdev, LED_OFF);
+		if (!(led->cdev.flags & LED_RETAIN_AT_SHUTDOWN))
+			gpio_led_set(&led->cdev, LED_OFF);
 	}
 }
 
 static struct platform_driver gpio_led_driver = {
 	.probe		= gpio_led_probe,
-	.remove		= gpio_led_remove,
 	.shutdown	= gpio_led_shutdown,
 	.driver		= {
 		.name	= "leds-gpio",

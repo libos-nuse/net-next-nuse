@@ -144,13 +144,14 @@ unsigned long fman_muram_alloc(struct muram_info *muram, size_t size)
 
 /**
  * fman_muram_free_mem
- * muram:	FM-MURAM module pointer.
- * offset:	offset of the memory region to be freed.
- * size:	size of the memory to be freed.
+ * @muram:	FM-MURAM module pointer.
+ * @offset:	offset of the memory region to be freed.
+ * @size:	size of the memory to be freed.
  *
  * Free an allocated memory from FM-MURAM partition.
  */
-void fman_muram_free_mem(struct muram_info *muram, unsigned long offset, size_t size)
+void fman_muram_free_mem(struct muram_info *muram, unsigned long offset,
+			 size_t size)
 {
 	unsigned long addr = fman_muram_offset_to_vbase(muram, offset);
 

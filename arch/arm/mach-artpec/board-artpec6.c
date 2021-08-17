@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ARTPEC-6 device support.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/amba/bus.h>
@@ -13,7 +10,6 @@
 #include <linux/irqchip.h>
 #include <linux/irqchip/arm-gic.h>
 #include <linux/mfd/syscon.h>
-#include <linux/of_platform.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/clk-provider.h>
@@ -44,8 +40,6 @@ static void __init artpec6_init_machine(void)
 		regmap_write(regmap, ARTPEC6_DMACFG_REGNUM,
 			     ARTPEC6_DMACFG_UARTS_BURST);
 	};
-
-	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
 }
 
 static void artpec6_l2c310_write_sec(unsigned long val, unsigned reg)

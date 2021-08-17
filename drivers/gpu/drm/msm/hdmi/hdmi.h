@@ -1,18 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __HDMI_CONNECTOR_H__
@@ -22,7 +11,10 @@
 #include <linux/clk.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/gpio/consumer.h>
 #include <linux/hdmi.h>
+
+#include <drm/drm_bridge.h>
 
 #include "msm_drv.h"
 #include "hdmi.xml.h"
@@ -33,10 +25,9 @@ struct hdmi_phy;
 struct hdmi_platform_config;
 
 struct hdmi_gpio_data {
-	int num;
+	struct gpio_desc *gpiod;
 	bool output;
 	int value;
-	const char *label;
 };
 
 struct hdmi_audio {
@@ -50,6 +41,7 @@ struct hdmi_hdcp_ctrl;
 struct hdmi {
 	struct drm_device *dev;
 	struct platform_device *pdev;
+	struct platform_device *audio_pdev;
 
 	const struct hdmi_platform_config *config;
 
@@ -210,6 +202,19 @@ static inline int msm_hdmi_pll_8996_init(struct platform_device *pdev)
 /*
  * audio:
  */
+/* Supported HDMI Audio channels and rates */
+#define	MSM_HDMI_AUDIO_CHANNEL_2	0
+#define	MSM_HDMI_AUDIO_CHANNEL_4	1
+#define	MSM_HDMI_AUDIO_CHANNEL_6	2
+#define	MSM_HDMI_AUDIO_CHANNEL_8	3
+
+#define	HDMI_SAMPLE_RATE_32KHZ		0
+#define	HDMI_SAMPLE_RATE_44_1KHZ	1
+#define	HDMI_SAMPLE_RATE_48KHZ		2
+#define	HDMI_SAMPLE_RATE_88_2KHZ	3
+#define	HDMI_SAMPLE_RATE_96KHZ		4
+#define	HDMI_SAMPLE_RATE_176_4KHZ	5
+#define	HDMI_SAMPLE_RATE_192KHZ		6
 
 int msm_hdmi_audio_update(struct hdmi *hdmi);
 int msm_hdmi_audio_info_setup(struct hdmi *hdmi, bool enabled,
@@ -231,6 +236,7 @@ void msm_hdmi_bridge_destroy(struct drm_bridge *bridge);
 
 void msm_hdmi_connector_irq(struct drm_connector *connector);
 struct drm_connector *msm_hdmi_connector_init(struct hdmi *hdmi);
+int msm_hdmi_hpd_enable(struct drm_connector *connector);
 
 /*
  * i2c adapter for ddc:

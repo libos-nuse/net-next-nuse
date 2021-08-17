@@ -1,20 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Freescale MXS On-Chip OTP driver
  *
  * Copyright (C) 2015 Stefan Wahren <stefan.wahren@i2se.com>
  *
  * Based on the driver from Huang Shijie and Christoph G. Baumann
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -25,7 +15,6 @@
 #include <linux/nvmem-provider.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
-#include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/stmp_device.h>
 
@@ -66,11 +55,10 @@ static int mxs_ocotp_wait(struct mxs_ocotp *otp)
 	return 0;
 }
 
-static int mxs_ocotp_read(void *context, const void *reg, size_t reg_size,
-			  void *val, size_t val_size)
+static int mxs_ocotp_read(void *context, unsigned int offset,
+			  void *val, size_t bytes)
 {
 	struct mxs_ocotp *otp = context;
-	unsigned int offset = *(u32 *)reg;
 	u32 *buf = val;
 	int ret;
 
@@ -94,17 +82,16 @@ static int mxs_ocotp_read(void *context, const void *reg, size_t reg_size,
 	if (ret)
 		goto close_banks;
 
-	while (val_size >= reg_size) {
+	while (bytes) {
 		if ((offset < OCOTP_DATA_OFFSET) || (offset % 16)) {
 			/* fill up non-data register */
-			*buf = 0;
+			*buf++ = 0;
 		} else {
-			*buf = readl(otp->base + offset);
+			*buf++ = readl(otp->base + offset);
 		}
 
-		buf++;
-		val_size -= reg_size;
-		offset += reg_size;
+		bytes -= 4;
+		offset += 4;
 	}
 
 close_banks:
@@ -117,69 +104,43 @@ disable_clk:
 	return ret;
 }
 
-static int mxs_ocotp_write(void *context, const void *data, size_t count)
-{
-	/* We don't want to support writing */
-	return 0;
-}
-
-static bool mxs_ocotp_writeable_reg(struct device *dev, unsigned int reg)
-{
-	return false;
-}
-
 static struct nvmem_config ocotp_config = {
 	.name = "mxs-ocotp",
-	.owner = THIS_MODULE,
+	.stride = 16,
+	.word_size = 4,
+	.reg_read = mxs_ocotp_read,
 };
 
-static const struct regmap_range imx23_ranges[] = {
-	regmap_reg_range(OCOTP_DATA_OFFSET, 0x210),
+struct mxs_data {
+	int size;
 };
 
-static const struct regmap_access_table imx23_access = {
-	.yes_ranges = imx23_ranges,
-	.n_yes_ranges = ARRAY_SIZE(imx23_ranges),
+static const struct mxs_data imx23_data = {
+	.size = 0x220,
 };
 
-static const struct regmap_range imx28_ranges[] = {
-	regmap_reg_range(OCOTP_DATA_OFFSET, 0x290),
-};
-
-static const struct regmap_access_table imx28_access = {
-	.yes_ranges = imx28_ranges,
-	.n_yes_ranges = ARRAY_SIZE(imx28_ranges),
-};
-
-static struct regmap_bus mxs_ocotp_bus = {
-	.read = mxs_ocotp_read,
-	.write = mxs_ocotp_write, /* make regmap_init() happy */
-	.reg_format_endian_default = REGMAP_ENDIAN_NATIVE,
-	.val_format_endian_default = REGMAP_ENDIAN_NATIVE,
-};
-
-static struct regmap_config mxs_ocotp_config = {
-	.reg_bits = 32,
-	.val_bits = 32,
-	.reg_stride = 16,
-	.writeable_reg = mxs_ocotp_writeable_reg,
+static const struct mxs_data imx28_data = {
+	.size = 0x2a0,
 };
 
 static const struct of_device_id mxs_ocotp_match[] = {
-	{ .compatible = "fsl,imx23-ocotp", .data = &imx23_access },
-	{ .compatible = "fsl,imx28-ocotp", .data = &imx28_access },
+	{ .compatible = "fsl,imx23-ocotp", .data = &imx23_data },
+	{ .compatible = "fsl,imx28-ocotp", .data = &imx28_data },
 	{ /* sentinel */},
 };
 MODULE_DEVICE_TABLE(of, mxs_ocotp_match);
 
+static void mxs_ocotp_action(void *data)
+{
+	clk_unprepare(data);
+}
+
 static int mxs_ocotp_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	const struct mxs_data *data;
 	struct mxs_ocotp *otp;
-	struct resource *res;
 	const struct of_device_id *match;
-	struct regmap *regmap;
-	const struct regmap_access_table *access;
 	int ret;
 
 	match = of_match_device(dev->driver->of_match_table, dev);
@@ -190,8 +151,7 @@ static int mxs_ocotp_probe(struct platform_device *pdev)
 	if (!otp)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	otp->base = devm_ioremap_resource(dev, res);
+	otp->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(otp->base))
 		return PTR_ERR(otp->base);
 
@@ -205,46 +165,26 @@ static int mxs_ocotp_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	access = match->data;
-	mxs_ocotp_config.rd_table = access;
-	mxs_ocotp_config.max_register = access->yes_ranges[0].range_max;
+	ret = devm_add_action_or_reset(&pdev->dev, mxs_ocotp_action, otp->clk);
+	if (ret)
+		return ret;
 
-	regmap = devm_regmap_init(dev, &mxs_ocotp_bus, otp, &mxs_ocotp_config);
-	if (IS_ERR(regmap)) {
-		dev_err(dev, "regmap init failed\n");
-		ret = PTR_ERR(regmap);
-		goto err_clk;
-	}
+	data = match->data;
 
+	ocotp_config.size = data->size;
+	ocotp_config.priv = otp;
 	ocotp_config.dev = dev;
-	otp->nvmem = nvmem_register(&ocotp_config);
-	if (IS_ERR(otp->nvmem)) {
-		ret = PTR_ERR(otp->nvmem);
-		goto err_clk;
-	}
+	otp->nvmem = devm_nvmem_register(dev, &ocotp_config);
+	if (IS_ERR(otp->nvmem))
+		return PTR_ERR(otp->nvmem);
 
 	platform_set_drvdata(pdev, otp);
 
 	return 0;
-
-err_clk:
-	clk_unprepare(otp->clk);
-
-	return ret;
-}
-
-static int mxs_ocotp_remove(struct platform_device *pdev)
-{
-	struct mxs_ocotp *otp = platform_get_drvdata(pdev);
-
-	clk_unprepare(otp->clk);
-
-	return nvmem_unregister(otp->nvmem);
 }
 
 static struct platform_driver mxs_ocotp_driver = {
 	.probe = mxs_ocotp_probe,
-	.remove = mxs_ocotp_remove,
 	.driver = {
 		.name = "mxs-ocotp",
 		.of_match_table = mxs_ocotp_match,
@@ -252,6 +192,6 @@ static struct platform_driver mxs_ocotp_driver = {
 };
 
 module_platform_driver(mxs_ocotp_driver);
-MODULE_AUTHOR("Stefan Wahren <stefan.wahren@i2se.com>");
+MODULE_AUTHOR("Stefan Wahren <wahrenst@gmx.net");
 MODULE_DESCRIPTION("driver for OCOTP in i.MX23/i.MX28");
 MODULE_LICENSE("GPL v2");

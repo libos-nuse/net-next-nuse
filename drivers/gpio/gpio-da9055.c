@@ -1,19 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * GPIO Driver for Dialog DA9055 PMICs.
  *
  * Copyright(c) 2012 Dialog Semiconductor Ltd.
  *
  * Author: David Dajun Chen <dchen@diasemi.com>
- *
- *  This program is free software; you can redistribute  it and/or modify it
- *  under  the terms of  the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the  License, or (at your
- *  option) any later version.
- *
  */
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 
 #include <linux/mfd/da9055/core.h>
 #include <linux/mfd/da9055/reg.h>
@@ -121,7 +116,7 @@ static int da9055_gpio_to_irq(struct gpio_chip *gc, u32 offset)
 				  DA9055_IRQ_GPI0 + offset);
 }
 
-static struct gpio_chip reference_gp = {
+static const struct gpio_chip reference_gp = {
 	.label = "da9055-gpio",
 	.owner = THIS_MODULE,
 	.get = da9055_gpio_get,

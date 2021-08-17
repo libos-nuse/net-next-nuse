@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for mt2063 Micronas tuner
  *
@@ -7,16 +8,6 @@
  *		Henry Wang <Henry.wang@AzureWave.com>
  * Made publicly available by Terratec, at:
  *	http://linux.terratec.de/files/TERRATEC_H7/20110323_TERRATEC_H7_Linux.tar.gz
- * The original driver's license is GPL, as declared with MODULE_LICENSE()
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation under version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/init.h>
@@ -24,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/videodev2.h>
+#include <linux/gcd.h>
 
 #include "mt2063.h"
 
@@ -665,27 +657,6 @@ static u32 MT2063_ChooseFirstIF(struct MT2063_AvoidSpursData_t *pAS_Info)
 }
 
 /**
- * gcd() - Uses Euclid's algorithm
- *
- * @u, @v:	Unsigned values whose GCD is desired.
- *
- * Returns THE greatest common divisor of u and v, if either value is 0,
- * the other value is returned as the result.
- */
-static u32 MT2063_gcd(u32 u, u32 v)
-{
-	u32 r;
-
-	while (v != 0) {
-		r = u % v;
-		u = v;
-		v = r;
-	}
-
-	return u;
-}
-
-/**
  * IsSpurInBand() - Checks to see if a spur will be present within the IF's
  *                  bandwidth. (fIFOut +/- fIFBW, -fIFOut +/- fIFBW)
  *
@@ -731,12 +702,12 @@ static u32 IsSpurInBand(struct MT2063_AvoidSpursData_t *pAS_Info,
 	 ** of f_LO1, f_LO2 and the edge value.  Use the larger of this
 	 ** gcd-based scale factor or f_Scale.
 	 */
-	lo_gcd = MT2063_gcd(f_LO1, f_LO2);
-	gd_Scale = max((u32) MT2063_gcd(lo_gcd, d), f_Scale);
+	lo_gcd = gcd(f_LO1, f_LO2);
+	gd_Scale = max((u32) gcd(lo_gcd, d), f_Scale);
 	hgds = gd_Scale / 2;
-	gc_Scale = max((u32) MT2063_gcd(lo_gcd, c), f_Scale);
+	gc_Scale = max((u32) gcd(lo_gcd, c), f_Scale);
 	hgcs = gc_Scale / 2;
-	gf_Scale = max((u32) MT2063_gcd(lo_gcd, f), f_Scale);
+	gf_Scale = max((u32) gcd(lo_gcd, f), f_Scale);
 	hgfs = gf_Scale / 2;
 
 	n0 = DIV_ROUND_UP(f_LO2 - d, f_LO1 - f_LO2);
@@ -1188,7 +1159,7 @@ static u32 mt2063_set_dnc_output_enable(struct mt2063_state *state,
 
 /*
  * MT2063_SetReceiverMode() - Set the MT2063 receiver mode, according with
- * 			      the selected enum mt2063_delivery_sys type.
+ *			      the selected enum mt2063_delivery_sys type.
  *
  *  (DNC1GC & DNC2GC are the values, which are used, when the specific
  *   DNC Output is selected, the other is always off)
@@ -1417,9 +1388,9 @@ static u32 MT2063_Round_fLO(u32 f_LO, u32 f_LO_Step, u32 f_ref)
  *                        risk of overflow.  It accurately calculates
  *                        f_ref * num / denom to within 1 HZ with fixed math.
  *
- * @num :	Fractional portion of the multiplier
+ * @f_ref:	SRO frequency.
+ * @num:	Fractional portion of the multiplier
  * @denom:	denominator portion of the ratio
- * @f_Ref:	SRO frequency.
  *
  * This calculation handles f_ref as two separate 14-bit fields.
  * Therefore, a maximum value of 2^28-1 may safely be used for f_ref.
@@ -1484,8 +1455,6 @@ static u32 MT2063_CalcLO1Mult(u32 *Div,
  * @f_LO:	desired LO frequency.
  * @f_LO_Step:	Minimum step size for the LO (in Hz).
  * @f_Ref:	SRO frequency.
- * @f_Avoid:	Range of PLL frequencies to avoid near
- *		integer multiples of f_Ref (in Hz).
  *
  * Returns: Recalculated LO frequency.
  */
@@ -1566,7 +1535,7 @@ static u32 MT2063_Tune(struct mt2063_state *state, u32 f_in)
 	 * Save original LO1 and LO2 register values
 	 */
 	ofLO1 = state->AS_Data.f_LO1;
-	ofLO2 = state->AS_Data.f_LO2; 
+	ofLO2 = state->AS_Data.f_LO2;
 
 	/*
 	 * Find and set RF Band setting
@@ -2039,7 +2008,7 @@ static int mt2063_get_status(struct dvb_frontend *fe, u32 *tuner_status)
 	return 0;
 }
 
-static int mt2063_release(struct dvb_frontend *fe)
+static void mt2063_release(struct dvb_frontend *fe)
 {
 	struct mt2063_state *state = fe->tuner_priv;
 
@@ -2047,8 +2016,6 @@ static int mt2063_release(struct dvb_frontend *fe)
 
 	fe->tuner_priv = NULL;
 	kfree(state);
-
-	return 0;
 }
 
 static int mt2063_set_analog_params(struct dvb_frontend *fe,
@@ -2221,13 +2188,12 @@ static int mt2063_get_bandwidth(struct dvb_frontend *fe, u32 *bw)
 	return 0;
 }
 
-static struct dvb_tuner_ops mt2063_ops = {
+static const struct dvb_tuner_ops mt2063_ops = {
 	.info = {
 		 .name = "MT2063 Silicon Tuner",
-		 .frequency_min = 45000000,
-		 .frequency_max = 865000000,
-		 .frequency_step = 0,
-		 },
+		 .frequency_min_hz  =  45 * MHz,
+		 .frequency_max_hz  = 865 * MHz,
+	 },
 
 	.init = mt2063_init,
 	.sleep = MT2063_Sleep,

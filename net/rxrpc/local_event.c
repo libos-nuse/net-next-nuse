@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* AF_RXRPC local endpoint management
  *
  * Copyright (C) 2007 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -15,8 +11,6 @@
 #include <linux/net.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
-#include <linux/udp.h>
-#include <linux/ip.h>
 #include <net/sock.h>
 #include <net/af_rxrpc.h>
 #include <generated/utsrelease.h>
@@ -33,7 +27,7 @@ static void rxrpc_send_version_request(struct rxrpc_local *local,
 {
 	struct rxrpc_wire_header whdr;
 	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
-	struct sockaddr_in sin;
+	struct sockaddr_rxrpc srx;
 	struct msghdr msg;
 	struct kvec iov[2];
 	size_t len;
@@ -41,12 +35,11 @@ static void rxrpc_send_version_request(struct rxrpc_local *local,
 
 	_enter("");
 
-	sin.sin_family = AF_INET;
-	sin.sin_port = udp_hdr(skb)->source;
-	sin.sin_addr.s_addr = ip_hdr(skb)->saddr;
+	if (rxrpc_extract_addr_from_skb(&srx, skb) < 0)
+		return;
 
-	msg.msg_name	= &sin;
-	msg.msg_namelen	= sizeof(sin);
+	msg.msg_name	= &srx.transport;
+	msg.msg_namelen	= srx.transport_len;
 	msg.msg_control	= NULL;
 	msg.msg_controllen = 0;
 	msg.msg_flags	= 0;
@@ -74,7 +67,11 @@ static void rxrpc_send_version_request(struct rxrpc_local *local,
 
 	ret = kernel_sendmsg(local->socket, &msg, iov, 2, len);
 	if (ret < 0)
-		_debug("sendmsg failed: %d", ret);
+		trace_rxrpc_tx_fail(local->debug_id, 0, ret,
+				    rxrpc_tx_point_version_reply);
+	else
+		trace_rxrpc_tx_packet(local->debug_id, &whdr,
+				      rxrpc_tx_point_version_reply);
 
 	_leave("");
 }
@@ -93,11 +90,13 @@ void rxrpc_process_local_events(struct rxrpc_local *local)
 	if (skb) {
 		struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
 
+		rxrpc_see_skb(skb, rxrpc_skb_seen);
 		_debug("{%d},{%u}", local->debug_id, sp->hdr.type);
 
 		switch (sp->hdr.type) {
 		case RXRPC_PACKET_TYPE_VERSION:
-			if (skb_copy_bits(skb, 0, &v, 1) < 0)
+			if (skb_copy_bits(skb, sizeof(struct rxrpc_wire_header),
+					  &v, 1) < 0)
 				return;
 			_proto("Rx VERSION { %02x }", v);
 			if (v == 0)
@@ -109,7 +108,7 @@ void rxrpc_process_local_events(struct rxrpc_local *local)
 			break;
 		}
 
-		rxrpc_free_skb(skb);
+		rxrpc_free_skb(skb, rxrpc_skb_freed);
 	}
 
 	_leave("");

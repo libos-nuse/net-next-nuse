@@ -37,30 +37,18 @@
  * DAMAGE.
  */
 
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/module.h>
 #include <linux/fips.h>
 #include <linux/time.h>
-#include <linux/crypto.h>
 #include <crypto/internal/rng.h>
 
-struct rand_data;
-int jent_read_entropy(struct rand_data *ec, unsigned char *data,
-		      unsigned int len);
-int jent_entropy_init(void);
-struct rand_data *jent_entropy_collector_alloc(unsigned int osr,
-					       unsigned int flags);
-void jent_entropy_collector_free(struct rand_data *entropy_collector);
+#include "jitterentropy.h"
 
 /***************************************************************************
  * Helper function
  ***************************************************************************/
-
-__u64 jent_rol64(__u64 word, unsigned int shift)
-{
-	return rol64(word, shift);
-}
 
 void *jent_zalloc(unsigned int len)
 {
@@ -69,7 +57,7 @@ void *jent_zalloc(unsigned int len)
 
 void jent_zfree(void *ptr)
 {
-	kzfree(ptr);
+	kfree_sensitive(ptr);
 }
 
 int jent_fips_enabled(void)
@@ -87,24 +75,28 @@ void jent_memcpy(void *dest, const void *src, unsigned int n)
 	memcpy(dest, src, n);
 }
 
+/*
+ * Obtain a high-resolution time stamp value. The time stamp is used to measure
+ * the execution time of a given code path and its variations. Hence, the time
+ * stamp must have a sufficiently high resolution.
+ *
+ * Note, if the function returns zero because a given architecture does not
+ * implement a high-resolution time stamp, the RNG code's runtime test
+ * will detect it and will not produce output.
+ */
 void jent_get_nstime(__u64 *out)
 {
-	struct timespec ts;
 	__u64 tmp = 0;
 
 	tmp = random_get_entropy();
 
 	/*
-	 * If random_get_entropy does not return a value (which is possible on,
-	 * for example, MIPS), invoke __getnstimeofday
+	 * If random_get_entropy does not return a value, i.e. it is not
+	 * implemented for a given architecture, use a clock source.
 	 * hoping that there are timers we can work with.
 	 */
-	if ((0 == tmp) &&
-	   (0 == __getnstimeofday(&ts))) {
-		tmp = ts.tv_sec;
-		tmp = tmp << 32;
-		tmp = tmp | ts.tv_nsec;
-	}
+	if (tmp == 0)
+		tmp = ktime_get_ns();
 
 	*out = tmp;
 }
@@ -116,6 +108,7 @@ void jent_get_nstime(__u64 *out)
 struct jitterentropy {
 	spinlock_t jent_lock;
 	struct rand_data *entropy_collector;
+	unsigned int reset_cnt;
 };
 
 static int jent_kcapi_init(struct crypto_tfm *tfm)
@@ -150,7 +143,33 @@ static int jent_kcapi_random(struct crypto_rng *tfm,
 	int ret = 0;
 
 	spin_lock(&rng->jent_lock);
+
+	/* Return a permanent error in case we had too many resets in a row. */
+	if (rng->reset_cnt > (1<<10)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
 	ret = jent_read_entropy(rng->entropy_collector, rdata, dlen);
+
+	/* Reset RNG in case of health failures */
+	if (ret < -1) {
+		pr_warn_ratelimited("Reset Jitter RNG due to health test failure: %s failure\n",
+				    (ret == -2) ? "Repetition Count Test" :
+						  "Adaptive Proportion Test");
+
+		rng->reset_cnt++;
+
+		ret = -EAGAIN;
+	} else {
+		rng->reset_cnt = 0;
+
+		/* Convert the Jitter RNG error into a usable error code */
+		if (ret == -1)
+			ret = -EINVAL;
+	}
+
+out:
 	spin_unlock(&rng->jent_lock);
 
 	return ret;

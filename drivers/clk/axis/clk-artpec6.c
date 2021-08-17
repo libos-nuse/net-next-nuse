@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ARTPEC-6 clock initialization
  *
  * Copyright 2015-2016 Axis Comunications AB.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk-provider.h>
@@ -113,8 +110,8 @@ static void of_artpec6_clkctrl_setup(struct device_node *np)
 	of_clk_add_provider(np, of_clk_src_onecell_get, &clkdata->clk_data);
 }
 
-CLK_OF_DECLARE(artpec6_clkctrl, "axis,artpec6-clkctrl",
-	       of_artpec6_clkctrl_setup);
+CLK_OF_DECLARE_DRIVER(artpec6_clkctrl, "axis,artpec6-clkctrl",
+		      of_artpec6_clkctrl_setup);
 
 static int artpec6_clkctrl_probe(struct platform_device *pdev)
 {

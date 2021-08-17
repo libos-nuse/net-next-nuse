@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * isl29125.c - Support for Intersil ISL29125 RGB light sensor
  *
  * Copyright (c) 2014 Peter Meerwald <pmeerw@pmeerw.net>
- *
- * This file is subject to the terms and conditions of version 2 of
- * the GNU General Public License.  See the file COPYING in the main
- * directory of this archive for more details.
  *
  * RGB light sensor with 16-bit channels for red, green, blue);
  * 7-bit I2C slave address 0x44
@@ -44,13 +41,15 @@
 #define ISL29125_MODE_B 0x3
 #define ISL29125_MODE_RGB 0x5
 
+#define ISL29125_SENSING_RANGE_0 5722   /* 375 lux full range */
+#define ISL29125_SENSING_RANGE_1 152590 /* 10k lux full range */
+
 #define ISL29125_MODE_RANGE BIT(3)
 
 #define ISL29125_STATUS_CONV BIT(1)
 
 struct isl29125_data {
 	struct i2c_client *client;
-	struct mutex lock;
 	u8 conf1;
 	u16 buffer[8]; /* 3x 16-bit, padding, 8 bytes timestamp */
 };
@@ -128,11 +127,11 @@ static int isl29125_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		if (iio_buffer_enabled(indio_dev))
-			return -EBUSY;
-		mutex_lock(&data->lock);
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret)
+			return ret;
 		ret = isl29125_read_data(data, chan->scan_index);
-		mutex_unlock(&data->lock);
+		iio_device_release_direct_mode(indio_dev);
 		if (ret < 0)
 			return ret;
 		*val = ret;
@@ -140,9 +139,9 @@ static int isl29125_read_raw(struct iio_dev *indio_dev,
 	case IIO_CHAN_INFO_SCALE:
 		*val = 0;
 		if (data->conf1 & ISL29125_MODE_RANGE)
-			*val2 = 152590; /* 10k lux full range */
+			*val2 = ISL29125_SENSING_RANGE_1; /*10k lux full range*/
 		else
-			*val2 = 5722; /* 375 lux full range */
+			*val2 = ISL29125_SENSING_RANGE_0; /*375 lux full range*/
 		return IIO_VAL_INT_PLUS_MICRO;
 	}
 	return -EINVAL;
@@ -158,9 +157,9 @@ static int isl29125_write_raw(struct iio_dev *indio_dev,
 	case IIO_CHAN_INFO_SCALE:
 		if (val != 0)
 			return -EINVAL;
-		if (val2 == 152590)
+		if (val2 == ISL29125_SENSING_RANGE_1)
 			data->conf1 |= ISL29125_MODE_RANGE;
-		else if (val2 == 5722)
+		else if (val2 == ISL29125_SENSING_RANGE_0)
 			data->conf1 &= ~ISL29125_MODE_RANGE;
 		else
 			return -EINVAL;
@@ -189,7 +188,7 @@ static irqreturn_t isl29125_trigger_handler(int irq, void *p)
 	}
 
 	iio_push_to_buffers_with_timestamp(indio_dev, data->buffer,
-		iio_get_time_ns());
+		iio_get_time_ns(indio_dev));
 
 done:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -212,10 +211,9 @@ static const struct iio_info isl29125_info = {
 	.read_raw = isl29125_read_raw,
 	.write_raw = isl29125_write_raw,
 	.attrs = &isl29125_attribute_group,
-	.driver_module = THIS_MODULE,
 };
 
-static int isl29125_buffer_preenable(struct iio_dev *indio_dev)
+static int isl29125_buffer_postenable(struct iio_dev *indio_dev)
 {
 	struct isl29125_data *data = iio_priv(indio_dev);
 
@@ -227,11 +225,6 @@ static int isl29125_buffer_preenable(struct iio_dev *indio_dev)
 static int isl29125_buffer_predisable(struct iio_dev *indio_dev)
 {
 	struct isl29125_data *data = iio_priv(indio_dev);
-	int ret;
-
-	ret = iio_triggered_buffer_predisable(indio_dev);
-	if (ret < 0)
-		return ret;
 
 	data->conf1 &= ~ISL29125_MODE_MASK;
 	data->conf1 |= ISL29125_MODE_PD;
@@ -240,8 +233,7 @@ static int isl29125_buffer_predisable(struct iio_dev *indio_dev)
 }
 
 static const struct iio_buffer_setup_ops isl29125_buffer_setup_ops = {
-	.preenable = isl29125_buffer_preenable,
-	.postenable = &iio_triggered_buffer_postenable,
+	.postenable = isl29125_buffer_postenable,
 	.predisable = isl29125_buffer_predisable,
 };
 
@@ -259,9 +251,7 @@ static int isl29125_probe(struct i2c_client *client,
 	data = iio_priv(indio_dev);
 	i2c_set_clientdata(client, indio_dev);
 	data->client = client;
-	mutex_init(&data->lock);
 
-	indio_dev->dev.parent = &client->dev;
 	indio_dev->info = &isl29125_info;
 	indio_dev->name = ISL29125_DRV_NAME;
 	indio_dev->channels = isl29125_channels;

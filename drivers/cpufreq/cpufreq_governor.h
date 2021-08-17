@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * drivers/cpufreq/cpufreq_governor.h
  *
@@ -8,10 +9,6 @@
  *		(C) 2003 Jun Nakajima <jun.nakajima@intel.com>
  *		(C) 2009 Alexander Clouter <alex@digriz.org.uk>
  *		(c) 2012 Viresh Kumar <viresh.kumar@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _CPUFREQ_GOVERNOR_H
@@ -20,6 +17,7 @@
 #include <linux/atomic.h>
 #include <linux/irq_work.h>
 #include <linux/cpufreq.h>
+#include <linux/sched/cpufreq.h>
 #include <linux/kernel_stat.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -40,7 +38,6 @@ enum {OD_NORMAL_SAMPLE, OD_SUB_SAMPLE};
 struct dbs_data {
 	struct gov_attr_set attr_set;
 	void *tuners;
-	unsigned int min_sampling_rate;
 	unsigned int ignore_nice_load;
 	unsigned int sampling_rate;
 	unsigned int sampling_down_factor;
@@ -85,7 +82,7 @@ struct policy_dbs_info {
 	 * Per policy mutex that serializes load evaluation from limit-change
 	 * and work-handler.
 	 */
-	struct mutex timer_mutex;
+	struct mutex update_mutex;
 
 	u64 last_sample_time;
 	s64 sample_delay_ns;
@@ -97,6 +94,7 @@ struct policy_dbs_info {
 	struct list_head list;
 	/* Multiplier for increasing sample delay temporarily. */
 	unsigned int rate_mult;
+	unsigned int idle_periods;	/* For conservative */
 	/* Status indicators */
 	bool is_shared;		/* This object is used by multiple CPUs */
 	bool work_in_progress;	/* Work is being queued up or in progress */
@@ -135,11 +133,11 @@ struct dbs_governor {
 	 */
 	struct dbs_data *gdbs_data;
 
-	unsigned int (*gov_dbs_timer)(struct cpufreq_policy *policy);
+	unsigned int (*gov_dbs_update)(struct cpufreq_policy *policy);
 	struct policy_dbs_info *(*alloc)(void);
 	void (*free)(struct policy_dbs_info *policy_dbs);
-	int (*init)(struct dbs_data *dbs_data, bool notify);
-	void (*exit)(struct dbs_data *dbs_data, bool notify);
+	int (*init)(struct dbs_data *dbs_data);
+	void (*exit)(struct dbs_data *dbs_data);
 	void (*start)(struct cpufreq_policy *policy);
 };
 
@@ -148,6 +146,25 @@ static inline struct dbs_governor *dbs_governor_of(struct cpufreq_policy *policy
 	return container_of(policy->governor, struct dbs_governor, gov);
 }
 
+/* Governor callback routines */
+int cpufreq_dbs_governor_init(struct cpufreq_policy *policy);
+void cpufreq_dbs_governor_exit(struct cpufreq_policy *policy);
+int cpufreq_dbs_governor_start(struct cpufreq_policy *policy);
+void cpufreq_dbs_governor_stop(struct cpufreq_policy *policy);
+void cpufreq_dbs_governor_limits(struct cpufreq_policy *policy);
+
+#define CPUFREQ_DBS_GOVERNOR_INITIALIZER(_name_)			\
+	{								\
+		.name = _name_,						\
+		.flags = CPUFREQ_GOV_DYNAMIC_SWITCHING,			\
+		.owner = THIS_MODULE,					\
+		.init = cpufreq_dbs_governor_init,			\
+		.exit = cpufreq_dbs_governor_exit,			\
+		.start = cpufreq_dbs_governor_start,			\
+		.stop = cpufreq_dbs_governor_stop,			\
+		.limits = cpufreq_dbs_governor_limits,			\
+	}
+
 /* Governor specific operations */
 struct od_ops {
 	unsigned int (*powersave_bias_target)(struct cpufreq_policy *policy,
@@ -155,7 +172,6 @@ struct od_ops {
 };
 
 unsigned int dbs_update(struct cpufreq_policy *policy);
-int cpufreq_governor_dbs(struct cpufreq_policy *policy, unsigned int event);
 void od_register_powersave_bias_handler(unsigned int (*f)
 		(struct cpufreq_policy *, unsigned int, unsigned int),
 		unsigned int powersave_bias);

@@ -1,14 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * da7219-aad.h - DA7322 ASoC AAD Driver
  *
  * Copyright (c) 2015 Dialog Semiconductor Ltd.
  *
  * Author: Adam Thomson <Adam.Thomson.Opensource@diasemi.com>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #ifndef __DA7219_AAD_H
@@ -176,8 +172,10 @@
 #define DA7219_AAD_MICBIAS_CHK_DELAY	10
 #define DA7219_AAD_MICBIAS_CHK_RETRIES	5
 
-#define DA7219_AAD_HPTEST_RAMP_FREQ	0x28
-#define DA7219_AAD_HPTEST_PERIOD	65
+#define DA7219_AAD_HPTEST_RAMP_FREQ		0x28
+#define DA7219_AAD_HPTEST_RAMP_FREQ_INT_OSC	0x4D
+#define DA7219_AAD_HPTEST_PERIOD		65
+#define DA7219_AAD_HPTEST_INT_OSC_PATH_DELAY	20
 
 enum da7219_aad_event_regs {
 	DA7219_AAD_IRQ_REG_A = 0,
@@ -187,7 +185,7 @@ enum da7219_aad_event_regs {
 
 /* Private data */
 struct da7219_aad_priv {
-	struct snd_soc_codec *codec;
+	struct snd_soc_component *component;
 	int irq;
 
 	u8 micbias_pulse_lvl;
@@ -199,14 +197,22 @@ struct da7219_aad_priv {
 	struct work_struct hptest_work;
 
 	struct snd_soc_jack *jack;
+	bool micbias_resume_enable;
 	bool jack_inserted;
 };
 
 /* AAD control */
-void da7219_aad_jack_det(struct snd_soc_codec *codec, struct snd_soc_jack *jack);
+void da7219_aad_jack_det(struct snd_soc_component *component, struct snd_soc_jack *jack);
+
+/* Suspend/Resume */
+void da7219_aad_suspend(struct snd_soc_component *component);
+void da7219_aad_resume(struct snd_soc_component *component);
 
 /* Init/Exit */
-int da7219_aad_init(struct snd_soc_codec *codec);
-void da7219_aad_exit(struct snd_soc_codec *codec);
+int da7219_aad_init(struct snd_soc_component *component);
+void da7219_aad_exit(struct snd_soc_component *component);
+
+/* I2C Probe */
+int da7219_aad_probe(struct i2c_client *i2c);
 
 #endif /* __DA7219_AAD_H */

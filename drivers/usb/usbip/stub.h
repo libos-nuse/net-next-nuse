@@ -1,20 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2003-2008 Takahiro Hirofuchi
- *
- * This is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307,
- * USA.
  */
 
 #ifndef __USBIP_STUB_H
@@ -66,7 +52,11 @@ struct stub_priv {
 	unsigned long seqnum;
 	struct list_head list;
 	struct stub_device *sdev;
-	struct urb *urb;
+	struct urb **urbs;
+	struct scatterlist *sgl;
+	int num_urbs;
+	int completed_urbs;
+	int urb_status;
 
 	int unlinking;
 };
@@ -87,6 +77,7 @@ struct bus_id_priv {
 	struct stub_device *sdev;
 	struct usb_device *udev;
 	char shutdown_busid;
+	spinlock_t busid_lock;
 };
 
 /* stub_priv is allocated from stub_priv_cache */
@@ -97,7 +88,9 @@ extern struct usb_device_driver stub_driver;
 
 /* stub_main.c */
 struct bus_id_priv *get_busid_priv(const char *busid);
+void put_busid_priv(struct bus_id_priv *bid);
 int del_match_busid(char *busid);
+void stub_free_priv_and_urb(struct stub_priv *priv);
 void stub_device_cleanup_urbs(struct stub_device *sdev);
 
 /* stub_rx.c */

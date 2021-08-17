@@ -1,15 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * BTS PMU driver for perf
  * Copyright (c) 2013-2014, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #undef DEBUG
@@ -23,7 +15,7 @@
 #include <linux/device.h>
 #include <linux/coredump.h>
 
-#include <asm-generic/sizes.h>
+#include <linux/sizes.h>
 #include <asm/perf_event.h>
 
 #include "../perf_event.h"
@@ -31,7 +23,17 @@
 struct bts_ctx {
 	struct perf_output_handle	handle;
 	struct debug_store		ds_back;
-	int				started;
+	int				state;
+};
+
+/* BTS context states: */
+enum {
+	/* no ongoing AUX transactions */
+	BTS_STATE_STOPPED = 0,
+	/* AUX transaction is on, BTS tracing is disabled */
+	BTS_STATE_INACTIVE,
+	/* AUX transaction is on, BTS tracing is running */
+	BTS_STATE_ACTIVE,
 };
 
 static DEFINE_PER_CPU(struct bts_ctx, bts_ctx);
@@ -53,25 +55,34 @@ struct bts_buffer {
 	unsigned int	cur_buf;
 	bool		snapshot;
 	local_t		data_size;
-	local_t		lost;
 	local_t		head;
 	unsigned long	end;
 	void		**data_pages;
-	struct bts_phys	buf[0];
+	struct bts_phys	buf[];
 };
 
-struct pmu bts_pmu;
+static struct pmu bts_pmu;
+
+static int buf_nr_pages(struct page *page)
+{
+	if (!PagePrivate(page))
+		return 1;
+
+	return 1 << page_private(page);
+}
 
 static size_t buf_size(struct page *page)
 {
-	return 1 << (PAGE_SHIFT + page_private(page));
+	return buf_nr_pages(page) * PAGE_SIZE;
 }
 
 static void *
-bts_buffer_setup_aux(int cpu, void **pages, int nr_pages, bool overwrite)
+bts_buffer_setup_aux(struct perf_event *event, void **pages,
+		     int nr_pages, bool overwrite)
 {
 	struct bts_buffer *buf;
 	struct page *page;
+	int cpu = event->cpu;
 	int node = (cpu == -1) ? cpu : cpu_to_node(cpu);
 	unsigned long offset;
 	size_t size = nr_pages << PAGE_SHIFT;
@@ -80,9 +91,7 @@ bts_buffer_setup_aux(int cpu, void **pages, int nr_pages, bool overwrite)
 	/* count all the high order buffers */
 	for (pg = 0, nbuf = 0; pg < nr_pages;) {
 		page = virt_to_page(pages[pg]);
-		if (WARN_ON_ONCE(!PagePrivate(page) && nr_pages > 1))
-			return NULL;
-		pg += 1 << page_private(page);
+		pg += buf_nr_pages(page);
 		nbuf++;
 	}
 
@@ -106,7 +115,7 @@ bts_buffer_setup_aux(int cpu, void **pages, int nr_pages, bool overwrite)
 		unsigned int __nr_pages;
 
 		page = virt_to_page(pages[pg]);
-		__nr_pages = PagePrivate(page) ? 1 << page_private(page) : 1;
+		__nr_pages = buf_nr_pages(page);
 		buf->buf[nbuf].page = page;
 		buf->buf[nbuf].offset = offset;
 		buf->buf[nbuf].displacement = (pad ? BTS_RECORD_SIZE - pad : 0);
@@ -189,7 +198,8 @@ static void bts_update(struct bts_ctx *bts)
 			return;
 
 		if (ds->bts_index >= ds->bts_absolute_maximum)
-			local_inc(&buf->lost);
+			perf_aux_output_flag(&bts->handle,
+			                     PERF_AUX_FLAG_TRUNCATED);
 
 		/*
 		 * old and head are always in the same physical buffer, so we
@@ -203,6 +213,15 @@ static void bts_update(struct bts_ctx *bts)
 
 static int
 bts_buffer_reset(struct bts_buffer *buf, struct perf_output_handle *handle);
+
+/*
+ * Ordering PMU callbacks wrt themselves and the PMI is done by means
+ * of bts::state, which:
+ *  - is set when bts::handle::event is valid, that is, between
+ *    perf_aux_output_begin() and perf_aux_output_end();
+ *  - is zero otherwise;
+ *  - is ordered against bts::handle::event with a compiler barrier.
+ */
 
 static void __bts_event_start(struct perf_event *event)
 {
@@ -221,9 +240,12 @@ static void __bts_event_start(struct perf_event *event)
 
 	/*
 	 * local barrier to make sure that ds configuration made it
-	 * before we enable BTS
+	 * before we enable BTS and bts::state goes ACTIVE
 	 */
 	wmb();
+
+	/* INACTIVE/STOPPED -> ACTIVE */
+	WRITE_ONCE(bts->state, BTS_STATE_ACTIVE);
 
 	intel_pmu_enable_bts(config);
 
@@ -246,47 +268,48 @@ static void bts_event_start(struct perf_event *event, int flags)
 	bts->ds_back.bts_absolute_maximum = cpuc->ds->bts_absolute_maximum;
 	bts->ds_back.bts_interrupt_threshold = cpuc->ds->bts_interrupt_threshold;
 
-	event->hw.itrace_started = 1;
+	perf_event_itrace_started(event);
 	event->hw.state = 0;
 
 	__bts_event_start(event);
 
-	/* PMI handler: this counter is running and likely generating PMIs */
-	ACCESS_ONCE(bts->started) = 1;
-
 	return;
 
 fail_end_stop:
-	perf_aux_output_end(&bts->handle, 0, false);
+	perf_aux_output_end(&bts->handle, 0);
 
 fail_stop:
 	event->hw.state = PERF_HES_STOPPED;
 }
 
-static void __bts_event_stop(struct perf_event *event)
+static void __bts_event_stop(struct perf_event *event, int state)
 {
+	struct bts_ctx *bts = this_cpu_ptr(&bts_ctx);
+
+	/* ACTIVE -> INACTIVE(PMI)/STOPPED(->stop()) */
+	WRITE_ONCE(bts->state, state);
+
 	/*
 	 * No extra synchronization is mandated by the documentation to have
 	 * BTS data stores globally visible.
 	 */
 	intel_pmu_disable_bts();
-
-	if (event->hw.state & PERF_HES_STOPPED)
-		return;
-
-	ACCESS_ONCE(event->hw.state) |= PERF_HES_STOPPED;
 }
 
 static void bts_event_stop(struct perf_event *event, int flags)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 	struct bts_ctx *bts = this_cpu_ptr(&bts_ctx);
-	struct bts_buffer *buf = perf_get_aux(&bts->handle);
+	struct bts_buffer *buf = NULL;
+	int state = READ_ONCE(bts->state);
 
-	/* PMI handler: don't restart this counter */
-	ACCESS_ONCE(bts->started) = 0;
+	if (state == BTS_STATE_ACTIVE)
+		__bts_event_stop(event, BTS_STATE_STOPPED);
 
-	__bts_event_stop(event);
+	if (state != BTS_STATE_STOPPED)
+		buf = perf_get_aux(&bts->handle);
+
+	event->hw.state |= PERF_HES_STOPPED;
 
 	if (flags & PERF_EF_UPDATE) {
 		bts_update(bts);
@@ -296,8 +319,8 @@ static void bts_event_stop(struct perf_event *event, int flags)
 				bts->handle.head =
 					local_xchg(&buf->data_size,
 						   buf->nr_pages << PAGE_SHIFT);
-			perf_aux_output_end(&bts->handle, local_xchg(&buf->data_size, 0),
-					    !!local_xchg(&buf->lost, 0));
+			perf_aux_output_end(&bts->handle,
+			                    local_xchg(&buf->data_size, 0));
 		}
 
 		cpuc->ds->bts_index = bts->ds_back.bts_buffer_base;
@@ -310,8 +333,20 @@ static void bts_event_stop(struct perf_event *event, int flags)
 void intel_bts_enable_local(void)
 {
 	struct bts_ctx *bts = this_cpu_ptr(&bts_ctx);
+	int state = READ_ONCE(bts->state);
 
-	if (bts->handle.event && bts->started)
+	/*
+	 * Here we transition from INACTIVE to ACTIVE;
+	 * if we instead are STOPPED from the interrupt handler,
+	 * stay that way. Can't be ACTIVE here though.
+	 */
+	if (WARN_ON_ONCE(state == BTS_STATE_ACTIVE))
+		return;
+
+	if (state == BTS_STATE_STOPPED)
+		return;
+
+	if (bts->handle.event)
 		__bts_event_start(bts->handle.event);
 }
 
@@ -319,8 +354,15 @@ void intel_bts_disable_local(void)
 {
 	struct bts_ctx *bts = this_cpu_ptr(&bts_ctx);
 
+	/*
+	 * Here we transition from ACTIVE to INACTIVE;
+	 * do nothing for STOPPED or INACTIVE.
+	 */
+	if (READ_ONCE(bts->state) != BTS_STATE_ACTIVE)
+		return;
+
 	if (bts->handle.event)
-		__bts_event_stop(bts->handle.event);
+		__bts_event_stop(bts->handle.event, BTS_STATE_INACTIVE);
 }
 
 static int
@@ -335,8 +377,6 @@ bts_buffer_reset(struct bts_buffer *buf, struct perf_output_handle *handle)
 		return 0;
 
 	head = handle->head & ((buf->nr_pages << PAGE_SHIFT) - 1);
-	if (WARN_ON_ONCE(head != local_read(&buf->head)))
-		return -EINVAL;
 
 	phys = &buf->buf[buf->cur_buf];
 	space = phys->offset + phys->displacement + phys->size - head;
@@ -403,22 +443,37 @@ bts_buffer_reset(struct bts_buffer *buf, struct perf_output_handle *handle)
 
 int intel_bts_interrupt(void)
 {
+	struct debug_store *ds = this_cpu_ptr(&cpu_hw_events)->ds;
 	struct bts_ctx *bts = this_cpu_ptr(&bts_ctx);
 	struct perf_event *event = bts->handle.event;
 	struct bts_buffer *buf;
 	s64 old_head;
-	int err;
+	int err = -ENOSPC, handled = 0;
 
-	if (!event || !bts->started)
-		return 0;
+	/*
+	 * The only surefire way of knowing if this NMI is ours is by checking
+	 * the write ptr against the PMI threshold.
+	 */
+	if (ds && (ds->bts_index >= ds->bts_interrupt_threshold))
+		handled = 1;
+
+	/*
+	 * this is wrapped in intel_bts_enable_local/intel_bts_disable_local,
+	 * so we can only be INACTIVE or STOPPED
+	 */
+	if (READ_ONCE(bts->state) == BTS_STATE_STOPPED)
+		return handled;
 
 	buf = perf_get_aux(&bts->handle);
+	if (!buf)
+		return handled;
+
 	/*
 	 * Skip snapshot counters: they don't use the interrupt, but
 	 * there's no other way of telling, because the pointer will
 	 * keep moving
 	 */
-	if (!buf || buf->snapshot)
+	if (buf->snapshot)
 		return 0;
 
 	old_head = local_read(&buf->head);
@@ -426,18 +481,26 @@ int intel_bts_interrupt(void)
 
 	/* no new data */
 	if (old_head == local_read(&buf->head))
-		return 0;
+		return handled;
 
-	perf_aux_output_end(&bts->handle, local_xchg(&buf->data_size, 0),
-			    !!local_xchg(&buf->lost, 0));
+	perf_aux_output_end(&bts->handle, local_xchg(&buf->data_size, 0));
 
 	buf = perf_aux_output_begin(&bts->handle, event);
-	if (!buf)
-		return 1;
+	if (buf)
+		err = bts_buffer_reset(buf, &bts->handle);
 
-	err = bts_buffer_reset(buf, &bts->handle);
-	if (err)
-		perf_aux_output_end(&bts->handle, 0, false);
+	if (err) {
+		WRITE_ONCE(bts->state, BTS_STATE_STOPPED);
+
+		if (buf) {
+			/*
+			 * BTS_STATE_STOPPED should be visible before
+			 * cleared handle::event
+			 */
+			barrier();
+			perf_aux_output_end(&bts->handle, 0);
+		}
+	}
 
 	return 1;
 }
@@ -483,9 +546,6 @@ static int bts_event_init(struct perf_event *event)
 	if (event->attr.type != bts_pmu.type)
 		return -ENOENT;
 
-	if (x86_add_exclusive(x86_lbr_exclusive_bts))
-		return -EBUSY;
-
 	/*
 	 * BTS leaks kernel addresses even when CPL0 tracing is
 	 * disabled, so disallow intel_bts driver for unprivileged
@@ -495,9 +555,14 @@ static int bts_event_init(struct perf_event *event)
 	 * Note that the default paranoia setting permits unprivileged
 	 * users to profile the kernel.
 	 */
-	if (event->attr.exclude_kernel && perf_paranoid_kernel() &&
-	    !capable(CAP_SYS_ADMIN))
-		return -EACCES;
+	if (event->attr.exclude_kernel) {
+		ret = perf_allow_kernel(&event->attr);
+		if (ret)
+			return ret;
+	}
+
+	if (x86_add_exclusive(x86_lbr_exclusive_bts))
+		return -EBUSY;
 
 	ret = x86_reserve_hardware();
 	if (ret) {
@@ -519,7 +584,26 @@ static __init int bts_init(void)
 	if (!boot_cpu_has(X86_FEATURE_DTES64) || !x86_pmu.bts)
 		return -ENODEV;
 
-	bts_pmu.capabilities	= PERF_PMU_CAP_AUX_NO_SG | PERF_PMU_CAP_ITRACE;
+	if (boot_cpu_has(X86_FEATURE_PTI)) {
+		/*
+		 * BTS hardware writes through a virtual memory map we must
+		 * either use the kernel physical map, or the user mapping of
+		 * the AUX buffer.
+		 *
+		 * However, since this driver supports per-CPU and per-task inherit
+		 * we cannot use the user mapping since it will not be available
+		 * if we're not running the owning process.
+		 *
+		 * With PTI we can't use the kernal map either, because its not
+		 * there when we run userspace.
+		 *
+		 * For now, disable this driver when using PTI.
+		 */
+		return -ENODEV;
+	}
+
+	bts_pmu.capabilities	= PERF_PMU_CAP_AUX_NO_SG | PERF_PMU_CAP_ITRACE |
+				  PERF_PMU_CAP_EXCLUSIVE;
 	bts_pmu.task_ctx_nr	= perf_sw_context;
 	bts_pmu.event_init	= bts_event_init;
 	bts_pmu.add		= bts_event_add;

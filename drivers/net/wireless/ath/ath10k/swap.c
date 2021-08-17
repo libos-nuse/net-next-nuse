@@ -1,17 +1,6 @@
+// SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2015 Qualcomm Atheros, Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ * Copyright (c) 2015-2016 Qualcomm Atheros, Inc.
  */
 
 /* This file has implementation for code swap logic. With code swap feature,
@@ -117,10 +106,8 @@ ath10k_swap_code_seg_alloc(struct ath10k *ar, size_t swap_bin_len)
 
 	virt_addr = dma_alloc_coherent(ar->dev, swap_bin_len, &paddr,
 				       GFP_KERNEL);
-	if (!virt_addr) {
-		ath10k_err(ar, "failed to allocate dma coherent memory\n");
+	if (!virt_addr)
 		return NULL;
-	}
 
 	seg_info->seg_hw_info.bus_addr[0] = __cpu_to_le32(paddr);
 	seg_info->seg_hw_info.size = __cpu_to_le32(swap_bin_len);
@@ -134,17 +121,18 @@ ath10k_swap_code_seg_alloc(struct ath10k *ar, size_t swap_bin_len)
 	return seg_info;
 }
 
-int ath10k_swap_code_seg_configure(struct ath10k *ar)
+int ath10k_swap_code_seg_configure(struct ath10k *ar,
+				   const struct ath10k_fw_file *fw_file)
 {
 	int ret;
 	struct ath10k_swap_code_seg_info *seg_info = NULL;
 
-	if (!ar->swap.firmware_swap_code_seg_info)
+	if (!fw_file->firmware_swap_code_seg_info)
 		return 0;
 
 	ath10k_dbg(ar, ATH10K_DBG_BOOT, "boot found firmware code swap binary\n");
 
-	seg_info = ar->swap.firmware_swap_code_seg_info;
+	seg_info = fw_file->firmware_swap_code_seg_info;
 
 	ret = ath10k_bmi_write_memory(ar, seg_info->target_addr,
 				      &seg_info->seg_hw_info,
@@ -158,28 +146,29 @@ int ath10k_swap_code_seg_configure(struct ath10k *ar)
 	return 0;
 }
 
-void ath10k_swap_code_seg_release(struct ath10k *ar)
+void ath10k_swap_code_seg_release(struct ath10k *ar,
+				  struct ath10k_fw_file *fw_file)
 {
-	ath10k_swap_code_seg_free(ar, ar->swap.firmware_swap_code_seg_info);
+	ath10k_swap_code_seg_free(ar, fw_file->firmware_swap_code_seg_info);
 
 	/* FIXME: these two assignments look to bein wrong place! Shouldn't
 	 * they be in ath10k_core_free_firmware_files() like the rest?
 	 */
-	ar->normal_mode_fw.fw_file.codeswap_data = NULL;
-	ar->normal_mode_fw.fw_file.codeswap_len = 0;
+	fw_file->codeswap_data = NULL;
+	fw_file->codeswap_len = 0;
 
-	ar->swap.firmware_swap_code_seg_info = NULL;
+	fw_file->firmware_swap_code_seg_info = NULL;
 }
 
-int ath10k_swap_code_seg_init(struct ath10k *ar)
+int ath10k_swap_code_seg_init(struct ath10k *ar, struct ath10k_fw_file *fw_file)
 {
 	int ret;
 	struct ath10k_swap_code_seg_info *seg_info;
 	const void *codeswap_data;
 	size_t codeswap_len;
 
-	codeswap_data = ar->normal_mode_fw.fw_file.codeswap_data;
-	codeswap_len = ar->normal_mode_fw.fw_file.codeswap_len;
+	codeswap_data = fw_file->codeswap_data;
+	codeswap_len = fw_file->codeswap_len;
 
 	if (!codeswap_len || !codeswap_data)
 		return 0;
@@ -200,7 +189,7 @@ int ath10k_swap_code_seg_init(struct ath10k *ar)
 		return ret;
 	}
 
-	ar->swap.firmware_swap_code_seg_info = seg_info;
+	fw_file->firmware_swap_code_seg_info = seg_info;
 
 	return 0;
 }

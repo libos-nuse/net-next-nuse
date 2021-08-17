@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2012 Alexandre Pereira da Silva <aletes.xgr@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2.
- *
  */
 
 #include <linux/clk.h>
@@ -25,6 +21,7 @@ struct lpc32xx_pwm_chip {
 };
 
 #define PWM_ENABLE	BIT(31)
+#define PWM_PIN_LEVEL	BIT(30)
 
 #define to_lpc32xx_pwm_chip(_chip) \
 	container_of(_chip, struct lpc32xx_pwm_chip, chip)
@@ -103,6 +100,7 @@ static int lpc32xx_pwm_probe(struct platform_device *pdev)
 	struct lpc32xx_pwm_chip *lpc32xx;
 	struct resource *res;
 	int ret;
+	u32 val;
 
 	lpc32xx = devm_kzalloc(&pdev->dev, sizeof(*lpc32xx), GFP_KERNEL);
 	if (!lpc32xx)
@@ -127,6 +125,11 @@ static int lpc32xx_pwm_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to add PWM chip, error %d\n", ret);
 		return ret;
 	}
+
+	/* When PWM is disable, configure the output to the default value */
+	val = readl(lpc32xx->base + (lpc32xx->chip.pwms[0].hwpwm << 2));
+	val &= ~PWM_PIN_LEVEL;
+	writel(val, lpc32xx->base + (lpc32xx->chip.pwms[0].hwpwm << 2));
 
 	platform_set_drvdata(pdev, lpc32xx);
 

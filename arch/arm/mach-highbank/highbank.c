@@ -1,29 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2010-2011 Calxeda, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <linux/clk.h>
 #include <linux/clkdev.h>
 #include <linux/clocksource.h>
-#include <linux/dma-mapping.h>
+#include <linux/dma-map-ops.h>
 #include <linux/input.h>
 #include <linux/io.h>
 #include <linux/irqchip.h>
 #include <linux/pl320-ipc.h>
 #include <linux/of.h>
 #include <linux/of_irq.h>
-#include <linux/of_platform.h>
 #include <linux/of_address.h>
 #include <linux/reboot.h>
 #include <linux/amba/bus.h>
@@ -162,8 +150,6 @@ static void __init highbank_init(void)
 	bus_register_notifier(&amba_bustype, &highbank_amba_nb);
 
 	pl320_ipc_register_notifier(&hb_keys_nb);
-
-	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
 
 	if (psci_ops.cpu_suspend)
 		platform_device_register(&highbank_cpuidle_device);

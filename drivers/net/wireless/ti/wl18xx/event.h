@@ -1,22 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * This file is part of wl18xx
  *
  * Copyright (C) 2012 Texas Instruments. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #ifndef __WL18XX_EVENT_H__
@@ -38,6 +24,7 @@ enum {
 	REMAIN_ON_CHANNEL_COMPLETE_EVENT_ID      = BIT(18),
 	DFS_CHANNELS_CONFIG_COMPLETE_EVENT       = BIT(19),
 	PERIODIC_SCAN_REPORT_EVENT_ID            = BIT(20),
+	RX_BA_WIN_SIZE_CHANGE_EVENT_ID           = BIT(21),
 	SMART_CONFIG_SYNC_EVENT_ID               = BIT(22),
 	SMART_CONFIG_DECODE_EVENT_ID             = BIT(23),
 	TIME_SYNC_EVENT_ID                       = BIT(24),
@@ -74,10 +61,16 @@ struct wl18xx_event_mailbox {
 	__le16 bss_loss_bitmap;
 
 	/* bitmap of stations (by HLID) which exceeded max tx retries */
-	__le32 tx_retry_exceeded_bitmap;
+	__le16 tx_retry_exceeded_bitmap;
+
+	/* time sync high msb*/
+	__le16 time_sync_tsf_high_msb;
 
 	/* bitmap of inactive stations (by HLID) */
-	__le32 inactive_sta_bitmap;
+	__le16 inactive_sta_bitmap;
+
+	/* time sync high lsb*/
+	__le16 time_sync_tsf_high_lsb;
 
 	/* rx BA win size indicated by RX_BA_WIN_SIZE_CHANGE_EVENT_ID */
 	u8 rx_ba_role_id;
@@ -98,14 +91,15 @@ struct wl18xx_event_mailbox {
 	u8 sc_sync_channel;
 	u8 sc_sync_band;
 
-	/* time sync msb*/
-	u16 time_sync_tsf_msb;
+	/* time sync low msb*/
+	__le16 time_sync_tsf_low_msb;
+
 	/* radar detect */
 	u8 radar_channel;
 	u8 radar_type;
 
-	/* time sync lsb*/
-	u16 time_sync_tsf_lsb;
+	/* time sync low lsb*/
+	__le16 time_sync_tsf_low_lsb;
 
 } __packed;
 

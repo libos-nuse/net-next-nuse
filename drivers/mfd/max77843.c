@@ -1,21 +1,15 @@
-/*
- * MFD core driver for the Maxim MAX77843
- *
- * Copyright (C) 2015 Samsung Electronics
- * Author: Jaewon Kim <jaewon02.kim@samsung.com>
- * Author: Beomho Seo <beomho.seo@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// MFD core driver for the Maxim MAX77843
+//
+// Copyright (C) 2015 Samsung Electronics
+// Author: Jaewon Kim <jaewon02.kim@samsung.com>
+// Author: Beomho Seo <beomho.seo@samsung.com>
 
 #include <linux/err.h>
 #include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
-#include <linux/module.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/max77693-common.h>
 #include <linux/mfd/max77843-private.h>
@@ -76,11 +70,11 @@ static int max77843_chg_init(struct max77693_dev *max77843)
 {
 	int ret;
 
-	max77843->i2c_chg = i2c_new_dummy(max77843->i2c->adapter, I2C_ADDR_CHG);
-	if (!max77843->i2c_chg) {
+	max77843->i2c_chg = i2c_new_dummy_device(max77843->i2c->adapter, I2C_ADDR_CHG);
+	if (IS_ERR(max77843->i2c_chg)) {
 		dev_err(&max77843->i2c->dev,
 				"Cannot allocate I2C device for Charger\n");
-		return -ENODEV;
+		return PTR_ERR(max77843->i2c_chg);
 	}
 	i2c_set_clientdata(max77843->i2c_chg, max77843);
 
@@ -171,19 +165,6 @@ err_pmic_id:
 	return ret;
 }
 
-static int max77843_remove(struct i2c_client *i2c)
-{
-	struct max77693_dev *max77843 = i2c_get_clientdata(i2c);
-
-	mfd_remove_devices(max77843->dev);
-
-	regmap_del_irq_chip(max77843->irq, max77843->irq_data_topsys);
-
-	i2c_unregister_device(max77843->i2c_chg);
-
-	return 0;
-}
-
 static const struct of_device_id max77843_dt_match[] = {
 	{ .compatible = "maxim,max77843", },
 	{ },
@@ -193,7 +174,6 @@ static const struct i2c_device_id max77843_id[] = {
 	{ "max77843", TYPE_MAX77843, },
 	{ },
 };
-MODULE_DEVICE_TABLE(i2c, max77843_id);
 
 static int __maybe_unused max77843_suspend(struct device *dev)
 {
@@ -226,9 +206,9 @@ static struct i2c_driver max77843_i2c_driver = {
 		.name = "max77843",
 		.pm = &max77843_pm,
 		.of_match_table = max77843_dt_match,
+		.suppress_bind_attrs = true,
 	},
 	.probe = max77843_probe,
-	.remove = max77843_remove,
 	.id_table = max77843_id,
 };
 
@@ -237,9 +217,3 @@ static int __init max77843_i2c_init(void)
 	return i2c_add_driver(&max77843_i2c_driver);
 }
 subsys_initcall(max77843_i2c_init);
-
-static void __exit max77843_i2c_exit(void)
-{
-	i2c_del_driver(&max77843_i2c_driver);
-}
-module_exit(max77843_i2c_exit);

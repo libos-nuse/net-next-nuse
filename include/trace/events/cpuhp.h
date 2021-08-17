@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM cpuhp
 
@@ -29,7 +30,35 @@ TRACE_EVENT(cpuhp_enter,
 		__entry->fun	= fun;
 	),
 
-	TP_printk("cpu: %04u target: %3d step: %3d (%pf)",
+	TP_printk("cpu: %04u target: %3d step: %3d (%ps)",
+		  __entry->cpu, __entry->target, __entry->idx, __entry->fun)
+);
+
+TRACE_EVENT(cpuhp_multi_enter,
+
+	TP_PROTO(unsigned int cpu,
+		 int target,
+		 int idx,
+		 int (*fun)(unsigned int, struct hlist_node *),
+		 struct hlist_node *node),
+
+	TP_ARGS(cpu, target, idx, fun, node),
+
+	TP_STRUCT__entry(
+		__field( unsigned int,	cpu		)
+		__field( int,		target		)
+		__field( int,		idx		)
+		__field( void *,	fun		)
+	),
+
+	TP_fast_assign(
+		__entry->cpu	= cpu;
+		__entry->target	= target;
+		__entry->idx	= idx;
+		__entry->fun	= fun;
+	),
+
+	TP_printk("cpu: %04u target: %3d step: %3d (%ps)",
 		  __entry->cpu, __entry->target, __entry->idx, __entry->fun)
 );
 

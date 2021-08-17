@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * SBC8641D board specific routines
  *
@@ -6,11 +7,6 @@
  * By Paul Gortmaker (see MAINTAINERS for contact information)
  *
  * Based largely on the 8641 HPCN support by Freescale Semiconductor Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/stddef.h>
@@ -67,9 +63,7 @@ sbc8641_show_cpuinfo(struct seq_file *m)
  */
 static int __init sbc8641_probe(void)
 {
-	unsigned long root = of_get_flat_dt_root();
-
-	if (of_flat_dt_is_compatible(root, "wind,sbc8641"))
+	if (of_machine_is_compatible("wind,sbc8641"))
 		return 1;	/* Looks good */
 
 	return 0;
@@ -84,7 +78,6 @@ define_machine(sbc8641) {
 	.init_IRQ		= mpc86xx_init_irq,
 	.show_cpuinfo		= sbc8641_show_cpuinfo,
 	.get_irq		= mpic_get_irq,
-	.restart		= fsl_rstcr_restart,
 	.time_init		= mpc86xx_time_init,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,

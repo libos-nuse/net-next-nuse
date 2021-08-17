@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Cryptographic API.
  *
@@ -42,10 +43,8 @@ static int ghash_setkey(struct crypto_shash *tfm,
 {
 	struct ghash_ctx *ctx = crypto_shash_ctx(tfm);
 
-	if (keylen != GHASH_BLOCK_SIZE) {
-		crypto_shash_set_flags(tfm, CRYPTO_TFM_RES_BAD_KEY_LEN);
+	if (keylen != GHASH_BLOCK_SIZE)
 		return -EINVAL;
-	}
 
 	memcpy(ctx->key, key, GHASH_BLOCK_SIZE);
 
@@ -58,7 +57,6 @@ static int ghash_update(struct shash_desc *desc,
 	struct ghash_desc_ctx *dctx = shash_desc_ctx(desc);
 	unsigned int n;
 	u8 *buf = dctx->buffer;
-	int ret;
 
 	if (dctx->bytes) {
 		u8 *pos = buf + (GHASH_BLOCK_SIZE - dctx->bytes);
@@ -71,18 +69,14 @@ static int ghash_update(struct shash_desc *desc,
 		src += n;
 
 		if (!dctx->bytes) {
-			ret = cpacf_kimd(CPACF_KIMD_GHASH, dctx, buf,
-					 GHASH_BLOCK_SIZE);
-			if (ret != GHASH_BLOCK_SIZE)
-				return -EIO;
+			cpacf_kimd(CPACF_KIMD_GHASH, dctx, buf,
+				   GHASH_BLOCK_SIZE);
 		}
 	}
 
 	n = srclen & ~(GHASH_BLOCK_SIZE - 1);
 	if (n) {
-		ret = cpacf_kimd(CPACF_KIMD_GHASH, dctx, src, n);
-		if (ret != n)
-			return -EIO;
+		cpacf_kimd(CPACF_KIMD_GHASH, dctx, src, n);
 		src += n;
 		srclen -= n;
 	}
@@ -98,17 +92,12 @@ static int ghash_update(struct shash_desc *desc,
 static int ghash_flush(struct ghash_desc_ctx *dctx)
 {
 	u8 *buf = dctx->buffer;
-	int ret;
 
 	if (dctx->bytes) {
 		u8 *pos = buf + (GHASH_BLOCK_SIZE - dctx->bytes);
 
 		memset(pos, 0, dctx->bytes);
-
-		ret = cpacf_kimd(CPACF_KIMD_GHASH, dctx, buf, GHASH_BLOCK_SIZE);
-		if (ret != GHASH_BLOCK_SIZE)
-			return -EIO;
-
+		cpacf_kimd(CPACF_KIMD_GHASH, dctx, buf, GHASH_BLOCK_SIZE);
 		dctx->bytes = 0;
 	}
 
@@ -137,7 +126,6 @@ static struct shash_alg ghash_alg = {
 		.cra_name		= "ghash",
 		.cra_driver_name	= "ghash-s390",
 		.cra_priority		= 300,
-		.cra_flags		= CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize		= GHASH_BLOCK_SIZE,
 		.cra_ctxsize		= sizeof(struct ghash_ctx),
 		.cra_module		= THIS_MODULE,
@@ -146,8 +134,8 @@ static struct shash_alg ghash_alg = {
 
 static int __init ghash_mod_init(void)
 {
-	if (!cpacf_query(CPACF_KIMD, CPACF_KIMD_GHASH))
-		return -EOPNOTSUPP;
+	if (!cpacf_query_func(CPACF_KIMD, CPACF_KIMD_GHASH))
+		return -ENODEV;
 
 	return crypto_register_shash(&ghash_alg);
 }
@@ -163,4 +151,4 @@ module_exit(ghash_mod_exit);
 MODULE_ALIAS_CRYPTO("ghash");
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("GHASH Message Digest Algorithm, s390 implementation");
+MODULE_DESCRIPTION("GHASH hash function, s390 implementation");

@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * QLogic qlcnic NIC Driver
  * Copyright (c)  2009-2013 QLogic Corporation
- *
- * See LICENSE.qlcnic for copyright and licensing details.
  */
 
 #ifndef __QLCNIC_DCBX_H
@@ -45,7 +44,6 @@ struct qlcnic_dcb {
 static inline void qlcnic_clear_dcb_ops(struct qlcnic_dcb *dcb)
 {
 	kfree(dcb);
-	dcb = NULL;
 }
 
 static inline int qlcnic_dcb_get_hw_capability(struct qlcnic_dcb *dcb)

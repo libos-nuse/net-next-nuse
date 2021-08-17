@@ -1,20 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * arch/arm/mm/cache-l2x0.c - L210/L220/L310 cache controller support
  *
  * Copyright (C) 2007 ARM Limited
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 #include <linux/cpu.h>
 #include <linux/err.h>
@@ -30,8 +18,8 @@
 #include <asm/cp15.h>
 #include <asm/cputype.h>
 #include <asm/hardware/cache-l2x0.h>
+#include <asm/hardware/cache-aurora-l2.h>
 #include "cache-tauros3.h"
-#include "cache-aurora-l2.h"
 
 struct l2c_init_data {
 	const char *type;
@@ -56,6 +44,9 @@ static u32 l2x0_size;
 static unsigned long sync_reg_offset = L2X0_CACHE_SYNC;
 
 struct l2x0_regs l2x0_saved_regs;
+
+static bool l2x0_bresp_disable;
+static bool l2x0_flz_disable;
 
 /*
  * Common code for all cache controllers.
@@ -142,6 +133,8 @@ static void l2c_disable(void)
 {
 	void __iomem *base = l2x0_base;
 
+	l2x0_pmu_suspend();
+
 	outer_cache.flush_all();
 	l2c_write_sec(0, base, L2X0_CTRL);
 	dsb(st);
@@ -159,6 +152,8 @@ static void l2c_resume(void)
 	/* Do not touch the controller if already enabled. */
 	if (!(readl_relaxed(base + L2X0_CTRL) & L2X0_CTRL_EN))
 		l2c_enable(base, l2x0_data->num_lock);
+
+	l2x0_pmu_resume();
 }
 
 /*
@@ -597,17 +592,16 @@ static void l2c310_configure(void __iomem *base)
 			      L310_POWER_CTRL);
 }
 
-static int l2c310_cpu_enable_flz(struct notifier_block *nb, unsigned long act, void *data)
+static int l2c310_starting_cpu(unsigned int cpu)
 {
-	switch (act & ~CPU_TASKS_FROZEN) {
-	case CPU_STARTING:
-		set_auxcr(get_auxcr() | BIT(3) | BIT(2) | BIT(1));
-		break;
-	case CPU_DYING:
-		set_auxcr(get_auxcr() & ~(BIT(3) | BIT(2) | BIT(1)));
-		break;
-	}
-	return NOTIFY_OK;
+	set_auxcr(get_auxcr() | BIT(3) | BIT(2) | BIT(1));
+	return 0;
+}
+
+static int l2c310_dying_cpu(unsigned int cpu)
+{
+	set_auxcr(get_auxcr() & ~(BIT(3) | BIT(2) | BIT(1)));
+	return 0;
 }
 
 static void __init l2c310_enable(void __iomem *base, unsigned num_lock)
@@ -617,7 +611,7 @@ static void __init l2c310_enable(void __iomem *base, unsigned num_lock)
 	u32 aux = l2x0_saved_regs.aux_ctrl;
 
 	if (rev >= L310_CACHE_ID_RTL_R2P0) {
-		if (cortex_a9) {
+		if (cortex_a9 && !l2x0_bresp_disable) {
 			aux |= L310_AUX_CTRL_EARLY_BRESP;
 			pr_info("L2C-310 enabling early BRESP for Cortex-A9\n");
 		} else if (aux & L310_AUX_CTRL_EARLY_BRESP) {
@@ -626,7 +620,7 @@ static void __init l2c310_enable(void __iomem *base, unsigned num_lock)
 		}
 	}
 
-	if (cortex_a9) {
+	if (cortex_a9 && !l2x0_flz_disable) {
 		u32 aux_cur = readl_relaxed(base + L2X0_AUX_CTRL);
 		u32 acr = get_auxcr();
 
@@ -678,10 +672,10 @@ static void __init l2c310_enable(void __iomem *base, unsigned num_lock)
 			power_ctrl & L310_STNDBY_MODE_EN ? "en" : "dis");
 	}
 
-	if (aux & L310_AUX_CTRL_FULL_LINE_ZERO) {
-		set_auxcr(get_auxcr() | BIT(3) | BIT(2) | BIT(1));
-		cpu_notifier(l2c310_cpu_enable_flz, 0);
-	}
+	if (aux & L310_AUX_CTRL_FULL_LINE_ZERO)
+		cpuhp_setup_state(CPUHP_AP_ARM_L2X0_STARTING,
+				  "arm/l2x0:starting", l2c310_starting_cpu,
+				  l2c310_dying_cpu);
 }
 
 static void __init l2c310_fixup(void __iomem *base, u32 cache_id,
@@ -710,9 +704,8 @@ static void __init l2c310_fixup(void __iomem *base, u32 cache_id,
 	if (revision >= L310_CACHE_ID_RTL_R3P0 &&
 	    revision < L310_CACHE_ID_RTL_R3P2) {
 		u32 val = l2x0_saved_regs.prefetch_ctrl;
-		/* I don't think bit23 is required here... but iMX6 does so */
-		if (val & (BIT(30) | BIT(23))) {
-			val &= ~(BIT(30) | BIT(23));
+		if (val & L310_PREFETCH_CTRL_DBL_LINEFILL) {
+			val &= ~L310_PREFETCH_CTRL_DBL_LINEFILL;
 			l2x0_saved_regs.prefetch_ctrl = val;
 			errata[n++] = "752271";
 		}
@@ -892,6 +885,8 @@ static int __init __l2c_init(const struct l2c_init_data *data,
 		data->type, ways, l2x0_size >> 10);
 	pr_info("%s: CACHE_ID 0x%08x, AUX_CTRL 0x%08x\n",
 		data->type, cache_id, aux);
+
+	l2x0_pmu_register(l2x0_base, cache_id);
 
 	return 0;
 }
@@ -1196,6 +1191,12 @@ static void __init l2c310_of_parse(const struct device_node *np,
 		*aux_mask &= ~L2C_AUX_CTRL_PARITY_ENABLE;
 	}
 
+	if (of_property_read_bool(np, "arm,early-bresp-disable"))
+		l2x0_bresp_disable = true;
+
+	if (of_property_read_bool(np, "arm,full-line-zero-disable"))
+		l2x0_flz_disable = true;
+
 	prefetch = l2x0_saved_regs.prefetch_ctrl;
 
 	ret = of_property_read_u32(np, "arm,double-linefill", &val);
@@ -1248,20 +1249,28 @@ static void __init l2c310_of_parse(const struct device_node *np,
 
 	ret = of_property_read_u32(np, "prefetch-data", &val);
 	if (ret == 0) {
-		if (val)
+		if (val) {
 			prefetch |= L310_PREFETCH_CTRL_DATA_PREFETCH;
-		else
+			*aux_val |= L310_PREFETCH_CTRL_DATA_PREFETCH;
+		} else {
 			prefetch &= ~L310_PREFETCH_CTRL_DATA_PREFETCH;
+			*aux_val &= ~L310_PREFETCH_CTRL_DATA_PREFETCH;
+		}
+		*aux_mask &= ~L310_PREFETCH_CTRL_DATA_PREFETCH;
 	} else if (ret != -EINVAL) {
 		pr_err("L2C-310 OF prefetch-data property value is missing\n");
 	}
 
 	ret = of_property_read_u32(np, "prefetch-instr", &val);
 	if (ret == 0) {
-		if (val)
+		if (val) {
 			prefetch |= L310_PREFETCH_CTRL_INSTR_PREFETCH;
-		else
+			*aux_val |= L310_PREFETCH_CTRL_INSTR_PREFETCH;
+		} else {
 			prefetch &= ~L310_PREFETCH_CTRL_INSTR_PREFETCH;
+			*aux_val &= ~L310_PREFETCH_CTRL_INSTR_PREFETCH;
+		}
+		*aux_mask &= ~L310_PREFETCH_CTRL_INSTR_PREFETCH;
 	} else if (ret != -EINVAL) {
 		pr_err("L2C-310 OF prefetch-instr property value is missing\n");
 	}
@@ -1351,8 +1360,8 @@ static unsigned long aurora_range_end(unsigned long start, unsigned long end)
 	 * since cache range operations stall the CPU pipeline
 	 * until completion.
 	 */
-	if (end > start + MAX_RANGE_SIZE)
-		end = start + MAX_RANGE_SIZE;
+	if (end > start + AURORA_MAX_RANGE_SIZE)
+		end = start + AURORA_MAX_RANGE_SIZE;
 
 	/*
 	 * Cache range operations can't straddle a page boundary.
@@ -1490,6 +1499,18 @@ static void __init aurora_of_parse(const struct device_node *np,
 	if (l2_wt_override) {
 		val |= AURORA_ACR_FORCE_WRITE_THRO_POLICY;
 		mask |= AURORA_ACR_FORCE_WRITE_POLICY_MASK;
+	}
+
+	if (of_property_read_bool(np, "marvell,ecc-enable")) {
+		mask |= AURORA_ACR_ECC_EN;
+		val |= AURORA_ACR_ECC_EN;
+	}
+
+	if (of_property_read_bool(np, "arm,parity-enable")) {
+		mask |= AURORA_ACR_PARITY_EN;
+		val |= AURORA_ACR_PARITY_EN;
+	} else if (of_property_read_bool(np, "arm,parity-disable")) {
+		mask |= AURORA_ACR_PARITY_EN;
 	}
 
 	*aux_val &= ~mask;

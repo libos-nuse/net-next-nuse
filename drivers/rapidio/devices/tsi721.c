@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * RapidIO mport driver for Tsi721 PCIExpress-to-SRIO bridge
  *
  * Copyright 2011 Integrated Device Technology, Inc.
  * Alexandre Bounine <alexandre.bounine@idt.com>
  * Chul Kim <chul.kim@idt.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59
- * Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
 #include <linux/io.h>
@@ -37,10 +24,21 @@
 #include "tsi721.h"
 
 #ifdef DEBUG
-u32 dbg_level = DBG_INIT | DBG_EXIT;
-module_param(dbg_level, uint, S_IWUSR | S_IRUGO);
+u32 tsi_dbg_level;
+module_param_named(dbg_level, tsi_dbg_level, uint, S_IWUSR | S_IRUGO);
 MODULE_PARM_DESC(dbg_level, "Debugging output level (default 0 = none)");
 #endif
+
+static int pcie_mrrs = -1;
+module_param(pcie_mrrs, int, S_IRUGO);
+MODULE_PARM_DESC(pcie_mrrs, "PCIe MRRS override value (0...5)");
+
+static u8 mbox_sel = 0x0f;
+module_param(mbox_sel, byte, S_IRUGO);
+MODULE_PARM_DESC(mbox_sel,
+		 "RIO Messaging MBOX Selection Mask (default: 0x0f = all)");
+
+static DEFINE_SPINLOCK(tsi721_maint_lock);
 
 static void tsi721_omsg_handler(struct tsi721_device *priv, int ch);
 static void tsi721_imsg_handler(struct tsi721_device *priv, int ch);
@@ -115,11 +113,14 @@ static int tsi721_maint_dma(struct tsi721_device *priv, u32 sys_size,
 	void __iomem *regs = priv->regs + TSI721_DMAC_BASE(priv->mdma.ch_id);
 	struct tsi721_dma_desc *bd_ptr;
 	u32 rd_count, swr_ptr, ch_stat;
+	unsigned long flags;
 	int i, err = 0;
 	u32 op = do_wr ? MAINT_WR : MAINT_RD;
 
 	if (offset > (RIO_MAINT_SPACE_SZ - len) || (len != sizeof(u32)))
 		return -EINVAL;
+
+	spin_lock_irqsave(&tsi721_maint_lock, flags);
 
 	bd_ptr = priv->mdma.bd_base;
 
@@ -188,7 +189,9 @@ static int tsi721_maint_dma(struct tsi721_device *priv, u32 sys_size,
 	 */
 	swr_ptr = ioread32(regs + TSI721_DMAC_DSWP);
 	iowrite32(swr_ptr, regs + TSI721_DMAC_DSRP);
+
 err_out:
+	spin_unlock_irqrestore(&tsi721_maint_lock, flags);
 
 	return err;
 }
@@ -1081,7 +1084,7 @@ static void tsi721_init_pc2sr_mapping(struct tsi721_device *priv)
  * from rstart to lstart.
  */
 static int tsi721_rio_map_inb_mem(struct rio_mport *mport, dma_addr_t lstart,
-		u64 rstart, u32 size, u32 flags)
+		u64 rstart, u64 size, u32 flags)
 {
 	struct tsi721_device *priv = mport->priv;
 	int i, avail = -1;
@@ -1094,6 +1097,10 @@ static int tsi721_rio_map_inb_mem(struct rio_mport *mport, dma_addr_t lstart,
 	struct tsi721_ib_win_mapping *map = NULL;
 	int ret = -EBUSY;
 
+	/* Max IBW size supported by HW is 16GB */
+	if (size > 0x400000000UL)
+		return -EINVAL;
+
 	if (direct) {
 		/* Calculate minimal acceptable window size and base address */
 
@@ -1101,15 +1108,15 @@ static int tsi721_rio_map_inb_mem(struct rio_mport *mport, dma_addr_t lstart,
 		ibw_start = lstart & ~(ibw_size - 1);
 
 		tsi_debug(IBW, &priv->pdev->dev,
-			"Direct (RIO_0x%llx -> PCIe_0x%pad), size=0x%x, ibw_start = 0x%llx",
+			"Direct (RIO_0x%llx -> PCIe_%pad), size=0x%llx, ibw_start = 0x%llx",
 			rstart, &lstart, size, ibw_start);
 
 		while ((lstart + size) > (ibw_start + ibw_size)) {
 			ibw_size *= 2;
 			ibw_start = lstart & ~(ibw_size - 1);
-			if (ibw_size > 0x80000000) { /* Limit max size to 2GB */
+			/* Check for crossing IBW max size 16GB */
+			if (ibw_size > 0x400000000UL)
 				return -EBUSY;
-			}
 		}
 
 		loc_start = ibw_start;
@@ -1120,7 +1127,7 @@ static int tsi721_rio_map_inb_mem(struct rio_mport *mport, dma_addr_t lstart,
 
 	} else {
 		tsi_debug(IBW, &priv->pdev->dev,
-			"Translated (RIO_0x%llx -> PCIe_0x%pad), size=0x%x",
+			"Translated (RIO_0x%llx -> PCIe_%pad), size=0x%llx",
 			rstart, &lstart, size);
 
 		if (!is_power_of_2(size) || size < 0x1000 ||
@@ -1148,7 +1155,7 @@ static int tsi721_rio_map_inb_mem(struct rio_mport *mport, dma_addr_t lstart,
 		} else if (ibw_start < (ib_win->rstart + ib_win->size) &&
 			   (ibw_start + ibw_size) > ib_win->rstart) {
 			/* Return error if address translation involved */
-			if (direct && ib_win->xlat) {
+			if (!direct || ib_win->xlat) {
 				ret = -EFAULT;
 				break;
 			}
@@ -1215,7 +1222,7 @@ static int tsi721_rio_map_inb_mem(struct rio_mport *mport, dma_addr_t lstart,
 	priv->ibwin_cnt--;
 
 	tsi_debug(IBW, &priv->pdev->dev,
-		"Configured IBWIN%d (RIO_0x%llx -> PCIe_0x%pad), size=0x%llx",
+		"Configured IBWIN%d (RIO_0x%llx -> PCIe_%pad), size=0x%llx",
 		i, ibw_start, &loc_start, ibw_size);
 
 	return 0;
@@ -1237,7 +1244,7 @@ static void tsi721_rio_unmap_inb_mem(struct rio_mport *mport,
 	int i;
 
 	tsi_debug(IBW, &priv->pdev->dev,
-		"Unmap IBW mapped to PCIe_0x%pad", &lstart);
+		"Unmap IBW mapped to PCIe_%pad", &lstart);
 
 	/* Search for matching active inbound translation window */
 	for (i = 0; i < TSI721_IBWIN_NUM; i++) {
@@ -1362,9 +1369,9 @@ static int tsi721_doorbell_init(struct tsi721_device *priv)
 	INIT_WORK(&priv->idb_work, tsi721_db_dpc);
 
 	/* Allocate buffer for inbound doorbells queue */
-	priv->idb_base = dma_zalloc_coherent(&priv->pdev->dev,
-				IDB_QSIZE * TSI721_IDB_ENTRY_SIZE,
-				&priv->idb_dma, GFP_KERNEL);
+	priv->idb_base = dma_alloc_coherent(&priv->pdev->dev,
+					    IDB_QSIZE * TSI721_IDB_ENTRY_SIZE,
+					    &priv->idb_dma, GFP_KERNEL);
 	if (!priv->idb_base)
 		return -ENOMEM;
 
@@ -1427,9 +1434,9 @@ static int tsi721_bdma_maint_init(struct tsi721_device *priv)
 	regs = priv->regs + TSI721_DMAC_BASE(TSI721_DMACH_MAINT);
 
 	/* Allocate space for DMA descriptors */
-	bd_ptr = dma_zalloc_coherent(&priv->pdev->dev,
-					bd_num * sizeof(struct tsi721_dma_desc),
-					&bd_phys, GFP_KERNEL);
+	bd_ptr = dma_alloc_coherent(&priv->pdev->dev,
+				    bd_num * sizeof(struct tsi721_dma_desc),
+				    &bd_phys, GFP_KERNEL);
 	if (!bd_ptr)
 		return -ENOMEM;
 
@@ -1444,7 +1451,7 @@ static int tsi721_bdma_maint_init(struct tsi721_device *priv)
 	sts_size = (bd_num >= TSI721_DMA_MINSTSSZ) ?
 					bd_num : TSI721_DMA_MINSTSSZ;
 	sts_size = roundup_pow_of_two(sts_size);
-	sts_ptr = dma_zalloc_coherent(&priv->pdev->dev,
+	sts_ptr = dma_alloc_coherent(&priv->pdev->dev,
 				     sts_size * sizeof(struct tsi721_dma_sts),
 				     &sts_phys, GFP_KERNEL);
 	if (!sts_ptr) {
@@ -1877,6 +1884,11 @@ static int tsi721_open_outb_mbox(struct rio_mport *mport, void *dev_id,
 		goto out;
 	}
 
+	if ((mbox_sel & (1 << mbox)) == 0) {
+		rc = -ENODEV;
+		goto out;
+	}
+
 	priv->omsg_ring[mbox].dev_id = dev_id;
 	priv->omsg_ring[mbox].size = entries;
 	priv->omsg_ring[mbox].sts_rdptr = 0;
@@ -1914,10 +1926,10 @@ static int tsi721_open_outb_mbox(struct rio_mport *mport, void *dev_id,
 
 	/* Outbound message descriptor status FIFO allocation */
 	priv->omsg_ring[mbox].sts_size = roundup_pow_of_two(entries + 1);
-	priv->omsg_ring[mbox].sts_base = dma_zalloc_coherent(&priv->pdev->dev,
-			priv->omsg_ring[mbox].sts_size *
-						sizeof(struct tsi721_dma_sts),
-			&priv->omsg_ring[mbox].sts_phys, GFP_KERNEL);
+	priv->omsg_ring[mbox].sts_base = dma_alloc_coherent(&priv->pdev->dev,
+							    priv->omsg_ring[mbox].sts_size * sizeof(struct tsi721_dma_sts),
+							    &priv->omsg_ring[mbox].sts_phys,
+							    GFP_KERNEL);
 	if (priv->omsg_ring[mbox].sts_base == NULL) {
 		tsi_debug(OMSG, &priv->pdev->dev,
 			"ENOMEM for OB_MSG_%d status FIFO", mbox);
@@ -2158,6 +2170,11 @@ static int tsi721_open_inb_mbox(struct rio_mport *mport, void *dev_id,
 	    (entries > TSI721_IMSGD_RING_SIZE) ||
 	    (!is_power_of_2(entries)) || mbox >= RIO_MAX_MBOX) {
 		rc = -EINVAL;
+		goto out;
+	}
+
+	if ((mbox_sel & (1 << mbox)) == 0) {
+		rc = -ENODEV;
 		goto out;
 	}
 
@@ -2532,11 +2549,11 @@ static int tsi721_query_mport(struct rio_mport *mport,
 	struct tsi721_device *priv = mport->priv;
 	u32 rval;
 
-	rval = ioread32(priv->regs + (0x100 + RIO_PORT_N_ERR_STS_CSR(0)));
+	rval = ioread32(priv->regs + 0x100 + RIO_PORT_N_ERR_STS_CSR(0, 0));
 	if (rval & RIO_PORT_N_ERR_STS_PORT_OK) {
-		rval = ioread32(priv->regs + (0x100 + RIO_PORT_N_CTL2_CSR(0)));
+		rval = ioread32(priv->regs + 0x100 + RIO_PORT_N_CTL2_CSR(0, 0));
 		attr->link_speed = (rval & RIO_PORT_N_CTL2_SEL_BAUD) >> 28;
-		rval = ioread32(priv->regs + (0x100 + RIO_PORT_N_CTL_CSR(0)));
+		rval = ioread32(priv->regs + 0x100 + RIO_PORT_N_CTL_CSR(0, 0));
 		attr->link_width = (rval & RIO_PORT_N_CTL_IPW) >> 27;
 	} else
 		attr->link_speed = RIO_LINK_DOWN;
@@ -2650,9 +2667,9 @@ static int tsi721_setup_mport(struct tsi721_device *priv)
 	mport->ops = &tsi721_rio_ops;
 	mport->index = 0;
 	mport->sys_size = 0; /* small system */
-	mport->phy_type = RIO_PHY_SERIAL;
 	mport->priv = (void *)priv;
 	mport->phys_efptr = 0x100;
+	mport->phys_rmap = 1;
 	mport->dev.parent = &pdev->dev;
 	mport->dev.release = tsi721_mport_release;
 
@@ -2738,7 +2755,7 @@ static int tsi721_probe(struct pci_dev *pdev,
 	{
 		int i;
 
-		for (i = 0; i <= PCI_STD_RESOURCE_END; i++) {
+		for (i = 0; i < PCI_STD_NUM_BARS; i++) {
 			tsi_debug(INIT, &pdev->dev, "res%d %pR",
 				  i, &pdev->resource[i]);
 		}
@@ -2840,8 +2857,19 @@ static int tsi721_probe(struct pci_dev *pdev,
 	pcie_capability_clear_and_set_word(pdev, PCI_EXP_DEVCTL,
 		PCI_EXP_DEVCTL_RELAX_EN | PCI_EXP_DEVCTL_NOSNOOP_EN, 0);
 
-	/* Adjust PCIe completion timeout. */
-	pcie_capability_clear_and_set_word(pdev, PCI_EXP_DEVCTL2, 0xf, 0x2);
+	/* Override PCIe Maximum Read Request Size setting if requested */
+	if (pcie_mrrs >= 0) {
+		if (pcie_mrrs <= 5)
+			pcie_capability_clear_and_set_word(pdev, PCI_EXP_DEVCTL,
+					PCI_EXP_DEVCTL_READRQ, pcie_mrrs << 12);
+		else
+			tsi_info(&pdev->dev,
+				 "Invalid MRRS override value %d", pcie_mrrs);
+	}
+
+	/* Set PCIe completion timeout to 1-10ms */
+	pcie_capability_clear_and_set_word(pdev, PCI_EXP_DEVCTL2,
+					   PCI_EXP_DEVCTL2_COMP_TIMEOUT, 0x2);
 
 	/*
 	 * FIXUP: correct offsets of MSI-X tables in the MSI-X Capability Block

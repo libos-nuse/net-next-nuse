@@ -1,31 +1,24 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __LINUX_PAGE_EXT_H
 #define __LINUX_PAGE_EXT_H
 
 #include <linux/types.h>
 #include <linux/stacktrace.h>
+#include <linux/stackdepot.h>
 
 struct pglist_data;
 struct page_ext_operations {
+	size_t offset;
+	size_t size;
 	bool (*need)(void);
 	void (*init)(void);
 };
 
 #ifdef CONFIG_PAGE_EXTENSION
 
-/*
- * page_ext->flags bits:
- *
- * PAGE_EXT_DEBUG_POISON is set for poisoned pages. This is used to
- * implement generic debug pagealloc feature. The pages are filled with
- * poison patterns and set this flag after free_pages(). The poisoned
- * pages are verified whether the patterns are not corrupted and clear
- * the flag before alloc_pages().
- */
-
 enum page_ext_flags {
-	PAGE_EXT_DEBUG_POISON,		/* Page is poisoned */
-	PAGE_EXT_DEBUG_GUARD,
 	PAGE_EXT_OWNER,
+	PAGE_EXT_OWNER_ALLOCATED,
 #if defined(CONFIG_IDLE_PAGE_TRACKING) && !defined(CONFIG_64BIT)
 	PAGE_EXT_YOUNG,
 	PAGE_EXT_IDLE,
@@ -41,15 +34,9 @@ enum page_ext_flags {
  */
 struct page_ext {
 	unsigned long flags;
-#ifdef CONFIG_PAGE_OWNER
-	unsigned int order;
-	gfp_t gfp_mask;
-	unsigned int nr_entries;
-	int last_migrate_reason;
-	unsigned long trace_entries[8];
-#endif
 };
 
+extern unsigned long page_ext_size;
 extern void pgdat_page_ext_init(struct pglist_data *pgdat);
 
 #ifdef CONFIG_SPARSEMEM
@@ -64,7 +51,14 @@ static inline void page_ext_init(void)
 }
 #endif
 
-struct page_ext *lookup_page_ext(struct page *page);
+struct page_ext *lookup_page_ext(const struct page *page);
+
+static inline struct page_ext *page_ext_next(struct page_ext *curr)
+{
+	void *next = curr;
+	next += page_ext_size;
+	return next;
+}
 
 #else /* !CONFIG_PAGE_EXTENSION */
 struct page_ext;
@@ -73,7 +67,7 @@ static inline void pgdat_page_ext_init(struct pglist_data *pgdat)
 {
 }
 
-static inline struct page_ext *lookup_page_ext(struct page *page)
+static inline struct page_ext *lookup_page_ext(const struct page *page)
 {
 	return NULL;
 }

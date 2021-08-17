@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ WITH Linux-syscall-note */
 /*
  * Copyright 2014 IBM Corp.
  *
@@ -19,20 +20,22 @@ struct cxl_ioctl_start_work {
 	__u64 work_element_descriptor;
 	__u64 amr;
 	__s16 num_interrupts;
-	__s16 reserved1;
-	__s32 reserved2;
+	__u16 tid;
+	__s32 reserved1;
+	__u64 reserved2;
 	__u64 reserved3;
 	__u64 reserved4;
 	__u64 reserved5;
-	__u64 reserved6;
 };
 
 #define CXL_START_WORK_AMR		0x0000000000000001ULL
 #define CXL_START_WORK_NUM_IRQS		0x0000000000000002ULL
 #define CXL_START_WORK_ERR_FF		0x0000000000000004ULL
+#define CXL_START_WORK_TID		0x0000000000000008ULL
 #define CXL_START_WORK_ALL		(CXL_START_WORK_AMR |\
 					 CXL_START_WORK_NUM_IRQS |\
-					 CXL_START_WORK_ERR_FF)
+					 CXL_START_WORK_ERR_FF |\
+					 CXL_START_WORK_TID)
 
 
 /* Possible modes that an afu can be in */
@@ -93,6 +96,7 @@ enum cxl_event_type {
 	CXL_EVENT_AFU_INTERRUPT = 1,
 	CXL_EVENT_DATA_STORAGE  = 2,
 	CXL_EVENT_AFU_ERROR     = 3,
+	CXL_EVENT_AFU_DRIVER    = 4,
 };
 
 struct cxl_event_header {
@@ -124,12 +128,28 @@ struct cxl_event_afu_error {
 	__u64 error;
 };
 
+struct cxl_event_afu_driver_reserved {
+	/*
+	 * Defines the buffer passed to the cxl driver by the AFU driver.
+	 *
+	 * This is not ABI since the event header.size passed to the user for
+	 * existing events is set in the read call to sizeof(cxl_event_header)
+	 * + sizeof(whatever event is being dispatched) and the user is already
+	 * required to use a 4K buffer on the read call.
+	 *
+	 * Of course the contents will be ABI, but that's up the AFU driver.
+	 */
+	__u32 data_size;
+	__u8 data[];
+};
+
 struct cxl_event {
 	struct cxl_event_header header;
 	union {
 		struct cxl_event_afu_interrupt irq;
 		struct cxl_event_data_storage fault;
 		struct cxl_event_afu_error afu_error;
+		struct cxl_event_afu_driver_reserved afu_driver_event;
 	};
 };
 

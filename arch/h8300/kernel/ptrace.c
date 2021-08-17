@@ -87,19 +87,15 @@ int h8300_put_reg(struct task_struct *task, int regno, unsigned long data)
 
 static int regs_get(struct task_struct *target,
 		    const struct user_regset *regset,
-		    unsigned int pos, unsigned int count,
-		    void *kbuf, void __user *ubuf)
+		    struct membuf to)
 {
 	int r;
-	struct user_regs_struct regs;
-	long *reg = (long *)&regs;
 
-	/* build user regs in buffer */
-	for (r = 0; r < ARRAY_SIZE(register_offset); r++)
-		*reg++ = h8300_get_reg(target, r);
+	BUILD_BUG_ON(sizeof(struct user_regs_struct) % sizeof(long) != 0);
+	for (r = 0; r < ELF_NGREG; r++)
+		membuf_store(&to, h8300_get_reg(target, r));
 
-	return user_regset_copyout(&pos, &count, &kbuf, &ubuf,
-				   &regs, 0, sizeof(regs));
+	return 0;
 }
 
 static int regs_set(struct task_struct *target,
@@ -113,7 +109,8 @@ static int regs_set(struct task_struct *target,
 	long *reg;
 
 	/* build user regs in buffer */
-	for (reg = (long *)&regs, r = 0; r < ARRAY_SIZE(register_offset); r++)
+	BUILD_BUG_ON(sizeof(regs) % sizeof(long) != 0);
+	for (reg = (long *)&regs, r = 0; r < sizeof(regs) / sizeof(long); r++)
 		*reg++ = h8300_get_reg(target, r);
 
 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf,
@@ -122,7 +119,7 @@ static int regs_set(struct task_struct *target,
 		return ret;
 
 	/* write back to pt_regs */
-	for (reg = (long *)&regs, r = 0; r < ARRAY_SIZE(register_offset); r++)
+	for (reg = (long *)&regs, r = 0; r < sizeof(regs) / sizeof(long); r++)
 		h8300_put_reg(target, r, *reg++);
 	return 0;
 }
@@ -137,7 +134,7 @@ static const struct user_regset h8300_regsets[] = {
 		.n		= ELF_NGREG,
 		.size		= sizeof(long),
 		.align		= sizeof(long),
-		.get		= regs_get,
+		.regset_get		= regs_get,
 		.set		= regs_set,
 	},
 };

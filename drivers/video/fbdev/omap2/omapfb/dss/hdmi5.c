@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * HDMI driver for OMAP5
  *
@@ -8,18 +9,6 @@
  *	Mythri pk
  *	Archit Taneja <archit@ti.com>
  *	Tomi Valkeinen <tomi.valkeinen@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define DSS_SUBSYS_NAME "HDMI"
@@ -35,10 +24,10 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/clk.h>
-#include <linux/gpio.h>
+#include <linux/of.h>
 #include <linux/regulator/consumer.h>
 #include <linux/component.h>
-#include <video/omapdss.h>
+#include <video/omapfb_dss.h>
 #include <sound/omap-hdmi-audio.h>
 
 #include "hdmi5_core.h"
@@ -54,9 +43,10 @@ static int hdmi_runtime_get(void)
 	DSSDBG("hdmi_runtime_get\n");
 
 	r = pm_runtime_get_sync(&hdmi.pdev->dev);
-	WARN_ON(r < 0);
-	if (r < 0)
+	if (WARN_ON(r < 0)) {
+		pm_runtime_put_sync(&hdmi.pdev->dev);
 		return r;
+	}
 
 	return 0;
 }
@@ -119,7 +109,6 @@ static irqreturn_t hdmi_irq_handler(int irq, void *data)
 
 static int hdmi_init_regulator(void)
 {
-	int r;
 	struct regulator *reg;
 
 	if (hdmi.vdda_reg != NULL)
@@ -129,13 +118,6 @@ static int hdmi_init_regulator(void)
 	if (IS_ERR(reg)) {
 		DSSERR("can't get VDDA regulator\n");
 		return PTR_ERR(reg);
-	}
-
-	r = regulator_set_voltage(reg, 1800000, 1800000);
-	if (r) {
-		devm_regulator_put(reg);
-		DSSWARN("can't set the regulator voltage\n");
-		return r;
 	}
 
 	hdmi.vdda_reg = reg;
@@ -703,7 +685,7 @@ static int hdmi_audio_register(struct device *dev)
 {
 	struct omap_hdmi_audio_pdata pdata = {
 		.dev = dev,
-		.dss_version = omapdss_get_version(),
+		.version = 5,
 		.audio_dma_addr = hdmi_wp_get_audio_dma_addr(&hdmi.wp),
 		.ops = &hdmi_audio_ops,
 	};

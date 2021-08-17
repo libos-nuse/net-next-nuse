@@ -1,7 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/errno.h>
 #include <linux/linkage.h>
 #include <asm/asm-offsets.h>
 #include <asm/assembler.h>
+#include <asm/smp.h>
 
 	.text
 /*
@@ -26,7 +28,7 @@
  *	aff0 = mpidr_masked & 0xff;
  *	aff1 = mpidr_masked & 0xff00;
  *	aff2 = mpidr_masked & 0xff0000;
- *	aff2 = mpidr_masked & 0xff00000000;
+ *	aff3 = mpidr_masked & 0xff00000000;
  *	dst = (aff0 >> rs0 | aff1 >> rs1 | aff2 >> rs2 | aff3 >> rs3);
  *}
  * Input registers: rs0, rs1, rs2, rs3, mpidr, mask
@@ -60,7 +62,7 @@
  *
  *  x0 = struct sleep_stack_data area
  */
-ENTRY(__cpu_suspend_enter)
+SYM_FUNC_START(__cpu_suspend_enter)
 	stp	x29, lr, [x0, #SLEEP_STACK_DATA_CALLEE_REGS]
 	stp	x19, x20, [x0,#SLEEP_STACK_DATA_CALLEE_REGS+16]
 	stp	x21, x22, [x0,#SLEEP_STACK_DATA_CALLEE_REGS+32]
@@ -73,10 +75,9 @@ ENTRY(__cpu_suspend_enter)
 	str	x2, [x0, #SLEEP_STACK_DATA_SYSTEM_REGS + CPU_CTX_SP]
 
 	/* find the mpidr_hash */
-	ldr	x1, =sleep_save_stash
-	ldr	x1, [x1]
+	ldr_l	x1, sleep_save_stash
 	mrs	x7, mpidr_el1
-	ldr	x9, =mpidr_hash
+	adr_l	x9, mpidr_hash
 	ldr	x10, [x9, #MPIDR_HASH_MASK]
 	/*
 	 * Following code relies on the struct mpidr_hash
@@ -94,29 +95,32 @@ ENTRY(__cpu_suspend_enter)
 	ldp	x29, lr, [sp], #16
 	mov	x0, #1
 	ret
-ENDPROC(__cpu_suspend_enter)
-	.ltorg
+SYM_FUNC_END(__cpu_suspend_enter)
 
-ENTRY(cpu_resume)
+	.pushsection ".idmap.text", "awx"
+SYM_CODE_START(cpu_resume)
 	bl	el2_setup		// if in EL2 drop to EL1 cleanly
+	bl	__cpu_setup
 	/* enable the MMU early - so we can access sleep_save_stash by va */
-	adr_l	lr, __enable_mmu	/* __cpu_setup will return here */
-	ldr	x27, =_cpu_resume	/* __enable_mmu will branch here */
-	adrp	x25, idmap_pg_dir
-	adrp	x26, swapper_pg_dir
-	b	__cpu_setup
-ENDPROC(cpu_resume)
+	adrp	x1, swapper_pg_dir
+	bl	__enable_mmu
+	ldr	x8, =_cpu_resume
+	br	x8
+SYM_CODE_END(cpu_resume)
+	.ltorg
+	.popsection
 
-ENTRY(_cpu_resume)
+SYM_FUNC_START(_cpu_resume)
 	mrs	x1, mpidr_el1
-	adrp	x8, mpidr_hash
-	add x8, x8, #:lo12:mpidr_hash // x8 = struct mpidr_hash phys address
-        /* retrieve mpidr_hash members to compute the hash */
+	adr_l	x8, mpidr_hash		// x8 = struct mpidr_hash virt address
+
+	/* retrieve mpidr_hash members to compute the hash */
 	ldr	x2, [x8, #MPIDR_HASH_MASK]
 	ldp	w3, w4, [x8, #MPIDR_HASH_SHIFTS]
 	ldp	w5, w6, [x8, #(MPIDR_HASH_SHIFTS + 8)]
 	compute_mpidr_hash x7, x3, x4, x5, x6, x1, x2
-        /* x7 contains hash index, let's use it to grab context pointer */
+
+	/* x7 contains hash index, let's use it to grab context pointer */
 	ldr_l	x0, sleep_save_stash
 	ldr	x0, [x0, x7, lsl #3]
 	add	x29, x0, #SLEEP_STACK_DATA_CALLEE_REGS
@@ -124,9 +128,6 @@ ENTRY(_cpu_resume)
 	/* load sp from context */
 	ldr	x2, [x0, #CPU_CTX_SP]
 	mov	sp, x2
-	/* save thread_info */
-	and	x2, x2, #~(THREAD_SIZE - 1)
-	msr	sp_el0, x2
 	/*
 	 * cpu_do_resume expects x0 to contain context address pointer
 	 */
@@ -134,7 +135,7 @@ ENTRY(_cpu_resume)
 
 #ifdef CONFIG_KASAN
 	mov	x0, sp
-	bl	kasan_unpoison_remaining_stack
+	bl	kasan_unpoison_task_stack_below
 #endif
 
 	ldp	x19, x20, [x29, #16]
@@ -145,4 +146,4 @@ ENTRY(_cpu_resume)
 	ldp	x29, lr, [x29]
 	mov	x0, #0
 	ret
-ENDPROC(_cpu_resume)
+SYM_FUNC_END(_cpu_resume)

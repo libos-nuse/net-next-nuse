@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * This file is based on code from OCTEON SDK by Cavium Networks.
  *
  * Copyright (c) 2003-2007 Cavium Networks
- *
- * This file is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, Version 2, as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -16,15 +13,10 @@
 #include <generated/utsrelease.h>
 #include <net/dst.h>
 
-#include <asm/octeon/octeon.h>
-
-#include "ethernet-defines.h"
 #include "octeon-ethernet.h"
+#include "ethernet-defines.h"
 #include "ethernet-mdio.h"
 #include "ethernet-util.h"
-
-#include <asm/octeon/cvmx-gmxx-defs.h>
-#include <asm/octeon/cvmx-smix-defs.h>
 
 static void cvm_oct_get_drvinfo(struct net_device *dev,
 				struct ethtool_drvinfo *info)
@@ -34,48 +26,23 @@ static void cvm_oct_get_drvinfo(struct net_device *dev,
 	strlcpy(info->bus_info, "Builtin", sizeof(info->bus_info));
 }
 
-static int cvm_oct_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
-{
-	struct octeon_ethernet *priv = netdev_priv(dev);
-
-	if (priv->phydev)
-		return phy_ethtool_gset(priv->phydev, cmd);
-
-	return -EINVAL;
-}
-
-static int cvm_oct_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
-{
-	struct octeon_ethernet *priv = netdev_priv(dev);
-
-	if (!capable(CAP_NET_ADMIN))
-		return -EPERM;
-
-	if (priv->phydev)
-		return phy_ethtool_sset(priv->phydev, cmd);
-
-	return -EINVAL;
-}
-
 static int cvm_oct_nway_reset(struct net_device *dev)
 {
-	struct octeon_ethernet *priv = netdev_priv(dev);
-
 	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
-	if (priv->phydev)
-		return phy_start_aneg(priv->phydev);
+	if (dev->phydev)
+		return phy_start_aneg(dev->phydev);
 
 	return -EINVAL;
 }
 
 const struct ethtool_ops cvm_oct_ethtool_ops = {
 	.get_drvinfo = cvm_oct_get_drvinfo,
-	.get_settings = cvm_oct_get_settings,
-	.set_settings = cvm_oct_set_settings,
 	.nway_reset = cvm_oct_nway_reset,
 	.get_link = ethtool_op_get_link,
+	.get_link_ksettings = phy_ethtool_get_link_ksettings,
+	.set_link_ksettings = phy_ethtool_set_link_ksettings,
 };
 
 /**
@@ -88,19 +55,17 @@ const struct ethtool_ops cvm_oct_ethtool_ops = {
  */
 int cvm_oct_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
-	struct octeon_ethernet *priv = netdev_priv(dev);
-
 	if (!netif_running(dev))
 		return -EINVAL;
 
-	if (!priv->phydev)
+	if (!dev->phydev)
 		return -EINVAL;
 
-	return phy_mii_ioctl(priv->phydev, rq, cmd);
+	return phy_mii_ioctl(dev->phydev, rq, cmd);
 }
 
 void cvm_oct_note_carrier(struct octeon_ethernet *priv,
-			  cvmx_helper_link_info_t li)
+			  union cvmx_helper_link_info li)
 {
 	if (li.s.link_up) {
 		pr_notice_ratelimited("%s: %u Mbps %s duplex, port %d, queue %d\n",
@@ -116,12 +81,12 @@ void cvm_oct_note_carrier(struct octeon_ethernet *priv,
 void cvm_oct_adjust_link(struct net_device *dev)
 {
 	struct octeon_ethernet *priv = netdev_priv(dev);
-	cvmx_helper_link_info_t link_info;
+	union cvmx_helper_link_info link_info;
 
 	link_info.u64		= 0;
-	link_info.s.link_up	= priv->phydev->link ? 1 : 0;
-	link_info.s.full_duplex = priv->phydev->duplex ? 1 : 0;
-	link_info.s.speed	= priv->phydev->speed;
+	link_info.s.link_up	= dev->phydev->link ? 1 : 0;
+	link_info.s.full_duplex = dev->phydev->duplex ? 1 : 0;
+	link_info.s.speed	= dev->phydev->speed;
 	priv->link_info		= link_info.u64;
 
 	/*
@@ -130,8 +95,8 @@ void cvm_oct_adjust_link(struct net_device *dev)
 	if (priv->poll)
 		priv->poll(dev);
 
-	if (priv->last_link != priv->phydev->link) {
-		priv->last_link = priv->phydev->link;
+	if (priv->last_link != dev->phydev->link) {
+		priv->last_link = dev->phydev->link;
 		cvmx_helper_link_set(priv->port, link_info);
 		cvm_oct_note_carrier(priv, link_info);
 	}
@@ -141,7 +106,7 @@ int cvm_oct_common_stop(struct net_device *dev)
 {
 	struct octeon_ethernet *priv = netdev_priv(dev);
 	int interface = INTERFACE(priv->port);
-	cvmx_helper_link_info_t link_info;
+	union cvmx_helper_link_info link_info;
 	union cvmx_gmxx_prtx_cfg gmx_cfg;
 	int index = INDEX(priv->port);
 
@@ -151,9 +116,8 @@ int cvm_oct_common_stop(struct net_device *dev)
 
 	priv->poll = NULL;
 
-	if (priv->phydev)
-		phy_disconnect(priv->phydev);
-	priv->phydev = NULL;
+	if (dev->phydev)
+		phy_disconnect(dev->phydev);
 
 	if (priv->last_link) {
 		link_info.u64 = 0;
@@ -176,31 +140,27 @@ int cvm_oct_phy_setup_device(struct net_device *dev)
 {
 	struct octeon_ethernet *priv = netdev_priv(dev);
 	struct device_node *phy_node;
+	struct phy_device *phydev = NULL;
 
 	if (!priv->of_node)
 		goto no_phy;
 
 	phy_node = of_parse_phandle(priv->of_node, "phy-handle", 0);
 	if (!phy_node && of_phy_is_fixed_link(priv->of_node)) {
-		int rc;
-
-		rc = of_phy_register_fixed_link(priv->of_node);
-		if (rc)
-			return rc;
-
 		phy_node = of_node_get(priv->of_node);
 	}
 	if (!phy_node)
 		goto no_phy;
 
-	priv->phydev = of_phy_connect(dev, phy_node, cvm_oct_adjust_link, 0,
-				      PHY_INTERFACE_MODE_GMII);
+	phydev = of_phy_connect(dev, phy_node, cvm_oct_adjust_link, 0,
+				priv->phy_mode);
+	of_node_put(phy_node);
 
-	if (!priv->phydev)
-		return -ENODEV;
+	if (!phydev)
+		return -EPROBE_DEFER;
 
 	priv->last_link = 0;
-	phy_start_aneg(priv->phydev);
+	phy_start(phydev);
 
 	return 0;
 no_phy:

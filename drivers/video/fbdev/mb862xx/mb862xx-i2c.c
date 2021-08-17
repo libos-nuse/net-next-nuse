@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Coral-P(A)/Lime I2C adapter driver
  *
  * (C) 2011 DENX Software Engineering, Anatolij Gustschin <agust@denx.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/fb.h>
@@ -157,17 +153,10 @@ static struct i2c_adapter mb862xx_i2c_adapter = {
 
 int mb862xx_i2c_init(struct mb862xxfb_par *par)
 {
-	int ret;
-
 	mb862xx_i2c_adapter.algo_data = par;
 	par->adap = &mb862xx_i2c_adapter;
 
-	ret = i2c_add_adapter(par->adap);
-	if (ret < 0) {
-		dev_err(par->dev, "failed to add %s\n",
-			mb862xx_i2c_adapter.name);
-	}
-	return ret;
+	return i2c_add_adapter(par->adap);
 }
 
 void mb862xx_i2c_exit(struct mb862xxfb_par *par)

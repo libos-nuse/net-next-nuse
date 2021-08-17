@@ -1,78 +1,78 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * i.MX drm driver - parallel display implementation
  *
  * Copyright (C) 2012 Sascha Hauer, Pengutronix
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/component.h>
 #include <linux/module.h>
-#include <drm/drmP.h>
-#include <drm/drm_fb_helper.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_panel.h>
+#include <linux/platform_device.h>
 #include <linux/videodev2.h>
+
 #include <video/of_display_timing.h>
-#include <linux/of_graph.h>
+
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_bridge.h>
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_of.h>
+#include <drm/drm_panel.h>
+#include <drm/drm_probe_helper.h>
+#include <drm/drm_simple_kms_helper.h>
 
 #include "imx-drm.h"
-
-#define con_to_imxpd(x) container_of(x, struct imx_parallel_display, connector)
-#define enc_to_imxpd(x) container_of(x, struct imx_parallel_display, encoder)
 
 struct imx_parallel_display {
 	struct drm_connector connector;
 	struct drm_encoder encoder;
+	struct drm_bridge bridge;
 	struct device *dev;
 	void *edid;
-	int edid_len;
 	u32 bus_format;
+	u32 bus_flags;
 	struct drm_display_mode mode;
 	struct drm_panel *panel;
+	struct drm_bridge *next_bridge;
 };
 
-static enum drm_connector_status imx_pd_connector_detect(
-		struct drm_connector *connector, bool force)
+static inline struct imx_parallel_display *con_to_imxpd(struct drm_connector *c)
 {
-	return connector_status_connected;
+	return container_of(c, struct imx_parallel_display, connector);
+}
+
+static inline struct imx_parallel_display *bridge_to_imxpd(struct drm_bridge *b)
+{
+	return container_of(b, struct imx_parallel_display, bridge);
 }
 
 static int imx_pd_connector_get_modes(struct drm_connector *connector)
 {
 	struct imx_parallel_display *imxpd = con_to_imxpd(connector);
 	struct device_node *np = imxpd->dev->of_node;
-	int num_modes = 0;
+	int num_modes;
 
-	if (imxpd->panel && imxpd->panel->funcs &&
-	    imxpd->panel->funcs->get_modes) {
-		struct drm_display_info *di = &connector->display_info;
-
-		num_modes = imxpd->panel->funcs->get_modes(imxpd->panel);
-		if (!imxpd->bus_format && di->num_bus_formats)
-			imxpd->bus_format = di->bus_formats[0];
-		if (num_modes > 0)
-			return num_modes;
-	}
+	num_modes = drm_panel_get_modes(imxpd->panel, connector);
+	if (num_modes > 0)
+		return num_modes;
 
 	if (imxpd->edid) {
-		drm_mode_connector_update_edid_property(connector, imxpd->edid);
+		drm_connector_update_edid_property(connector, imxpd->edid);
 		num_modes = drm_add_edid_modes(connector, imxpd->edid);
 	}
 
 	if (np) {
 		struct drm_display_mode *mode = drm_mode_create(connector->dev);
+		int ret;
 
 		if (!mode)
 			return -EINVAL;
-		of_get_drm_display_mode(np, &imxpd->mode, OF_USE_NATIVE_MODE);
+
+		ret = of_get_drm_display_mode(np, &imxpd->mode,
+					      &imxpd->bus_flags,
+					      OF_USE_NATIVE_MODE);
+		if (ret)
+			return ret;
+
 		drm_mode_copy(mode, &imxpd->mode);
 		mode->type |= DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 		drm_mode_probed_add(connector, mode);
@@ -82,84 +82,184 @@ static int imx_pd_connector_get_modes(struct drm_connector *connector)
 	return num_modes;
 }
 
-static struct drm_encoder *imx_pd_connector_best_encoder(
-		struct drm_connector *connector)
+static void imx_pd_bridge_enable(struct drm_bridge *bridge)
 {
-	struct imx_parallel_display *imxpd = con_to_imxpd(connector);
-
-	return &imxpd->encoder;
-}
-
-static void imx_pd_encoder_dpms(struct drm_encoder *encoder, int mode)
-{
-	struct imx_parallel_display *imxpd = enc_to_imxpd(encoder);
-
-	if (mode != DRM_MODE_DPMS_ON)
-		drm_panel_disable(imxpd->panel);
-	else
-		drm_panel_enable(imxpd->panel);
-}
-
-static void imx_pd_encoder_prepare(struct drm_encoder *encoder)
-{
-	struct imx_parallel_display *imxpd = enc_to_imxpd(encoder);
-	imx_drm_set_bus_config(encoder, imxpd->bus_format, 2, 3,
-			       imxpd->connector.display_info.bus_flags);
-}
-
-static void imx_pd_encoder_commit(struct drm_encoder *encoder)
-{
-	struct imx_parallel_display *imxpd = enc_to_imxpd(encoder);
+	struct imx_parallel_display *imxpd = bridge_to_imxpd(bridge);
 
 	drm_panel_prepare(imxpd->panel);
 	drm_panel_enable(imxpd->panel);
 }
 
-static void imx_pd_encoder_mode_set(struct drm_encoder *encoder,
-			 struct drm_display_mode *orig_mode,
-			 struct drm_display_mode *mode)
+static void imx_pd_bridge_disable(struct drm_bridge *bridge)
 {
-}
-
-static void imx_pd_encoder_disable(struct drm_encoder *encoder)
-{
-	struct imx_parallel_display *imxpd = enc_to_imxpd(encoder);
+	struct imx_parallel_display *imxpd = bridge_to_imxpd(bridge);
 
 	drm_panel_disable(imxpd->panel);
 	drm_panel_unprepare(imxpd->panel);
 }
 
+static const u32 imx_pd_bus_fmts[] = {
+	MEDIA_BUS_FMT_RGB888_1X24,
+	MEDIA_BUS_FMT_BGR888_1X24,
+	MEDIA_BUS_FMT_GBR888_1X24,
+	MEDIA_BUS_FMT_RGB666_1X18,
+	MEDIA_BUS_FMT_RGB666_1X24_CPADHI,
+	MEDIA_BUS_FMT_RGB565_1X16,
+};
+
+static u32 *
+imx_pd_bridge_atomic_get_output_bus_fmts(struct drm_bridge *bridge,
+					 struct drm_bridge_state *bridge_state,
+					 struct drm_crtc_state *crtc_state,
+					 struct drm_connector_state *conn_state,
+					 unsigned int *num_output_fmts)
+{
+	struct drm_display_info *di = &conn_state->connector->display_info;
+	struct imx_parallel_display *imxpd = bridge_to_imxpd(bridge);
+	u32 *output_fmts;
+
+	if (!imxpd->bus_format && !di->num_bus_formats) {
+		*num_output_fmts = ARRAY_SIZE(imx_pd_bus_fmts);
+		return kmemdup(imx_pd_bus_fmts, sizeof(imx_pd_bus_fmts),
+			       GFP_KERNEL);
+	}
+
+	*num_output_fmts = 1;
+	output_fmts = kmalloc(sizeof(*output_fmts), GFP_KERNEL);
+	if (!output_fmts)
+		return NULL;
+
+	if (!imxpd->bus_format && di->num_bus_formats)
+		output_fmts[0] = di->bus_formats[0];
+	else
+		output_fmts[0] = imxpd->bus_format;
+
+	return output_fmts;
+}
+
+static bool imx_pd_format_supported(u32 output_fmt)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(imx_pd_bus_fmts); i++) {
+		if (imx_pd_bus_fmts[i] == output_fmt)
+			return true;
+	}
+
+	return false;
+}
+
+static u32 *
+imx_pd_bridge_atomic_get_input_bus_fmts(struct drm_bridge *bridge,
+					struct drm_bridge_state *bridge_state,
+					struct drm_crtc_state *crtc_state,
+					struct drm_connector_state *conn_state,
+					u32 output_fmt,
+					unsigned int *num_input_fmts)
+{
+	struct imx_parallel_display *imxpd = bridge_to_imxpd(bridge);
+	u32 *input_fmts;
+
+	/*
+	 * If the next bridge does not support bus format negotiation, let's
+	 * use the static bus format definition (imxpd->bus_format) if it's
+	 * specified, RGB888 when it's not.
+	 */
+	if (output_fmt == MEDIA_BUS_FMT_FIXED)
+		output_fmt = imxpd->bus_format ? : MEDIA_BUS_FMT_RGB888_1X24;
+
+	/* Now make sure the requested output format is supported. */
+	if ((imxpd->bus_format && imxpd->bus_format != output_fmt) ||
+	    !imx_pd_format_supported(output_fmt)) {
+		*num_input_fmts = 0;
+		return NULL;
+	}
+
+	*num_input_fmts = 1;
+	input_fmts = kmalloc(sizeof(*input_fmts), GFP_KERNEL);
+	if (!input_fmts)
+		return NULL;
+
+	input_fmts[0] = output_fmt;
+	return input_fmts;
+}
+
+static int imx_pd_bridge_atomic_check(struct drm_bridge *bridge,
+				      struct drm_bridge_state *bridge_state,
+				      struct drm_crtc_state *crtc_state,
+				      struct drm_connector_state *conn_state)
+{
+	struct imx_crtc_state *imx_crtc_state = to_imx_crtc_state(crtc_state);
+	struct drm_display_info *di = &conn_state->connector->display_info;
+	struct imx_parallel_display *imxpd = bridge_to_imxpd(bridge);
+	struct drm_bridge_state *next_bridge_state = NULL;
+	struct drm_bridge *next_bridge;
+	u32 bus_flags, bus_fmt;
+
+	next_bridge = drm_bridge_get_next_bridge(bridge);
+	if (next_bridge)
+		next_bridge_state = drm_atomic_get_new_bridge_state(crtc_state->state,
+								    next_bridge);
+
+	if (next_bridge_state)
+		bus_flags = next_bridge_state->input_bus_cfg.flags;
+	else if (di->num_bus_formats)
+		bus_flags = di->bus_flags;
+	else
+		bus_flags = imxpd->bus_flags;
+
+	bus_fmt = bridge_state->input_bus_cfg.format;
+	if (!imx_pd_format_supported(bus_fmt))
+		return -EINVAL;
+
+	if (bus_flags &
+	    ~(DRM_BUS_FLAG_DE_LOW | DRM_BUS_FLAG_DE_HIGH |
+	      DRM_BUS_FLAG_PIXDATA_DRIVE_POSEDGE |
+	      DRM_BUS_FLAG_PIXDATA_DRIVE_NEGEDGE)) {
+		dev_warn(imxpd->dev, "invalid bus_flags (%x)\n", bus_flags);
+		return -EINVAL;
+	}
+
+	bridge_state->output_bus_cfg.flags = bus_flags;
+	bridge_state->input_bus_cfg.flags = bus_flags;
+	imx_crtc_state->bus_flags = bus_flags;
+	imx_crtc_state->bus_format = bridge_state->input_bus_cfg.format;
+	imx_crtc_state->di_hsync_pin = 2;
+	imx_crtc_state->di_vsync_pin = 3;
+
+	return 0;
+}
+
 static const struct drm_connector_funcs imx_pd_connector_funcs = {
-	.dpms = drm_helper_connector_dpms,
 	.fill_modes = drm_helper_probe_single_connector_modes,
-	.detect = imx_pd_connector_detect,
 	.destroy = imx_drm_connector_destroy,
+	.reset = drm_atomic_helper_connector_reset,
+	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
 
 static const struct drm_connector_helper_funcs imx_pd_connector_helper_funcs = {
 	.get_modes = imx_pd_connector_get_modes,
-	.best_encoder = imx_pd_connector_best_encoder,
 };
 
-static const struct drm_encoder_funcs imx_pd_encoder_funcs = {
-	.destroy = imx_drm_encoder_destroy,
-};
-
-static const struct drm_encoder_helper_funcs imx_pd_encoder_helper_funcs = {
-	.dpms = imx_pd_encoder_dpms,
-	.prepare = imx_pd_encoder_prepare,
-	.commit = imx_pd_encoder_commit,
-	.mode_set = imx_pd_encoder_mode_set,
-	.disable = imx_pd_encoder_disable,
+static const struct drm_bridge_funcs imx_pd_bridge_funcs = {
+	.enable = imx_pd_bridge_enable,
+	.disable = imx_pd_bridge_disable,
+	.atomic_reset = drm_atomic_helper_bridge_reset,
+	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+	.atomic_check = imx_pd_bridge_atomic_check,
+	.atomic_get_input_bus_fmts = imx_pd_bridge_atomic_get_input_bus_fmts,
+	.atomic_get_output_bus_fmts = imx_pd_bridge_atomic_get_output_bus_fmts,
 };
 
 static int imx_pd_register(struct drm_device *drm,
 	struct imx_parallel_display *imxpd)
 {
+	struct drm_encoder *encoder = &imxpd->encoder;
 	int ret;
 
-	ret = imx_drm_encoder_parse_of(drm, &imxpd->encoder,
-				       imxpd->dev->of_node);
+	ret = imx_drm_encoder_parse_of(drm, encoder, imxpd->dev->of_node);
 	if (ret)
 		return ret;
 
@@ -170,19 +270,30 @@ static int imx_pd_register(struct drm_device *drm,
 	 */
 	imxpd->connector.dpms = DRM_MODE_DPMS_OFF;
 
-	drm_encoder_helper_add(&imxpd->encoder, &imx_pd_encoder_helper_funcs);
-	drm_encoder_init(drm, &imxpd->encoder, &imx_pd_encoder_funcs,
-			 DRM_MODE_ENCODER_NONE, NULL);
+	drm_simple_encoder_init(drm, encoder, DRM_MODE_ENCODER_NONE);
 
-	drm_connector_helper_add(&imxpd->connector,
-			&imx_pd_connector_helper_funcs);
-	drm_connector_init(drm, &imxpd->connector, &imx_pd_connector_funcs,
-			   DRM_MODE_CONNECTOR_VGA);
+	imxpd->bridge.funcs = &imx_pd_bridge_funcs;
+	drm_bridge_attach(encoder, &imxpd->bridge, NULL, 0);
 
-	if (imxpd->panel)
-		drm_panel_attach(imxpd->panel, &imxpd->connector);
+	if (!imxpd->next_bridge) {
+		drm_connector_helper_add(&imxpd->connector,
+				&imx_pd_connector_helper_funcs);
+		drm_connector_init(drm, &imxpd->connector,
+				   &imx_pd_connector_funcs,
+				   DRM_MODE_CONNECTOR_DPI);
+	}
 
-	drm_mode_connector_attach_encoder(&imxpd->connector, &imxpd->encoder);
+	if (imxpd->next_bridge) {
+		ret = drm_bridge_attach(encoder, imxpd->next_bridge,
+					&imxpd->bridge, 0);
+		if (ret < 0) {
+			dev_err(imxpd->dev, "failed to attach bridge: %d\n",
+				ret);
+			return ret;
+		}
+	} else {
+		drm_connector_attach_encoder(&imxpd->connector, encoder);
+	}
 
 	return 0;
 }
@@ -191,46 +302,38 @@ static int imx_pd_bind(struct device *dev, struct device *master, void *data)
 {
 	struct drm_device *drm = data;
 	struct device_node *np = dev->of_node;
-	struct device_node *ep;
 	const u8 *edidp;
 	struct imx_parallel_display *imxpd;
+	int edid_len;
 	int ret;
+	u32 bus_format = 0;
 	const char *fmt;
 
-	imxpd = devm_kzalloc(dev, sizeof(*imxpd), GFP_KERNEL);
-	if (!imxpd)
-		return -ENOMEM;
+	imxpd = dev_get_drvdata(dev);
+	memset(imxpd, 0, sizeof(*imxpd));
 
-	edidp = of_get_property(np, "edid", &imxpd->edid_len);
+	/* port@1 is the output port */
+	ret = drm_of_find_panel_or_bridge(np, 1, 0, &imxpd->panel,
+					  &imxpd->next_bridge);
+	if (ret && ret != -ENODEV)
+		return ret;
+
+	edidp = of_get_property(np, "edid", &edid_len);
 	if (edidp)
-		imxpd->edid = kmemdup(edidp, imxpd->edid_len, GFP_KERNEL);
+		imxpd->edid = devm_kmemdup(dev, edidp, edid_len, GFP_KERNEL);
 
 	ret = of_property_read_string(np, "interface-pix-fmt", &fmt);
 	if (!ret) {
 		if (!strcmp(fmt, "rgb24"))
-			imxpd->bus_format = MEDIA_BUS_FMT_RGB888_1X24;
+			bus_format = MEDIA_BUS_FMT_RGB888_1X24;
 		else if (!strcmp(fmt, "rgb565"))
-			imxpd->bus_format = MEDIA_BUS_FMT_RGB565_1X16;
+			bus_format = MEDIA_BUS_FMT_RGB565_1X16;
 		else if (!strcmp(fmt, "bgr666"))
-			imxpd->bus_format = MEDIA_BUS_FMT_RGB666_1X18;
+			bus_format = MEDIA_BUS_FMT_RGB666_1X18;
 		else if (!strcmp(fmt, "lvds666"))
-			imxpd->bus_format = MEDIA_BUS_FMT_RGB666_1X24_CPADHI;
+			bus_format = MEDIA_BUS_FMT_RGB666_1X24_CPADHI;
 	}
-
-	/* port@1 is the output port */
-	ep = of_graph_get_endpoint_by_regs(np, 1, -1);
-	if (ep) {
-		struct device_node *remote;
-
-		remote = of_graph_get_remote_port_parent(ep);
-		of_node_put(ep);
-		if (remote) {
-			imxpd->panel = of_drm_find_panel(remote);
-			of_node_put(remote);
-		}
-		if (!imxpd->panel)
-			return -EPROBE_DEFER;
-	}
+	imxpd->bus_format = bus_format;
 
 	imxpd->dev = dev;
 
@@ -238,29 +341,23 @@ static int imx_pd_bind(struct device *dev, struct device *master, void *data)
 	if (ret)
 		return ret;
 
-	dev_set_drvdata(dev, imxpd);
-
 	return 0;
-}
-
-static void imx_pd_unbind(struct device *dev, struct device *master,
-	void *data)
-{
-	struct imx_parallel_display *imxpd = dev_get_drvdata(dev);
-
-	imxpd->encoder.funcs->destroy(&imxpd->encoder);
-	imxpd->connector.funcs->destroy(&imxpd->connector);
-
-	kfree(imxpd->edid);
 }
 
 static const struct component_ops imx_pd_ops = {
 	.bind	= imx_pd_bind,
-	.unbind	= imx_pd_unbind,
 };
 
 static int imx_pd_probe(struct platform_device *pdev)
 {
+	struct imx_parallel_display *imxpd;
+
+	imxpd = devm_kzalloc(&pdev->dev, sizeof(*imxpd), GFP_KERNEL);
+	if (!imxpd)
+		return -ENOMEM;
+
+	platform_set_drvdata(pdev, imxpd);
+
 	return component_add(&pdev->dev, &imx_pd_ops);
 }
 

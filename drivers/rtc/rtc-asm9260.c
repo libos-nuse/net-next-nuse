@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2016 Oleksij Rempel <linux@rempel-privat.de>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License,
- * or (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -112,8 +108,6 @@ struct asm9260_rtc_priv {
 	void __iomem		*iobase;
 	struct rtc_device	*rtc;
 	struct clk		*clk;
-	/* io lock */
-	spinlock_t		lock;
 };
 
 static irqreturn_t asm9260_rtc_irq(int irq, void *dev_id)
@@ -122,11 +116,15 @@ static irqreturn_t asm9260_rtc_irq(int irq, void *dev_id)
 	u32 isr;
 	unsigned long events = 0;
 
+	mutex_lock(&priv->rtc->ops_lock);
 	isr = ioread32(priv->iobase + HW_CIIR);
-	if (!isr)
+	if (!isr) {
+		mutex_unlock(&priv->rtc->ops_lock);
 		return IRQ_NONE;
+	}
 
 	iowrite32(0, priv->iobase + HW_CIIR);
+	mutex_unlock(&priv->rtc->ops_lock);
 
 	events |= RTC_AF | RTC_IRQF;
 
@@ -139,9 +137,7 @@ static int asm9260_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	struct asm9260_rtc_priv *priv = dev_get_drvdata(dev);
 	u32 ctime0, ctime1, ctime2;
-	unsigned long irq_flags;
 
-	spin_lock_irqsave(&priv->lock, irq_flags);
 	ctime0 = ioread32(priv->iobase + HW_CTIME0);
 	ctime1 = ioread32(priv->iobase + HW_CTIME1);
 	ctime2 = ioread32(priv->iobase + HW_CTIME2);
@@ -155,7 +151,6 @@ static int asm9260_rtc_read_time(struct device *dev, struct rtc_time *tm)
 		ctime1 = ioread32(priv->iobase + HW_CTIME1);
 		ctime2 = ioread32(priv->iobase + HW_CTIME2);
 	}
-	spin_unlock_irqrestore(&priv->lock, irq_flags);
 
 	tm->tm_sec  = (ctime0 >> BM_CTIME0_SEC_S)  & BM_CTIME0_SEC_M;
 	tm->tm_min  = (ctime0 >> BM_CTIME0_MIN_S)  & BM_CTIME0_MIN_M;
@@ -174,9 +169,7 @@ static int asm9260_rtc_read_time(struct device *dev, struct rtc_time *tm)
 static int asm9260_rtc_set_time(struct device *dev, struct rtc_time *tm)
 {
 	struct asm9260_rtc_priv *priv = dev_get_drvdata(dev);
-	unsigned long irq_flags;
 
-	spin_lock_irqsave(&priv->lock, irq_flags);
 	/*
 	 * make sure SEC counter will not flip other counter on write time,
 	 * real value will be written at the enf of sequence.
@@ -191,7 +184,6 @@ static int asm9260_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	iowrite32(tm->tm_hour, priv->iobase + HW_HOUR);
 	iowrite32(tm->tm_min,  priv->iobase + HW_MIN);
 	iowrite32(tm->tm_sec,  priv->iobase + HW_SEC);
-	spin_unlock_irqrestore(&priv->lock, irq_flags);
 
 	return 0;
 }
@@ -199,9 +191,7 @@ static int asm9260_rtc_set_time(struct device *dev, struct rtc_time *tm)
 static int asm9260_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct asm9260_rtc_priv *priv = dev_get_drvdata(dev);
-	unsigned long irq_flags;
 
-	spin_lock_irqsave(&priv->lock, irq_flags);
 	alrm->time.tm_year = ioread32(priv->iobase + HW_ALYEAR);
 	alrm->time.tm_mon  = ioread32(priv->iobase + HW_ALMON);
 	alrm->time.tm_mday = ioread32(priv->iobase + HW_ALDOM);
@@ -213,7 +203,6 @@ static int asm9260_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 
 	alrm->enabled = ioread32(priv->iobase + HW_AMR) ? 1 : 0;
 	alrm->pending = ioread32(priv->iobase + HW_CIIR) ? 1 : 0;
-	spin_unlock_irqrestore(&priv->lock, irq_flags);
 
 	return rtc_valid_tm(&alrm->time);
 }
@@ -221,9 +210,7 @@ static int asm9260_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 static int asm9260_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct asm9260_rtc_priv *priv = dev_get_drvdata(dev);
-	unsigned long irq_flags;
 
-	spin_lock_irqsave(&priv->lock, irq_flags);
 	iowrite32(alrm->time.tm_year, priv->iobase + HW_ALYEAR);
 	iowrite32(alrm->time.tm_mon,  priv->iobase + HW_ALMON);
 	iowrite32(alrm->time.tm_mday, priv->iobase + HW_ALDOM);
@@ -234,7 +221,6 @@ static int asm9260_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	iowrite32(alrm->time.tm_sec,  priv->iobase + HW_ALSEC);
 
 	iowrite32(alrm->enabled ? 0 : BM_AMR_OFF, priv->iobase + HW_AMR);
-	spin_unlock_irqrestore(&priv->lock, irq_flags);
 
 	return 0;
 }
@@ -259,7 +245,6 @@ static int asm9260_rtc_probe(struct platform_device *pdev)
 {
 	struct asm9260_rtc_priv *priv;
 	struct device *dev = &pdev->dev;
-	struct resource	*res;
 	int irq_alarm, ret;
 	u32 ccr;
 
@@ -271,17 +256,17 @@ static int asm9260_rtc_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, priv);
 
 	irq_alarm = platform_get_irq(pdev, 0);
-	if (irq_alarm < 0) {
-		dev_err(dev, "No alarm IRQ resource defined\n");
+	if (irq_alarm < 0)
 		return irq_alarm;
-	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	priv->iobase = devm_ioremap_resource(dev, res);
+	priv->iobase = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(priv->iobase))
 		return PTR_ERR(priv->iobase);
 
 	priv->clk = devm_clk_get(dev, "ahb");
+	if (IS_ERR(priv->clk))
+		return PTR_ERR(priv->clk);
+
 	ret = clk_prepare_enable(priv->clk);
 	if (ret) {
 		dev_err(dev, "Failed to enable clk!\n");
@@ -337,13 +322,13 @@ static const struct of_device_id asm9260_dt_ids[] = {
 	{ .compatible = "alphascale,asm9260-rtc", },
 	{}
 };
+MODULE_DEVICE_TABLE(of, asm9260_dt_ids);
 
 static struct platform_driver asm9260_rtc_driver = {
 	.probe		= asm9260_rtc_probe,
 	.remove		= asm9260_rtc_remove,
 	.driver		= {
 		.name	= "asm9260-rtc",
-		.owner	= THIS_MODULE,
 		.of_match_table = asm9260_dt_ids,
 	},
 };

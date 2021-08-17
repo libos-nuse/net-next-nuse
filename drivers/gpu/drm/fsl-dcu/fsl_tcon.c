@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2015 Toradex AG
  *
  * Stefan Agner <stefan@agner.ch>
  *
  * Freescale TCON device driver
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -57,10 +53,7 @@ static int fsl_tcon_init_regmap(struct device *dev,
 
 	tcon->regs = devm_regmap_init_mmio(dev, regs,
 					   &fsl_tcon_regmap_config);
-	if (IS_ERR(tcon->regs))
-		return PTR_ERR(tcon->regs);
-
-	return 0;
+	return PTR_ERR_OR_ZERO(tcon->regs);
 }
 
 struct fsl_tcon *fsl_tcon_init(struct device *dev)
@@ -75,10 +68,8 @@ struct fsl_tcon *fsl_tcon_init(struct device *dev)
 		return NULL;
 
 	tcon = devm_kzalloc(dev, sizeof(*tcon), GFP_KERNEL);
-	if (!tcon) {
-		ret = -ENOMEM;
+	if (!tcon)
 		goto err_node_put;
-	}
 
 	ret = fsl_tcon_init_regmap(dev, tcon, np);
 	if (ret) {
@@ -92,8 +83,13 @@ struct fsl_tcon *fsl_tcon_init(struct device *dev)
 		goto err_node_put;
 	}
 
-	clk_prepare_enable(tcon->ipg_clk);
+	ret = clk_prepare_enable(tcon->ipg_clk);
+	if (ret) {
+		dev_err(dev, "Couldn't enable the TCON clock\n");
+		goto err_node_put;
+	}
 
+	of_node_put(np);
 	dev_info(dev, "Using TCON in bypass mode\n");
 
 	return tcon;

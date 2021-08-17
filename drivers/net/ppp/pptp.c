@@ -1,13 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Point-to-Point Tunneling Protocol for Linux
  *
  *	Authors: Dmitry Kozlov <xeb@mail.ru>
- *
- *	This program is free software; you can redistribute it and/or
- *	modify it under the terms of the GNU General Public License
- *	as published by the Free Software Foundation; either version
- *	2 of the License, or (at your option) any later version.
- *
  */
 
 #include <linux/string.h>
@@ -37,6 +32,7 @@
 #include <net/icmp.h>
 #include <net/route.h>
 #include <net/gre.h>
+#include <net/pptp.h>
 
 #include <linux/uaccess.h>
 
@@ -52,41 +48,6 @@ static DEFINE_SPINLOCK(chan_lock);
 static struct proto pptp_sk_proto __read_mostly;
 static const struct ppp_channel_ops pptp_chan_ops;
 static const struct proto_ops pptp_ops;
-
-#define PPP_LCP_ECHOREQ 0x09
-#define PPP_LCP_ECHOREP 0x0A
-#define SC_RCV_BITS	(SC_RCV_B7_1|SC_RCV_B7_0|SC_RCV_ODDP|SC_RCV_EVNP)
-
-#define MISSING_WINDOW 20
-#define WRAPPED(curseq, lastseq)\
-	((((curseq) & 0xffffff00) == 0) &&\
-	(((lastseq) & 0xffffff00) == 0xffffff00))
-
-#define PPTP_GRE_PROTO  0x880B
-#define PPTP_GRE_VER    0x1
-
-#define PPTP_GRE_FLAG_C	0x80
-#define PPTP_GRE_FLAG_R	0x40
-#define PPTP_GRE_FLAG_K	0x20
-#define PPTP_GRE_FLAG_S	0x10
-#define PPTP_GRE_FLAG_A	0x80
-
-#define PPTP_GRE_IS_C(f) ((f)&PPTP_GRE_FLAG_C)
-#define PPTP_GRE_IS_R(f) ((f)&PPTP_GRE_FLAG_R)
-#define PPTP_GRE_IS_K(f) ((f)&PPTP_GRE_FLAG_K)
-#define PPTP_GRE_IS_S(f) ((f)&PPTP_GRE_FLAG_S)
-#define PPTP_GRE_IS_A(f) ((f)&PPTP_GRE_FLAG_A)
-
-#define PPTP_HEADER_OVERHEAD (2+sizeof(struct pptp_gre_header))
-struct pptp_gre_header {
-	u8  flags;
-	u8  ver;
-	__be16 protocol;
-	__be16 payload_len;
-	__be16 call_id;
-	__be32 seq;
-	__be32 ack;
-} __packed;
 
 static struct pppox_sock *lookup_chan(u16 call_id, __be32 s_addr)
 {
@@ -165,7 +126,6 @@ static void del_chan(struct pppox_sock *sock)
 	clear_bit(sock->proto.pptp.src_addr.call_id, callid_bitmap);
 	RCU_INIT_POINTER(callid_sock[sock->proto.pptp.src_addr.call_id], NULL);
 	spin_unlock(&chan_lock);
-	synchronize_rcu();
 }
 
 static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
@@ -195,7 +155,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 				   opt->dst_addr.sin_addr.s_addr,
 				   opt->src_addr.sin_addr.s_addr,
 				   0, 0, IPPROTO_GRE,
-				   RT_TOS(0), 0);
+				   RT_TOS(0), sk->sk_bound_dev_if);
 	if (IS_ERR(rt))
 		goto tx_error;
 
@@ -240,16 +200,14 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	skb_push(skb, header_len);
 	hdr = (struct pptp_gre_header *)(skb->data);
 
-	hdr->flags       = PPTP_GRE_FLAG_K;
-	hdr->ver         = PPTP_GRE_VER;
-	hdr->protocol    = htons(PPTP_GRE_PROTO);
-	hdr->call_id     = htons(opt->dst_addr.call_id);
+	hdr->gre_hd.flags = GRE_KEY | GRE_VERSION_1 | GRE_SEQ;
+	hdr->gre_hd.protocol = GRE_PROTO_PPP;
+	hdr->call_id = htons(opt->dst_addr.call_id);
 
-	hdr->flags      |= PPTP_GRE_FLAG_S;
-	hdr->seq         = htonl(++opt->seq_sent);
+	hdr->seq = htonl(++opt->seq_sent);
 	if (opt->ack_sent != seq_recv)	{
 		/* send ack with this message */
-		hdr->ver |= PPTP_GRE_FLAG_A;
+		hdr->gre_hd.flags |= GRE_ACK;
 		hdr->ack  = htonl(seq_recv);
 		opt->ack_sent = seq_recv;
 	}
@@ -280,7 +238,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	skb_dst_drop(skb);
 	skb_dst_set(skb, &rt->dst);
 
-	nf_reset(skb);
+	nf_reset_ct(skb);
 
 	skb->ip_summed = CHECKSUM_NONE;
 	ip_select_ident(net, skb, NULL);
@@ -312,7 +270,7 @@ static int pptp_rcv_core(struct sock *sk, struct sk_buff *skb)
 	headersize  = sizeof(*header);
 
 	/* test if acknowledgement present */
-	if (PPTP_GRE_IS_A(header->ver)) {
+	if (GRE_IS_ACK(header->gre_hd.flags)) {
 		__u32 ack;
 
 		if (!pskb_may_pull(skb, headersize))
@@ -320,7 +278,7 @@ static int pptp_rcv_core(struct sock *sk, struct sk_buff *skb)
 		header = (struct pptp_gre_header *)(skb->data);
 
 		/* ack in different place if S = 0 */
-		ack = PPTP_GRE_IS_S(header->flags) ? header->ack : header->seq;
+		ack = GRE_IS_SEQ(header->gre_hd.flags) ? header->ack : header->seq;
 
 		ack = ntohl(ack);
 
@@ -333,7 +291,7 @@ static int pptp_rcv_core(struct sock *sk, struct sk_buff *skb)
 		headersize -= sizeof(header->ack);
 	}
 	/* test if payload present */
-	if (!PPTP_GRE_IS_S(header->flags))
+	if (!GRE_IS_SEQ(header->gre_hd.flags))
 		goto drop;
 
 	payload_len = ntohs(header->payload_len);
@@ -360,11 +318,6 @@ allow_packet:
 			if (skb->len < 3)
 				goto drop;
 			skb_pull(skb, 2);
-		}
-
-		if ((*skb->data) & 1) {
-			/* protocol is compressed */
-			skb_push(skb, 1)[0] = 0;
 		}
 
 		skb->ip_summed = CHECKSUM_NONE;
@@ -394,18 +347,18 @@ static int pptp_rcv(struct sk_buff *skb)
 
 	header = (struct pptp_gre_header *)skb->data;
 
-	if (ntohs(header->protocol) != PPTP_GRE_PROTO || /* PPTP-GRE protocol for PPTP */
-		PPTP_GRE_IS_C(header->flags) ||                /* flag C should be clear */
-		PPTP_GRE_IS_R(header->flags) ||                /* flag R should be clear */
-		!PPTP_GRE_IS_K(header->flags) ||               /* flag K should be set */
-		(header->flags&0xF) != 0)                      /* routing and recursion ctrl = 0 */
+	if (header->gre_hd.protocol != GRE_PROTO_PPP || /* PPTP-GRE protocol for PPTP */
+		GRE_IS_CSUM(header->gre_hd.flags) ||    /* flag CSUM should be clear */
+		GRE_IS_ROUTING(header->gre_hd.flags) || /* flag ROUTING should be clear */
+		!GRE_IS_KEY(header->gre_hd.flags) ||    /* flag KEY should be set */
+		(header->gre_hd.flags & GRE_FLAGS))     /* flag Recursion Ctrl should be clear */
 		/* if invalid, discard this packet */
 		goto drop;
 
 	po = lookup_chan(htons(header->call_id), iph->saddr);
 	if (po) {
 		skb_dst_drop(skb);
-		nf_reset(skb);
+		nf_reset_ct(skb);
 		return sk_receive_skb(sk_pppox(po), skb, 0);
 	}
 drop:
@@ -491,7 +444,8 @@ static int pptp_connect(struct socket *sock, struct sockaddr *uservaddr,
 				   opt->dst_addr.sin_addr.s_addr,
 				   opt->src_addr.sin_addr.s_addr,
 				   0, 0,
-				   IPPROTO_GRE, RT_CONN_FLAGS(sk), 0);
+				   IPPROTO_GRE, RT_CONN_FLAGS(sk),
+				   sk->sk_bound_dev_if);
 	if (IS_ERR(rt)) {
 		error = -EHOSTUNREACH;
 		goto end;
@@ -501,7 +455,6 @@ static int pptp_connect(struct socket *sock, struct sockaddr *uservaddr,
 	po->chan.mtu = dst_mtu(&rt->dst);
 	if (!po->chan.mtu)
 		po->chan.mtu = PPP_MRU;
-	ip_rt_put(rt);
 	po->chan.mtu -= PPTP_HEADER_OVERHEAD;
 
 	po->chan.hdrlen = 2 + sizeof(struct pptp_gre_header);
@@ -520,7 +473,7 @@ static int pptp_connect(struct socket *sock, struct sockaddr *uservaddr,
 }
 
 static int pptp_getname(struct socket *sock, struct sockaddr *uaddr,
-	int *usockaddr_len, int peer)
+	int peer)
 {
 	int len = sizeof(struct sockaddr_pppox);
 	struct sockaddr_pppox sp;
@@ -533,16 +486,13 @@ static int pptp_getname(struct socket *sock, struct sockaddr *uaddr,
 
 	memcpy(uaddr, &sp, len);
 
-	*usockaddr_len = len;
-
-	return 0;
+	return len;
 }
 
 static int pptp_release(struct socket *sock)
 {
 	struct sock *sk = sock->sk;
 	struct pppox_sock *po;
-	struct pptp_opt *opt;
 	int error = 0;
 
 	if (!sk)
@@ -556,8 +506,8 @@ static int pptp_release(struct socket *sock)
 	}
 
 	po = pppox_sk(sk);
-	opt = &po->proto.pptp;
 	del_chan(po);
+	synchronize_rcu();
 
 	pppox_unbind_sock(sk);
 	sk->sk_state = PPPOX_DEAD;
@@ -578,6 +528,7 @@ static void pptp_sock_destruct(struct sock *sk)
 		pppox_unbind_sock(sk);
 	}
 	skb_queue_purge(&sk->sk_receive_queue);
+	dst_release(rcu_dereference_protected(sk->sk_dst_cache, 1));
 }
 
 static int pptp_create(struct net *net, struct socket *sock, int kern)
@@ -665,15 +616,15 @@ static const struct proto_ops pptp_ops = {
 	.socketpair = sock_no_socketpair,
 	.accept     = sock_no_accept,
 	.getname    = pptp_getname,
-	.poll       = sock_no_poll,
 	.listen     = sock_no_listen,
 	.shutdown   = sock_no_shutdown,
-	.setsockopt = sock_no_setsockopt,
-	.getsockopt = sock_no_getsockopt,
 	.sendmsg    = sock_no_sendmsg,
 	.recvmsg    = sock_no_recvmsg,
 	.mmap       = sock_no_mmap,
 	.ioctl      = pppox_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = pppox_compat_ioctl,
+#endif
 };
 
 static const struct pppox_proto pppox_pptp_proto = {
@@ -690,7 +641,7 @@ static int __init pptp_init_module(void)
 	int err = 0;
 	pr_info("PPTP driver version " PPTP_DRIVER_VERSION "\n");
 
-	callid_sock = vzalloc((MAX_CALLID + 1) * sizeof(void *));
+	callid_sock = vzalloc(array_size(sizeof(void *), (MAX_CALLID + 1)));
 	if (!callid_sock)
 		return -ENOMEM;
 

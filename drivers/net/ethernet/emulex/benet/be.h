@@ -1,11 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2005 - 2016 Broadcom
  * All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.  The full GNU General
- * Public License is included in this distribution in the file called COPYING.
  *
  * Contact Information:
  * linux-drivers@emulex.com
@@ -37,7 +33,6 @@
 #include "be_hw.h"
 #include "be_roce.h"
 
-#define DRV_VER			"11.0.0.0"
 #define DRV_NAME		"be2net"
 #define BE_NAME			"Emulex BladeEngine2"
 #define BE3_NAME		"Emulex BladeEngine3"
@@ -65,7 +60,7 @@
 /* Number of bytes of an RX frame that are copied to skb->data */
 #define BE_HDR_LEN		((u16) 64)
 /* allocate extra space to allow tunneling decapsulation without head reallocation */
-#define BE_RX_SKB_ALLOC_SIZE (BE_HDR_LEN + 64)
+#define BE_RX_SKB_ALLOC_SIZE	256
 
 #define BE_MAX_JUMBO_FRAME_SIZE	9018
 #define BE_MIN_MTU		256
@@ -187,36 +182,15 @@ struct be_eq_obj {
 	struct be_queue_info q;
 	char desc[32];
 
-	/* Adaptive interrupt coalescing (AIC) info */
-	bool enable_aic;
-	u32 min_eqd;		/* in usecs */
-	u32 max_eqd;		/* in usecs */
-	u32 eqd;		/* configured val when aic is off */
-	u32 cur_eqd;		/* in usecs */
-
+	struct be_adapter *adapter;
+	struct napi_struct napi;
 	u8 idx;			/* array index */
 	u8 msix_idx;
 	u16 spurious_intr;
-	struct napi_struct napi;
-	struct be_adapter *adapter;
 	cpumask_var_t  affinity_mask;
-
-#ifdef CONFIG_NET_RX_BUSY_POLL
-#define BE_EQ_IDLE		0
-#define BE_EQ_NAPI		1	/* napi owns this EQ */
-#define BE_EQ_POLL		2	/* poll owns this EQ */
-#define BE_EQ_LOCKED		(BE_EQ_NAPI | BE_EQ_POLL)
-#define BE_EQ_NAPI_YIELD	4	/* napi yielded this EQ */
-#define BE_EQ_POLL_YIELD	8	/* poll yielded this EQ */
-#define BE_EQ_YIELD		(BE_EQ_NAPI_YIELD | BE_EQ_POLL_YIELD)
-#define BE_EQ_USER_PEND		(BE_EQ_POLL | BE_EQ_POLL_YIELD)
-	unsigned int state;
-	spinlock_t lock;	/* lock to serialize napi and busy-poll */
-#endif  /* CONFIG_NET_RX_BUSY_POLL */
 } ____cacheline_aligned_in_smp;
 
 struct be_aic_obj {		/* Adaptive interrupt coalescing (AIC) info */
-	bool enable;
 	u32 min_eqd;		/* in usecs */
 	u32 max_eqd;		/* in usecs */
 	u32 prev_eqd;		/* in usecs */
@@ -224,11 +198,6 @@ struct be_aic_obj {		/* Adaptive interrupt coalescing (AIC) info */
 	ulong jiffies;
 	u64 rx_pkts_prev;	/* Used to calculate RX pps */
 	u64 tx_reqs_prev;	/* Used to calculate TX pps */
-};
-
-enum {
-	NAPI_POLLING,
-	BUSY_POLLING
 };
 
 struct be_mcc_obj {
@@ -243,7 +212,6 @@ struct be_tx_stats {
 	u64 tx_vxlan_offload_pkts;
 	u64 tx_reqs;
 	u64 tx_compl;
-	ulong tx_jiffies;
 	u32 tx_stops;
 	u32 tx_drv_drops;	/* pkts dropped by driver */
 	/* the error counters are described in be_ethtool.c */
@@ -253,6 +221,7 @@ struct be_tx_stats {
 	u32 tx_spoof_check_err;
 	u32 tx_qinq_err;
 	u32 tx_internal_parity_err;
+	u32 tx_sge_err;
 	struct u64_stats_sync sync;
 	struct u64_stats_sync sync_compl;
 };
@@ -265,9 +234,9 @@ struct be_tx_compl_info {
 
 struct be_tx_obj {
 	u32 db_offset;
+	struct be_tx_compl_info txcp;
 	struct be_queue_info q;
 	struct be_queue_info cq;
-	struct be_tx_compl_info txcp;
 	/* Remember the skbs that were transmitted */
 	struct sk_buff *sent_skb_list[TX_Q_LEN];
 	struct be_tx_stats stats;
@@ -399,13 +368,13 @@ enum vf_state {
 #define BE_FLAGS_PHY_MISCONFIGURED		BIT(10)
 #define BE_FLAGS_ERR_DETECTION_SCHEDULED	BIT(11)
 #define BE_FLAGS_OS2BMC				BIT(12)
+#define BE_FLAGS_TRY_RECOVERY			BIT(13)
 
 #define BE_UC_PMAC_COUNT			30
 #define BE_VF_UC_PMAC_COUNT			2
 
 #define MAX_ERR_RECOVERY_RETRY_COUNT		3
 #define ERR_DETECTION_DELAY			1000
-#define ERR_RECOVERY_RETRY_DELAY		30000
 
 /* Ethtool set_dump flags */
 #define LANCER_INITIATE_FW_DUMP			0x1
@@ -462,10 +431,10 @@ struct be_port_resources {
 #define be_is_os2bmc_enabled(adapter) (adapter->flags & BE_FLAGS_OS2BMC)
 
 struct rss_info {
-	u64 rss_flags;
 	u8 rsstable[RSS_INDIR_TABLE_LEN];
 	u8 rss_queue[RSS_INDIR_TABLE_LEN];
 	u8 rss_hkey[RSS_HASH_KEY_LEN];
+	u64 rss_flags;
 };
 
 #define BE_INVALID_DIE_TEMP	0xFF
@@ -508,6 +477,77 @@ struct be_wrb_params {
 	u16 lso_mss;	/* MSS for LSO */
 };
 
+struct be_eth_addr {
+	unsigned char mac[ETH_ALEN];
+};
+
+#define BE_SEC	1000			/* in msec */
+#define BE_MIN	(60 * BE_SEC)		/* in msec */
+#define BE_HOUR	(60 * BE_MIN)		/* in msec */
+
+#define ERR_RECOVERY_MAX_RETRY_COUNT		3
+#define ERR_RECOVERY_DETECTION_DELAY		BE_SEC
+#define ERR_RECOVERY_RETRY_DELAY		(30 * BE_SEC)
+
+/* UE-detection-duration in BEx/Skyhawk:
+ * All PFs must wait for this duration after they detect UE before reading
+ * SLIPORT_SEMAPHORE register. At the end of this duration, the Firmware
+ * guarantees that the SLIPORT_SEMAPHORE register is updated to indicate
+ * if the UE is recoverable.
+ */
+#define ERR_RECOVERY_UE_DETECT_DURATION			BE_SEC
+
+/* Initial idle time (in msec) to elapse after driver load,
+ * before UE recovery is allowed.
+ */
+#define ERR_IDLE_HR			24
+#define ERR_RECOVERY_IDLE_TIME		(ERR_IDLE_HR * BE_HOUR)
+
+/* Time interval (in msec) after which UE recovery can be repeated */
+#define ERR_INTERVAL_HR			72
+#define ERR_RECOVERY_INTERVAL		(ERR_INTERVAL_HR * BE_HOUR)
+
+/* BEx/SH UE recovery state machine */
+enum {
+	ERR_RECOVERY_ST_NONE = 0,		/* No Recovery */
+	ERR_RECOVERY_ST_DETECT = 1,		/* UE detection duration */
+	ERR_RECOVERY_ST_RESET = 2,		/* Reset Phase (PF0 only) */
+	ERR_RECOVERY_ST_PRE_POLL = 3,		/* Pre-Poll Phase (all PFs) */
+	ERR_RECOVERY_ST_REINIT = 4		/* Re-initialize Phase */
+};
+
+struct be_error_recovery {
+	union {
+		u8 recovery_retries;	/* used for Lancer		*/
+		u8 recovery_state;	/* used for BEx and Skyhawk	*/
+	};
+
+	/* BEx/Skyhawk error recovery variables */
+	bool recovery_supported;
+	u16 ue_to_reset_time;		/* Time after UE, to soft reset
+					 * the chip - PF0 only
+					 */
+	u16 ue_to_poll_time;		/* Time after UE, to Restart Polling
+					 * of SLIPORT_SEMAPHORE reg
+					 */
+	u16 last_err_code;
+	unsigned long probe_time;
+	unsigned long last_recovery_time;
+
+	/* Common to both Lancer & BEx/SH error recovery */
+	u32 resched_delay;
+	struct delayed_work err_detection_work;
+};
+
+/* Ethtool priv_flags */
+#define	BE_DISABLE_TPE_RECOVERY	0x1
+
+struct be_vxlan_port {
+	struct list_head list;
+	__be16 port;		/* VxLAN UDP dst port */
+	int port_aliases;	/* alias count */
+};
+
 struct be_adapter {
 	struct pci_dev *pdev;
 	struct net_device *netdev;
@@ -523,7 +563,7 @@ struct be_adapter {
 	struct be_dma_mem mbox_mem_alloced;
 
 	struct be_mcc_obj mcc_obj;
-	spinlock_t mcc_lock;	/* For serializing mcc cmds to BE card */
+	struct mutex mcc_lock;	/* For serializing mcc cmds to BE card */
 	spinlock_t mcc_cq_lock;
 
 	u16 cfg_num_rx_irqs;		/* configured via set-channels */
@@ -547,6 +587,7 @@ struct be_adapter {
 
 	struct be_drv_stats drv_stats;
 	struct be_aic_obj aic_obj[MAX_EVT_QS];
+	bool aic_enabled;
 	u8 vlan_prio_bmap;	/* Available Priority BitMap */
 	u16 recommended_prio_bits;/* Recommended Priority bits in vlan tag */
 	struct be_dma_mem rx_filter; /* Cmd DMA mem for rx-filter */
@@ -556,7 +597,6 @@ struct be_adapter {
 	struct delayed_work work;
 	u16 work_counter;
 
-	struct delayed_work be_err_detection_work;
 	u8 recovery_retries;
 	u8 err_flags;
 	bool pcicfg_mapped;	/* pcicfg obtained via pci_iomap() */
@@ -570,9 +610,15 @@ struct be_adapter {
 	int if_handle;		/* Used to configure filtering */
 	u32 if_flags;		/* Interface filtering flags */
 	u32 *pmac_id;		/* MAC addr handle used by BE card */
+	struct be_eth_addr *uc_list;/* list of uc-addrs programmed (not perm) */
 	u32 uc_macs;		/* Count of secondary UC MAC programmed */
+	struct be_eth_addr *mc_list;/* list of mcast addrs programmed */
+	u32 mc_count;
 	unsigned long vids[BITS_TO_LONGS(VLAN_N_VID)];
 	u16 vlans_added;
+	bool update_uc_list;
+	bool update_mc_list;
+	struct mutex rx_filter_lock;/* For protecting vids[] & mc/uc_list[] */
 
 	u32 beacon_state;	/* for set_phys_id */
 
@@ -607,9 +653,7 @@ struct be_adapter {
 	u32 sli_family;
 	u8 hba_port_num;
 	u16 pvid;
-	__be16 vxlan_port;
-	int vxlan_port_count;
-	int vxlan_port_aliases;
+	__be16 vxlan_port;		/* offloaded vxlan port num */
 	struct phy_info phy;
 	u8 wol_cap;
 	bool wol_en;
@@ -624,6 +668,15 @@ struct be_adapter {
 	u32 fat_dump_len;
 	u16 serial_num[CNTL_SERIAL_NUM_WORDS];
 	u8 phy_state; /* state of sfp optics (functional, faulted, etc.,) */
+	u8 dev_mac[ETH_ALEN];
+	u32 priv_flags; /* ethtool get/set_priv_flags() */
+	struct be_error_recovery error_recovery;
+};
+
+/* Used for defered FW config cmds. Add fields to this struct as reqd */
+struct be_cmd_work {
+	struct work_struct work;
+	struct be_adapter *adapter;
 };
 
 #define be_physfn(adapter)		(!adapter->virtfn)
@@ -690,17 +743,33 @@ static inline u16 be_max_any_irqs(struct be_adapter *adapter)
 /* Is BE in QNQ multi-channel mode */
 #define be_is_qnq_mode(adapter)		(adapter->function_mode & QNQ_MODE)
 
+#ifdef CONFIG_BE2NET_LANCER
 #define lancer_chip(adapter)	(adapter->pdev->device == OC_DEVICE_ID3 || \
 				 adapter->pdev->device == OC_DEVICE_ID4)
+#else
+#define lancer_chip(adapter)	(0)
+#endif /* CONFIG_BE2NET_LANCER */
 
+#ifdef CONFIG_BE2NET_SKYHAWK
 #define skyhawk_chip(adapter)	(adapter->pdev->device == OC_DEVICE_ID5 || \
 				 adapter->pdev->device == OC_DEVICE_ID6)
+#else
+#define skyhawk_chip(adapter)	(0)
+#endif /* CONFIG_BE2NET_SKYHAWK */
 
+#ifdef CONFIG_BE2NET_BE3
 #define BE3_chip(adapter)	(adapter->pdev->device == BE_DEVICE_ID2 || \
 				 adapter->pdev->device == OC_DEVICE_ID2)
+#else
+#define BE3_chip(adapter)	(0)
+#endif /* CONFIG_BE2NET_BE3 */
 
+#ifdef CONFIG_BE2NET_BE2
 #define BE2_chip(adapter)	(adapter->pdev->device == BE_DEVICE_ID1 || \
 				 adapter->pdev->device == OC_DEVICE_ID1)
+#else
+#define BE2_chip(adapter)	(0)
+#endif /* CONFIG_BE2NET_BE2 */
 
 #define BEx_chip(adapter)	(BE3_chip(adapter) || BE2_chip(adapter))
 
@@ -848,11 +917,24 @@ static inline bool is_ipv4_pkt(struct sk_buff *skb)
 	return skb->protocol == htons(ETH_P_IP) && ip_hdr(skb)->version == 4;
 }
 
+static inline bool is_ipv6_ext_hdr(struct sk_buff *skb)
+{
+	if (ip_hdr(skb)->version == 6)
+		return ipv6_ext_hdr(ipv6_hdr(skb)->nexthdr);
+	else
+		return false;
+}
+
+#define be_error_recovering(adapter)	\
+		(adapter->flags & BE_FLAGS_TRY_RECOVERY)
+
 #define BE_ERROR_EEH		1
 #define BE_ERROR_UE		BIT(1)
 #define BE_ERROR_FW		BIT(2)
-#define BE_ERROR_HW		(BE_ERROR_EEH | BE_ERROR_UE)
-#define BE_ERROR_ANY		(BE_ERROR_EEH | BE_ERROR_UE | BE_ERROR_FW)
+#define BE_ERROR_TX		BIT(3)
+#define BE_ERROR_HW		(BE_ERROR_EEH | BE_ERROR_UE | BE_ERROR_TX)
+#define BE_ERROR_ANY		(BE_ERROR_EEH | BE_ERROR_UE | BE_ERROR_FW | \
+				 BE_ERROR_TX)
 #define BE_CLEAR_ALL		0xFF
 
 static inline u8 be_check_error(struct be_adapter *adapter, u32 err_type)

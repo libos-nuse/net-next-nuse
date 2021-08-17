@@ -1,16 +1,13 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /* bpf_jit.S: Packet/header access helper functions
  * for PPC64 BPF compiler.
  *
  * Copyright 2011 Matt Evans <matt@ozlabs.org>, IBM Corporation
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; version 2
- * of the License.
  */
 
 #include <asm/ppc_asm.h>
-#include "bpf_jit.h"
+#include <asm/asm-compat.h>
+#include "bpf_jit32.h"
 
 /*
  * All of these routines are called directly from generated code,

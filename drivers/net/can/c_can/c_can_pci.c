@@ -161,6 +161,7 @@ static int c_can_pci_probe(struct pci_dev *pdev,
 
 	dev->irq = pdev->irq;
 	priv->base = addr;
+	priv->device = &pdev->dev;
 
 	if (!c_can_pci_data->freq) {
 		dev_err(&pdev->dev, "no clock frequency defined\n");
@@ -177,7 +178,6 @@ static int c_can_pci_probe(struct pci_dev *pdev,
 		break;
 	case BOSCH_D_CAN:
 		priv->regs = reg_map_d_can;
-		priv->can.ctrlmode_supported |= CAN_CTRLMODE_3_SAMPLES;
 		break;
 	default:
 		ret = -EINVAL;
@@ -239,26 +239,27 @@ static void c_can_pci_remove(struct pci_dev *pdev)
 {
 	struct net_device *dev = pci_get_drvdata(pdev);
 	struct c_can_priv *priv = netdev_priv(dev);
+	void __iomem *addr = priv->base;
 
 	unregister_c_can_dev(dev);
 
 	free_c_can_dev(dev);
 
-	pci_iounmap(pdev, priv->base);
+	pci_iounmap(pdev, addr);
 	pci_disable_msi(pdev);
 	pci_clear_master(pdev);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 }
 
-static struct c_can_pci_data c_can_sta2x11= {
+static const struct c_can_pci_data c_can_sta2x11= {
 	.type = BOSCH_C_CAN,
 	.reg_align = C_CAN_REG_ALIGN_32,
 	.freq = 52000000, /* 52 Mhz */
 	.bar = 0,
 };
 
-static struct c_can_pci_data c_can_pch = {
+static const struct c_can_pci_data c_can_pch = {
 	.type = BOSCH_C_CAN,
 	.reg_align = C_CAN_REG_32,
 	.freq = 50000000, /* 50 MHz */

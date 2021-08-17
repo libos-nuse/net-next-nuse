@@ -1,15 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014 MediaTek Inc.
  * Author: James Liao <jamesjj.liao@mediatek.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/of.h>
@@ -20,11 +12,12 @@
 #include <linux/delay.h>
 #include <linux/clkdev.h>
 #include <linux/mfd/syscon.h>
+#include <linux/device.h>
 
 #include "clk-mtk.h"
 #include "clk-gate.h"
 
-struct clk_onecell_data * __init mtk_alloc_clk_data(unsigned int clk_num)
+struct clk_onecell_data *mtk_alloc_clk_data(unsigned int clk_num)
 {
 	int i;
 	struct clk_onecell_data *clk_data;
@@ -49,7 +42,7 @@ err_out:
 	return NULL;
 }
 
-void __init mtk_clk_register_fixed_clks(const struct mtk_fixed_clk *clks,
+void mtk_clk_register_fixed_clks(const struct mtk_fixed_clk *clks,
 		int num, struct clk_onecell_data *clk_data)
 {
 	int i;
@@ -57,6 +50,9 @@ void __init mtk_clk_register_fixed_clks(const struct mtk_fixed_clk *clks,
 
 	for (i = 0; i < num; i++) {
 		const struct mtk_fixed_clk *rc = &clks[i];
+
+		if (clk_data && !IS_ERR_OR_NULL(clk_data->clks[rc->id]))
+			continue;
 
 		clk = clk_register_fixed_rate(NULL, rc->name, rc->parent, 0,
 					      rc->rate);
@@ -72,7 +68,7 @@ void __init mtk_clk_register_fixed_clks(const struct mtk_fixed_clk *clks,
 	}
 }
 
-void __init mtk_clk_register_factors(const struct mtk_fixed_factor *clks,
+void mtk_clk_register_factors(const struct mtk_fixed_factor *clks,
 		int num, struct clk_onecell_data *clk_data)
 {
 	int i;
@@ -80,6 +76,9 @@ void __init mtk_clk_register_factors(const struct mtk_fixed_factor *clks,
 
 	for (i = 0; i < num; i++) {
 		const struct mtk_fixed_factor *ff = &clks[i];
+
+		if (clk_data && !IS_ERR_OR_NULL(clk_data->clks[ff->id]))
+			continue;
 
 		clk = clk_register_fixed_factor(NULL, ff->name, ff->parent_name,
 				CLK_SET_RATE_PARENT, ff->mult, ff->div);
@@ -95,9 +94,10 @@ void __init mtk_clk_register_factors(const struct mtk_fixed_factor *clks,
 	}
 }
 
-int __init mtk_clk_register_gates(struct device_node *node,
+int mtk_clk_register_gates_with_dev(struct device_node *node,
 		const struct mtk_gate *clks,
-		int num, struct clk_onecell_data *clk_data)
+		int num, struct clk_onecell_data *clk_data,
+		struct device *dev)
 {
 	int i;
 	struct clk *clk;
@@ -108,7 +108,7 @@ int __init mtk_clk_register_gates(struct device_node *node,
 
 	regmap = syscon_node_to_regmap(node);
 	if (IS_ERR(regmap)) {
-		pr_err("Cannot find regmap for %s: %ld\n", node->full_name,
+		pr_err("Cannot find regmap for %pOF: %ld\n", node,
 				PTR_ERR(regmap));
 		return PTR_ERR(regmap);
 	}
@@ -116,12 +116,15 @@ int __init mtk_clk_register_gates(struct device_node *node,
 	for (i = 0; i < num; i++) {
 		const struct mtk_gate *gate = &clks[i];
 
+		if (!IS_ERR_OR_NULL(clk_data->clks[gate->id]))
+			continue;
+
 		clk = mtk_clk_register_gate(gate->name, gate->parent_name,
 				regmap,
 				gate->regs->set_ofs,
 				gate->regs->clr_ofs,
 				gate->regs->sta_ofs,
-				gate->shift, gate->ops);
+				gate->shift, gate->ops, gate->flags, dev);
 
 		if (IS_ERR(clk)) {
 			pr_err("Failed to register clk %s: %ld\n",
@@ -135,7 +138,15 @@ int __init mtk_clk_register_gates(struct device_node *node,
 	return 0;
 }
 
-struct clk * __init mtk_clk_register_composite(const struct mtk_composite *mc,
+int mtk_clk_register_gates(struct device_node *node,
+		const struct mtk_gate *clks,
+		int num, struct clk_onecell_data *clk_data)
+{
+	return mtk_clk_register_gates_with_dev(node,
+		clks, num, clk_data, NULL);
+}
+
+struct clk *mtk_clk_register_composite(const struct mtk_composite *mc,
 		void __iomem *base, spinlock_t *lock)
 {
 	struct clk *clk;
@@ -158,7 +169,7 @@ struct clk * __init mtk_clk_register_composite(const struct mtk_composite *mc,
 		mux->mask = BIT(mc->mux_width) - 1;
 		mux->shift = mc->mux_shift;
 		mux->lock = lock;
-
+		mux->flags = mc->mux_flags;
 		mux_hw = &mux->hw;
 		mux_ops = &clk_mux_ops;
 
@@ -222,7 +233,7 @@ err_out:
 	return ERR_PTR(ret);
 }
 
-void __init mtk_clk_register_composites(const struct mtk_composite *mcs,
+void mtk_clk_register_composites(const struct mtk_composite *mcs,
 		int num, void __iomem *base, spinlock_t *lock,
 		struct clk_onecell_data *clk_data)
 {
@@ -231,6 +242,9 @@ void __init mtk_clk_register_composites(const struct mtk_composite *mcs,
 
 	for (i = 0; i < num; i++) {
 		const struct mtk_composite *mc = &mcs[i];
+
+		if (clk_data && !IS_ERR_OR_NULL(clk_data->clks[mc->id]))
+			continue;
 
 		clk = mtk_clk_register_composite(mc, base, lock);
 
@@ -242,5 +256,33 @@ void __init mtk_clk_register_composites(const struct mtk_composite *mcs,
 
 		if (clk_data)
 			clk_data->clks[mc->id] = clk;
+	}
+}
+
+void mtk_clk_register_dividers(const struct mtk_clk_divider *mcds,
+			int num, void __iomem *base, spinlock_t *lock,
+				struct clk_onecell_data *clk_data)
+{
+	struct clk *clk;
+	int i;
+
+	for (i = 0; i <  num; i++) {
+		const struct mtk_clk_divider *mcd = &mcds[i];
+
+		if (clk_data && !IS_ERR_OR_NULL(clk_data->clks[mcd->id]))
+			continue;
+
+		clk = clk_register_divider(NULL, mcd->name, mcd->parent_name,
+			mcd->flags, base +  mcd->div_reg, mcd->div_shift,
+			mcd->div_width, mcd->clk_divider_flags, lock);
+
+		if (IS_ERR(clk)) {
+			pr_err("Failed to register clk %s: %ld\n",
+				mcd->name, PTR_ERR(clk));
+			continue;
+		}
+
+		if (clk_data)
+			clk_data->clks[mcd->id] = clk;
 	}
 }

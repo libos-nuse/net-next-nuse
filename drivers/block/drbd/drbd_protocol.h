@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __DRBD_PROTOCOL_H
 #define __DRBD_PROTOCOL_H
 
@@ -56,9 +57,23 @@ enum drbd_packet {
 	P_PROTOCOL_UPDATE     = 0x2d, /* data sock: is used in established connections */
         /* 0x2e to 0x30 reserved, used in drbd 9 */
 
-	/* REQ_DISCARD. We used "discard" in different contexts before,
+	/* REQ_OP_DISCARD. We used "discard" in different contexts before,
 	 * which is why I chose TRIM here, to disambiguate. */
 	P_TRIM                = 0x31,
+
+	/* Only use these two if both support FF_THIN_RESYNC */
+	P_RS_THIN_REQ         = 0x32, /* Request a block for resync or reply P_RS_DEALLOCATED */
+	P_RS_DEALLOCATED      = 0x33, /* Contains only zeros on sync source node */
+
+	/* REQ_WRITE_SAME.
+	 * On a receiving side without REQ_WRITE_SAME,
+	 * we may fall back to an opencoded loop instead. */
+	P_WSAME               = 0x34,
+
+	/* 0x35 already claimed in DRBD 9 */
+	P_ZEROES              = 0x36, /* data sock: zero-out, WRITE_ZEROES */
+
+	/* 0x40 .. 0x48 already claimed in DRBD 9 */
 
 	P_MAY_IGNORE	      = 0x100, /* Flag to test if (cmd > P_MAY_IGNORE) ... */
 	P_MAX_OPT_CMD	      = 0x101,
@@ -106,16 +121,26 @@ struct p_header100 {
 	u32	  pad;
 } __packed;
 
-/* these defines must not be changed without changing the protocol version */
-#define DP_HARDBARRIER	      1 /* depricated */
+/* These defines must not be changed without changing the protocol version.
+ * New defines may only be introduced together with protocol version bump or
+ * new protocol feature flags.
+ */
+#define DP_HARDBARRIER	      1 /* no longer used */
 #define DP_RW_SYNC	      2 /* equals REQ_SYNC    */
 #define DP_MAY_SET_IN_SYNC    4
 #define DP_UNPLUG             8 /* not used anymore   */
 #define DP_FUA               16 /* equals REQ_FUA     */
-#define DP_FLUSH             32 /* equals REQ_FLUSH   */
-#define DP_DISCARD           64 /* equals REQ_DISCARD */
+#define DP_FLUSH             32 /* equals REQ_PREFLUSH   */
+#define DP_DISCARD           64 /* equals REQ_OP_DISCARD */
 #define DP_SEND_RECEIVE_ACK 128 /* This is a proto B write request */
 #define DP_SEND_WRITE_ACK   256 /* This is a proto C write request */
+#define DP_WSAME            512 /* equiv. REQ_WRITE_SAME */
+#define DP_ZEROES          1024 /* equiv. REQ_OP_WRITE_ZEROES */
+
+/* possible combinations:
+ * REQ_OP_WRITE_ZEROES:  DP_DISCARD | DP_ZEROES
+ * REQ_OP_WRITE_ZEROES + REQ_NOUNMAP: DP_ZEROES
+ */
 
 struct p_data {
 	u64	    sector;    /* 64 bits sector number */
@@ -127,6 +152,11 @@ struct p_data {
 struct p_trim {
 	struct p_data p_data;
 	u32	    size;	/* == bio->bi_size */
+} __packed;
+
+struct p_wsame {
+	struct p_data p_data;
+	u32           size;     /* == bio->bi_size */
 } __packed;
 
 /*
@@ -160,7 +190,59 @@ struct p_block_req {
  *   ReportParams
  */
 
-#define FF_TRIM      1
+/* supports TRIM/DISCARD on the "wire" protocol */
+#define DRBD_FF_TRIM 1
+
+/* Detect all-zeros during resync, and rather TRIM/UNMAP/DISCARD those blocks
+ * instead of fully allocate a supposedly thin volume on initial resync */
+#define DRBD_FF_THIN_RESYNC 2
+
+/* supports REQ_WRITE_SAME on the "wire" protocol.
+ * Note: this flag is overloaded,
+ * its presence also
+ *   - indicates support for 128 MiB "batch bios",
+ *     max discard size of 128 MiB
+ *     instead of 4M before that.
+ *   - indicates that we exchange additional settings in p_sizes
+ *     drbd_send_sizes()/receive_sizes()
+ */
+#define DRBD_FF_WSAME 4
+
+/* supports REQ_OP_WRITE_ZEROES on the "wire" protocol.
+ *
+ * We used to map that to "discard" on the sending side, and if we cannot
+ * guarantee that discard zeroes data, the receiving side would map discard
+ * back to zero-out.
+ *
+ * With the introduction of REQ_OP_WRITE_ZEROES,
+ * we started to use that for both WRITE_ZEROES and DISCARDS,
+ * hoping that WRITE_ZEROES would "do what we want",
+ * UNMAP if possible, zero-out the rest.
+ *
+ * The example scenario is some LVM "thin" backend.
+ *
+ * While an un-allocated block on dm-thin reads as zeroes, on a dm-thin
+ * with "skip_block_zeroing=true", after a partial block write allocated
+ * that block, that same block may well map "undefined old garbage" from
+ * the backends on LBAs that have not yet been written to.
+ *
+ * If we cannot distinguish between zero-out and discard on the receiving
+ * side, to avoid "undefined old garbage" to pop up randomly at later times
+ * on supposedly zero-initialized blocks, we'd need to map all discards to
+ * zero-out on the receiving side.  But that would potentially do a full
+ * alloc on thinly provisioned backends, even when the expectation was to
+ * unmap/trim/discard/de-allocate.
+ *
+ * We need to distinguish on the protocol level, whether we need to guarantee
+ * zeroes (and thus use zero-out, potentially doing the mentioned full-alloc),
+ * or if we want to put the emphasis on discard, and only do a "best effort
+ * zeroing" (by "discarding" blocks aligned to discard-granularity, and zeroing
+ * only potential unaligned head and tail clippings), to at least *try* to
+ * avoid "false positives" in an online-verify later, hoping that someone
+ * set skip_block_zeroing=false.
+ */
+#define DRBD_FF_WZEROES 8
+
 
 struct p_connection_features {
 	u32 protocol_min;
@@ -189,7 +271,7 @@ struct p_rs_param {
 	u32 resync_rate;
 
 	      /* Since protocol version 88 and higher. */
-	char verify_alg[0];
+	char verify_alg[];
 } __packed;
 
 struct p_rs_param_89 {
@@ -223,7 +305,7 @@ struct p_protocol {
 	u32 two_primaries;
 
 	/* Since protocol version 87 and higher. */
-	char integrity_alg[0];
+	char integrity_alg[];
 
 } __packed;
 
@@ -235,6 +317,40 @@ struct p_rs_uuid {
 	u64	    uuid;
 } __packed;
 
+/* optional queue_limits if (agreed_features & DRBD_FF_WSAME)
+ * see also struct queue_limits, as of late 2015 */
+struct o_qlim {
+	/* we don't need it yet, but we may as well communicate it now */
+	u32 physical_block_size;
+
+	/* so the original in struct queue_limits is unsigned short,
+	 * but I'd have to put in padding anyways. */
+	u32 logical_block_size;
+
+	/* One incoming bio becomes one DRBD request,
+	 * which may be translated to several bio on the receiving side.
+	 * We don't need to communicate chunk/boundary/segment ... limits.
+	 */
+
+	/* various IO hints may be useful with "diskless client" setups */
+	u32 alignment_offset;
+	u32 io_min;
+	u32 io_opt;
+
+	/* We may need to communicate integrity stuff at some point,
+	 * but let's not get ahead of ourselves. */
+
+	/* Backend discard capabilities.
+	 * Receiving side uses "blkdev_issue_discard()", no need to communicate
+	 * more specifics.  If the backend cannot do discards, the DRBD peer
+	 * may fall back to blkdev_issue_zeroout().
+	 */
+	u8 discard_enabled;
+	u8 discard_zeroes_data;
+	u8 write_same_capable;
+	u8 _pad;
+} __packed;
+
 struct p_sizes {
 	u64	    d_size;  /* size of disk */
 	u64	    u_size;  /* user requested size */
@@ -242,6 +358,9 @@ struct p_sizes {
 	u32	    max_bio_size;  /* Maximal size of a BIO */
 	u16	    queue_order_type;  /* not yet implemented in DRBD*/
 	u16	    dds_flags; /* use enum dds_flags here. */
+
+	/* optional queue_limits if (agreed_features & DRBD_FF_WSAME) */
+	struct o_qlim qlim[];
 } __packed;
 
 struct p_state {
@@ -290,7 +409,7 @@ struct p_compressed_bm {
 	 */
 	u8 encoding;
 
-	u8 code[0];
+	u8 code[];
 } __packed;
 
 struct p_delay_probe93 {

@@ -1,7 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) ST-Ericsson SA 2010
  *
- * License Terms: GNU General Public License, version 2
  * Author: Rabin Vincent <rabin.vincent@stericsson.com> for ST-Ericsson
  */
 
@@ -9,6 +9,20 @@
 #define __LINUX_MFD_STMPE_H
 
 #include <linux/mutex.h>
+
+#define STMPE_SAMPLE_TIME(x)	((x & 0xf) << 4)
+#define STMPE_MOD_12B(x)	((x & 0x1) << 3)
+#define STMPE_REF_SEL(x)	((x & 0x1) << 1)
+#define STMPE_ADC_FREQ(x)	(x & 0x3)
+#define STMPE_AVE_CTRL(x)	((x & 0x3) << 6)
+#define STMPE_DET_DELAY(x)	((x & 0x7) << 3)
+#define STMPE_SETTLING(x)	(x & 0x7)
+#define STMPE_FRACTION_Z(x)	(x & 0x7)
+#define STMPE_I_DRIVE(x)	(x & 0x1)
+#define STMPE_OP_MODE(x)	((x & 0x7) << 1)
+
+#define STMPE811_REG_ADC_CTRL1	0x20
+#define STMPE811_REG_ADC_CTRL2	0x21
 
 struct device;
 struct regulator;
@@ -26,6 +40,7 @@ enum stmpe_partnum {
 	STMPE610,
 	STMPE801,
 	STMPE811,
+	STMPE1600,
 	STMPE1601,
 	STMPE1801,
 	STMPE2401,
@@ -39,22 +54,42 @@ enum stmpe_partnum {
  */
 enum {
 	STMPE_IDX_CHIP_ID,
+	STMPE_IDX_SYS_CTRL,
+	STMPE_IDX_SYS_CTRL2,
 	STMPE_IDX_ICR_LSB,
 	STMPE_IDX_IER_LSB,
+	STMPE_IDX_IER_MSB,
 	STMPE_IDX_ISR_LSB,
 	STMPE_IDX_ISR_MSB,
 	STMPE_IDX_GPMR_LSB,
+	STMPE_IDX_GPMR_CSB,
+	STMPE_IDX_GPMR_MSB,
 	STMPE_IDX_GPSR_LSB,
+	STMPE_IDX_GPSR_CSB,
+	STMPE_IDX_GPSR_MSB,
 	STMPE_IDX_GPCR_LSB,
+	STMPE_IDX_GPCR_CSB,
+	STMPE_IDX_GPCR_MSB,
 	STMPE_IDX_GPDR_LSB,
+	STMPE_IDX_GPDR_CSB,
+	STMPE_IDX_GPDR_MSB,
+	STMPE_IDX_GPEDR_LSB,
+	STMPE_IDX_GPEDR_CSB,
 	STMPE_IDX_GPEDR_MSB,
 	STMPE_IDX_GPRER_LSB,
+	STMPE_IDX_GPRER_CSB,
+	STMPE_IDX_GPRER_MSB,
 	STMPE_IDX_GPFER_LSB,
+	STMPE_IDX_GPFER_CSB,
+	STMPE_IDX_GPFER_MSB,
 	STMPE_IDX_GPPUR_LSB,
 	STMPE_IDX_GPPDR_LSB,
 	STMPE_IDX_GPAFR_U_MSB,
 	STMPE_IDX_IEGPIOR_LSB,
+	STMPE_IDX_IEGPIOR_CSB,
+	STMPE_IDX_IEGPIOR_MSB,
 	STMPE_IDX_ISGPIOR_LSB,
+	STMPE_IDX_ISGPIOR_CSB,
 	STMPE_IDX_ISGPIOR_MSB,
 	STMPE_IDX_MAX,
 };
@@ -62,6 +97,7 @@ enum {
 
 struct stmpe_variant_info;
 struct stmpe_client_info;
+struct stmpe_platform_data;
 
 /**
  * struct stmpe - STMPE MFD structure
@@ -101,6 +137,12 @@ struct stmpe {
 	u8 ier[2];
 	u8 oldier[2];
 	struct stmpe_platform_data *pdata;
+
+	/* For devices that use an ADC */
+	u8 sample_time;
+	u8 mod_12b;
+	u8 ref_sel;
+	u8 adc_freq;
 };
 
 extern int stmpe_reg_write(struct stmpe *stmpe, u8 reg, u8 data);
@@ -114,28 +156,8 @@ extern int stmpe_set_altfunc(struct stmpe *stmpe, u32 pins,
 			     enum stmpe_block block);
 extern int stmpe_enable(struct stmpe *stmpe, unsigned int blocks);
 extern int stmpe_disable(struct stmpe *stmpe, unsigned int blocks);
+extern int stmpe811_adc_common_init(struct stmpe *stmpe);
 
 #define STMPE_GPIO_NOREQ_811_TOUCH	(0xf0)
-
-/**
- * struct stmpe_platform_data - STMPE platform data
- * @id: device id to distinguish between multiple STMPEs on the same board
- * @blocks: bitmask of blocks to enable (use STMPE_BLOCK_*)
- * @irq_trigger: IRQ trigger to use for the interrupt to the host
- * @autosleep: bool to enable/disable stmpe autosleep
- * @autosleep_timeout: inactivity timeout in milliseconds for autosleep
- * @irq_over_gpio: true if gpio is used to get irq
- * @irq_gpio: gpio number over which irq will be requested (significant only if
- *	      irq_over_gpio is true)
- */
-struct stmpe_platform_data {
-	int id;
-	unsigned int blocks;
-	unsigned int irq_trigger;
-	bool autosleep;
-	bool irq_over_gpio;
-	int irq_gpio;
-	int autosleep_timeout;
-};
 
 #endif

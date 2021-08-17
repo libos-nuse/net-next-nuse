@@ -1,20 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * An implementation of file copy service.
  *
  * Copyright (C) 2014, Microsoft, Inc.
  *
  * Author : K. Y. Srinivasan <ksrinivasan@novell.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
- * NON INFRINGEMENT.  See the GNU General Public License for more
- * details.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -23,6 +13,7 @@
 #include <linux/workqueue.h>
 #include <linux/hyperv.h>
 #include <linux/sched.h>
+#include <asm/hyperv-tlfs.h>
 
 #include "hyperv_vmbus.h"
 #include "hv_utils_transport.h"
@@ -30,6 +21,16 @@
 #define WIN8_SRV_MAJOR		1
 #define WIN8_SRV_MINOR		1
 #define WIN8_SRV_VERSION	(WIN8_SRV_MAJOR << 16 | WIN8_SRV_MINOR)
+
+#define FCOPY_VER_COUNT 1
+static const int fcopy_versions[] = {
+	WIN8_SRV_VERSION
+};
+
+#define FW_VER_COUNT 1
+static const int fw_versions[] = {
+	UTIL_FW_VERSION
+};
 
 /*
  * Global state maintained for transaction that is being processed.
@@ -70,7 +71,7 @@ static void fcopy_poll_wrapper(void *channel)
 {
 	/* Transaction is finished, reset the state here to avoid races. */
 	fcopy_transaction.state = HVUTIL_READY;
-	hv_fcopy_onchannelcallback(channel);
+	tasklet_schedule(&((struct vmbus_channel *)channel)->callback_event);
 }
 
 static void fcopy_timeout_func(struct work_struct *dummy)
@@ -80,6 +81,12 @@ static void fcopy_timeout_func(struct work_struct *dummy)
 	 * process the pending transaction.
 	 */
 	fcopy_respond_to_host(HV_E_FAIL);
+	hv_poll_channel(fcopy_transaction.recv_channel, fcopy_poll_wrapper);
+}
+
+static void fcopy_register_done(void)
+{
+	pr_debug("FCP: userspace daemon registered\n");
 	hv_poll_channel(fcopy_transaction.recv_channel, fcopy_poll_wrapper);
 }
 
@@ -94,7 +101,8 @@ static int fcopy_handle_handshake(u32 version)
 		break;
 	case FCOPY_VERSION_1:
 		/* Daemon expects us to reply with our own version */
-		if (hvutil_transport_send(hvt, &our_ver, sizeof(our_ver)))
+		if (hvutil_transport_send(hvt, &our_ver, sizeof(our_ver),
+		    fcopy_register_done))
 			return -EFAULT;
 		dm_reg_value = version;
 		break;
@@ -107,8 +115,7 @@ static int fcopy_handle_handshake(u32 version)
 		 */
 		return -EINVAL;
 	}
-	pr_debug("FCP: userspace daemon ver. %d registered\n", version);
-	hv_poll_channel(fcopy_transaction.recv_channel, fcopy_poll_wrapper);
+	pr_debug("FCP: userspace daemon ver. %d connected\n", version);
 	return 0;
 }
 
@@ -154,6 +161,10 @@ static void fcopy_send_data(struct work_struct *dummy)
 		out_src = smsg_out;
 		break;
 
+	case WRITE_TO_FILE:
+		out_src = fcopy_transaction.fcopy_msg;
+		out_len = sizeof(struct hv_do_fcopy);
+		break;
 	default:
 		out_src = fcopy_transaction.fcopy_msg;
 		out_len = fcopy_transaction.recv_len;
@@ -161,7 +172,7 @@ static void fcopy_send_data(struct work_struct *dummy)
 	}
 
 	fcopy_transaction.state = HVUTIL_USERSPACE_REQ;
-	rc = hvutil_transport_send(hvt, out_src, out_len);
+	rc = hvutil_transport_send(hvt, out_src, out_len, NULL);
 	if (rc) {
 		pr_debug("FCP: failed to communicate to the daemon: %d\n", rc);
 		if (cancel_delayed_work_sync(&fcopy_timeout_work)) {
@@ -170,8 +181,6 @@ static void fcopy_send_data(struct work_struct *dummy)
 		}
 	}
 	kfree(smsg_out);
-
-	return;
 }
 
 /*
@@ -221,14 +230,12 @@ void hv_fcopy_onchannelcallback(void *context)
 	u64 requestid;
 	struct hv_fcopy_hdr *fcopy_msg;
 	struct icmsg_hdr *icmsghdr;
-	struct icmsg_negotiate *negop = NULL;
-	int util_fw_version;
 	int fcopy_srv_version;
 
 	if (fcopy_transaction.state > HVUTIL_READY)
 		return;
 
-	vmbus_recvpacket(channel, recv_buffer, PAGE_SIZE * 2, &recvlen,
+	vmbus_recvpacket(channel, recv_buffer, HV_HYP_PAGE_SIZE * 2, &recvlen,
 			 &requestid);
 	if (recvlen <= 0)
 		return;
@@ -236,10 +243,15 @@ void hv_fcopy_onchannelcallback(void *context)
 	icmsghdr = (struct icmsg_hdr *)&recv_buffer[
 			sizeof(struct vmbuspipe_hdr)];
 	if (icmsghdr->icmsgtype == ICMSGTYPE_NEGOTIATE) {
-		util_fw_version = UTIL_FW_VERSION;
-		fcopy_srv_version = WIN8_SRV_VERSION;
-		vmbus_prep_negotiate_resp(icmsghdr, negop, recv_buffer,
-				util_fw_version, fcopy_srv_version);
+		if (vmbus_prep_negotiate_resp(icmsghdr, recv_buffer,
+				fw_versions, FW_VER_COUNT,
+				fcopy_versions, FCOPY_VER_COUNT,
+				NULL, &fcopy_srv_version)) {
+
+			pr_info("FCopy IC version %d.%d\n",
+				fcopy_srv_version >> 16,
+				fcopy_srv_version & 0xFFFF);
+		}
 	} else {
 		fcopy_msg = (struct hv_fcopy_hdr *)&recv_buffer[
 				sizeof(struct vmbuspipe_hdr) +
@@ -334,9 +346,61 @@ int hv_fcopy_init(struct hv_util_service *srv)
 	return 0;
 }
 
+static void hv_fcopy_cancel_work(void)
+{
+	cancel_delayed_work_sync(&fcopy_timeout_work);
+	cancel_work_sync(&fcopy_send_work);
+}
+
+int hv_fcopy_pre_suspend(void)
+{
+	struct vmbus_channel *channel = fcopy_transaction.recv_channel;
+	struct hv_fcopy_hdr *fcopy_msg;
+
+	/*
+	 * Fake a CANCEL_FCOPY message for the user space daemon in case the
+	 * daemon is in the middle of copying some file. It doesn't matter if
+	 * there is already a message pending to be delivered to the user
+	 * space since we force fcopy_transaction.state to be HVUTIL_READY, so
+	 * the user space daemon's write() will fail with EINVAL (see
+	 * fcopy_on_msg()), and the daemon will reset the device by closing
+	 * and re-opening it.
+	 */
+	fcopy_msg = kzalloc(sizeof(*fcopy_msg), GFP_KERNEL);
+	if (!fcopy_msg)
+		return -ENOMEM;
+
+	tasklet_disable(&channel->callback_event);
+
+	fcopy_msg->operation = CANCEL_FCOPY;
+
+	hv_fcopy_cancel_work();
+
+	/* We don't care about the return value. */
+	hvutil_transport_send(hvt, fcopy_msg, sizeof(*fcopy_msg), NULL);
+
+	kfree(fcopy_msg);
+
+	fcopy_transaction.state = HVUTIL_READY;
+
+	/* tasklet_enable() will be called in hv_fcopy_pre_resume(). */
+	return 0;
+}
+
+int hv_fcopy_pre_resume(void)
+{
+	struct vmbus_channel *channel = fcopy_transaction.recv_channel;
+
+	tasklet_enable(&channel->callback_event);
+
+	return 0;
+}
+
 void hv_fcopy_deinit(void)
 {
 	fcopy_transaction.state = HVUTIL_DEVICE_DYING;
-	cancel_delayed_work_sync(&fcopy_timeout_work);
+
+	hv_fcopy_cancel_work();
+
 	hvutil_transport_destroy(hvt);
 }

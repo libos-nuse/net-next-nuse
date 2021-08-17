@@ -1,21 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2014 Chen-Yu Tsai
  * Author: Chen-Yu Tsai <wens@csie.org>
  *
  * Allwinner A23 APB0 clock driver
  *
- * License Terms: GNU General Public License v2
- *
  * Based on clk-sun6i-apb0.c
  * Allwinner A31 APB0 clock driver
  *
  * Copyright (C) 2014 Free Electrons
  * Author: Boris BREZILLON <boris.brezillon@free-electrons.com>
- *
  */
 
 #include <linux/clk-provider.h>
-#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
@@ -82,8 +81,8 @@ err_unmap:
 	of_address_to_resource(node, 0, &res);
 	release_mem_region(res.start, resource_size(&res));
 }
-CLK_OF_DECLARE(sun8i_a23_apb0, "allwinner,sun8i-a23-apb0-clk",
-	       sun8i_a23_apb0_setup);
+CLK_OF_DECLARE_DRIVER(sun8i_a23_apb0, "allwinner,sun8i-a23-apb0-clk",
+		      sun8i_a23_apb0_setup);
 
 static int sun8i_a23_apb0_clk_probe(struct platform_device *pdev)
 {
@@ -98,17 +97,13 @@ static int sun8i_a23_apb0_clk_probe(struct platform_device *pdev)
 		return PTR_ERR(reg);
 
 	clk = sun8i_a23_apb0_register(np, reg);
-	if (IS_ERR(clk))
-		return PTR_ERR(clk);
-
-	return 0;
+	return PTR_ERR_OR_ZERO(clk);
 }
 
 static const struct of_device_id sun8i_a23_apb0_clk_dt_ids[] = {
 	{ .compatible = "allwinner,sun8i-a23-apb0-clk" },
 	{ /* sentinel */ }
 };
-MODULE_DEVICE_TABLE(of, sun8i_a23_apb0_clk_dt_ids);
 
 static struct platform_driver sun8i_a23_apb0_clk_driver = {
 	.driver = {
@@ -117,8 +112,4 @@ static struct platform_driver sun8i_a23_apb0_clk_driver = {
 	},
 	.probe = sun8i_a23_apb0_clk_probe,
 };
-module_platform_driver(sun8i_a23_apb0_clk_driver);
-
-MODULE_AUTHOR("Chen-Yu Tsai <wens@csie.org>");
-MODULE_DESCRIPTION("Allwinner A23 APB0 clock Driver");
-MODULE_LICENSE("GPL v2");
+builtin_platform_driver(sun8i_a23_apb0_clk_driver);

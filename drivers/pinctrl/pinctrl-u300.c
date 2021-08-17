@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for the U300 pin controller
  *
@@ -13,6 +14,7 @@
  */
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/slab.h>
@@ -670,7 +672,7 @@ struct u300_pmx {
  * u300_pmx_registers - the array of registers read/written for each pinmux
  * shunt setting
  */
-const u32 u300_pmx_registers[] = {
+static const u32 u300_pmx_registers[] = {
 	U300_SYSCON_PMC1LR,
 	U300_SYSCON_PMC1HR,
 	U300_SYSCON_PMC2R,
@@ -1053,7 +1055,6 @@ static struct pinctrl_desc u300_pmx_desc = {
 static int u300_pmx_probe(struct platform_device *pdev)
 {
 	struct u300_pmx *upmx;
-	struct resource *res;
 
 	/* Create state holders etc for this driver */
 	upmx = devm_kzalloc(&pdev->dev, sizeof(*upmx), GFP_KERNEL);
@@ -1062,8 +1063,7 @@ static int u300_pmx_probe(struct platform_device *pdev)
 
 	upmx->dev = &pdev->dev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	upmx->virtbase = devm_ioremap_resource(&pdev->dev, res);
+	upmx->virtbase = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(upmx->virtbase))
 		return PTR_ERR(upmx->virtbase);
 

@@ -1,22 +1,5 @@
-/* Intel(R) Ethernet Switch Host Interface Driver
- * Copyright(c) 2013 - 2016 Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * The full GNU General Public License is included in this distribution in
- * the file called "COPYING".
- *
- * Contact Information:
- * e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
- * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
- */
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright(c) 2013 - 2019 Intel Corporation. */
 
 #include "fm10k_pf.h"
 #include "fm10k_vf.h"
@@ -51,21 +34,21 @@ static s32 fm10k_reset_hw_pf(struct fm10k_hw *hw)
 
 	/* shut down all rings */
 	err = fm10k_disable_queues_generic(hw, FM10K_MAX_QUEUES);
-	if (err)
+	if (err == FM10K_ERR_REQUESTS_PENDING) {
+		hw->mac.reset_while_pending++;
+		goto force_reset;
+	} else if (err) {
 		return err;
+	}
 
 	/* Verify that DMA is no longer active */
 	reg = fm10k_read_reg(hw, FM10K_DMA_CTRL);
 	if (reg & (FM10K_DMA_CTRL_TX_ACTIVE | FM10K_DMA_CTRL_RX_ACTIVE))
 		return FM10K_ERR_DMA_PENDING;
 
-	/* verify the switch is ready for reset */
-	reg = fm10k_read_reg(hw, FM10K_DMA_CTRL2);
-	if (!(reg & FM10K_DMA_CTRL2_SWITCH_READY))
-		goto out;
-
+force_reset:
 	/* Inititate data path reset */
-	reg |= FM10K_DMA_CTRL_DATAPATH_RESET;
+	reg = FM10K_DMA_CTRL_DATAPATH_RESET;
 	fm10k_write_reg(hw, FM10K_DMA_CTRL, reg);
 
 	/* Flush write and allow 100us for reset to complete */
@@ -75,10 +58,9 @@ static s32 fm10k_reset_hw_pf(struct fm10k_hw *hw)
 	/* Verify we made it out of reset */
 	reg = fm10k_read_reg(hw, FM10K_IP);
 	if (!(reg & FM10K_IP_NOTINRESET))
-		err = FM10K_ERR_RESET_FAILED;
+		return FM10K_ERR_RESET_FAILED;
 
-out:
-	return err;
+	return 0;
 }
 
 /**
@@ -864,14 +846,10 @@ static s32 fm10k_iov_assign_default_mac_vlan_pf(struct fm10k_hw *hw,
 	vf_q_idx = fm10k_vf_queue_index(hw, vf_idx);
 	qmap_idx = qmap_stride * vf_idx;
 
-	/* MAP Tx queue back to 0 temporarily, and disable it */
-	fm10k_write_reg(hw, FM10K_TQMAP(qmap_idx), 0);
-	fm10k_write_reg(hw, FM10K_TXDCTL(vf_q_idx), 0);
-
 	/* Determine correct default VLAN ID. The FM10K_VLAN_OVERRIDE bit is
 	 * used here to indicate to the VF that it will not have privilege to
 	 * write VLAN_TABLE. All policy is enforced on the PF but this allows
-	 * the VF to correctly report errors to userspace rqeuests.
+	 * the VF to correctly report errors to userspace requests.
 	 */
 	if (vf_info->pf_vid)
 		vf_vid = vf_info->pf_vid | FM10K_VLAN_OVERRIDE;
@@ -883,9 +861,35 @@ static s32 fm10k_iov_assign_default_mac_vlan_pf(struct fm10k_hw *hw,
 	fm10k_tlv_attr_put_mac_vlan(msg, FM10K_MAC_VLAN_MSG_DEFAULT_MAC,
 				    vf_info->mac, vf_vid);
 
-	/* load onto outgoing mailbox, ignore any errors on enqueue */
-	if (vf_info->mbx.ops.enqueue_tx)
-		vf_info->mbx.ops.enqueue_tx(hw, &vf_info->mbx, msg);
+	/* Configure Queue control register with new VLAN ID. The TXQCTL
+	 * register is RO from the VF, so the PF must do this even in the
+	 * case of notifying the VF of a new VID via the mailbox.
+	 */
+	txqctl = ((u32)vf_vid << FM10K_TXQCTL_VID_SHIFT) &
+		 FM10K_TXQCTL_VID_MASK;
+	txqctl |= (vf_idx << FM10K_TXQCTL_TC_SHIFT) |
+		  FM10K_TXQCTL_VF | vf_idx;
+
+	for (i = 0; i < queues_per_pool; i++)
+		fm10k_write_reg(hw, FM10K_TXQCTL(vf_q_idx + i), txqctl);
+
+	/* try loading a message onto outgoing mailbox first */
+	if (vf_info->mbx.ops.enqueue_tx) {
+		err = vf_info->mbx.ops.enqueue_tx(hw, &vf_info->mbx, msg);
+		if (err != FM10K_MBX_ERR_NO_MBX)
+			return err;
+		err = 0;
+	}
+
+	/* If we aren't connected to a mailbox, this is most likely because
+	 * the VF driver is not running. It should thus be safe to re-map
+	 * queues and use the registers to pass the MAC address so that the VF
+	 * driver gets correct information during its initialization.
+	 */
+
+	/* MAP Tx queue back to 0 temporarily, and disable it */
+	fm10k_write_reg(hw, FM10K_TQMAP(qmap_idx), 0);
+	fm10k_write_reg(hw, FM10K_TXDCTL(vf_q_idx), 0);
 
 	/* verify ring has disabled before modifying base address registers */
 	txdctl = fm10k_read_reg(hw, FM10K_TXDCTL(vf_q_idx));
@@ -924,16 +928,6 @@ static s32 fm10k_iov_assign_default_mac_vlan_pf(struct fm10k_hw *hw,
 						   FM10K_TDLEN_ITR_SCALE_SHIFT);
 
 err_out:
-	/* configure Queue control register */
-	txqctl = ((u32)vf_vid << FM10K_TXQCTL_VID_SHIFT) &
-		 FM10K_TXQCTL_VID_MASK;
-	txqctl |= (vf_idx << FM10K_TXQCTL_TC_SHIFT) |
-		  FM10K_TXQCTL_VF | vf_idx;
-
-	/* assign VLAN ID */
-	for (i = 0; i < queues_per_pool; i++)
-		fm10k_write_reg(hw, FM10K_TXQCTL(vf_q_idx + i), txqctl);
-
 	/* restore the queue back to VF ownership */
 	fm10k_write_reg(hw, FM10K_TQMAP(qmap_idx), vf_q_idx);
 	return err;
@@ -1154,11 +1148,11 @@ static void fm10k_iov_update_stats_pf(struct fm10k_hw *hw,
  *  @results: Pointer array to message, results[0] is pointer to message
  *  @mbx: Pointer to mailbox information structure
  *
- *  This function is a default handler for MSI-X requests from the VF.  The
+ *  This function is a default handler for MSI-X requests from the VF. The
  *  assumption is that in this case it is acceptable to just directly
  *  hand off the message from the VF to the underlying shared code.
  **/
-s32 fm10k_iov_msg_msix_pf(struct fm10k_hw *hw, u32 **results,
+s32 fm10k_iov_msg_msix_pf(struct fm10k_hw *hw, u32 __always_unused **results,
 			  struct fm10k_mbx_info *mbx)
 {
 	struct fm10k_vf_info *vf_info = (struct fm10k_vf_info *)mbx;
@@ -1169,13 +1163,13 @@ s32 fm10k_iov_msg_msix_pf(struct fm10k_hw *hw, u32 **results,
 
 /**
  * fm10k_iov_select_vid - Select correct default VLAN ID
- * @hw: Pointer to hardware structure
+ * @vf_info: pointer to VF information structure
  * @vid: VLAN ID to correct
  *
  * Will report an error if the VLAN ID is out of range. For VID = 0, it will
  * return either the pf_vid or sw_vid depending on which one is set.
  */
-static s32 fm10k_iov_select_vid(struct fm10k_vf_info *vf_info, u16 vid)
+s32 fm10k_iov_select_vid(struct fm10k_vf_info *vf_info, u16 vid)
 {
 	if (!vid)
 		return vf_info->pf_vid ? vf_info->pf_vid : vf_info->sw_vid;
@@ -1323,19 +1317,19 @@ static u8 fm10k_iov_supported_xcast_mode_pf(struct fm10k_vf_info *vf_info,
 	case FM10K_XCAST_MODE_PROMISC:
 		if (vf_flags & FM10K_VF_FLAG_PROMISC_CAPABLE)
 			return FM10K_XCAST_MODE_PROMISC;
-		/* fallthough */
+		fallthrough;
 	case FM10K_XCAST_MODE_ALLMULTI:
 		if (vf_flags & FM10K_VF_FLAG_ALLMULTI_CAPABLE)
 			return FM10K_XCAST_MODE_ALLMULTI;
-		/* fallthough */
+		fallthrough;
 	case FM10K_XCAST_MODE_MULTI:
 		if (vf_flags & FM10K_VF_FLAG_MULTI_CAPABLE)
 			return FM10K_XCAST_MODE_MULTI;
-		/* fallthough */
+		fallthrough;
 	case FM10K_XCAST_MODE_NONE:
 		if (vf_flags & FM10K_VF_FLAG_NONE_CAPABLE)
 			return FM10K_XCAST_MODE_NONE;
-		/* fallthough */
+		fallthrough;
 	default:
 		break;
 	}
@@ -1358,7 +1352,6 @@ s32 fm10k_iov_msg_lport_state_pf(struct fm10k_hw *hw, u32 **results,
 				 struct fm10k_mbx_info *mbx)
 {
 	struct fm10k_vf_info *vf_info = (struct fm10k_vf_info *)mbx;
-	u32 *result;
 	s32 err = 0;
 	u32 msg[2];
 	u8 mode = 0;
@@ -1368,7 +1361,7 @@ s32 fm10k_iov_msg_lport_state_pf(struct fm10k_hw *hw, u32 **results,
 		return FM10K_ERR_PARAM;
 
 	if (!!results[FM10K_LPORT_STATE_MSG_XCAST_MODE]) {
-		result = results[FM10K_LPORT_STATE_MSG_XCAST_MODE];
+		u32 *result = results[FM10K_LPORT_STATE_MSG_XCAST_MODE];
 
 		/* XCAST mode update requested */
 		err = fm10k_tlv_attr_get_u8(result, &mode);
@@ -1572,7 +1565,7 @@ static s32 fm10k_get_fault_pf(struct fm10k_hw *hw, int type,
 	/* read remaining fields */
 	fault->address = fm10k_read_reg(hw, type + FM10K_FAULT_ADDR_HI);
 	fault->address <<= 32;
-	fault->address = fm10k_read_reg(hw, type + FM10K_FAULT_ADDR_LO);
+	fault->address |= fm10k_read_reg(hw, type + FM10K_FAULT_ADDR_LO);
 	fault->specinfo = fm10k_read_reg(hw, type + FM10K_FAULT_SPECINFO);
 
 	/* clear valid bit to allow for next error */
@@ -1619,25 +1612,15 @@ static s32 fm10k_request_lport_map_pf(struct fm10k_hw *hw)
  **/
 static s32 fm10k_get_host_state_pf(struct fm10k_hw *hw, bool *switch_ready)
 {
-	s32 ret_val = 0;
 	u32 dma_ctrl2;
 
 	/* verify the switch is ready for interaction */
 	dma_ctrl2 = fm10k_read_reg(hw, FM10K_DMA_CTRL2);
 	if (!(dma_ctrl2 & FM10K_DMA_CTRL2_SWITCH_READY))
-		goto out;
+		return 0;
 
 	/* retrieve generic host state info */
-	ret_val = fm10k_get_host_state_generic(hw, switch_ready);
-	if (ret_val)
-		goto out;
-
-	/* interface cannot receive traffic without logical ports */
-	if (hw->mac.dglort_map == FM10K_DGLORTMAP_NONE)
-		ret_val = fm10k_request_lport_map_pf(hw);
-
-out:
-	return ret_val;
+	return fm10k_get_host_state_generic(hw, switch_ready);
 }
 
 /* This structure defines the attibutes to be parsed below */
@@ -1658,7 +1641,7 @@ const struct fm10k_tlv_attr fm10k_lport_map_msg_attr[] = {
  *  switch API.
  **/
 s32 fm10k_msg_lport_map_pf(struct fm10k_hw *hw, u32 **results,
-			   struct fm10k_mbx_info *mbx)
+			   struct fm10k_mbx_info __always_unused *mbx)
 {
 	u16 glort, mask;
 	u32 dglort_map;
@@ -1701,7 +1684,7 @@ const struct fm10k_tlv_attr fm10k_update_pvid_msg_attr[] = {
  *  This handler configures the default VLAN for the PF
  **/
 static s32 fm10k_msg_update_pvid_pf(struct fm10k_hw *hw, u32 **results,
-				    struct fm10k_mbx_info *mbx)
+				    struct fm10k_mbx_info __always_unused *mbx)
 {
 	u16 glort, pvid;
 	u32 pvid_update;
@@ -1762,7 +1745,7 @@ const struct fm10k_tlv_attr fm10k_err_msg_attr[] = {
  *  messages that the PF has sent.
  **/
 s32 fm10k_msg_err_pf(struct fm10k_hw *hw, u32 **results,
-		     struct fm10k_mbx_info *mbx)
+		     struct fm10k_mbx_info __always_unused *mbx)
 {
 	struct fm10k_swapi_error err_msg;
 	s32 err;
@@ -1813,6 +1796,7 @@ static const struct fm10k_mac_ops mac_ops_pf = {
 	.set_dma_mask		= fm10k_set_dma_mask_pf,
 	.get_fault		= fm10k_get_fault_pf,
 	.get_host_state		= fm10k_get_host_state_pf,
+	.request_lport_map	= fm10k_request_lport_map_pf,
 };
 
 static const struct fm10k_iov_ops iov_ops_pf = {

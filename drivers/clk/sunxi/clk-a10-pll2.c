@@ -1,22 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2013 Emilio López
  * Emilio López <emilio@elopez.com.ar>
  *
  * Copyright 2015 Maxime Ripard
  * Maxime Ripard <maxime.ripard@free-electrons.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/slab.h>
@@ -73,7 +65,7 @@ static void __init sun4i_pll2_setup(struct device_node *node,
 					  SUN4I_PLL2_PRE_DIV_WIDTH,
 					  CLK_DIVIDER_ONE_BASED | CLK_DIVIDER_ALLOW_ZERO,
 					  &sun4i_a10_pll2_lock);
-	if (!prediv_clk) {
+	if (IS_ERR(prediv_clk)) {
 		pr_err("Couldn't register the prediv clock\n");
 		goto err_free_array;
 	}
@@ -106,7 +98,7 @@ static void __init sun4i_pll2_setup(struct device_node *node,
 					  &mult->hw, &clk_multiplier_ops,
 					  &gate->hw, &clk_gate_ops,
 					  CLK_SET_RATE_PARENT);
-	if (!base_clk) {
+	if (IS_ERR(base_clk)) {
 		pr_err("Couldn't register the base multiplier clock\n");
 		goto err_free_multiplier;
 	}

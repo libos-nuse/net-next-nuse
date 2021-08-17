@@ -1,28 +1,12 @@
-/*
- * max8998.c - mfd core driver for the Maxim 8998
- *
- *  Copyright (C) 2009-2010 Samsung Electronics
- *  Kyungmin Park <kyungmin.park@samsung.com>
- *  Marek Szyprowski <m.szyprowski@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// max8998.c - mfd core driver for the Maxim 8998
+//
+//  Copyright (C) 2009-2010 Samsung Electronics
+//  Kyungmin Park <kyungmin.park@samsung.com>
+//  Marek Szyprowski <m.szyprowski@samsung.com>
 
 #include <linux/err.h>
-#include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
@@ -138,7 +122,6 @@ static const struct of_device_id max8998_dt_match[] = {
 	{ .compatible = "ti,lp3974", .data = (void *)TYPE_LP3974 },
 	{},
 };
-MODULE_DEVICE_TABLE(of, max8998_dt_match);
 #endif
 
 /*
@@ -195,10 +178,8 @@ static int max8998_i2c_probe(struct i2c_client *i2c,
 
 	if (IS_ENABLED(CONFIG_OF) && i2c->dev.of_node) {
 		pdata = max8998_i2c_parse_dt_pdata(&i2c->dev);
-		if (IS_ERR(pdata)) {
-			ret = PTR_ERR(pdata);
-			goto err;
-		}
+		if (IS_ERR(pdata))
+			return PTR_ERR(pdata);
 	}
 
 	i2c_set_clientdata(i2c, max8998);
@@ -214,10 +195,10 @@ static int max8998_i2c_probe(struct i2c_client *i2c,
 	}
 	mutex_init(&max8998->iolock);
 
-	max8998->rtc = i2c_new_dummy(i2c->adapter, RTC_I2C_ADDR);
-	if (!max8998->rtc) {
+	max8998->rtc = i2c_new_dummy_device(i2c->adapter, RTC_I2C_ADDR);
+	if (IS_ERR(max8998->rtc)) {
 		dev_err(&i2c->dev, "Failed to allocate I2C device for RTC\n");
-		return -ENODEV;
+		return PTR_ERR(max8998->rtc);
 	}
 	i2c_set_clientdata(max8998->rtc, max8998);
 
@@ -254,23 +235,11 @@ err:
 	return ret;
 }
 
-static int max8998_i2c_remove(struct i2c_client *i2c)
-{
-	struct max8998_dev *max8998 = i2c_get_clientdata(i2c);
-
-	mfd_remove_devices(max8998->dev);
-	max8998_irq_exit(max8998);
-	i2c_unregister_device(max8998->rtc);
-
-	return 0;
-}
-
 static const struct i2c_device_id max8998_i2c_id[] = {
 	{ "max8998", TYPE_MAX8998 },
 	{ "lp3974", TYPE_LP3974},
 	{ }
 };
-MODULE_DEVICE_TABLE(i2c, max8998_i2c_id);
 
 static int max8998_suspend(struct device *dev)
 {
@@ -378,10 +347,10 @@ static struct i2c_driver max8998_i2c_driver = {
 	.driver = {
 		   .name = "max8998",
 		   .pm = &max8998_pm,
+		   .suppress_bind_attrs = true,
 		   .of_match_table = of_match_ptr(max8998_dt_match),
 	},
 	.probe = max8998_i2c_probe,
-	.remove = max8998_i2c_remove,
 	.id_table = max8998_i2c_id,
 };
 
@@ -391,13 +360,3 @@ static int __init max8998_i2c_init(void)
 }
 /* init early so consumer devices can complete system boot */
 subsys_initcall(max8998_i2c_init);
-
-static void __exit max8998_i2c_exit(void)
-{
-	i2c_del_driver(&max8998_i2c_driver);
-}
-module_exit(max8998_i2c_exit);
-
-MODULE_DESCRIPTION("MAXIM 8998 multi-function core driver");
-MODULE_AUTHOR("Kyungmin Park <kyungmin.park@samsung.com>");
-MODULE_LICENSE("GPL");

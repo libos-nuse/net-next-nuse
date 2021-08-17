@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * dm355evm_msp.c - driver for MSP430 firmware on DM355EVM board
  *
  * Copyright (C) 2008 David Brownell
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/init.h>
@@ -16,9 +12,10 @@
 #include <linux/module.h>
 #include <linux/err.h>
 #include <linux/gpio.h>
+#include <linux/gpio/machine.h>
 #include <linux/leds.h>
 #include <linux/i2c.h>
-#include <linux/i2c/dm355evm_msp.h>
+#include <linux/mfd/dm355evm_msp.h>
 
 
 /*
@@ -120,6 +117,54 @@ static const u8 msp_gpios[] = {
 	MSP_GPIO(4, SDMMC), MSP_GPIO(3, SDMMC),	/* mmc1 WP, nCD */
 };
 
+static struct gpio_led evm_leds[] = {
+	{ .name = "dm355evm::ds14",
+	  .default_trigger = "heartbeat", },
+	{ .name = "dm355evm::ds15",
+	  .default_trigger = "mmc0", },
+	{ .name = "dm355evm::ds16",
+	  /* could also be a CE-ATA drive */
+	  .default_trigger = "mmc1", },
+	{ .name = "dm355evm::ds17",
+	  .default_trigger = "nand-disk", },
+	{ .name = "dm355evm::ds18", },
+	{ .name = "dm355evm::ds19", },
+	{ .name = "dm355evm::ds20", },
+	{ .name = "dm355evm::ds21", },
+};
+
+static struct gpio_led_platform_data evm_led_data = {
+	.num_leds	= ARRAY_SIZE(evm_leds),
+	.leds		= evm_leds,
+};
+
+static struct gpiod_lookup_table evm_leds_gpio_table = {
+	.dev_id = "leds-gpio",
+	.table = {
+		/*
+		 * These GPIOs are on the dm355evm_msp
+		 * GPIO chip at index 0..7
+		 */
+		GPIO_LOOKUP_IDX("dm355evm_msp", 0, NULL,
+				0, GPIO_ACTIVE_LOW),
+		GPIO_LOOKUP_IDX("dm355evm_msp", 1, NULL,
+				1, GPIO_ACTIVE_LOW),
+		GPIO_LOOKUP_IDX("dm355evm_msp", 2, NULL,
+				2, GPIO_ACTIVE_LOW),
+		GPIO_LOOKUP_IDX("dm355evm_msp", 3, NULL,
+				3, GPIO_ACTIVE_LOW),
+		GPIO_LOOKUP_IDX("dm355evm_msp", 4, NULL,
+				4, GPIO_ACTIVE_LOW),
+		GPIO_LOOKUP_IDX("dm355evm_msp", 5, NULL,
+				5, GPIO_ACTIVE_LOW),
+		GPIO_LOOKUP_IDX("dm355evm_msp", 6, NULL,
+				6, GPIO_ACTIVE_LOW),
+		GPIO_LOOKUP_IDX("dm355evm_msp", 7, NULL,
+				7, GPIO_ACTIVE_LOW),
+		{ },
+	},
+};
+
 #define MSP_GPIO_REG(offset)	(msp_gpios[(offset)] >> 3)
 #define MSP_GPIO_MASK(offset)	BIT(msp_gpios[(offset)] & 0x07)
 
@@ -199,11 +244,8 @@ static struct device *add_child(struct i2c_client *client, const char *name,
 	int			status;
 
 	pdev = platform_device_alloc(name, -1);
-	if (!pdev) {
-		dev_dbg(&client->dev, "can't alloc dev\n");
-		status = -ENOMEM;
-		goto err;
-	}
+	if (!pdev)
+		return ERR_PTR(-ENOMEM);
 
 	device_init_wakeup(&pdev->dev, can_wakeup);
 	pdev->dev.parent = &client->dev;
@@ -212,7 +254,7 @@ static struct device *add_child(struct i2c_client *client, const char *name,
 		status = platform_device_add_data(pdev, pdata, pdata_len);
 		if (status < 0) {
 			dev_dbg(&pdev->dev, "can't add platform_data\n");
-			goto err;
+			goto put_device;
 		}
 	}
 
@@ -225,19 +267,20 @@ static struct device *add_child(struct i2c_client *client, const char *name,
 		status = platform_device_add_resources(pdev, &r, 1);
 		if (status < 0) {
 			dev_dbg(&pdev->dev, "can't add irq\n");
-			goto err;
+			goto put_device;
 		}
 	}
 
 	status = platform_device_add(pdev);
+	if (status)
+		goto put_device;
 
-err:
-	if (status < 0) {
-		platform_device_put(pdev);
-		dev_err(&client->dev, "can't add %s dev\n", name);
-		return ERR_PTR(status);
-	}
 	return &pdev->dev;
+
+put_device:
+	platform_device_put(pdev);
+	dev_err(&client->dev, "failed to add device %s\n", name);
+	return ERR_PTR(status);
 }
 
 static int add_children(struct i2c_client *client)
@@ -266,32 +309,7 @@ static int add_children(struct i2c_client *client)
 
 	/* LED output */
 	if (msp_has_leds()) {
-#define GPIO_LED(l)	.name = l, .active_low = true
-		static struct gpio_led evm_leds[] = {
-			{ GPIO_LED("dm355evm::ds14"),
-				.default_trigger = "heartbeat", },
-			{ GPIO_LED("dm355evm::ds15"),
-				.default_trigger = "mmc0", },
-			{ GPIO_LED("dm355evm::ds16"),
-				/* could also be a CE-ATA drive */
-				.default_trigger = "mmc1", },
-			{ GPIO_LED("dm355evm::ds17"),
-				.default_trigger = "nand-disk", },
-			{ GPIO_LED("dm355evm::ds18"), },
-			{ GPIO_LED("dm355evm::ds19"), },
-			{ GPIO_LED("dm355evm::ds20"), },
-			{ GPIO_LED("dm355evm::ds21"), },
-		};
-#undef GPIO_LED
-
-		struct gpio_led_platform_data evm_led_data = {
-			.num_leds	= ARRAY_SIZE(evm_leds),
-			.leds		= evm_leds,
-		};
-
-		for (i = 0; i < ARRAY_SIZE(evm_leds); i++)
-			evm_leds[i].gpio = i + dm355evm_msp_gpio.base;
-
+		gpiod_add_lookup_table(&evm_leds_gpio_table);
 		/* NOTE:  these are the only fully programmable LEDs
 		 * on the board, since GPIO-61/ds22 (and many signals
 		 * going to DC7) must be used for AEMIF address lines

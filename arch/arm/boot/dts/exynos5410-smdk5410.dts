@@ -1,27 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * SAMSUNG SMDK5410 board device tree source
+ * Samsung SMDK5410 board device tree source
  *
  * Copyright (c) 2013 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
-*/
+ */
 
 /dts-v1/;
 #include "exynos5410.dtsi"
 #include <dt-bindings/interrupt-controller/irq.h>
 / {
-	model = "Samsung SMDK5410 board based on EXYNOS5410";
+	model = "Samsung SMDK5410 board based on Exynos5410";
 	compatible = "samsung,smdk5410", "samsung,exynos5410", "samsung,exynos5";
 
-	memory {
+	memory@40000000 {
+		device_type = "memory";
 		reg = <0x40000000 0x80000000>;
 	};
 
 	chosen {
-		bootargs = "console=ttySAC2,115200";
+		stdout-path = "serial2:115200n8";
 	};
 
 	fin_pll: xxti {
@@ -31,7 +29,14 @@
 		#clock-cells = <0>;
 	};
 
-	firmware@02037000 {
+	pmic_ap_clk: pmic-ap-clk {
+		/* Workaround for missing PMIC and its clock */
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <32768>;
+	};
+
+	firmware@2037000 {
 		compatible = "samsung,secure-firmware";
 		reg = <0x02037000 0x1000>;
 	};
@@ -40,7 +45,6 @@
 
 &mmc_0 {
 	status = "okay";
-	num-slots = <1>;
 	cap-mmc-highspeed;
 	broken-cd;
 	card-detect-delay = <200>;
@@ -52,7 +56,6 @@
 
 &mmc_2 {
 	status = "okay";
-	num-slots = <1>;
 	cap-sd-highspeed;
 	card-detect-delay = <200>;
 	samsung,dw-mshc-ciu-div = <3>;
@@ -66,8 +69,8 @@
 	srom_ctl: srom-ctl {
 		samsung,pins = "gpy0-3", "gpy0-4", "gpy0-5",
 			       "gpy1-0", "gpy1-1", "gpy1-2", "gpy1-3";
-		samsung,pin-function = <2>;
-		samsung,pin-drv = <0>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_2>;
+		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
 	};
 
 	srom_ebi: srom-ebi {
@@ -77,10 +80,15 @@
 			       "gpy5-4", "gpy5-5", "gpy5-6", "gpy5-7",
 			       "gpy6-0", "gpy6-1", "gpy6-2", "gpy6-3",
 			       "gpy6-4", "gpy6-5", "gpy6-6", "gpy6-7";
-		samsung,pin-function = <2>;
-		samsung,pin-pud = <3>;
-		samsung,pin-drv = <0>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_2>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
+		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
 	};
+};
+
+&rtc {
+	clocks = <&clock CLK_RTC>, <&pmic_ap_clk>;
+	clock-names = "rtc", "rtc_src";
 };
 
 &sromc {
@@ -102,14 +110,14 @@
 	};
 };
 
-&uart0 {
+&serial_0 {
 	status = "okay";
 };
 
-&uart1 {
+&serial_1 {
 	status = "okay";
 };
 
-&uart2 {
+&serial_2 {
 	status = "okay";
 };

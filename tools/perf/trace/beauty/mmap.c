@@ -1,158 +1,82 @@
-#include <sys/mman.h>
+// SPDX-License-Identifier: LGPL-2.1
+#include <linux/log2.h>
 
-static size_t syscall_arg__scnprintf_mmap_prot(char *bf, size_t size,
-					       struct syscall_arg *arg)
+#include "trace/beauty/generated/mmap_prot_array.c"
+static DEFINE_STRARRAY(mmap_prot, "PROT_");
+
+static size_t mmap__scnprintf_prot(unsigned long prot, char *bf, size_t size, bool show_prefix)
 {
-	int printed = 0, prot = arg->val;
+       return strarray__scnprintf_flags(&strarray__mmap_prot, bf, size, show_prefix, prot);
+}
 
-	if (prot == PROT_NONE)
-		return scnprintf(bf, size, "NONE");
-#define	P_MMAP_PROT(n) \
-	if (prot & PROT_##n) { \
-		printed += scnprintf(bf + printed, size - printed, "%s%s", printed ? "|" : "", #n); \
-		prot &= ~PROT_##n; \
-	}
+static size_t syscall_arg__scnprintf_mmap_prot(char *bf, size_t size, struct syscall_arg *arg)
+{
+	unsigned long prot = arg->val;
 
-	P_MMAP_PROT(EXEC);
-	P_MMAP_PROT(READ);
-	P_MMAP_PROT(WRITE);
-#ifdef PROT_SEM
-	P_MMAP_PROT(SEM);
-#endif
-	P_MMAP_PROT(GROWSDOWN);
-	P_MMAP_PROT(GROWSUP);
-#undef P_MMAP_PROT
+	if (prot == 0)
+		return scnprintf(bf, size, "%sNONE", arg->show_string_prefix ? strarray__mmap_prot.prefix : "");
 
-	if (prot)
-		printed += scnprintf(bf + printed, size - printed, "%s%#x", printed ? "|" : "", prot);
-
-	return printed;
+	return mmap__scnprintf_prot(prot, bf, size, arg->show_string_prefix);
 }
 
 #define SCA_MMAP_PROT syscall_arg__scnprintf_mmap_prot
 
-#ifndef MAP_STACK
-# define MAP_STACK		0x20000
-#endif
+#include "trace/beauty/generated/mmap_flags_array.c"
+static DEFINE_STRARRAY(mmap_flags, "MAP_");
+
+static size_t mmap__scnprintf_flags(unsigned long flags, char *bf, size_t size, bool show_prefix)
+{
+       return strarray__scnprintf_flags(&strarray__mmap_flags, bf, size, show_prefix, flags);
+}
 
 static size_t syscall_arg__scnprintf_mmap_flags(char *bf, size_t size,
 						struct syscall_arg *arg)
 {
-	int printed = 0, flags = arg->val;
+	unsigned long flags = arg->val;
 
-#define	P_MMAP_FLAG(n) \
-	if (flags & MAP_##n) { \
-		printed += scnprintf(bf + printed, size - printed, "%s%s", printed ? "|" : "", #n); \
-		flags &= ~MAP_##n; \
-	}
+	if (flags & MAP_ANONYMOUS)
+		arg->mask |= (1 << 4) | (1 << 5); /* Mask 4th ('fd') and 5th ('offset') args, ignored */
 
-	P_MMAP_FLAG(SHARED);
-	P_MMAP_FLAG(PRIVATE);
-#ifdef MAP_32BIT
-	P_MMAP_FLAG(32BIT);
-#endif
-	P_MMAP_FLAG(ANONYMOUS);
-	P_MMAP_FLAG(DENYWRITE);
-	P_MMAP_FLAG(EXECUTABLE);
-	P_MMAP_FLAG(FILE);
-	P_MMAP_FLAG(FIXED);
-	P_MMAP_FLAG(GROWSDOWN);
-#ifdef MAP_HUGETLB
-	P_MMAP_FLAG(HUGETLB);
-#endif
-	P_MMAP_FLAG(LOCKED);
-	P_MMAP_FLAG(NONBLOCK);
-	P_MMAP_FLAG(NORESERVE);
-	P_MMAP_FLAG(POPULATE);
-	P_MMAP_FLAG(STACK);
-#ifdef MAP_UNINITIALIZED
-	P_MMAP_FLAG(UNINITIALIZED);
-#endif
-#undef P_MMAP_FLAG
-
-	if (flags)
-		printed += scnprintf(bf + printed, size - printed, "%s%#x", printed ? "|" : "", flags);
-
-	return printed;
+	return mmap__scnprintf_flags(flags, bf, size, arg->show_string_prefix);
 }
 
 #define SCA_MMAP_FLAGS syscall_arg__scnprintf_mmap_flags
 
-static size_t syscall_arg__scnprintf_mremap_flags(char *bf, size_t size,
-						  struct syscall_arg *arg)
+#include "trace/beauty/generated/mremap_flags_array.c"
+static DEFINE_STRARRAY(mremap_flags, "MREMAP_");
+
+static size_t mremap__scnprintf_flags(unsigned long flags, char *bf, size_t size, bool show_prefix)
 {
-	int printed = 0, flags = arg->val;
+       return strarray__scnprintf_flags(&strarray__mremap_flags, bf, size, show_prefix, flags);
+}
 
-#define P_MREMAP_FLAG(n) \
-	if (flags & MREMAP_##n) { \
-		printed += scnprintf(bf + printed, size - printed, "%s%s", printed ? "|" : "", #n); \
-		flags &= ~MREMAP_##n; \
-	}
+static size_t syscall_arg__scnprintf_mremap_flags(char *bf, size_t size, struct syscall_arg *arg)
+{
+	unsigned long flags = arg->val;
 
-	P_MREMAP_FLAG(MAYMOVE);
-#ifdef MREMAP_FIXED
-	P_MREMAP_FLAG(FIXED);
-#endif
-#undef P_MREMAP_FLAG
+	if (!(flags & MREMAP_FIXED))
+		arg->mask |=  (1 << 5); /* Mask 5th ('new_address') args, ignored */
 
-	if (flags)
-		printed += scnprintf(bf + printed, size - printed, "%s%#x", printed ? "|" : "", flags);
-
-	return printed;
+	return mremap__scnprintf_flags(flags, bf, size, arg->show_string_prefix);
 }
 
 #define SCA_MREMAP_FLAGS syscall_arg__scnprintf_mremap_flags
 
-#ifndef MADV_HWPOISON
-#define MADV_HWPOISON		100
-#endif
+static size_t madvise__scnprintf_behavior(int behavior, char *bf, size_t size)
+{
+#include "trace/beauty/generated/madvise_behavior_array.c"
+       static DEFINE_STRARRAY(madvise_advices, "MADV_");
 
-#ifndef MADV_MERGEABLE
-#define MADV_MERGEABLE		 12
-#endif
+       if (behavior < strarray__madvise_advices.nr_entries && strarray__madvise_advices.entries[behavior] != NULL)
+               return scnprintf(bf, size, "MADV_%s", strarray__madvise_advices.entries[behavior]);
 
-#ifndef MADV_UNMERGEABLE
-#define MADV_UNMERGEABLE	 13
-#endif
+       return scnprintf(bf, size, "%#", behavior);
+}
 
 static size_t syscall_arg__scnprintf_madvise_behavior(char *bf, size_t size,
 						      struct syscall_arg *arg)
 {
-	int behavior = arg->val;
-
-	switch (behavior) {
-#define	P_MADV_BHV(n) case MADV_##n: return scnprintf(bf, size, #n)
-	P_MADV_BHV(NORMAL);
-	P_MADV_BHV(RANDOM);
-	P_MADV_BHV(SEQUENTIAL);
-	P_MADV_BHV(WILLNEED);
-	P_MADV_BHV(DONTNEED);
-	P_MADV_BHV(REMOVE);
-	P_MADV_BHV(DONTFORK);
-	P_MADV_BHV(DOFORK);
-	P_MADV_BHV(HWPOISON);
-#ifdef MADV_SOFT_OFFLINE
-	P_MADV_BHV(SOFT_OFFLINE);
-#endif
-	P_MADV_BHV(MERGEABLE);
-	P_MADV_BHV(UNMERGEABLE);
-#ifdef MADV_HUGEPAGE
-	P_MADV_BHV(HUGEPAGE);
-#endif
-#ifdef MADV_NOHUGEPAGE
-	P_MADV_BHV(NOHUGEPAGE);
-#endif
-#ifdef MADV_DONTDUMP
-	P_MADV_BHV(DONTDUMP);
-#endif
-#ifdef MADV_DODUMP
-	P_MADV_BHV(DODUMP);
-#endif
-#undef P_MADV_PHV
-	default: break;
-	}
-
-	return scnprintf(bf, size, "%#x", behavior);
+	return madvise__scnprintf_behavior(arg->val, bf, size);
 }
 
 #define SCA_MADV_BHV syscall_arg__scnprintf_madvise_behavior

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _PERF_RESORT_RB_H_
 #define _PERF_RESORT_RB_H_
 /*
@@ -35,7 +36,7 @@ DEFINE_RB_RESORT_RB(threads, strcmp(a->thread->shortname,
 
 	struct rb_node *nd;
 
-	resort_rb__for_each(nd, threads) {
+	resort_rb__for_each_entry(nd, threads) {
 		struct thread *t = threads_entry;
 		printf("%s: %d\n", t->shortname, t->tid);
 	}
@@ -123,7 +124,7 @@ static void __name##_sorted__init_entry(struct rb_node *nd,			\
 struct __name##_sorted_entry *__name##_entry;					\
 struct __name##_sorted *__name = __name##_sorted__new
 
-#define resort_rb__for_each(__nd, __name)					\
+#define resort_rb__for_each_entry(__nd, __name)					\
 	for (__nd = rb_first(&__name->entries);					\
 	     __name##_entry = rb_entry(__nd, struct __name##_sorted_entry,	\
 				       rb_node), __nd;				\
@@ -139,11 +140,12 @@ struct __name##_sorted *__name = __name##_sorted__new
 
 /* For 'struct intlist' */
 #define DECLARE_RESORT_RB_INTLIST(__name, __ilist)				\
-	DECLARE_RESORT_RB(__name)(&__ilist->rblist.entries,			\
+	DECLARE_RESORT_RB(__name)(&__ilist->rblist.entries.rb_root,		\
 				  __ilist->rblist.nr_entries)
 
 /* For 'struct machine->threads' */
-#define DECLARE_RESORT_RB_MACHINE_THREADS(__name, __machine)			\
-	DECLARE_RESORT_RB(__name)(&__machine->threads, __machine->nr_threads)
+#define DECLARE_RESORT_RB_MACHINE_THREADS(__name, __machine, hash_bucket)    \
+ DECLARE_RESORT_RB(__name)(&__machine->threads[hash_bucket].entries.rb_root, \
+			   __machine->threads[hash_bucket].nr)
 
 #endif /* _PERF_RESORT_RB_H_ */

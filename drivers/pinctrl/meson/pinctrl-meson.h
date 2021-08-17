@@ -1,20 +1,17 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Pin controller and GPIO driver for Amlogic Meson SoCs
  *
  * Copyright (C) 2014 Beniamino Galvani <b.galvani@gmail.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/pinctrl/pinctrl.h>
+#include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/types.h>
+
+struct meson_pinctrl;
 
 /**
  * struct meson_pmx_group - a pinmux group
@@ -31,9 +28,7 @@ struct meson_pmx_group {
 	const char *name;
 	const unsigned int *pins;
 	unsigned int num_pins;
-	bool is_gpio;
-	unsigned int reg;
-	unsigned int bit;
+	const void *data;
 };
 
 /**
@@ -72,7 +67,18 @@ enum meson_reg_type {
 	REG_DIR,
 	REG_OUT,
 	REG_IN,
+	REG_DS,
 	NUM_REG,
+};
+
+/**
+ * enum meson_pinconf_drv - value of drive-strength supported
+ */
+enum meson_pinconf_drv {
+	MESON_PINCONF_DRV_500UA,
+	MESON_PINCONF_DRV_2500UA,
+	MESON_PINCONF_DRV_3000UA,
+	MESON_PINCONF_DRV_4000UA,
 };
 
 /**
@@ -81,6 +87,7 @@ enum meson_reg_type {
  * @name:	bank name
  * @first:	first pin of the bank
  * @last:	last pin of the bank
+ * @irq:	hwirq base number of the bank
  * @regs:	array of register descriptors
  *
  * A bank represents a set of pins controlled by a contiguous set of
@@ -92,57 +99,24 @@ struct meson_bank {
 	const char *name;
 	unsigned int first;
 	unsigned int last;
+	int irq_first;
+	int irq_last;
 	struct meson_reg_desc regs[NUM_REG];
 };
 
-/**
- * struct meson_domain_data - domain platform data
- *
- * @name:	name of the domain
- * @banks:	set of banks belonging to the domain
- * @num_banks:	number of banks in the domain
- */
-struct meson_domain_data {
-	const char *name;
-	struct meson_bank *banks;
-	unsigned int num_banks;
-	unsigned int pin_base;
-	unsigned int num_pins;
-};
-
-/**
- * struct meson_domain
- *
- * @reg_mux:	registers for mux settings
- * @reg_pullen:	registers for pull-enable settings
- * @reg_pull:	registers for pull settings
- * @reg_gpio:	registers for gpio settings
- * @chip:	gpio chip associated with the domain
- * @data;	platform data for the domain
- * @node:	device tree node for the domain
- *
- * A domain represents a set of banks controlled by the same set of
- * registers.
- */
-struct meson_domain {
-	struct regmap *reg_mux;
-	struct regmap *reg_pullen;
-	struct regmap *reg_pull;
-	struct regmap *reg_gpio;
-
-	struct gpio_chip chip;
-	struct meson_domain_data *data;
-	struct device_node *of_node;
-};
-
 struct meson_pinctrl_data {
+	const char *name;
 	const struct pinctrl_pin_desc *pins;
 	struct meson_pmx_group *groups;
 	struct meson_pmx_func *funcs;
-	struct meson_domain_data *domain_data;
 	unsigned int num_pins;
 	unsigned int num_groups;
 	unsigned int num_funcs;
+	struct meson_bank *banks;
+	unsigned int num_banks;
+	const struct pinmux_ops *pmx_ops;
+	void *pmx_data;
+	int (*parse_dt)(struct meson_pinctrl *pc);
 };
 
 struct meson_pinctrl {
@@ -150,27 +124,14 @@ struct meson_pinctrl {
 	struct pinctrl_dev *pcdev;
 	struct pinctrl_desc desc;
 	struct meson_pinctrl_data *data;
-	struct meson_domain *domain;
+	struct regmap *reg_mux;
+	struct regmap *reg_pullen;
+	struct regmap *reg_pull;
+	struct regmap *reg_gpio;
+	struct regmap *reg_ds;
+	struct gpio_chip chip;
+	struct device_node *of_node;
 };
-
-#define PIN(x, b)	(b + x)
-
-#define GROUP(grp, r, b)						\
-	{								\
-		.name = #grp,						\
-		.pins = grp ## _pins,					\
-		.num_pins = ARRAY_SIZE(grp ## _pins),			\
-		.reg = r,						\
-		.bit = b,						\
-	 }
-
-#define GPIO_GROUP(gpio, b)						\
-	{								\
-		.name = #gpio,						\
-		.pins = (const unsigned int[]){ PIN(gpio, b) },		\
-		.num_pins = 1,						\
-		.is_gpio = true,					\
-	 }
 
 #define FUNCTION(fn)							\
 	{								\
@@ -179,25 +140,41 @@ struct meson_pinctrl {
 		.num_groups = ARRAY_SIZE(fn ## _groups),		\
 	}
 
-#define BANK(n, f, l, per, peb, pr, pb, dr, db, or, ob, ir, ib)		\
+#define BANK_DS(n, f, l, fi, li, per, peb, pr, pb, dr, db, or, ob, ir, ib,     \
+		dsr, dsb)                                                      \
 	{								\
-		.name	= n,						\
-		.first	= f,						\
-		.last	= l,						\
-		.regs	= {						\
+		.name		= n,					\
+		.first		= f,					\
+		.last		= l,					\
+		.irq_first	= fi,					\
+		.irq_last	= li,					\
+		.regs = {						\
 			[REG_PULLEN]	= { per, peb },			\
 			[REG_PULL]	= { pr, pb },			\
 			[REG_DIR]	= { dr, db },			\
 			[REG_OUT]	= { or, ob },			\
 			[REG_IN]	= { ir, ib },			\
+			[REG_DS]	= { dsr, dsb },			\
 		},							\
 	 }
 
-#define MESON_PIN(x, b) PINCTRL_PIN(PIN(x, b), #x)
+#define BANK(n, f, l, fi, li, per, peb, pr, pb, dr, db, or, ob, ir, ib) \
+	BANK_DS(n, f, l, fi, li, per, peb, pr, pb, dr, db, or, ob, ir, ib, 0, 0)
 
-extern struct meson_pinctrl_data meson8_cbus_pinctrl_data;
-extern struct meson_pinctrl_data meson8_aobus_pinctrl_data;
-extern struct meson_pinctrl_data meson8b_cbus_pinctrl_data;
-extern struct meson_pinctrl_data meson8b_aobus_pinctrl_data;
-extern struct meson_pinctrl_data meson_gxbb_periphs_pinctrl_data;
-extern struct meson_pinctrl_data meson_gxbb_aobus_pinctrl_data;
+#define MESON_PIN(x) PINCTRL_PIN(x, #x)
+
+/* Common pmx functions */
+int meson_pmx_get_funcs_count(struct pinctrl_dev *pcdev);
+const char *meson_pmx_get_func_name(struct pinctrl_dev *pcdev,
+				    unsigned selector);
+int meson_pmx_get_groups(struct pinctrl_dev *pcdev,
+			 unsigned selector,
+			 const char * const **groups,
+			 unsigned * const num_groups);
+
+/* Common probe function */
+int meson_pinctrl_probe(struct platform_device *pdev);
+/* Common ao groups extra dt parse function for SoCs before g12a  */
+int meson8_aobus_parse_dt_extra(struct meson_pinctrl *pc);
+/* Common extra dt parse function for SoCs like A1  */
+int meson_a1_parse_dt_extra(struct meson_pinctrl *pc);

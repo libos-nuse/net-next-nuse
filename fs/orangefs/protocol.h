@@ -1,33 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/spinlock_types.h>
 #include <linux/slab.h>
 #include <linux/ioctl.h>
-
-extern struct client_debug_mask *cdm_array;
-extern char *debug_help_string;
-extern int help_string_initialized;
-extern struct dentry *debug_dir;
-extern struct dentry *help_file_dentry;
-extern struct dentry *client_debug_dentry;
-extern const struct file_operations debug_help_fops;
-extern int client_all_index;
-extern int client_verbose_index;
-extern int cdm_element_count;
-#define DEBUG_HELP_STRING_SIZE 4096
-#define HELP_STRING_UNINITIALIZED \
-	"Client Debug Keywords are unknown until the first time\n" \
-	"the client is started after boot.\n"
-#define ORANGEFS_KMOD_DEBUG_HELP_FILE "debug-help"
-#define ORANGEFS_KMOD_DEBUG_FILE "kernel-debug"
-#define ORANGEFS_CLIENT_DEBUG_FILE "client-debug"
-#define ORANGEFS_VERBOSE "verbose"
-#define ORANGEFS_ALL "all"
-
-/* pvfs2-config.h ***********************************************************/
-#define ORANGEFS_VERSION_MAJOR 2
-#define ORANGEFS_VERSION_MINOR 9
-#define ORANGEFS_VERSION_SUB 0
 
 /* khandle stuff  ***********************************************************/
 
@@ -89,16 +65,6 @@ static inline void ORANGEFS_khandle_from(struct orangefs_khandle *kh,
 }
 
 /* pvfs2-types.h ************************************************************/
-typedef __u32 ORANGEFS_uid;
-typedef __u32 ORANGEFS_gid;
-typedef __s32 ORANGEFS_fs_id;
-typedef __u32 ORANGEFS_permissions;
-typedef __u64 ORANGEFS_time;
-typedef __s64 ORANGEFS_size;
-typedef __u64 ORANGEFS_flags;
-typedef __u64 ORANGEFS_ds_position;
-typedef __s32 ORANGEFS_error;
-typedef __s64 ORANGEFS_offset;
 
 #define ORANGEFS_SUPER_MAGIC 0x20030528
 
@@ -158,18 +124,12 @@ typedef __s64 ORANGEFS_offset;
 #define ORANGEFS_G_SGID    (1 << 10)
 #define ORANGEFS_U_SUID    (1 << 11)
 
-/* definition taken from stdint.h */
-#define INT32_MAX (2147483647)
-#define ORANGEFS_ITERATE_START    (INT32_MAX - 1)
-#define ORANGEFS_ITERATE_END      (INT32_MAX - 2)
-#define ORANGEFS_ITERATE_NEXT     (INT32_MAX - 3)
-#define ORANGEFS_READDIR_START ORANGEFS_ITERATE_START
-#define ORANGEFS_READDIR_END   ORANGEFS_ITERATE_END
+#define ORANGEFS_ITERATE_START    2147483646
+#define ORANGEFS_ITERATE_END      2147483645
 #define ORANGEFS_IMMUTABLE_FL FS_IMMUTABLE_FL
 #define ORANGEFS_APPEND_FL    FS_APPEND_FL
 #define ORANGEFS_NOATIME_FL   FS_NOATIME_FL
 #define ORANGEFS_MIRROR_FL    0x01000000ULL
-#define ORANGEFS_O_EXECUTE (1 << 0)
 #define ORANGEFS_FS_ID_NULL       ((__s32)0)
 #define ORANGEFS_ATTR_SYS_UID                   (1 << 0)
 #define ORANGEFS_ATTR_SYS_GID                   (1 << 1)
@@ -201,14 +161,6 @@ typedef __s64 ORANGEFS_offset;
 #define ORANGEFS_ATTR_SYS_ALL_NOHINT			\
 	(ORANGEFS_ATTR_SYS_COMMON_ALL		|	\
 	 ORANGEFS_ATTR_SYS_SIZE			|	\
-	 ORANGEFS_ATTR_SYS_LNK_TARGET		|	\
-	 ORANGEFS_ATTR_SYS_DFILE_COUNT		|	\
-	 ORANGEFS_ATTR_SYS_MIRROR_COPIES_COUNT	|	\
-	 ORANGEFS_ATTR_SYS_DIRENT_COUNT		|	\
-	 ORANGEFS_ATTR_SYS_BLKSIZE)
-
-#define ORANGEFS_ATTR_SYS_ALL_NOHINT_NOSIZE		\
-	(ORANGEFS_ATTR_SYS_COMMON_ALL		|	\
 	 ORANGEFS_ATTR_SYS_LNK_TARGET		|	\
 	 ORANGEFS_ATTR_SYS_DFILE_COUNT		|	\
 	 ORANGEFS_ATTR_SYS_MIRROR_COPIES_COUNT	|	\
@@ -260,35 +212,6 @@ enum orangefs_ds_type {
 	ORANGEFS_TYPE_DIRDATA = (1 << 4),
 	ORANGEFS_TYPE_INTERNAL = (1 << 5)	/* for the server's private use */
 };
-
-/*
- * ORANGEFS_certificate simply stores a buffer with the buffer size.
- * The buffer can be converted to an OpenSSL X509 struct for use.
- */
-struct ORANGEFS_certificate {
-	__u32 buf_size;
-	unsigned char *buf;
-};
-
-/*
- * A credential identifies a user and is signed by the client/user
- * private key.
- */
-struct ORANGEFS_credential {
-	__u32 userid;	/* user id */
-	__u32 num_groups;	/* length of group_array */
-	__u32 *group_array;	/* groups for which the user is a member */
-	char *issuer;		/* alias of the issuing server */
-	__u64 timeout;	/* seconds after epoch to time out */
-	__u32 sig_size;	/* length of the signature in bytes */
-	unsigned char *signature;	/* digital signature */
-	struct ORANGEFS_certificate certificate;	/* user certificate buffer */
-};
-#define extra_size_ORANGEFS_credential (ORANGEFS_REQ_LIMIT_GROUPS	*	\
-				    sizeof(__u32)		+	\
-				    ORANGEFS_REQ_LIMIT_ISSUER	+	\
-				    ORANGEFS_REQ_LIMIT_SIGNATURE	+	\
-				    extra_size_ORANGEFS_certificate)
 
 /* This structure is used by the VFS-client interaction alone */
 struct ORANGEFS_keyval_pair {
@@ -419,7 +342,7 @@ enum {
  * that may be 32 bit!
  */
 struct ORANGEFS_dev_map_desc {
-	void *ptr;
+	void __user *ptr;
 	__s32 total_size;
 	__s32 size;
 	__s32 count;
@@ -427,29 +350,13 @@ struct ORANGEFS_dev_map_desc {
 
 /* gossip.h *****************************************************************/
 
-#ifdef GOSSIP_DISABLE_DEBUG
-#define gossip_debug(mask, fmt, ...)					\
-do {									\
-	if (0)								\
-		printk(KERN_DEBUG fmt, ##__VA_ARGS__);			\
-} while (0)
-#else
-extern __u64 gossip_debug_mask;
-extern struct client_debug_mask client_debug_mask;
+extern __u64 orangefs_gossip_debug_mask;
 
 /* try to avoid function call overhead by checking masks in macro */
 #define gossip_debug(mask, fmt, ...)					\
 do {									\
-	if (gossip_debug_mask & (mask))					\
+	if (orangefs_gossip_debug_mask & (mask))			\
 		printk(KERN_DEBUG fmt, ##__VA_ARGS__);			\
 } while (0)
-#endif /* GOSSIP_DISABLE_DEBUG */
-
-/* do file and line number printouts w/ the GNU preprocessor */
-#define gossip_ldebug(mask, fmt, ...)					\
-	gossip_debug(mask, "%s: " fmt, __func__, ##__VA_ARGS__)
 
 #define gossip_err pr_err
-#define gossip_lerr(fmt, ...)						\
-	gossip_err("%s line %d: " fmt,					\
-		   __FILE__, __LINE__, ##__VA_ARGS__)

@@ -9,6 +9,7 @@
  */
 
 #include <linux/gpio/driver.h>
+#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
@@ -22,7 +23,6 @@ static int ts4800_gpio_probe(struct platform_device *pdev)
 {
 	struct device_node *node;
 	struct gpio_chip *chip;
-	struct resource *res;
 	void __iomem *base_addr;
 	int retval;
 	u32 ngpios;
@@ -31,8 +31,7 @@ static int ts4800_gpio_probe(struct platform_device *pdev)
 	if (!chip)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base_addr = devm_ioremap_resource(&pdev->dev, res);
+	base_addr = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base_addr))
 		return PTR_ERR(base_addr);
 
@@ -65,6 +64,7 @@ static const struct of_device_id ts4800_gpio_of_match[] = {
 	{ .compatible = "technologic,ts4800-gpio", },
 	{},
 };
+MODULE_DEVICE_TABLE(of, ts4800_gpio_of_match);
 
 static struct platform_driver ts4800_gpio_driver = {
 	.driver = {

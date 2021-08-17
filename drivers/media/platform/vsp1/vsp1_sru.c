@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * vsp1_sru.c  --  R-Car VSP1 Super Resolution Unit
  *
  * Copyright (C) 2013 Renesas Corporation
  *
  * Contact: Laurent Pinchart (laurent.pinchart@ideasonboard.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/device.h>
@@ -18,6 +14,7 @@
 
 #include "vsp1.h"
 #include "vsp1_dl.h"
+#include "vsp1_pipe.h"
 #include "vsp1_sru.h"
 
 #define SRU_MIN_SIZE				4U
@@ -27,17 +24,17 @@
  * Device Access
  */
 
-static inline void vsp1_sru_write(struct vsp1_sru *sru, struct vsp1_dl_list *dl,
-				  u32 reg, u32 data)
+static inline void vsp1_sru_write(struct vsp1_sru *sru,
+				  struct vsp1_dl_body *dlb, u32 reg, u32 data)
 {
-	vsp1_dl_list_write(dl, reg, data);
+	vsp1_dl_body_write(dlb, reg, data);
 }
 
 /* -----------------------------------------------------------------------------
  * Controls
  */
 
-#define V4L2_CID_VSP1_SRU_INTENSITY		(V4L2_CID_USER_BASE + 1)
+#define V4L2_CID_VSP1_SRU_INTENSITY		(V4L2_CID_USER_BASE | 0x1001)
 
 struct vsp1_sru_param {
 	u32 ctrl0;
@@ -128,6 +125,7 @@ static int sru_enum_frame_size(struct v4l2_subdev *subdev,
 	struct vsp1_sru *sru = to_sru(subdev);
 	struct v4l2_subdev_pad_config *config;
 	struct v4l2_mbus_framefmt *format;
+	int ret = 0;
 
 	config = vsp1_entity_get_pad_config(&sru->entity, cfg, fse->which);
 	if (!config)
@@ -135,8 +133,12 @@ static int sru_enum_frame_size(struct v4l2_subdev *subdev,
 
 	format = vsp1_entity_get_pad_format(&sru->entity, config, SRU_PAD_SINK);
 
-	if (fse->index || fse->code != format->code)
-		return -EINVAL;
+	mutex_lock(&sru->entity.lock);
+
+	if (fse->index || fse->code != format->code) {
+		ret = -EINVAL;
+		goto done;
+	}
 
 	if (fse->pad == SRU_PAD_SINK) {
 		fse->min_width = SRU_MIN_SIZE;
@@ -156,7 +158,9 @@ static int sru_enum_frame_size(struct v4l2_subdev *subdev,
 		}
 	}
 
-	return 0;
+done:
+	mutex_unlock(&sru->entity.lock);
+	return ret;
 }
 
 static void sru_try_format(struct vsp1_sru *sru,
@@ -184,7 +188,8 @@ static void sru_try_format(struct vsp1_sru *sru,
 						    SRU_PAD_SINK);
 		fmt->code = format->code;
 
-		/* We can upscale by 2 in both direction, but not independently.
+		/*
+		 * We can upscale by 2 in both direction, but not independently.
 		 * Compare the input and output rectangles areas (avoiding
 		 * integer overflows on the output): if the requested output
 		 * area is larger than 1.5^2 the input area upscale by two,
@@ -217,10 +222,15 @@ static int sru_set_format(struct v4l2_subdev *subdev,
 	struct vsp1_sru *sru = to_sru(subdev);
 	struct v4l2_subdev_pad_config *config;
 	struct v4l2_mbus_framefmt *format;
+	int ret = 0;
+
+	mutex_lock(&sru->entity.lock);
 
 	config = vsp1_entity_get_pad_config(&sru->entity, cfg, fmt->which);
-	if (!config)
-		return -EINVAL;
+	if (!config) {
+		ret = -EINVAL;
+		goto done;
+	}
 
 	sru_try_format(sru, config, fmt->pad, &fmt->format);
 
@@ -236,10 +246,12 @@ static int sru_set_format(struct v4l2_subdev *subdev,
 		sru_try_format(sru, config, SRU_PAD_SOURCE, format);
 	}
 
-	return 0;
+done:
+	mutex_unlock(&sru->entity.lock);
+	return ret;
 }
 
-static struct v4l2_subdev_pad_ops sru_pad_ops = {
+static const struct v4l2_subdev_pad_ops sru_pad_ops = {
 	.init_cfg = vsp1_entity_init_cfg,
 	.enum_mbus_code = sru_enum_mbus_code,
 	.enum_frame_size = sru_enum_frame_size,
@@ -247,7 +259,7 @@ static struct v4l2_subdev_pad_ops sru_pad_ops = {
 	.set_fmt = sru_set_format,
 };
 
-static struct v4l2_subdev_ops sru_ops = {
+static const struct v4l2_subdev_ops sru_ops = {
 	.pad    = &sru_pad_ops,
 };
 
@@ -255,9 +267,10 @@ static struct v4l2_subdev_ops sru_ops = {
  * VSP1 Entity Operations
  */
 
-static void sru_configure(struct vsp1_entity *entity,
-			  struct vsp1_pipeline *pipe,
-			  struct vsp1_dl_list *dl)
+static void sru_configure_stream(struct vsp1_entity *entity,
+				 struct vsp1_pipeline *pipe,
+				 struct vsp1_dl_list *dl,
+				 struct vsp1_dl_body *dlb)
 {
 	const struct vsp1_sru_param *param;
 	struct vsp1_sru *sru = to_sru(&entity->subdev);
@@ -283,13 +296,62 @@ static void sru_configure(struct vsp1_entity *entity,
 
 	ctrl0 |= param->ctrl0;
 
-	vsp1_sru_write(sru, dl, VI6_SRU_CTRL0, ctrl0);
-	vsp1_sru_write(sru, dl, VI6_SRU_CTRL1, VI6_SRU_CTRL1_PARAM5);
-	vsp1_sru_write(sru, dl, VI6_SRU_CTRL2, param->ctrl2);
+	vsp1_sru_write(sru, dlb, VI6_SRU_CTRL0, ctrl0);
+	vsp1_sru_write(sru, dlb, VI6_SRU_CTRL1, VI6_SRU_CTRL1_PARAM5);
+	vsp1_sru_write(sru, dlb, VI6_SRU_CTRL2, param->ctrl2);
+}
+
+static unsigned int sru_max_width(struct vsp1_entity *entity,
+				  struct vsp1_pipeline *pipe)
+{
+	struct vsp1_sru *sru = to_sru(&entity->subdev);
+	struct v4l2_mbus_framefmt *input;
+	struct v4l2_mbus_framefmt *output;
+
+	input = vsp1_entity_get_pad_format(&sru->entity, sru->entity.config,
+					   SRU_PAD_SINK);
+	output = vsp1_entity_get_pad_format(&sru->entity, sru->entity.config,
+					    SRU_PAD_SOURCE);
+
+	/*
+	 * The maximum input width of the SRU is 288 input pixels, but 32
+	 * pixels are reserved to support overlapping partition windows when
+	 * scaling.
+	 */
+	if (input->width != output->width)
+		return 512;
+	else
+		return 256;
+}
+
+static void sru_partition(struct vsp1_entity *entity,
+			  struct vsp1_pipeline *pipe,
+			  struct vsp1_partition *partition,
+			  unsigned int partition_idx,
+			  struct vsp1_partition_window *window)
+{
+	struct vsp1_sru *sru = to_sru(&entity->subdev);
+	struct v4l2_mbus_framefmt *input;
+	struct v4l2_mbus_framefmt *output;
+
+	input = vsp1_entity_get_pad_format(&sru->entity, sru->entity.config,
+					   SRU_PAD_SINK);
+	output = vsp1_entity_get_pad_format(&sru->entity, sru->entity.config,
+					    SRU_PAD_SOURCE);
+
+	/* Adapt if SRUx2 is enabled. */
+	if (input->width != output->width) {
+		window->width /= 2;
+		window->left /= 2;
+	}
+
+	partition->sru = *window;
 }
 
 static const struct vsp1_entity_operations sru_entity_ops = {
-	.configure = sru_configure,
+	.configure_stream = sru_configure_stream,
+	.max_width = sru_max_width,
+	.partition = sru_partition,
 };
 
 /* -----------------------------------------------------------------------------
@@ -308,7 +370,8 @@ struct vsp1_sru *vsp1_sru_create(struct vsp1_device *vsp1)
 	sru->entity.ops = &sru_entity_ops;
 	sru->entity.type = VSP1_ENTITY_SRU;
 
-	ret = vsp1_entity_init(vsp1, &sru->entity, "sru", 2, &sru_ops);
+	ret = vsp1_entity_init(vsp1, &sru->entity, "sru", 2, &sru_ops,
+			       MEDIA_ENT_F_PROC_VIDEO_SCALER);
 	if (ret < 0)
 		return ERR_PTR(ret);
 

@@ -1,18 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 3-axis magnetometer driver supporting following I2C Bosch-Sensortec chips:
  *  - BMC150
  *  - BMC156
+ *  - BMM150
  *
  * Copyright (c) 2016, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 #include <linux/device.h>
 #include <linux/mod_devicetable.h>
@@ -49,6 +42,7 @@ static int bmc150_magn_i2c_remove(struct i2c_client *client)
 static const struct acpi_device_id bmc150_magn_acpi_match[] = {
 	{"BMC150B", 0},
 	{"BMC156B", 0},
+	{"BMM150B", 0},
 	{},
 };
 MODULE_DEVICE_TABLE(acpi, bmc150_magn_acpi_match);
@@ -56,13 +50,24 @@ MODULE_DEVICE_TABLE(acpi, bmc150_magn_acpi_match);
 static const struct i2c_device_id bmc150_magn_i2c_id[] = {
 	{"bmc150_magn",	0},
 	{"bmc156_magn", 0},
+	{"bmm150_magn", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, bmc150_magn_i2c_id);
 
+static const struct of_device_id bmc150_magn_of_match[] = {
+	{ .compatible = "bosch,bmc150_magn" },
+	{ .compatible = "bosch,bmc156_magn" },
+	{ .compatible = "bosch,bmm150_magn" }, /* deprecated compatible */
+	{ .compatible = "bosch,bmm150" },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, bmc150_magn_of_match);
+
 static struct i2c_driver bmc150_magn_driver = {
 	.driver = {
 		.name	= "bmc150_magn_i2c",
+		.of_match_table = bmc150_magn_of_match,
 		.acpi_match_table = ACPI_PTR(bmc150_magn_acpi_match),
 		.pm	= &bmc150_magn_pm_ops,
 	},

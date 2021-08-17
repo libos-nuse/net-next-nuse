@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * SBSA(Server Base System Architecture) Generic Watchdog driver
  *
@@ -6,15 +7,6 @@
  *         Suravee Suthikulpanit <Suravee.Suthikulpanit@amd.com>
  *         Al Stone <al.stone@linaro.org>
  *         Timur Tabi <timur@codeaurora.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License 2 as published
- * by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * ARM SBSA Generic Watchdog has two stage timeouts:
  * the first signal (WS0) is for alerting the system by interrupt,
@@ -46,10 +38,10 @@
  * by WOR, in the single stage mode, the timeout is (WOR * 2); in the two
  * stages mode, the timeout is WOR. The maximum timeout in the two stages mode
  * is half of that in the single stage mode.
- *
  */
 
 #include <linux/io.h>
+#include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -159,8 +151,8 @@ static unsigned int sbsa_gwdt_get_timeleft(struct watchdog_device *wdd)
 	    !(readl(gwdt->control_base + SBSA_GWDT_WCS) & SBSA_GWDT_WCS_WS0))
 		timeleft += readl(gwdt->control_base + SBSA_GWDT_WOR);
 
-	timeleft += readq(gwdt->control_base + SBSA_GWDT_WCV) -
-		    arch_counter_get_cntvct();
+	timeleft += lo_hi_readq(gwdt->control_base + SBSA_GWDT_WCV) -
+		    arch_timer_read_counter();
 
 	do_div(timeleft, gwdt->clk);
 
@@ -178,15 +170,6 @@ static int sbsa_gwdt_keepalive(struct watchdog_device *wdd)
 	writel(0, gwdt->refresh_base + SBSA_GWDT_WRR);
 
 	return 0;
-}
-
-static unsigned int sbsa_gwdt_status(struct watchdog_device *wdd)
-{
-	struct sbsa_gwdt *gwdt = watchdog_get_drvdata(wdd);
-	u32 status = readl(gwdt->control_base + SBSA_GWDT_WCS);
-
-	/* is the watchdog timer running? */
-	return (status & SBSA_GWDT_WCS_EN) << WDOG_ACTIVE;
 }
 
 static int sbsa_gwdt_start(struct watchdog_device *wdd)
@@ -216,7 +199,7 @@ static irqreturn_t sbsa_gwdt_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static struct watchdog_info sbsa_gwdt_info = {
+static const struct watchdog_info sbsa_gwdt_info = {
 	.identity	= WATCHDOG_NAME,
 	.options	= WDIOF_SETTIMEOUT |
 			  WDIOF_KEEPALIVEPING |
@@ -224,11 +207,10 @@ static struct watchdog_info sbsa_gwdt_info = {
 			  WDIOF_CARDRESET,
 };
 
-static struct watchdog_ops sbsa_gwdt_ops = {
+static const struct watchdog_ops sbsa_gwdt_ops = {
 	.owner		= THIS_MODULE,
 	.start		= sbsa_gwdt_start,
 	.stop		= sbsa_gwdt_stop,
-	.status		= sbsa_gwdt_status,
 	.ping		= sbsa_gwdt_keepalive,
 	.set_timeout	= sbsa_gwdt_set_timeout,
 	.get_timeleft	= sbsa_gwdt_get_timeleft,
@@ -240,7 +222,6 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct watchdog_device *wdd;
 	struct sbsa_gwdt *gwdt;
-	struct resource *res;
 	int ret, irq;
 	u32 status;
 
@@ -249,13 +230,11 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	platform_set_drvdata(pdev, gwdt);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	cf_base = devm_ioremap_resource(dev, res);
+	cf_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(cf_base))
 		return PTR_ERR(cf_base);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	rf_base = devm_ioremap_resource(dev, res);
+	rf_base = devm_platform_ioremap_resource(pdev, 1);
 	if (IS_ERR(rf_base))
 		return PTR_ERR(rf_base);
 
@@ -273,7 +252,7 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 	wdd->info = &sbsa_gwdt_info;
 	wdd->ops = &sbsa_gwdt_ops;
 	wdd->min_timeout = 1;
-	wdd->max_timeout = U32_MAX / gwdt->clk;
+	wdd->max_hw_heartbeat_ms = U32_MAX / gwdt->clk * 1000;
 	wdd->timeout = DEFAULT_TIMEOUT;
 	watchdog_set_drvdata(wdd, gwdt);
 	watchdog_set_nowayout(wdd, nowayout);
@@ -283,6 +262,8 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 		dev_warn(dev, "System reset by WDT.\n");
 		wdd->bootstatus |= WDIOF_CARDRESET;
 	}
+	if (status & SBSA_GWDT_WCS_EN)
+		set_bit(WDOG_HW_RUNNING, &wdd->status);
 
 	if (action) {
 		irq = platform_get_irq(pdev, 0);
@@ -310,7 +291,7 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 	 * the timeout is (WOR * 2), so the maximum timeout should be doubled.
 	 */
 	if (!action)
-		wdd->max_timeout *= 2;
+		wdd->max_hw_heartbeat_ms *= 2;
 
 	watchdog_init_timeout(wdd, timeout, dev);
 	/*
@@ -320,29 +301,14 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 	 */
 	sbsa_gwdt_set_timeout(wdd, wdd->timeout);
 
-	ret = watchdog_register_device(wdd);
+	watchdog_stop_on_reboot(wdd);
+	ret = devm_watchdog_register_device(dev, wdd);
 	if (ret)
 		return ret;
 
 	dev_info(dev, "Initialized with %ds timeout @ %u Hz, action=%d.%s\n",
 		 wdd->timeout, gwdt->clk, action,
 		 status & SBSA_GWDT_WCS_EN ? " [enabled]" : "");
-
-	return 0;
-}
-
-static void sbsa_gwdt_shutdown(struct platform_device *pdev)
-{
-	struct sbsa_gwdt *gwdt = platform_get_drvdata(pdev);
-
-	sbsa_gwdt_stop(&gwdt->wdd);
-}
-
-static int sbsa_gwdt_remove(struct platform_device *pdev)
-{
-	struct sbsa_gwdt *gwdt = platform_get_drvdata(pdev);
-
-	watchdog_unregister_device(&gwdt->wdd);
 
 	return 0;
 }
@@ -392,8 +358,6 @@ static struct platform_driver sbsa_gwdt_driver = {
 		.of_match_table = sbsa_gwdt_of_match,
 	},
 	.probe = sbsa_gwdt_probe,
-	.remove = sbsa_gwdt_remove,
-	.shutdown = sbsa_gwdt_shutdown,
 	.id_table = sbsa_gwdt_pdev_match,
 };
 

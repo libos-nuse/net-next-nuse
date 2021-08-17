@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/capability.h>
 #include <linux/fs.h>
 #include <linux/posix_acl.h>
@@ -23,7 +24,8 @@ reiserfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	struct reiserfs_transaction_handle th;
 	size_t jcreate_blocks;
 	int size = acl ? posix_acl_xattr_size(acl->a_count) : 0;
-
+	int update_mode = 0;
+	umode_t mode = inode->i_mode;
 
 	/*
 	 * Pessimism: We can't assume that anything from the xattr root up
@@ -37,7 +39,16 @@ reiserfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	error = journal_begin(&th, inode->i_sb, jcreate_blocks);
 	reiserfs_write_unlock(inode->i_sb);
 	if (error == 0) {
+		if (type == ACL_TYPE_ACCESS && acl) {
+			error = posix_acl_update_mode(inode, &mode, &acl);
+			if (error)
+				goto unlock;
+			update_mode = 1;
+		}
 		error = __reiserfs_set_acl(&th, inode, type, acl);
+		if (!error && update_mode)
+			inode->i_mode = mode;
+unlock:
 		reiserfs_write_lock(inode->i_sb);
 		error2 = journal_end(&th);
 		reiserfs_write_unlock(inode->i_sb);
@@ -241,15 +252,6 @@ __reiserfs_set_acl(struct reiserfs_transaction_handle *th, struct inode *inode,
 	switch (type) {
 	case ACL_TYPE_ACCESS:
 		name = XATTR_NAME_POSIX_ACL_ACCESS;
-		if (acl) {
-			error = posix_acl_equiv_mode(acl, &inode->i_mode);
-			if (error < 0)
-				return error;
-			else {
-				if (error == 0)
-					acl = NULL;
-			}
-		}
 		break;
 	case ACL_TYPE_DEFAULT:
 		name = XATTR_NAME_POSIX_ACL_DEFAULT;
@@ -277,7 +279,7 @@ __reiserfs_set_acl(struct reiserfs_transaction_handle *th, struct inode *inode,
 	if (error == -ENODATA) {
 		error = 0;
 		if (type == ACL_TYPE_ACCESS) {
-			inode->i_ctime = CURRENT_TIME_SEC;
+			inode->i_ctime = current_time(inode);
 			mark_inode_dirty(inode);
 		}
 	}
@@ -318,10 +320,8 @@ reiserfs_inherit_default_acl(struct reiserfs_transaction_handle *th,
 	 * would be useless since permissions are ignored, and a pain because
 	 * it introduces locking cycles
 	 */
-	if (IS_PRIVATE(dir)) {
-		inode->i_flags |= S_PRIVATE;
+	if (IS_PRIVATE(inode))
 		goto apply_umask;
-	}
 
 	err = posix_acl_create(dir, &inode->i_mode, &default_acl, &acl);
 	if (err)
@@ -373,7 +373,7 @@ int reiserfs_cache_default_acl(struct inode *inode)
 
 		/* Other xattrs can be created during inode creation. We don't
 		 * want to claim too many blocks, so we check to see if we
-		 * we need to create the tree to the xattrs, and then we
+		 * need to create the tree to the xattrs, and then we
 		 * just want two files. */
 		nblocks = reiserfs_xattr_jcreate_nblocks(inode);
 		nblocks += JOURNAL_BLOCKS_PER_OBJECT(inode->i_sb);

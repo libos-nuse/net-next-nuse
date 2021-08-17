@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Au1000/Au1500/Au1100 AC97C controller driver for ASoC
  *
@@ -91,8 +92,8 @@ static unsigned short au1xac97c_ac97_read(struct snd_ac97 *ac97,
 	do {
 		mutex_lock(&ctx->lock);
 
-		tmo = 5;
-		while ((RD(ctx, AC97_STATUS) & STAT_CP) && tmo--)
+		tmo = 6;
+		while ((RD(ctx, AC97_STATUS) & STAT_CP) && --tmo)
 			udelay(21);	/* wait an ac97 frame time */
 		if (!tmo) {
 			pr_debug("ac97rd timeout #1\n");
@@ -105,7 +106,7 @@ static unsigned short au1xac97c_ac97_read(struct snd_ac97 *ac97,
 		 * poll, Forrest, poll...
 		 */
 		tmo = 0x10000;
-		while ((RD(ctx, AC97_STATUS) & STAT_CP) && tmo--)
+		while ((RD(ctx, AC97_STATUS) & STAT_CP) && --tmo)
 			asm volatile ("nop");
 		data = RD(ctx, AC97_CMDRESP);
 
@@ -205,7 +206,6 @@ static int au1xac97c_dai_probe(struct snd_soc_dai *dai)
 
 static struct snd_soc_dai_driver au1xac97c_dai_driver = {
 	.name			= "alchemy-ac97c",
-	.bus_control		= true,
 	.probe			= au1xac97c_dai_probe,
 	.playback = {
 		.rates		= AC97_RATES,
@@ -247,7 +247,7 @@ static int au1xac97c_drvprobe(struct platform_device *pdev)
 				     pdev->name))
 		return -EBUSY;
 
-	ctx->mmio = devm_ioremap_nocache(&pdev->dev, iores->start,
+	ctx->mmio = devm_ioremap(&pdev->dev, iores->start,
 					 resource_size(iores));
 	if (!ctx->mmio)
 		return -EBUSY;

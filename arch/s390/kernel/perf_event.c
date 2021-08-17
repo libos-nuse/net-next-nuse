@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Performance event support for s390x
  *
  *  Copyright IBM Corp. 2012, 2013
  *  Author(s): Hendrik Brueckner <brueckner@linux.vnet.ibm.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License (version 2 only)
- * as published by the Free Software Foundation.
  */
 #define KMSG_COMPONENT	"perf"
 #define pr_fmt(fmt)	KMSG_COMPONENT ": " fmt
@@ -24,6 +21,7 @@
 #include <asm/lowcore.h>
 #include <asm/processor.h>
 #include <asm/sysinfo.h>
+#include <asm/unwind.h>
 
 const char *perf_pmu_name(void)
 {
@@ -222,20 +220,17 @@ static int __init service_level_perf_register(void)
 }
 arch_initcall(service_level_perf_register);
 
-static int __perf_callchain_kernel(void *data, unsigned long address)
-{
-	struct perf_callchain_entry_ctx *entry = data;
-
-	perf_callchain_store(entry, address);
-	return 0;
-}
-
 void perf_callchain_kernel(struct perf_callchain_entry_ctx *entry,
 			   struct pt_regs *regs)
 {
-	if (user_mode(regs))
-		return;
-	dump_trace(__perf_callchain_kernel, entry, NULL, regs->gprs[15]);
+	struct unwind_state state;
+	unsigned long addr;
+
+	unwind_for_each_frame(&state, current, regs, 0) {
+		addr = unwind_get_return_address(&state);
+		if (!addr || perf_callchain_store(entry, addr))
+			return;
+	}
 }
 
 /* Perf definitions for PMU event attributes in sysfs */
@@ -245,36 +240,5 @@ ssize_t cpumf_events_sysfs_show(struct device *dev,
 	struct perf_pmu_events_attr *pmu_attr;
 
 	pmu_attr = container_of(attr, struct perf_pmu_events_attr, attr);
-	return sprintf(page, "event=0x%04llx,name=%s\n",
-		       pmu_attr->id, attr->attr.name);
+	return sprintf(page, "event=0x%04llx\n", pmu_attr->id);
 }
-
-/* Reserve/release functions for sharing perf hardware */
-static DEFINE_SPINLOCK(perf_hw_owner_lock);
-static void *perf_sampling_owner;
-
-int perf_reserve_sampling(void)
-{
-	int err;
-
-	err = 0;
-	spin_lock(&perf_hw_owner_lock);
-	if (perf_sampling_owner) {
-		pr_warn("The sampling facility is already reserved by %p\n",
-			perf_sampling_owner);
-		err = -EBUSY;
-	} else
-		perf_sampling_owner = __builtin_return_address(0);
-	spin_unlock(&perf_hw_owner_lock);
-	return err;
-}
-EXPORT_SYMBOL(perf_reserve_sampling);
-
-void perf_release_sampling(void)
-{
-	spin_lock(&perf_hw_owner_lock);
-	WARN_ON(!perf_sampling_owner);
-	perf_sampling_owner = NULL;
-	spin_unlock(&perf_hw_owner_lock);
-}
-EXPORT_SYMBOL(perf_release_sampling);

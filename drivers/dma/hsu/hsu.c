@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Core driver for the High Speed UART DMA
  *
@@ -5,10 +6,6 @@
  * Author: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
  *
  * Partially based on the bits found in drivers/tty/serial/mfd.c.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 /*
@@ -64,10 +61,10 @@ static void hsu_dma_chan_start(struct hsu_dma_chan *hsuc)
 
 	if (hsuc->direction == DMA_MEM_TO_DEV) {
 		bsr = config->dst_maxburst;
-		mtsr = config->src_addr_width;
+		mtsr = config->dst_addr_width;
 	} else if (hsuc->direction == DMA_DEV_TO_MEM) {
 		bsr = config->src_maxburst;
-		mtsr = config->dst_addr_width;
+		mtsr = config->src_addr_width;
 	}
 
 	hsu_chan_disable(hsuc);
@@ -126,28 +123,33 @@ static void hsu_dma_start_transfer(struct hsu_dma_chan *hsuc)
 	hsu_dma_start_channel(hsuc);
 }
 
-static u32 hsu_dma_chan_get_sr(struct hsu_dma_chan *hsuc)
-{
-	unsigned long flags;
-	u32 sr;
-
-	spin_lock_irqsave(&hsuc->vchan.lock, flags);
-	sr = hsu_chan_readl(hsuc, HSU_CH_SR);
-	spin_unlock_irqrestore(&hsuc->vchan.lock, flags);
-
-	return sr & ~(HSU_CH_SR_DESCE_ANY | HSU_CH_SR_CDESC_ANY);
-}
-
-irqreturn_t hsu_dma_irq(struct hsu_dma_chip *chip, unsigned short nr)
+/*
+ *      hsu_dma_get_status() - get DMA channel status
+ *      @chip: HSUART DMA chip
+ *      @nr: DMA channel number
+ *      @status: pointer for DMA Channel Status Register value
+ *
+ *      Description:
+ *      The function reads and clears the DMA Channel Status Register, checks
+ *      if it was a timeout interrupt and returns a corresponding value.
+ *
+ *      Caller should provide a valid pointer for the DMA Channel Status
+ *      Register value that will be returned in @status.
+ *
+ *      Return:
+ *      1 for DMA timeout status, 0 for other DMA status, or error code for
+ *      invalid parameters or no interrupt pending.
+ */
+int hsu_dma_get_status(struct hsu_dma_chip *chip, unsigned short nr,
+		       u32 *status)
 {
 	struct hsu_dma_chan *hsuc;
-	struct hsu_dma_desc *desc;
 	unsigned long flags;
 	u32 sr;
 
 	/* Sanity check */
 	if (nr >= chip->hsu->nr_channels)
-		return IRQ_NONE;
+		return -EINVAL;
 
 	hsuc = &chip->hsu->chan[nr];
 
@@ -155,22 +157,64 @@ irqreturn_t hsu_dma_irq(struct hsu_dma_chip *chip, unsigned short nr)
 	 * No matter what situation, need read clear the IRQ status
 	 * There is a bug, see Errata 5, HSD 2900918
 	 */
-	sr = hsu_dma_chan_get_sr(hsuc);
+	spin_lock_irqsave(&hsuc->vchan.lock, flags);
+	sr = hsu_chan_readl(hsuc, HSU_CH_SR);
+	spin_unlock_irqrestore(&hsuc->vchan.lock, flags);
+
+	/* Check if any interrupt is pending */
+	sr &= ~(HSU_CH_SR_DESCE_ANY | HSU_CH_SR_CDESC_ANY);
 	if (!sr)
-		return IRQ_NONE;
+		return -EIO;
 
 	/* Timeout IRQ, need wait some time, see Errata 2 */
 	if (sr & HSU_CH_SR_DESCTO_ANY)
 		udelay(2);
 
+	/*
+	 * At this point, at least one of Descriptor Time Out, Channel Error
+	 * or Descriptor Done bits must be set. Clear the Descriptor Time Out
+	 * bits and if sr is still non-zero, it must be channel error or
+	 * descriptor done which are higher priority than timeout and handled
+	 * in hsu_dma_do_irq(). Else, it must be a timeout.
+	 */
 	sr &= ~HSU_CH_SR_DESCTO_ANY;
-	if (!sr)
-		return IRQ_HANDLED;
+
+	*status = sr;
+
+	return sr ? 0 : 1;
+}
+EXPORT_SYMBOL_GPL(hsu_dma_get_status);
+
+/*
+ *      hsu_dma_do_irq() - DMA interrupt handler
+ *      @chip: HSUART DMA chip
+ *      @nr: DMA channel number
+ *      @status: Channel Status Register value
+ *
+ *      Description:
+ *      This function handles Channel Error and Descriptor Done interrupts.
+ *      This function should be called after determining that the DMA interrupt
+ *      is not a normal timeout interrupt, ie. hsu_dma_get_status() returned 0.
+ *
+ *      Return:
+ *      0 for invalid channel number, 1 otherwise.
+ */
+int hsu_dma_do_irq(struct hsu_dma_chip *chip, unsigned short nr, u32 status)
+{
+	struct hsu_dma_chan *hsuc;
+	struct hsu_dma_desc *desc;
+	unsigned long flags;
+
+	/* Sanity check */
+	if (nr >= chip->hsu->nr_channels)
+		return 0;
+
+	hsuc = &chip->hsu->chan[nr];
 
 	spin_lock_irqsave(&hsuc->vchan.lock, flags);
 	desc = hsuc->desc;
 	if (desc) {
-		if (sr & HSU_CH_SR_CHE) {
+		if (status & HSU_CH_SR_CHE) {
 			desc->status = DMA_ERROR;
 		} else if (desc->active < desc->nents) {
 			hsu_dma_start_channel(hsuc);
@@ -182,9 +226,9 @@ irqreturn_t hsu_dma_irq(struct hsu_dma_chip *chip, unsigned short nr)
 	}
 	spin_unlock_irqrestore(&hsuc->vchan.lock, flags);
 
-	return IRQ_HANDLED;
+	return 1;
 }
-EXPORT_SYMBOL_GPL(hsu_dma_irq);
+EXPORT_SYMBOL_GPL(hsu_dma_do_irq);
 
 static struct hsu_dma_desc *hsu_dma_alloc_desc(unsigned int nents)
 {
@@ -301,10 +345,6 @@ static int hsu_dma_slave_config(struct dma_chan *chan,
 {
 	struct hsu_dma_chan *hsuc = to_hsu_dma_chan(chan);
 
-	/* Check if chan will be configured for slave transfers */
-	if (!is_slave_direction(config->direction))
-		return -EINVAL;
-
 	memcpy(&hsuc->config, config, sizeof(hsuc->config));
 
 	return 0;
@@ -366,6 +406,13 @@ static void hsu_dma_free_chan_resources(struct dma_chan *chan)
 	vchan_free_chan_resources(to_virt_chan(chan));
 }
 
+static void hsu_dma_synchronize(struct dma_chan *chan)
+{
+	struct hsu_dma_chan *hsuc = to_hsu_dma_chan(chan);
+
+	vchan_synchronize(&hsuc->vchan);
+}
+
 int hsu_dma_probe(struct hsu_dma_chip *chip)
 {
 	struct hsu_dma *hsu;
@@ -412,6 +459,7 @@ int hsu_dma_probe(struct hsu_dma_chip *chip)
 	hsu->dma.device_pause = hsu_dma_pause;
 	hsu->dma.device_resume = hsu_dma_resume;
 	hsu->dma.device_terminate_all = hsu_dma_terminate_all;
+	hsu->dma.device_synchronize = hsu_dma_synchronize;
 
 	hsu->dma.src_addr_widths = HSU_DMA_BUSWIDTHS;
 	hsu->dma.dst_addr_widths = HSU_DMA_BUSWIDTHS;

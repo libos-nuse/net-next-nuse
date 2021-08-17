@@ -35,7 +35,7 @@
 	.macro	setup_c0_status set clr
 	.set	push
 	mfc0	t0, CP0_STATUS
-	or	t0, ST0_CU0|\set|0x1f|\clr
+	or	t0, ST0_KERNEL_CUMASK|\set|0x1f|\clr
 	xor	t0, 0x1f|\clr
 	mtc0	t0, CP0_STATUS
 	.set	noreorder
@@ -77,7 +77,7 @@ EXPORT(_stext)
 	 */
 FEXPORT(__kernel_entry)
 	j	kernel_entry
-#endif
+#endif /* CONFIG_BOOT_RAW */
 
 	__REF
 
@@ -93,22 +93,33 @@ NESTED(kernel_entry, 16, sp)			# kernel entry point
 	jr	t0
 0:
 
-#ifdef CONFIG_MIPS_RAW_APPENDED_DTB
-	PTR_LA		t0, __appended_dtb
+#ifdef CONFIG_USE_OF
+#if defined(CONFIG_MIPS_RAW_APPENDED_DTB) || \
+	defined(CONFIG_MIPS_ELF_APPENDED_DTB)
+
+	PTR_LA		t2, __appended_dtb
 
 #ifdef CONFIG_CPU_BIG_ENDIAN
 	li		t1, 0xd00dfeed
-#else
+#else  /* !CONFIG_CPU_BIG_ENDIAN */
 	li		t1, 0xedfe0dd0
-#endif
-	lw		t2, (t0)
-	bne		t1, t2, not_found
-	 nop
+#endif /* !CONFIG_CPU_BIG_ENDIAN */
+	lw		t0, (t2)
+	beq		t0, t1, dtb_found
+#endif /* CONFIG_MIPS_RAW_APPENDED_DTB || CONFIG_MIPS_ELF_APPENDED_DTB */
+	li		t1, -2
+	move		t2, a1
+	beq		a0, t1, dtb_found
 
-	move		a1, t0
-	PTR_LI		a0, -2
-not_found:
-#endif
+#ifdef CONFIG_BUILTIN_DTB
+	PTR_LA	t2, __dtb_start
+	PTR_LA	t1, __dtb_end
+	bne		t1, t2, dtb_found
+#endif /* CONFIG_BUILTIN_DTB */
+
+	li		t2, 0
+dtb_found:
+#endif /* CONFIG_USE_OF */
 	PTR_LA		t0, __bss_start		# clear .bss
 	LONG_S		zero, (t0)
 	PTR_LA		t1, __bss_stop - LONGSIZE
@@ -122,7 +133,14 @@ not_found:
 	LONG_S		a2, fw_arg2
 	LONG_S		a3, fw_arg3
 
+#ifdef CONFIG_USE_OF
+	LONG_S		t2, fw_passed_dtb
+#endif
+
 	MTC0		zero, CP0_CONTEXT	# clear context register
+#ifdef CONFIG_64BIT
+	MTC0		zero, CP0_XCONTEXT
+#endif
 	PTR_LA		$28, init_thread_union
 	/* Set the SP after an empty pt_regs.  */
 	PTR_LI		sp, _THREAD_SIZE - 32 - PT_SIZE
@@ -149,9 +167,9 @@ not_found:
 	 * newly sync'd icache.
 	 */
 	jr.hb		v0
-#else
+#else  /* !CONFIG_RELOCATABLE */
 	j		start_kernel
-#endif
+#endif /* !CONFIG_RELOCATABLE */
 	END(kernel_entry)
 
 #ifdef CONFIG_SMP

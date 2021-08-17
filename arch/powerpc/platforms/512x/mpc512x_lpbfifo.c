@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * The driver for Freescale MPC512x LocalPlus Bus FIFO
  * (called SCLPC in the Reference Manual).
  *
  * Copyright (C) 2013-2015 Alexander Popov <alex.popov@linux.com>.
- *
- * This file is released under the GPLv2.
  */
 
 #include <linux/interrupt.h>
@@ -435,9 +434,9 @@ static int mpc512x_lpbfifo_probe(struct platform_device *pdev)
 	memset(&lpbfifo, 0, sizeof(struct lpbfifo_data));
 	spin_lock_init(&lpbfifo.lock);
 
-	lpbfifo.chan = dma_request_slave_channel(&pdev->dev, "rx-tx");
-	if (lpbfifo.chan == NULL)
-		return -EPROBE_DEFER;
+	lpbfifo.chan = dma_request_chan(&pdev->dev, "rx-tx");
+	if (IS_ERR(lpbfifo.chan))
+		return PTR_ERR(lpbfifo.chan);
 
 	if (of_address_to_resource(pdev->dev.of_node, 0, &r) != 0) {
 		dev_err(&pdev->dev, "bad 'reg' in 'sclpc' device tree node\n");
@@ -473,7 +472,7 @@ static int mpc512x_lpbfifo_probe(struct platform_device *pdev)
 	}
 
 	lpbfifo.irq = irq_of_parse_and_map(pdev->dev.of_node, 0);
-	if (lpbfifo.irq == NO_IRQ) {
+	if (!lpbfifo.irq) {
 		dev_err(&pdev->dev, "mapping irq failed\n");
 		ret = -ENODEV;
 		goto err0;
@@ -528,7 +527,6 @@ static struct platform_driver mpc512x_lpbfifo_driver = {
 	.remove = mpc512x_lpbfifo_remove,
 	.driver = {
 		.name = DRV_NAME,
-		.owner = THIS_MODULE,
 		.of_match_table = mpc512x_lpbfifo_match,
 	},
 };

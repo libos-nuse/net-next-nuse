@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * mdt.c - meta data file for NILFS
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * Written by Ryusuke Konishi.
  */
@@ -57,7 +48,7 @@ nilfs_mdt_insert_new_block(struct inode *inode, unsigned long block,
 	set_buffer_mapped(bh);
 
 	kaddr = kmap_atomic(bh->b_page);
-	memset(kaddr + bh_offset(bh), 0, 1 << inode->i_blkbits);
+	memset(kaddr + bh_offset(bh), 0, i_blocksize(inode));
 	if (init_block)
 		init_block(inode, bh, kaddr);
 	flush_dcache_page(bh->b_page);
@@ -121,7 +112,7 @@ static int nilfs_mdt_create_block(struct inode *inode, unsigned long block,
 
 static int
 nilfs_mdt_submit_block(struct inode *inode, unsigned long blkoff,
-		       int mode, struct buffer_head **out_bh)
+		       int mode, int mode_flags, struct buffer_head **out_bh)
 {
 	struct buffer_head *bh;
 	__u64 blknum = 0;
@@ -135,7 +126,7 @@ nilfs_mdt_submit_block(struct inode *inode, unsigned long blkoff,
 	if (buffer_uptodate(bh))
 		goto out;
 
-	if (mode == READA) {
+	if (mode_flags & REQ_RAHEAD) {
 		if (!trylock_buffer(bh)) {
 			ret = -EBUSY;
 			goto failed_bh;
@@ -157,7 +148,7 @@ nilfs_mdt_submit_block(struct inode *inode, unsigned long blkoff,
 
 	bh->b_end_io = end_buffer_read_sync;
 	get_bh(bh);
-	submit_bh(mode, bh);
+	submit_bh(mode, mode_flags, bh);
 	ret = 0;
 
 	trace_nilfs2_mdt_submit_block(inode, inode->i_ino, blkoff, mode);
@@ -181,7 +172,7 @@ static int nilfs_mdt_read_block(struct inode *inode, unsigned long block,
 	int i, nr_ra_blocks = NILFS_MDT_MAX_RA_BLOCKS;
 	int err;
 
-	err = nilfs_mdt_submit_block(inode, block, READ, &first_bh);
+	err = nilfs_mdt_submit_block(inode, block, REQ_OP_READ, 0, &first_bh);
 	if (err == -EEXIST) /* internal code */
 		goto out;
 
@@ -191,7 +182,8 @@ static int nilfs_mdt_read_block(struct inode *inode, unsigned long block,
 	if (readahead) {
 		blkoff = block + 1;
 		for (i = 0; i < nr_ra_blocks; i++, blkoff++) {
-			err = nilfs_mdt_submit_block(inode, blkoff, READA, &bh);
+			err = nilfs_mdt_submit_block(inode, blkoff, REQ_OP_READ,
+						     REQ_RAHEAD, &bh);
 			if (likely(!err || err == -EEXIST))
 				brelse(bh);
 			else if (err != -EBUSY)
@@ -206,8 +198,12 @@ static int nilfs_mdt_read_block(struct inode *inode, unsigned long block,
 
  out_no_wait:
 	err = -EIO;
-	if (!buffer_uptodate(first_bh))
+	if (!buffer_uptodate(first_bh)) {
+		nilfs_err(inode->i_sb,
+			  "I/O error reading meta-data file (ino=%lu, block-offset=%lu)",
+			  inode->i_ino, block);
 		goto failed_bh;
+	}
  out:
 	*out_bh = first_bh;
 	return 0;
@@ -408,7 +404,7 @@ nilfs_mdt_write_page(struct page *page, struct writeback_control *wbc)
 	struct super_block *sb;
 	int err = 0;
 
-	if (inode && (inode->i_sb->s_flags & MS_RDONLY)) {
+	if (inode && sb_rdonly(inode->i_sb)) {
 		/*
 		 * It means that filesystem was remounted in read-only
 		 * mode because of error or metadata corruption. But we
@@ -496,7 +492,7 @@ void nilfs_mdt_set_entry_size(struct inode *inode, unsigned int entry_size,
 	struct nilfs_mdt_info *mi = NILFS_MDT(inode);
 
 	mi->mi_entry_size = entry_size;
-	mi->mi_entries_per_block = (1 << inode->i_blkbits) / entry_size;
+	mi->mi_entries_per_block = i_blocksize(inode) / entry_size;
 	mi->mi_first_entry_offset = DIV_ROUND_UP(header_size, entry_size);
 }
 

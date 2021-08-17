@@ -39,7 +39,7 @@ static int tpic2810_get_direction(struct gpio_chip *chip,
 				  unsigned offset)
 {
 	/* This device always output */
-	return 0;
+	return GPIO_LINE_DIRECTION_OUT;
 }
 
 static int tpic2810_direction_input(struct gpio_chip *chip,
@@ -87,7 +87,7 @@ static void tpic2810_set_multiple(struct gpio_chip *chip, unsigned long *mask,
 	tpic2810_set_mask_bits(chip, *mask, *bits);
 }
 
-static struct gpio_chip template_chip = {
+static const struct gpio_chip template_chip = {
 	.label			= "tpic2810",
 	.owner			= THIS_MODULE,
 	.get_direction		= tpic2810_get_direction,

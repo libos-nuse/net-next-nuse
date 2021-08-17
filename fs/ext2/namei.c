@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/fs/ext2/namei.c
  *
@@ -40,13 +41,11 @@ static inline int ext2_add_nondir(struct dentry *dentry, struct inode *inode)
 {
 	int err = ext2_add_link(dentry, inode);
 	if (!err) {
-		unlock_new_inode(inode);
-		d_instantiate(dentry, inode);
+		d_instantiate_new(dentry, inode);
 		return 0;
 	}
 	inode_dec_link_count(inode);
-	unlock_new_inode(inode);
-	iput(inode);
+	discard_new_inode(inode);
 	return err;
 }
 
@@ -58,13 +57,17 @@ static struct dentry *ext2_lookup(struct inode * dir, struct dentry *dentry, uns
 {
 	struct inode * inode;
 	ino_t ino;
+	int res;
 	
 	if (dentry->d_name.len > EXT2_NAME_LEN)
 		return ERR_PTR(-ENAMETOOLONG);
 
-	ino = ext2_inode_by_name(dir, &dentry->d_name);
-	inode = NULL;
-	if (ino) {
+	res = ext2_inode_by_name(dir, &dentry->d_name, &ino);
+	if (res) {
+		if (res != -ENOENT)
+			return ERR_PTR(res);
+		inode = NULL;
+	} else {
 		inode = ext2_iget(dir->i_sb, ino);
 		if (inode == ERR_PTR(-ESTALE)) {
 			ext2_error(dir->i_sb, __func__,
@@ -79,9 +82,13 @@ static struct dentry *ext2_lookup(struct inode * dir, struct dentry *dentry, uns
 struct dentry *ext2_get_parent(struct dentry *child)
 {
 	struct qstr dotdot = QSTR_INIT("..", 2);
-	unsigned long ino = ext2_inode_by_name(d_inode(child), &dotdot);
-	if (!ino)
-		return ERR_PTR(-ENOENT);
+	ino_t ino;
+	int res;
+
+	res = ext2_inode_by_name(d_inode(child), &dotdot, &ino);
+	if (res)
+		return ERR_PTR(res);
+
 	return d_obtain_alias(ext2_iget(child->d_sb, ino));
 } 
 
@@ -106,14 +113,7 @@ static int ext2_create (struct inode * dir, struct dentry * dentry, umode_t mode
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
-	inode->i_op = &ext2_file_inode_operations;
-	if (test_opt(inode->i_sb, NOBH)) {
-		inode->i_mapping->a_ops = &ext2_nobh_aops;
-		inode->i_fop = &ext2_file_operations;
-	} else {
-		inode->i_mapping->a_ops = &ext2_aops;
-		inode->i_fop = &ext2_file_operations;
-	}
+	ext2_set_file_ops(inode);
 	mark_inode_dirty(inode);
 	return ext2_add_nondir(dentry, inode);
 }
@@ -124,14 +124,7 @@ static int ext2_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mode)
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
-	inode->i_op = &ext2_file_inode_operations;
-	if (test_opt(inode->i_sb, NOBH)) {
-		inode->i_mapping->a_ops = &ext2_nobh_aops;
-		inode->i_fop = &ext2_file_operations;
-	} else {
-		inode->i_mapping->a_ops = &ext2_aops;
-		inode->i_fop = &ext2_file_operations;
-	}
+	ext2_set_file_ops(inode);
 	mark_inode_dirty(inode);
 	d_tmpfile(dentry, inode);
 	unlock_new_inode(inode);
@@ -151,9 +144,7 @@ static int ext2_mknod (struct inode * dir, struct dentry *dentry, umode_t mode, 
 	err = PTR_ERR(inode);
 	if (!IS_ERR(inode)) {
 		init_special_inode(inode, inode->i_mode, rdev);
-#ifdef CONFIG_EXT2_FS_XATTR
 		inode->i_op = &ext2_special_inode_operations;
-#endif
 		mark_inode_dirty(inode);
 		err = ext2_add_nondir(dentry, inode);
 	}
@@ -206,8 +197,7 @@ out:
 
 out_fail:
 	inode_dec_link_count(inode);
-	unlock_new_inode(inode);
-	iput (inode);
+	discard_new_inode(inode);
 	goto out;
 }
 
@@ -221,7 +211,7 @@ static int ext2_link (struct dentry * old_dentry, struct inode * dir,
 	if (err)
 		return err;
 
-	inode->i_ctime = CURRENT_TIME_SEC;
+	inode->i_ctime = current_time(inode);
 	inode_inc_link_count(inode);
 	ihold(inode);
 
@@ -268,16 +258,14 @@ static int ext2_mkdir(struct inode * dir, struct dentry * dentry, umode_t mode)
 	if (err)
 		goto out_fail;
 
-	unlock_new_inode(inode);
-	d_instantiate(dentry, inode);
+	d_instantiate_new(dentry, inode);
 out:
 	return err;
 
 out_fail:
 	inode_dec_link_count(inode);
 	inode_dec_link_count(inode);
-	unlock_new_inode(inode);
-	iput(inode);
+	discard_new_inode(inode);
 out_dir:
 	inode_dec_link_count(dir);
 	goto out;
@@ -294,9 +282,9 @@ static int ext2_unlink(struct inode * dir, struct dentry *dentry)
 	if (err)
 		goto out;
 
-	de = ext2_find_entry (dir, &dentry->d_name, &page);
-	if (!de) {
-		err = -ENOENT;
+	de = ext2_find_entry(dir, &dentry->d_name, &page);
+	if (IS_ERR(de)) {
+		err = PTR_ERR(de);
 		goto out;
 	}
 
@@ -328,7 +316,8 @@ static int ext2_rmdir (struct inode * dir, struct dentry *dentry)
 }
 
 static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
-	struct inode * new_dir,	struct dentry * new_dentry )
+			struct inode * new_dir,	struct dentry * new_dentry,
+			unsigned int flags)
 {
 	struct inode * old_inode = d_inode(old_dentry);
 	struct inode * new_inode = d_inode(new_dentry);
@@ -338,6 +327,9 @@ static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 	struct ext2_dir_entry_2 * old_de;
 	int err;
 
+	if (flags & ~RENAME_NOREPLACE)
+		return -EINVAL;
+
 	err = dquot_initialize(old_dir);
 	if (err)
 		goto out;
@@ -346,9 +338,9 @@ static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 	if (err)
 		goto out;
 
-	old_de = ext2_find_entry (old_dir, &old_dentry->d_name, &old_page);
-	if (!old_de) {
-		err = -ENOENT;
+	old_de = ext2_find_entry(old_dir, &old_dentry->d_name, &old_page);
+	if (IS_ERR(old_de)) {
+		err = PTR_ERR(old_de);
 		goto out;
 	}
 
@@ -367,12 +359,13 @@ static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 		if (dir_de && !ext2_empty_dir (new_inode))
 			goto out_dir;
 
-		err = -ENOENT;
-		new_de = ext2_find_entry (new_dir, &new_dentry->d_name, &new_page);
-		if (!new_de)
+		new_de = ext2_find_entry(new_dir, &new_dentry->d_name, &new_page);
+		if (IS_ERR(new_de)) {
+			err = PTR_ERR(new_de);
 			goto out_dir;
+		}
 		ext2_set_link(new_dir, new_de, new_page, old_inode, 1);
-		new_inode->i_ctime = CURRENT_TIME_SEC;
+		new_inode->i_ctime = current_time(new_inode);
 		if (dir_de)
 			drop_nlink(new_inode);
 		inode_dec_link_count(new_inode);
@@ -388,7 +381,7 @@ static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 	 * Like most other Unix systems, set the ctime for inodes on a
  	 * rename.
 	 */
-	old_inode->i_ctime = CURRENT_TIME_SEC;
+	old_inode->i_ctime = current_time(old_inode);
 	mark_inode_dirty(old_inode);
 
 	ext2_delete_entry (old_de, old_page);
@@ -427,12 +420,8 @@ const struct inode_operations ext2_dir_inode_operations = {
 	.rmdir		= ext2_rmdir,
 	.mknod		= ext2_mknod,
 	.rename		= ext2_rename,
-#ifdef CONFIG_EXT2_FS_XATTR
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
 	.listxattr	= ext2_listxattr,
-	.removexattr	= generic_removexattr,
-#endif
+	.getattr	= ext2_getattr,
 	.setattr	= ext2_setattr,
 	.get_acl	= ext2_get_acl,
 	.set_acl	= ext2_set_acl,
@@ -440,12 +429,8 @@ const struct inode_operations ext2_dir_inode_operations = {
 };
 
 const struct inode_operations ext2_special_inode_operations = {
-#ifdef CONFIG_EXT2_FS_XATTR
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
 	.listxattr	= ext2_listxattr,
-	.removexattr	= generic_removexattr,
-#endif
+	.getattr	= ext2_getattr,
 	.setattr	= ext2_setattr,
 	.get_acl	= ext2_get_acl,
 	.set_acl	= ext2_set_acl,

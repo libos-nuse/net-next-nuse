@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Sascha Hauer, Pengutronix <s.hauer@pengutronix.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 #include <linux/mm.h>
 #include <linux/delay.h>
@@ -66,31 +62,25 @@ static const char *std_sel[] = {"ppll", "arm"};
 static const char *ipg_per_sel[] = {"ahb_per_div", "arm_per_div"};
 
 enum mx35_clks {
-	ckih, mpll, ppll, mpll_075, arm, hsp, hsp_div, hsp_sel, ahb, ipg,
-	arm_per_div, ahb_per_div, ipg_per, uart_sel, uart_div, esdhc_sel,
-	esdhc1_div, esdhc2_div, esdhc3_div, spdif_sel, spdif_div_pre,
-	spdif_div_post, ssi_sel, ssi1_div_pre, ssi1_div_post, ssi2_div_pre,
-	ssi2_div_post, usb_sel, usb_div, nfc_div, asrc_gate, pata_gate,
-	audmux_gate, can1_gate, can2_gate, cspi1_gate, cspi2_gate, ect_gate,
-	edio_gate, emi_gate, epit1_gate, epit2_gate, esai_gate, esdhc1_gate,
-	esdhc2_gate, esdhc3_gate, fec_gate, gpio1_gate, gpio2_gate, gpio3_gate,
-	gpt_gate, i2c1_gate, i2c2_gate, i2c3_gate, iomuxc_gate, ipu_gate,
-	kpp_gate, mlb_gate, mshc_gate, owire_gate, pwm_gate, rngc_gate,
-	rtc_gate, rtic_gate, scc_gate, sdma_gate, spba_gate, spdif_gate,
-	ssi1_gate, ssi2_gate, uart1_gate, uart2_gate, uart3_gate, usbotg_gate,
-	wdog_gate, max_gate, admux_gate, csi_gate, csi_div, csi_sel, iim_gate,
-	gpu2d_gate, ckil, clk_max
+	/*  0 */ ckih, mpll, ppll, mpll_075, arm, hsp, hsp_div, hsp_sel, ahb,
+	/*  9 */ ipg, arm_per_div, ahb_per_div, ipg_per, uart_sel, uart_div,
+	/* 15 */ esdhc_sel, esdhc1_div, esdhc2_div, esdhc3_div, spdif_sel,
+	/* 20 */ spdif_div_pre, spdif_div_post, ssi_sel, ssi1_div_pre,
+	/* 24 */ ssi1_div_post, ssi2_div_pre, ssi2_div_post, usb_sel, usb_div,
+	/* 29 */ nfc_div, asrc_gate, pata_gate, audmux_gate, can1_gate,
+	/* 34 */ can2_gate, cspi1_gate, cspi2_gate, ect_gate, edio_gate,
+	/* 39 */ emi_gate, epit1_gate, epit2_gate, esai_gate, esdhc1_gate,
+	/* 44 */ esdhc2_gate, esdhc3_gate, fec_gate, gpio1_gate, gpio2_gate,
+	/* 49 */ gpio3_gate, gpt_gate, i2c1_gate, i2c2_gate, i2c3_gate,
+	/* 54 */ iomuxc_gate, ipu_gate, kpp_gate, mlb_gate, mshc_gate,
+	/* 59 */ owire_gate, pwm_gate, rngc_gate, rtc_gate, rtic_gate, scc_gate,
+	/* 65 */ sdma_gate, spba_gate, spdif_gate, ssi1_gate, ssi2_gate,
+	/* 70 */ uart1_gate, uart2_gate, uart3_gate, usbotg_gate, wdog_gate,
+	/* 75 */ max_gate, admux_gate, csi_gate, csi_div, csi_sel, iim_gate,
+	/* 81 */ gpu2d_gate, ckil, clk_max
 };
 
 static struct clk *clk[clk_max];
-
-static struct clk ** const uart_clks[] __initconst = {
-	&clk[ipg],
-	&clk[uart1_gate],
-	&clk[uart2_gate],
-	&clk[uart3_gate],
-	NULL
-};
 
 static void __init _mx35_clocks_init(void)
 {
@@ -115,7 +105,7 @@ static void __init _mx35_clocks_init(void)
 	}
 
 	clk[ckih] = imx_clk_fixed("ckih", 24000000);
-	clk[ckil] = imx_clk_fixed("ckih", 32768);
+	clk[ckil] = imx_clk_fixed("ckil", 32768);
 	clk[mpll] = imx_clk_pllv1(IMX_PLLV1_IMX35, "mpll", "ckih", base + MX35_CCM_MPCTL);
 	clk[ppll] = imx_clk_pllv1(IMX_PLLV1_IMX35, "ppll", "ckih", base + MX35_CCM_PPCTL);
 
@@ -245,77 +235,9 @@ static void __init _mx35_clocks_init(void)
 	 */
 	clk_prepare_enable(clk[scc_gate]);
 
-	imx_register_uart_clocks(uart_clks);
+	imx_register_uart_clocks(4);
 
 	imx_print_silicon_rev("i.MX35", mx35_revision());
-}
-
-int __init mx35_clocks_init(void)
-{
-	_mx35_clocks_init();
-
-	clk_register_clkdev(clk[pata_gate], NULL, "pata_imx");
-	clk_register_clkdev(clk[can1_gate], NULL, "flexcan.0");
-	clk_register_clkdev(clk[can2_gate], NULL, "flexcan.1");
-	clk_register_clkdev(clk[cspi1_gate], "per", "imx35-cspi.0");
-	clk_register_clkdev(clk[cspi1_gate], "ipg", "imx35-cspi.0");
-	clk_register_clkdev(clk[cspi2_gate], "per", "imx35-cspi.1");
-	clk_register_clkdev(clk[cspi2_gate], "ipg", "imx35-cspi.1");
-	clk_register_clkdev(clk[epit1_gate], NULL, "imx-epit.0");
-	clk_register_clkdev(clk[epit2_gate], NULL, "imx-epit.1");
-	clk_register_clkdev(clk[esdhc1_gate], "per", "sdhci-esdhc-imx35.0");
-	clk_register_clkdev(clk[ipg], "ipg", "sdhci-esdhc-imx35.0");
-	clk_register_clkdev(clk[ahb], "ahb", "sdhci-esdhc-imx35.0");
-	clk_register_clkdev(clk[esdhc2_gate], "per", "sdhci-esdhc-imx35.1");
-	clk_register_clkdev(clk[ipg], "ipg", "sdhci-esdhc-imx35.1");
-	clk_register_clkdev(clk[ahb], "ahb", "sdhci-esdhc-imx35.1");
-	clk_register_clkdev(clk[esdhc3_gate], "per", "sdhci-esdhc-imx35.2");
-	clk_register_clkdev(clk[ipg], "ipg", "sdhci-esdhc-imx35.2");
-	clk_register_clkdev(clk[ahb], "ahb", "sdhci-esdhc-imx35.2");
-	/* i.mx35 has the i.mx27 type fec */
-	clk_register_clkdev(clk[fec_gate], NULL, "imx27-fec.0");
-	clk_register_clkdev(clk[gpt_gate], "per", "imx-gpt.0");
-	clk_register_clkdev(clk[ipg], "ipg", "imx-gpt.0");
-	clk_register_clkdev(clk[i2c1_gate], NULL, "imx21-i2c.0");
-	clk_register_clkdev(clk[i2c2_gate], NULL, "imx21-i2c.1");
-	clk_register_clkdev(clk[i2c3_gate], NULL, "imx21-i2c.2");
-	clk_register_clkdev(clk[ipu_gate], NULL, "ipu-core");
-	clk_register_clkdev(clk[ipu_gate], NULL, "mx3_sdc_fb");
-	clk_register_clkdev(clk[kpp_gate], NULL, "imx-keypad");
-	clk_register_clkdev(clk[owire_gate], NULL, "mxc_w1");
-	clk_register_clkdev(clk[sdma_gate], NULL, "imx35-sdma");
-	clk_register_clkdev(clk[ssi1_gate], NULL, "imx-ssi.0");
-	clk_register_clkdev(clk[ssi2_gate], NULL, "imx-ssi.1");
-	/* i.mx35 has the i.mx21 type uart */
-	clk_register_clkdev(clk[uart1_gate], "per", "imx21-uart.0");
-	clk_register_clkdev(clk[ipg], "ipg", "imx21-uart.0");
-	clk_register_clkdev(clk[uart2_gate], "per", "imx21-uart.1");
-	clk_register_clkdev(clk[ipg], "ipg", "imx21-uart.1");
-	clk_register_clkdev(clk[uart3_gate], "per", "imx21-uart.2");
-	clk_register_clkdev(clk[ipg], "ipg", "imx21-uart.2");
-	/* i.mx35 has the i.mx21 type rtc */
-	clk_register_clkdev(clk[ckil], "ref", "imx21-rtc");
-	clk_register_clkdev(clk[rtc_gate], "ipg", "imx21-rtc");
-	clk_register_clkdev(clk[usb_div], "per", "mxc-ehci.0");
-	clk_register_clkdev(clk[ipg], "ipg", "mxc-ehci.0");
-	clk_register_clkdev(clk[usbotg_gate], "ahb", "mxc-ehci.0");
-	clk_register_clkdev(clk[usb_div], "per", "mxc-ehci.1");
-	clk_register_clkdev(clk[ipg], "ipg", "mxc-ehci.1");
-	clk_register_clkdev(clk[usbotg_gate], "ahb", "mxc-ehci.1");
-	clk_register_clkdev(clk[usb_div], "per", "mxc-ehci.2");
-	clk_register_clkdev(clk[ipg], "ipg", "mxc-ehci.2");
-	clk_register_clkdev(clk[usbotg_gate], "ahb", "mxc-ehci.2");
-	clk_register_clkdev(clk[usb_div], "per", "imx-udc-mx27");
-	clk_register_clkdev(clk[ipg], "ipg", "imx-udc-mx27");
-	clk_register_clkdev(clk[usbotg_gate], "ahb", "imx-udc-mx27");
-	clk_register_clkdev(clk[wdog_gate], NULL, "imx2-wdt.0");
-	clk_register_clkdev(clk[nfc_div], NULL, "imx25-nand.0");
-	clk_register_clkdev(clk[csi_gate], NULL, "mx3-camera.0");
-	clk_register_clkdev(clk[admux_gate], "audmux", NULL);
-
-	mxc_timer_init(MX35_GPT1_BASE_ADDR, MX35_INT_GPT, GPT_TYPE_IMX31);
-
-	return 0;
 }
 
 static void __init mx35_clocks_init_dt(struct device_node *ccm_node)

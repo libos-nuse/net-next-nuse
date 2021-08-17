@@ -56,7 +56,7 @@ Scott Hill shill@gtcocalcomp.com
 #include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/usb.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/unaligned.h>
 #include <asm/byteorder.h>
 #include <linux/bitops.h>
@@ -78,6 +78,7 @@ Scott Hill shill@gtcocalcomp.com
 
 /* Max size of a single report */
 #define REPORT_MAX_SIZE       10
+#define MAX_COLLECTION_LEVELS  10
 
 
 /* Bitmask whether pen is in range */
@@ -223,20 +224,23 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 	char  maintype = 'x';
 	char  globtype[12];
 	int   indent = 0;
-	char  indentstr[10] = "";
-
+	char  indentstr[MAX_COLLECTION_LEVELS + 1] = { 0 };
 
 	dev_dbg(ddev, "======>>>>>>PARSE<<<<<<======\n");
 
 	/* Walk  this report and pull out the info we need */
 	while (i < length) {
-		prefix = report[i];
-
-		/* Skip over prefix */
-		i++;
+		prefix = report[i++];
 
 		/* Determine data size and save the data in the proper variable */
-		size = PREF_SIZE(prefix);
+		size = (1U << PREF_SIZE(prefix)) >> 1;
+		if (i + size > length) {
+			dev_err(ddev,
+				"Not enough data (need %d, have %d)\n",
+				i + size, length);
+			break;
+		}
+
 		switch (size) {
 		case 1:
 			data = report[i];
@@ -244,8 +248,7 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 		case 2:
 			data16 = get_unaligned_le16(&report[i]);
 			break;
-		case 3:
-			size = 4;
+		case 4:
 			data32 = get_unaligned_le32(&report[i]);
 			break;
 		}
@@ -347,6 +350,13 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 			case TAG_MAIN_COL_START:
 				maintype = 'S';
 
+				if (indent == MAX_COLLECTION_LEVELS) {
+					dev_err(ddev, "Collection level %d would exceed limit of %d\n",
+						indent + 1,
+						MAX_COLLECTION_LEVELS);
+					break;
+				}
+
 				if (data == 0) {
 					dev_dbg(ddev, "======>>>>>> Physical\n");
 					strcpy(globtype, "Physical");
@@ -366,8 +376,15 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 				break;
 
 			case TAG_MAIN_COL_END:
-				dev_dbg(ddev, "<<<<<<======\n");
 				maintype = 'E';
+
+				if (indent == 0) {
+					dev_err(ddev, "Collection level already at zero\n");
+					break;
+				}
+
+				dev_dbg(ddev, "<<<<<<======\n");
+
 				indent--;
 				for (x = 0; x < indent; x++)
 					indentstr[x] = '-';
@@ -659,8 +676,8 @@ static void gtco_urb_callback(struct urb *urbinfo)
 
 			/* Mask out the Y tilt value used for pressure */
 			device->buffer[7] = (u8)((device->buffer[7]) & 0x7F);
+			fallthrough;
 
-			/* Fall thru */
 		case 4:
 			/* Tilt */
 			input_report_abs(inputdev, ABS_TILT_X,
@@ -668,8 +685,8 @@ static void gtco_urb_callback(struct urb *urbinfo)
 
 			input_report_abs(inputdev, ABS_TILT_Y,
 					 sign_extend32(device->buffer[7], 6));
+			fallthrough;
 
-			/* Fall thru */
 		case 2:
 		case 3:
 			/* Convert buttons, only 5 bits possible */
@@ -678,8 +695,8 @@ static void gtco_urb_callback(struct urb *urbinfo)
 			/* We don't apply any meaning to the bitmask,
 			   just report */
 			input_event(inputdev, EV_MSC, MSC_SERIAL, val);
+			fallthrough;
 
-			/*  Fall thru */
 		case 1:
 			/* All reports have X and Y coords in the same place */
 			val = get_unaligned_le16(&device->buffer[1]);
@@ -858,18 +875,14 @@ static int gtco_probe(struct usb_interface *usbinterface,
 	}
 
 	/* Sanity check that a device has an endpoint */
-	if (usbinterface->altsetting[0].desc.bNumEndpoints < 1) {
+	if (usbinterface->cur_altsetting->desc.bNumEndpoints < 1) {
 		dev_err(&usbinterface->dev,
 			"Invalid number of endpoints\n");
 		error = -EINVAL;
 		goto err_free_urb;
 	}
 
-	/*
-	 * The endpoint is always altsetting 0, we know this since we know
-	 * this device only has one interrupt endpoint
-	 */
-	endpoint = &usbinterface->altsetting[0].endpoint[0].desc;
+	endpoint = &usbinterface->cur_altsetting->endpoint[0].desc;
 
 	/* Some debug */
 	dev_dbg(&usbinterface->dev, "gtco # interfaces: %d\n", usbinterface->num_altsetting);
@@ -879,7 +892,8 @@ static int gtco_probe(struct usb_interface *usbinterface,
 	if (usb_endpoint_xfer_int(endpoint))
 		dev_dbg(&usbinterface->dev, "endpoint: we have interrupt endpoint\n");
 
-	dev_dbg(&usbinterface->dev, "endpoint extra len:%d\n", usbinterface->altsetting[0].extralen);
+	dev_dbg(&usbinterface->dev, "interface extra len:%d\n",
+		usbinterface->cur_altsetting->extralen);
 
 	/*
 	 * Find the HID descriptor so we can find out the size of the
@@ -956,8 +970,6 @@ static int gtco_probe(struct usb_interface *usbinterface,
 	input_dev->dev.parent = &usbinterface->dev;
 
 	/* Setup the URB, it will be posted later on open of input device */
-	endpoint = &usbinterface->altsetting[0].endpoint[0].desc;
-
 	usb_fill_int_urb(gtco->urbinfo,
 			 udev,
 			 usb_rcvintpipe(udev,

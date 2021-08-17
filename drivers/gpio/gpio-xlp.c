@@ -1,24 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2003-2015 Broadcom Corporation
  * All Rights Reserved
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/platform_device.h>
 #include <linux/of_device.h>
 #include <linux/module.h>
 #include <linux/irq.h>
 #include <linux/interrupt.h>
 #include <linux/irqchip/chained_irq.h>
+#include <linux/acpi.h>
 
 /*
  * XLP GPIO has multiple 32 bit registers for each feature where each register
@@ -224,7 +217,7 @@ static void xlp_gpio_generic_handler(struct irq_desc *desc)
 
 		if (gpio_stat & BIT(gpio % XLP_GPIO_REGSZ))
 			generic_handle_irq(irq_find_mapping(
-						priv->chip.irqdomain, gpio));
+						priv->chip.irq.domain, gpio));
 	}
 	chained_irq_exit(irqchip, desc);
 }
@@ -297,23 +290,18 @@ MODULE_DEVICE_TABLE(of, xlp_gpio_of_ids);
 static int xlp_gpio_probe(struct platform_device *pdev)
 {
 	struct gpio_chip *gc;
-	struct resource *iores;
+	struct gpio_irq_chip *girq;
 	struct xlp_gpio_priv *priv;
-	const struct of_device_id *of_id;
 	void __iomem *gpio_base;
 	int irq_base, irq, err;
 	int ngpio;
 	u32 soc_type;
 
-	iores = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!iores)
-		return -ENODEV;
-
 	priv = devm_kzalloc(&pdev->dev,	sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
-	gpio_base = devm_ioremap_resource(&pdev->dev, iores);
+	gpio_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(gpio_base))
 		return PTR_ERR(gpio_base);
 
@@ -321,13 +309,19 @@ static int xlp_gpio_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	of_id = of_match_device(xlp_gpio_of_ids, &pdev->dev);
-	if (!of_id) {
-		dev_err(&pdev->dev, "Failed to get soc type!\n");
-		return -ENODEV;
-	}
+	if (pdev->dev.of_node) {
+		soc_type = (uintptr_t)of_device_get_match_data(&pdev->dev);
+	} else {
+		const struct acpi_device_id *acpi_id;
 
-	soc_type = (uintptr_t) of_id->data;
+		acpi_id = acpi_match_device(pdev->dev.driver->acpi_match_table,
+						&pdev->dev);
+		if (!acpi_id || !acpi_id->driver_data) {
+			dev_err(&pdev->dev, "Unable to match ACPI ID\n");
+			return -ENODEV;
+		}
+		soc_type = (uintptr_t) acpi_id->driver_data;
+	}
 
 	switch (soc_type) {
 	case XLP_GPIO_VARIANT_XLP832:
@@ -388,45 +382,57 @@ static int xlp_gpio_probe(struct platform_device *pdev)
 	gc->get = xlp_gpio_get;
 
 	spin_lock_init(&priv->lock);
-	/* XLP has fixed IRQ range for GPIO interrupts */
-	if (soc_type == GPIO_VARIANT_VULCAN)
-		irq_base = irq_alloc_descs(-1, 0, gc->ngpio, 0);
-	else
-		irq_base = irq_alloc_descs(-1, XLP_GPIO_IRQ_BASE, gc->ngpio, 0);
-	if (irq_base < 0) {
-		dev_err(&pdev->dev, "Failed to allocate IRQ numbers\n");
-		return irq_base;
+
+	/* XLP(MIPS) has fixed range for GPIO IRQs, Vulcan(ARM64) does not */
+	if (soc_type != GPIO_VARIANT_VULCAN) {
+		irq_base = devm_irq_alloc_descs(&pdev->dev, -1,
+						XLP_GPIO_IRQ_BASE,
+						gc->ngpio, 0);
+		if (irq_base < 0) {
+			dev_err(&pdev->dev, "Failed to allocate IRQ numbers\n");
+			return irq_base;
+		}
+	} else {
+		irq_base = 0;
 	}
+
+	girq = &gc->irq;
+	girq->chip = &xlp_gpio_irq_chip;
+	girq->parent_handler = xlp_gpio_generic_handler;
+	girq->num_parents = 1;
+	girq->parents = devm_kcalloc(&pdev->dev, 1,
+				     sizeof(*girq->parents),
+				     GFP_KERNEL);
+	if (!girq->parents)
+		return -ENOMEM;
+	girq->parents[0] = irq;
+	girq->first = irq_base;
+	girq->default_type = IRQ_TYPE_NONE;
+	girq->handler = handle_level_irq;
 
 	err = gpiochip_add_data(gc, priv);
 	if (err < 0)
-		goto out_free_desc;
-
-	err = gpiochip_irqchip_add(gc, &xlp_gpio_irq_chip, irq_base,
-				handle_level_irq, IRQ_TYPE_NONE);
-	if (err) {
-		dev_err(&pdev->dev, "Could not connect irqchip to gpiochip!\n");
-		goto out_gpio_remove;
-	}
-
-	gpiochip_set_chained_irqchip(gc, &xlp_gpio_irq_chip, irq,
-			xlp_gpio_generic_handler);
+		return err;
 
 	dev_info(&pdev->dev, "registered %d GPIOs\n", gc->ngpio);
 
 	return 0;
-
-out_gpio_remove:
-	gpiochip_remove(gc);
-out_free_desc:
-	irq_free_descs(irq_base, gc->ngpio);
-	return err;
 }
+
+#ifdef CONFIG_ACPI
+static const struct acpi_device_id xlp_gpio_acpi_match[] = {
+	{ "BRCM9006", GPIO_VARIANT_VULCAN },
+	{ "CAV9006",  GPIO_VARIANT_VULCAN },
+	{},
+};
+MODULE_DEVICE_TABLE(acpi, xlp_gpio_acpi_match);
+#endif
 
 static struct platform_driver xlp_gpio_driver = {
 	.driver		= {
 		.name	= "xlp-gpio",
 		.of_match_table = xlp_gpio_of_ids,
+		.acpi_match_table = ACPI_PTR(xlp_gpio_acpi_match),
 	},
 	.probe		= xlp_gpio_probe,
 };

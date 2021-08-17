@@ -1,21 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  Copyright (C) 2003-2005 SAN People
  *
  * Debugging macro include header
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
 */
-
-#ifdef CONFIG_MMU
-#define AT91_IO_P2V(x) ((x) - 0x01000000)
-#else
-#define AT91_IO_P2V(x) (x)
-#endif
-
-#define AT91_DEBUG_UART_VIRT AT91_IO_P2V(CONFIG_DEBUG_UART_PHYS)
 
 #define AT91_DBGU_SR		(0x14)	/* Status Register */
 #define AT91_DBGU_THR		(0x1c)	/* Transmitter Holding Register */
@@ -24,17 +12,20 @@
 
 	.macro	addruart, rp, rv, tmp
 	ldr	\rp, =CONFIG_DEBUG_UART_PHYS		@ System peripherals (phys address)
-	ldr	\rv, =AT91_DEBUG_UART_VIRT		@ System peripherals (virt address)
+	ldr	\rv, =CONFIG_DEBUG_UART_VIRT		@ System peripherals (virt address)
 	.endm
 
 	.macro	senduart,rd,rx
 	strb	\rd, [\rx, #(AT91_DBGU_THR)]		@ Write to Transmitter Holding Register
 	.endm
 
-	.macro	waituart,rd,rx
+	.macro	waituarttxrdy,rd,rx
 1001:	ldr	\rd, [\rx, #(AT91_DBGU_SR)]		@ Read Status Register
 	tst	\rd, #AT91_DBGU_TXRDY			@ DBGU_TXRDY = 1 when ready to transmit
 	beq	1001b
+	.endm
+
+	.macro	waituartcts,rd,rx
 	.endm
 
 	.macro	busyuart,rd,rx

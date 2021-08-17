@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * VFIO PCI interrupt handling
  *
  * Copyright (C) 2012 Red Hat, Inc.  All rights reserved.
  *     Author: Alex Williamson <alex.williamson@redhat.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Derived from original vfio:
  * Copyright 2010 Cisco Systems, Inc.  All rights reserved.
@@ -250,45 +247,28 @@ static irqreturn_t vfio_msihandler(int irq, void *arg)
 static int vfio_msi_enable(struct vfio_pci_device *vdev, int nvec, bool msix)
 {
 	struct pci_dev *pdev = vdev->pdev;
+	unsigned int flag = msix ? PCI_IRQ_MSIX : PCI_IRQ_MSI;
 	int ret;
+	u16 cmd;
 
 	if (!is_irq_none(vdev))
 		return -EINVAL;
 
-	vdev->ctx = kzalloc(nvec * sizeof(struct vfio_pci_irq_ctx), GFP_KERNEL);
+	vdev->ctx = kcalloc(nvec, sizeof(struct vfio_pci_irq_ctx), GFP_KERNEL);
 	if (!vdev->ctx)
 		return -ENOMEM;
 
-	if (msix) {
-		int i;
-
-		vdev->msix = kzalloc(nvec * sizeof(struct msix_entry),
-				     GFP_KERNEL);
-		if (!vdev->msix) {
-			kfree(vdev->ctx);
-			return -ENOMEM;
-		}
-
-		for (i = 0; i < nvec; i++)
-			vdev->msix[i].entry = i;
-
-		ret = pci_enable_msix_range(pdev, vdev->msix, 1, nvec);
-		if (ret < nvec) {
-			if (ret > 0)
-				pci_disable_msix(pdev);
-			kfree(vdev->msix);
-			kfree(vdev->ctx);
-			return ret;
-		}
-	} else {
-		ret = pci_enable_msi_range(pdev, 1, nvec);
-		if (ret < nvec) {
-			if (ret > 0)
-				pci_disable_msi(pdev);
-			kfree(vdev->ctx);
-			return ret;
-		}
+	/* return the number of supported vectors if we can't get all: */
+	cmd = vfio_pci_memory_lock_and_enable(vdev);
+	ret = pci_alloc_irq_vectors(pdev, 1, nvec, flag);
+	if (ret < nvec) {
+		if (ret > 0)
+			pci_free_irq_vectors(pdev);
+		vfio_pci_memory_unlock_and_restore(vdev, cmd);
+		kfree(vdev->ctx);
+		return ret;
 	}
+	vfio_pci_memory_unlock_and_restore(vdev, cmd);
 
 	vdev->num_ctx = nvec;
 	vdev->irq_type = msix ? VFIO_PCI_MSIX_IRQ_INDEX :
@@ -311,15 +291,20 @@ static int vfio_msi_set_vector_signal(struct vfio_pci_device *vdev,
 	struct pci_dev *pdev = vdev->pdev;
 	struct eventfd_ctx *trigger;
 	int irq, ret;
+	u16 cmd;
 
 	if (vector < 0 || vector >= vdev->num_ctx)
 		return -EINVAL;
 
-	irq = msix ? vdev->msix[vector].vector : pdev->irq + vector;
+	irq = pci_irq_vector(pdev, vector);
 
 	if (vdev->ctx[vector].trigger) {
-		free_irq(irq, vdev->ctx[vector].trigger);
 		irq_bypass_unregister_producer(&vdev->ctx[vector].producer);
+
+		cmd = vfio_pci_memory_lock_and_enable(vdev);
+		free_irq(irq, vdev->ctx[vector].trigger);
+		vfio_pci_memory_unlock_and_restore(vdev, cmd);
+
 		kfree(vdev->ctx[vector].name);
 		eventfd_ctx_put(vdev->ctx[vector].trigger);
 		vdev->ctx[vector].trigger = NULL;
@@ -347,6 +332,7 @@ static int vfio_msi_set_vector_signal(struct vfio_pci_device *vdev,
 	 * such a reset it would be unsuccessful. To avoid this, restore the
 	 * cached value of the message prior to enabling.
 	 */
+	cmd = vfio_pci_memory_lock_and_enable(vdev);
 	if (msix) {
 		struct msi_msg msg;
 
@@ -356,6 +342,7 @@ static int vfio_msi_set_vector_signal(struct vfio_pci_device *vdev,
 
 	ret = request_irq(irq, vfio_msihandler, 0,
 			  vdev->ctx[vector].name, trigger);
+	vfio_pci_memory_unlock_and_restore(vdev, cmd);
 	if (ret) {
 		kfree(vdev->ctx[vector].name);
 		eventfd_ctx_put(trigger);
@@ -365,11 +352,13 @@ static int vfio_msi_set_vector_signal(struct vfio_pci_device *vdev,
 	vdev->ctx[vector].producer.token = trigger;
 	vdev->ctx[vector].producer.irq = irq;
 	ret = irq_bypass_register_producer(&vdev->ctx[vector].producer);
-	if (unlikely(ret))
+	if (unlikely(ret)) {
 		dev_info(&pdev->dev,
 		"irq bypass producer (token %p) registration fails: %d\n",
 		vdev->ctx[vector].producer.token, ret);
 
+		vdev->ctx[vector].producer.token = NULL;
+	}
 	vdev->ctx[vector].trigger = trigger;
 
 	return 0;
@@ -400,6 +389,7 @@ static void vfio_msi_disable(struct vfio_pci_device *vdev, bool msix)
 {
 	struct pci_dev *pdev = vdev->pdev;
 	int i;
+	u16 cmd;
 
 	for (i = 0; i < vdev->num_ctx; i++) {
 		vfio_virqfd_disable(&vdev->ctx[i].unmask);
@@ -408,11 +398,16 @@ static void vfio_msi_disable(struct vfio_pci_device *vdev, bool msix)
 
 	vfio_msi_set_block(vdev, 0, vdev->num_ctx, NULL, msix);
 
-	if (msix) {
-		pci_disable_msix(vdev->pdev);
-		kfree(vdev->msix);
-	} else
-		pci_disable_msi(pdev);
+	cmd = vfio_pci_memory_lock_and_enable(vdev);
+	pci_free_irq_vectors(pdev);
+	vfio_pci_memory_unlock_and_restore(vdev, cmd);
+
+	/*
+	 * Both disable paths above use pci_intx_for_msi() to clear DisINTx
+	 * via their shutdown paths.  Restore for NoINTx devices.
+	 */
+	if (vdev->nointx)
+		pci_intx(pdev, 0);
 
 	vdev->irq_type = VFIO_PCI_NUM_IRQS;
 	vdev->num_ctx = 0;
@@ -564,67 +559,80 @@ static int vfio_pci_set_msi_trigger(struct vfio_pci_device *vdev,
 }
 
 static int vfio_pci_set_ctx_trigger_single(struct eventfd_ctx **ctx,
-					   uint32_t flags, void *data)
+					   unsigned int count, uint32_t flags,
+					   void *data)
 {
-	int32_t fd = *(int32_t *)data;
-
-	if (!(flags & VFIO_IRQ_SET_DATA_TYPE_MASK))
-		return -EINVAL;
-
 	/* DATA_NONE/DATA_BOOL enables loopback testing */
 	if (flags & VFIO_IRQ_SET_DATA_NONE) {
-		if (*ctx)
-			eventfd_signal(*ctx, 1);
-		return 0;
+		if (*ctx) {
+			if (count) {
+				eventfd_signal(*ctx, 1);
+			} else {
+				eventfd_ctx_put(*ctx);
+				*ctx = NULL;
+			}
+			return 0;
+		}
 	} else if (flags & VFIO_IRQ_SET_DATA_BOOL) {
-		uint8_t trigger = *(uint8_t *)data;
+		uint8_t trigger;
+
+		if (!count)
+			return -EINVAL;
+
+		trigger = *(uint8_t *)data;
 		if (trigger && *ctx)
 			eventfd_signal(*ctx, 1);
+
+		return 0;
+	} else if (flags & VFIO_IRQ_SET_DATA_EVENTFD) {
+		int32_t fd;
+
+		if (!count)
+			return -EINVAL;
+
+		fd = *(int32_t *)data;
+		if (fd == -1) {
+			if (*ctx)
+				eventfd_ctx_put(*ctx);
+			*ctx = NULL;
+		} else if (fd >= 0) {
+			struct eventfd_ctx *efdctx;
+
+			efdctx = eventfd_ctx_fdget(fd);
+			if (IS_ERR(efdctx))
+				return PTR_ERR(efdctx);
+
+			if (*ctx)
+				eventfd_ctx_put(*ctx);
+
+			*ctx = efdctx;
+		}
 		return 0;
 	}
 
-	/* Handle SET_DATA_EVENTFD */
-	if (fd == -1) {
-		if (*ctx)
-			eventfd_ctx_put(*ctx);
-		*ctx = NULL;
-		return 0;
-	} else if (fd >= 0) {
-		struct eventfd_ctx *efdctx;
-		efdctx = eventfd_ctx_fdget(fd);
-		if (IS_ERR(efdctx))
-			return PTR_ERR(efdctx);
-		if (*ctx)
-			eventfd_ctx_put(*ctx);
-		*ctx = efdctx;
-		return 0;
-	} else
-		return -EINVAL;
+	return -EINVAL;
 }
 
 static int vfio_pci_set_err_trigger(struct vfio_pci_device *vdev,
 				    unsigned index, unsigned start,
 				    unsigned count, uint32_t flags, void *data)
 {
-	if (index != VFIO_PCI_ERR_IRQ_INDEX)
+	if (index != VFIO_PCI_ERR_IRQ_INDEX || start != 0 || count > 1)
 		return -EINVAL;
 
-	/*
-	 * We should sanitize start & count, but that wasn't caught
-	 * originally, so this IRQ index must forever ignore them :-(
-	 */
-
-	return vfio_pci_set_ctx_trigger_single(&vdev->err_trigger, flags, data);
+	return vfio_pci_set_ctx_trigger_single(&vdev->err_trigger,
+					       count, flags, data);
 }
 
 static int vfio_pci_set_req_trigger(struct vfio_pci_device *vdev,
 				    unsigned index, unsigned start,
 				    unsigned count, uint32_t flags, void *data)
 {
-	if (index != VFIO_PCI_REQ_IRQ_INDEX || start != 0 || count != 1)
+	if (index != VFIO_PCI_REQ_IRQ_INDEX || start != 0 || count > 1)
 		return -EINVAL;
 
-	return vfio_pci_set_ctx_trigger_single(&vdev->req_trigger, flags, data);
+	return vfio_pci_set_ctx_trigger_single(&vdev->req_trigger,
+					       count, flags, data);
 }
 
 int vfio_pci_set_irqs_ioctl(struct vfio_pci_device *vdev, uint32_t flags,

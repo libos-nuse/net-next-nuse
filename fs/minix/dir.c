@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/minix/dir.c
  *
@@ -57,7 +58,7 @@ static int dir_commit_chunk(struct page *page, loff_t pos, unsigned len)
 		mark_inode_dirty(dir);
 	}
 	if (IS_DIRSYNC(dir))
-		err = write_one_page(page, 1);
+		err = write_one_page(page);
 	else
 		unlock_page(page);
 	return err;
@@ -274,7 +275,7 @@ got_it:
 		de->inode = inode->i_ino;
 	}
 	err = dir_commit_chunk(page, pos, sbi->s_dirsize);
-	dir->i_mtime = dir->i_ctime = CURRENT_TIME_SEC;
+	dir->i_mtime = dir->i_ctime = current_time(dir);
 	mark_inode_dirty(dir);
 out_put:
 	dir_put_page(page);
@@ -306,7 +307,7 @@ int minix_delete_entry(struct minix_dir_entry *de, struct page *page)
 		unlock_page(page);
 	}
 	dir_put_page(page);
-	inode->i_ctime = inode->i_mtime = CURRENT_TIME_SEC;
+	inode->i_ctime = inode->i_mtime = current_time(inode);
 	mark_inode_dirty(inode);
 	return err;
 }
@@ -430,7 +431,7 @@ void minix_set_link(struct minix_dir_entry *de, struct page *page,
 		unlock_page(page);
 	}
 	dir_put_page(page);
-	dir->i_mtime = dir->i_ctime = CURRENT_TIME_SEC;
+	dir->i_mtime = dir->i_ctime = current_time(dir);
 	mark_inode_dirty(dir);
 }
 

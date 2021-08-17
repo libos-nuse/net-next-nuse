@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2015 Ash Charles, Gumstix Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 /*
@@ -37,13 +34,13 @@
 		pinctrl-0 = <&button_pins>;
 		#address-cells = <1>;
 		#size-cells = <0>;
-		button0@23 {
+		button0 {
 			label = "button0";
 			linux,code = <BTN_0>;
 			gpios = <&gpio1 23 GPIO_ACTIVE_LOW>;		/* gpio_23 */
 			wakeup-source;
 		};
-		button1@14 {
+		button1 {
 			label = "button1";
 			linux,code = <BTN_1>;
 			gpios = <&gpio1 14 GPIO_ACTIVE_LOW>;		/* gpio_14 */

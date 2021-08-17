@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * drivers/net/ethernet/rocker/rocker.h - Rocker switch device driver
  * Copyright (c) 2014-2016 Jiri Pirko <jiri@mellanox.com>
  * Copyright (c) 2014 Scott Feldman <sfeldma@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef _ROCKER_H
@@ -15,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/netdevice.h>
+#include <linux/notifier.h>
 #include <net/neighbour.h>
 #include <net/switchdev.h>
 
@@ -52,6 +49,9 @@ struct rocker_port {
 	struct rocker_dma_ring_info rx_ring;
 };
 
+struct rocker_port *rocker_port_dev_lower_find(struct net_device *dev,
+					       struct rocker *rocker);
+
 struct rocker_world_ops;
 
 struct rocker {
@@ -66,7 +66,9 @@ struct rocker {
 	spinlock_t cmd_ring_lock;		/* for cmd ring accesses */
 	struct rocker_dma_ring_info cmd_ring;
 	struct rocker_dma_ring_info event_ring;
+	struct notifier_block fib_nb;
 	struct rocker_world_ops *wops;
+	struct workqueue_struct *rocker_owq;
 	void *wpriv;
 };
 
@@ -99,37 +101,25 @@ struct rocker_world_ops {
 	int (*port_open)(struct rocker_port *rocker_port);
 	void (*port_stop)(struct rocker_port *rocker_port);
 	int (*port_attr_stp_state_set)(struct rocker_port *rocker_port,
-				       u8 state,
-				       struct switchdev_trans *trans);
+				       u8 state);
 	int (*port_attr_bridge_flags_set)(struct rocker_port *rocker_port,
 					  unsigned long brport_flags,
 					  struct switchdev_trans *trans);
-	int (*port_attr_bridge_flags_get)(const struct rocker_port *rocker_port,
-					  unsigned long *p_brport_flags);
+	int (*port_attr_bridge_flags_support_get)(const struct rocker_port *
+						  rocker_port,
+						  unsigned long *
+						  p_brport_flags);
 	int (*port_attr_bridge_ageing_time_set)(struct rocker_port *rocker_port,
 						u32 ageing_time,
 						struct switchdev_trans *trans);
 	int (*port_obj_vlan_add)(struct rocker_port *rocker_port,
-				 const struct switchdev_obj_port_vlan *vlan,
-				 struct switchdev_trans *trans);
+				 const struct switchdev_obj_port_vlan *vlan);
 	int (*port_obj_vlan_del)(struct rocker_port *rocker_port,
 				 const struct switchdev_obj_port_vlan *vlan);
-	int (*port_obj_vlan_dump)(const struct rocker_port *rocker_port,
-				  struct switchdev_obj_port_vlan *vlan,
-				  switchdev_obj_dump_cb_t *cb);
-	int (*port_obj_fib4_add)(struct rocker_port *rocker_port,
-				 const struct switchdev_obj_ipv4_fib *fib4,
-				 struct switchdev_trans *trans);
-	int (*port_obj_fib4_del)(struct rocker_port *rocker_port,
-				 const struct switchdev_obj_ipv4_fib *fib4);
 	int (*port_obj_fdb_add)(struct rocker_port *rocker_port,
-				const struct switchdev_obj_port_fdb *fdb,
-				struct switchdev_trans *trans);
+				u16 vid, const unsigned char *addr);
 	int (*port_obj_fdb_del)(struct rocker_port *rocker_port,
-				const struct switchdev_obj_port_fdb *fdb);
-	int (*port_obj_fdb_dump)(const struct rocker_port *rocker_port,
-				 struct switchdev_obj_port_fdb *fdb,
-				 switchdev_obj_dump_cb_t *cb);
+				u16 vid, const unsigned char *addr);
 	int (*port_master_linked)(struct rocker_port *rocker_port,
 				  struct net_device *master);
 	int (*port_master_unlinked)(struct rocker_port *rocker_port,
@@ -141,6 +131,11 @@ struct rocker_world_ops {
 	int (*port_ev_mac_vlan_seen)(struct rocker_port *rocker_port,
 				     const unsigned char *addr,
 				     __be16 vlan_id);
+	int (*fib4_add)(struct rocker *rocker,
+			const struct fib_entry_notifier_info *fen_info);
+	int (*fib4_del)(struct rocker *rocker,
+			const struct fib_entry_notifier_info *fen_info);
+	void (*fib4_abort)(struct rocker *rocker);
 };
 
 extern struct rocker_world_ops rocker_ofdpa_ops;

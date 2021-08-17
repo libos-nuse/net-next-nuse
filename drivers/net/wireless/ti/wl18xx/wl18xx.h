@@ -1,22 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * This file is part of wl18xx
  *
  * Copyright (C) 2011 Texas Instruments Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #ifndef __WL18XX_PRIV_H__
@@ -29,7 +15,7 @@
 #define WL18XX_IFTYPE_VER	9
 #define WL18XX_MAJOR_VER	WLCORE_FW_VER_IGNORE
 #define WL18XX_SUBTYPE_VER	WLCORE_FW_VER_IGNORE
-#define WL18XX_MINOR_VER	11
+#define WL18XX_MINOR_VER	58
 
 #define WL18XX_CMD_MAX_SIZE          740
 
@@ -125,7 +111,11 @@ struct wl18xx_fw_packet_counters {
 	/* Tx rate of the last transmitted packet */
 	u8 tx_last_rate;
 
-	u8 padding[2];
+	/* Tx rate or Tx rate estimate pre-calculated by fw in mbps units */
+	u8 tx_last_rate_mbps;
+
+	/* hlid for which the rates were reported */
+	u8 hlid;
 } __packed;
 
 /* FW status registers */

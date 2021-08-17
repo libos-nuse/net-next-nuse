@@ -29,10 +29,9 @@
 #include <linux/errno.h>
 #include <linux/fs.h>
 #include <linux/anon_inodes.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/mpic.h>
 #include <asm/kvm_para.h>
-#include <asm/kvm_host.h>
 #include <asm/kvm_ppc.h>
 #include <kvm/iodev.h>
 
@@ -1823,7 +1822,8 @@ int kvm_set_msi(struct kvm_kernel_irq_routing_entry *e,
 	return 0;
 }
 
-int kvm_set_routing_entry(struct kvm_kernel_irq_routing_entry *e,
+int kvm_set_routing_entry(struct kvm *kvm,
+			  struct kvm_kernel_irq_routing_entry *e,
 			  const struct kvm_irq_routing_entry *ue)
 {
 	int r = -EINVAL;

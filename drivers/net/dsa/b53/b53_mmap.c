@@ -17,7 +17,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/kconfig.h>
 #include <linux/module.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
@@ -31,7 +30,8 @@ struct b53_mmap_priv {
 
 static int b53_mmap_read8(struct b53_device *dev, u8 page, u8 reg, u8 *val)
 {
-	u8 __iomem *regs = dev->priv;
+	struct b53_mmap_priv *priv = dev->priv;
+	void __iomem *regs = priv->regs;
 
 	*val = readb(regs + (page << 8) + reg);
 
@@ -40,7 +40,8 @@ static int b53_mmap_read8(struct b53_device *dev, u8 page, u8 reg, u8 *val)
 
 static int b53_mmap_read16(struct b53_device *dev, u8 page, u8 reg, u16 *val)
 {
-	u8 __iomem *regs = dev->priv;
+	struct b53_mmap_priv *priv = dev->priv;
+	void __iomem *regs = priv->regs;
 
 	if (WARN_ON(reg % 2))
 		return -EINVAL;
@@ -55,7 +56,8 @@ static int b53_mmap_read16(struct b53_device *dev, u8 page, u8 reg, u16 *val)
 
 static int b53_mmap_read32(struct b53_device *dev, u8 page, u8 reg, u32 *val)
 {
-	u8 __iomem *regs = dev->priv;
+	struct b53_mmap_priv *priv = dev->priv;
+	void __iomem *regs = priv->regs;
 
 	if (WARN_ON(reg % 4))
 		return -EINVAL;
@@ -70,7 +72,8 @@ static int b53_mmap_read32(struct b53_device *dev, u8 page, u8 reg, u32 *val)
 
 static int b53_mmap_read48(struct b53_device *dev, u8 page, u8 reg, u64 *val)
 {
-	u8 __iomem *regs = dev->priv;
+	struct b53_mmap_priv *priv = dev->priv;
+	void __iomem *regs = priv->regs;
 
 	if (WARN_ON(reg % 2))
 		return -EINVAL;
@@ -108,7 +111,8 @@ static int b53_mmap_read48(struct b53_device *dev, u8 page, u8 reg, u64 *val)
 
 static int b53_mmap_read64(struct b53_device *dev, u8 page, u8 reg, u64 *val)
 {
-	u8 __iomem *regs = dev->priv;
+	struct b53_mmap_priv *priv = dev->priv;
+	void __iomem *regs = priv->regs;
 	u32 hi, lo;
 
 	if (WARN_ON(reg % 4))
@@ -129,7 +133,8 @@ static int b53_mmap_read64(struct b53_device *dev, u8 page, u8 reg, u64 *val)
 
 static int b53_mmap_write8(struct b53_device *dev, u8 page, u8 reg, u8 value)
 {
-	u8 __iomem *regs = dev->priv;
+	struct b53_mmap_priv *priv = dev->priv;
+	void __iomem *regs = priv->regs;
 
 	writeb(value, regs + (page << 8) + reg);
 
@@ -139,7 +144,8 @@ static int b53_mmap_write8(struct b53_device *dev, u8 page, u8 reg, u8 value)
 static int b53_mmap_write16(struct b53_device *dev, u8 page, u8 reg,
 			    u16 value)
 {
-	u8 __iomem *regs = dev->priv;
+	struct b53_mmap_priv *priv = dev->priv;
+	void __iomem *regs = priv->regs;
 
 	if (WARN_ON(reg % 2))
 		return -EINVAL;
@@ -155,7 +161,8 @@ static int b53_mmap_write16(struct b53_device *dev, u8 page, u8 reg,
 static int b53_mmap_write32(struct b53_device *dev, u8 page, u8 reg,
 			    u32 value)
 {
-	u8 __iomem *regs = dev->priv;
+	struct b53_mmap_priv *priv = dev->priv;
+	void __iomem *regs = priv->regs;
 
 	if (WARN_ON(reg % 4))
 		return -EINVAL;
@@ -208,7 +215,7 @@ static int b53_mmap_write64(struct b53_device *dev, u8 page, u8 reg,
 	return 0;
 }
 
-static struct b53_io_ops b53_mmap_ops = {
+static const struct b53_io_ops b53_mmap_ops = {
 	.read8 = b53_mmap_read8,
 	.read16 = b53_mmap_read16,
 	.read32 = b53_mmap_read32,
@@ -224,17 +231,23 @@ static struct b53_io_ops b53_mmap_ops = {
 static int b53_mmap_probe(struct platform_device *pdev)
 {
 	struct b53_platform_data *pdata = pdev->dev.platform_data;
+	struct b53_mmap_priv *priv;
 	struct b53_device *dev;
 
 	if (!pdata)
 		return -EINVAL;
 
-	dev = b53_switch_alloc(&pdev->dev, &b53_mmap_ops, pdata->regs);
+	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	priv->regs = pdata->regs;
+
+	dev = b53_switch_alloc(&pdev->dev, &b53_mmap_ops, priv);
 	if (!dev)
 		return -ENOMEM;
 
-	if (pdata)
-		dev->pdata = pdata;
+	dev->pdata = pdata;
 
 	platform_set_drvdata(pdev, dev);
 
@@ -258,6 +271,7 @@ static const struct of_device_id b53_mmap_of_table[] = {
 	{ .compatible = "brcm,bcm63xx-switch" },
 	{ /* sentinel */ },
 };
+MODULE_DEVICE_TABLE(of, b53_mmap_of_table);
 
 static struct platform_driver b53_mmap_driver = {
 	.probe = b53_mmap_probe,

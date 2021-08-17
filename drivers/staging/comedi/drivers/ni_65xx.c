@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * ni_65xx.c
  * Comedi driver for National Instruments PCI-65xx static dio boards
@@ -7,16 +8,6 @@
  *
  * COMEDI - Linux Control and Measurement Device Interface
  * Copyright (C) 1999,2002,2003 David A. Schleef <ds@schleef.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 /*
@@ -151,10 +142,10 @@ enum ni_65xx_boardid {
 
 struct ni_65xx_board {
 	const char *name;
-	unsigned num_dio_ports;
-	unsigned num_di_ports;
-	unsigned num_do_ports;
-	unsigned legacy_invert:1;
+	unsigned int num_dio_ports;
+	unsigned int num_di_ports;
+	unsigned int num_do_ports;
+	unsigned int legacy_invert:1;
 };
 
 static const struct ni_65xx_board ni_65xx_boards[] = {
@@ -360,7 +351,7 @@ static int ni_65xx_dio_insn_config(struct comedi_device *dev,
 	unsigned long base_port = (unsigned long)s->private;
 	unsigned int chan = CR_CHAN(insn->chanspec);
 	unsigned int chan_mask = NI_65XX_CHAN_TO_MASK(chan);
-	unsigned port = base_port + NI_65XX_CHAN_TO_PORT(chan);
+	unsigned int port = base_port + NI_65XX_CHAN_TO_PORT(chan);
 	unsigned int interval;
 	unsigned int val;
 
@@ -428,14 +419,14 @@ static int ni_65xx_dio_insn_bits(struct comedi_device *dev,
 	unsigned long base_port = (unsigned long)s->private;
 	unsigned int base_chan = CR_CHAN(insn->chanspec);
 	int last_port_offset = NI_65XX_CHAN_TO_PORT(s->n_chan - 1);
-	unsigned read_bits = 0;
+	unsigned int read_bits = 0;
 	int port_offset;
 
 	for (port_offset = NI_65XX_CHAN_TO_PORT(base_chan);
 	     port_offset <= last_port_offset; port_offset++) {
-		unsigned port = base_port + port_offset;
+		unsigned int port = base_port + port_offset;
 		int base_port_channel = NI_65XX_PORT_TO_CHAN(port_offset);
-		unsigned port_mask, port_data, bits;
+		unsigned int port_mask, port_data, bits;
 		int bitshift = base_port_channel - base_chan;
 
 		if (bitshift >= 32)
@@ -640,7 +631,7 @@ static int ni_65xx_auto_attach(struct comedi_device *dev,
 	struct pci_dev *pcidev = comedi_to_pci_dev(dev);
 	const struct ni_65xx_board *board = NULL;
 	struct comedi_subdevice *s;
-	unsigned i;
+	unsigned int i;
 	int ret;
 
 	if (context < ARRAY_SIZE(ni_65xx_boards))
@@ -826,6 +817,6 @@ static struct pci_driver ni_65xx_pci_driver = {
 };
 module_comedi_pci_driver(ni_65xx_driver, ni_65xx_pci_driver);
 
-MODULE_AUTHOR("Comedi http://www.comedi.org");
+MODULE_AUTHOR("Comedi https://www.comedi.org");
 MODULE_DESCRIPTION("Comedi driver for NI PCI-65xx static dio boards");
 MODULE_LICENSE("GPL");

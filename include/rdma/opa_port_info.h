@@ -1,42 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB */
 /*
- * Copyright (c) 2014 Intel Corporation.  All rights reserved.
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and/or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright (c) 2014-2020 Intel Corporation.  All rights reserved.
  */
 
-#if !defined(OPA_PORT_INFO_H)
+#ifndef OPA_PORT_INFO_H
 #define OPA_PORT_INFO_H
 
-/* Temporary until HFI driver is updated */
-#ifndef USE_PI_LED_ENABLE
-#define USE_PI_LED_ENABLE 0
-#endif
+#include <rdma/opa_smi.h>
 
 #define OPA_PORT_LINK_MODE_NOP	0		/* No change */
 #define OPA_PORT_LINK_MODE_OPA	4		/* Port mode is OPA */
@@ -132,6 +102,7 @@
 #define OPA_LINK_WIDTH_3X            0x0004
 #define OPA_LINK_WIDTH_4X            0x0008
 
+#define OPA_CAP_MASK3_IsEthOnFabricSupported      (1 << 13)
 #define OPA_CAP_MASK3_IsSnoopSupported            (1 << 7)
 #define OPA_CAP_MASK3_IsAsyncSC2VLSupported       (1 << 6)
 #define OPA_CAP_MASK3_IsAddrRangeConfigSupported  (1 << 5)
@@ -140,14 +111,6 @@
 /* reserved (1 << 2) */
 #define OPA_CAP_MASK3_IsVLMarkerSupported         (1 << 1)
 #define OPA_CAP_MASK3_IsVLrSupported              (1 << 0)
-
-/**
- * new MTU values
- */
-enum {
-	OPA_MTU_8192  = 6,
-	OPA_MTU_10240 = 7,
-};
 
 enum {
 	OPA_PORT_PHYS_CONF_DISCONNECTED = 0,
@@ -274,23 +237,12 @@ enum port_info_field_masks {
 	OPA_PI_MASK_MTU_CAP                       = 0x0F,
 };
 
-#if USE_PI_LED_ENABLE
 struct opa_port_states {
 	u8     reserved;
 	u8     ledenable_offlinereason;   /* 1 res, 1 bit, 6 bits */
 	u8     reserved2;
 	u8     portphysstate_portstate;   /* 4 bits, 4 bits */
 };
-#define PI_LED_ENABLE_SUP 1
-#else
-struct opa_port_states {
-	u8     reserved;
-	u8     offline_reason;            /* 2 res, 6 bits */
-	u8     reserved2;
-	u8     portphysstate_portstate;   /* 4 bits, 4 bits */
-};
-#define PI_LED_ENABLE_SUP 0
-#endif
 
 struct opa_port_state_info {
 	struct opa_port_states port_states;
@@ -428,6 +380,6 @@ struct opa_port_info {
 	u8     local_port_num;
 	u8     reserved12;
 	u8     reserved13;                       /* was guid_cap */
-} __attribute__ ((packed));
+} __packed;
 
 #endif /* OPA_PORT_INFO_H */

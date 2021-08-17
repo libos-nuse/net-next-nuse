@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2007, 2008, 2009 Siemens AG
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #include <linux/slab.h>
@@ -32,11 +23,6 @@
 LIST_HEAD(cfg802154_rdev_list);
 int cfg802154_rdev_list_generation;
 
-static int wpan_phy_match(struct device *dev, const void *data)
-{
-	return !strcmp(dev_name(dev), (const char *)data);
-}
-
 struct wpan_phy *wpan_phy_find(const char *str)
 {
 	struct device *dev;
@@ -44,7 +30,7 @@ struct wpan_phy *wpan_phy_find(const char *str)
 	if (WARN_ON(!str))
 		return NULL;
 
-	dev = class_find_device(&wpan_phy_class, NULL, str, wpan_phy_match);
+	dev = class_find_device_by_name(&wpan_phy_class, str);
 	if (!dev)
 		return NULL;
 
@@ -140,6 +126,8 @@ wpan_phy_new(const struct cfg802154_ops *ops, size_t priv_size)
 	rdev->wpan_phy.dev.class = &wpan_phy_class;
 	rdev->wpan_phy.dev.platform_data = rdev;
 
+	wpan_phy_net_set(&rdev->wpan_phy, &init_net);
+
 	init_waitqueue_head(&rdev->dev_wait);
 
 	return &rdev->wpan_phy;
@@ -206,6 +194,49 @@ void wpan_phy_free(struct wpan_phy *phy)
 	put_device(&phy->dev);
 }
 EXPORT_SYMBOL(wpan_phy_free);
+
+int cfg802154_switch_netns(struct cfg802154_registered_device *rdev,
+			   struct net *net)
+{
+	struct wpan_dev *wpan_dev;
+	int err = 0;
+
+	list_for_each_entry(wpan_dev, &rdev->wpan_dev_list, list) {
+		if (!wpan_dev->netdev)
+			continue;
+		wpan_dev->netdev->features &= ~NETIF_F_NETNS_LOCAL;
+		err = dev_change_net_namespace(wpan_dev->netdev, net, "wpan%d");
+		if (err)
+			break;
+		wpan_dev->netdev->features |= NETIF_F_NETNS_LOCAL;
+	}
+
+	if (err) {
+		/* failed -- clean up to old netns */
+		net = wpan_phy_net(&rdev->wpan_phy);
+
+		list_for_each_entry_continue_reverse(wpan_dev,
+						     &rdev->wpan_dev_list,
+						     list) {
+			if (!wpan_dev->netdev)
+				continue;
+			wpan_dev->netdev->features &= ~NETIF_F_NETNS_LOCAL;
+			err = dev_change_net_namespace(wpan_dev->netdev, net,
+						       "wpan%d");
+			WARN_ON(err);
+			wpan_dev->netdev->features |= NETIF_F_NETNS_LOCAL;
+		}
+
+		return err;
+	}
+
+	wpan_phy_net_set(&rdev->wpan_phy, net);
+
+	err = device_rename(&rdev->wpan_phy.dev, dev_name(&rdev->wpan_phy.dev));
+	WARN_ON(err);
+
+	return 0;
+}
 
 void cfg802154_dev_free(struct cfg802154_registered_device *rdev)
 {
@@ -286,13 +317,33 @@ static struct notifier_block cfg802154_netdev_notifier = {
 	.notifier_call = cfg802154_netdev_notifier_call,
 };
 
+static void __net_exit cfg802154_pernet_exit(struct net *net)
+{
+	struct cfg802154_registered_device *rdev;
+
+	rtnl_lock();
+	list_for_each_entry(rdev, &cfg802154_rdev_list, list) {
+		if (net_eq(wpan_phy_net(&rdev->wpan_phy), net))
+			WARN_ON(cfg802154_switch_netns(rdev, &init_net));
+	}
+	rtnl_unlock();
+}
+
+static struct pernet_operations cfg802154_pernet_ops = {
+	.exit = cfg802154_pernet_exit,
+};
+
 static int __init wpan_phy_class_init(void)
 {
 	int rc;
 
-	rc = wpan_phy_sysfs_init();
+	rc = register_pernet_device(&cfg802154_pernet_ops);
 	if (rc)
 		goto err;
+
+	rc = wpan_phy_sysfs_init();
+	if (rc)
+		goto err_sysfs;
 
 	rc = register_netdevice_notifier(&cfg802154_netdev_notifier);
 	if (rc)
@@ -315,6 +366,8 @@ err_notifier:
 	unregister_netdevice_notifier(&cfg802154_netdev_notifier);
 err_nl:
 	wpan_phy_sysfs_exit();
+err_sysfs:
+	unregister_pernet_device(&cfg802154_pernet_ops);
 err:
 	return rc;
 }
@@ -326,10 +379,10 @@ static void __exit wpan_phy_class_exit(void)
 	ieee802154_nl_exit();
 	unregister_netdevice_notifier(&cfg802154_netdev_notifier);
 	wpan_phy_sysfs_exit();
+	unregister_pernet_device(&cfg802154_pernet_ops);
 }
 module_exit(wpan_phy_class_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("IEEE 802.15.4 configuration interface");
 MODULE_AUTHOR("Dmitry Eremin-Solenikov");
-

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Renesas USB DMA Controller Driver
  *
@@ -6,10 +7,6 @@
  * based on rcar-dmac.c
  * Copyright (C) 2014 Renesas Electronics Inc.
  * Author: Laurent Pinchart <laurent.pinchart@ideasonboard.com>
- *
- * This is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -60,7 +57,7 @@ struct usb_dmac_desc {
 	u32 residue;
 	struct list_head node;
 	dma_cookie_t done_cookie;
-	struct usb_dmac_sg sg[0];
+	struct usb_dmac_sg sg[];
 };
 
 #define to_usb_dmac_desc(vd)	container_of(vd, struct usb_dmac_desc, vd)
@@ -117,7 +114,7 @@ struct usb_dmac {
 #define USB_DMASWR			0x0008
 #define USB_DMASWR_SWR			(1 << 0)
 #define USB_DMAOR			0x0060
-#define USB_DMAOR_AE			(1 << 2)
+#define USB_DMAOR_AE			(1 << 1)
 #define USB_DMAOR_DME			(1 << 0)
 
 #define USB_DMASAR			0x0000
@@ -269,7 +266,7 @@ static int usb_dmac_desc_alloc(struct usb_dmac_chan *chan, unsigned int sg_len,
 	struct usb_dmac_desc *desc;
 	unsigned long flags;
 
-	desc = kzalloc(sizeof(*desc) + sg_len * sizeof(desc->sg[0]), gfp);
+	desc = kzalloc(struct_size(desc, sg, sg_len), gfp);
 	if (!desc)
 		return -ENOMEM;
 
@@ -589,6 +586,8 @@ static void usb_dmac_isr_transfer_end(struct usb_dmac_chan *chan)
 		desc->residue = usb_dmac_get_current_residue(chan, desc,
 							desc->sg_index - 1);
 		desc->done_cookie = desc->vd.tx.cookie;
+		desc->vd.tx_result.result = DMA_TRANS_NOERROR;
+		desc->vd.tx_result.residue = desc->residue;
 		vchan_cookie_complete(&desc->vd);
 
 		/* Restart the next transfer if this driver has a next desc */
@@ -600,27 +599,30 @@ static irqreturn_t usb_dmac_isr_channel(int irq, void *dev)
 {
 	struct usb_dmac_chan *chan = dev;
 	irqreturn_t ret = IRQ_NONE;
-	u32 mask = USB_DMACHCR_TE;
-	u32 check_bits = USB_DMACHCR_TE | USB_DMACHCR_SP;
+	u32 mask = 0;
 	u32 chcr;
+	bool xfer_end = false;
 
 	spin_lock(&chan->vc.lock);
 
 	chcr = usb_dmac_chan_read(chan, USB_DMACHCR);
-	if (chcr & check_bits)
-		mask |= USB_DMACHCR_DE | check_bits;
+	if (chcr & (USB_DMACHCR_TE | USB_DMACHCR_SP)) {
+		mask |= USB_DMACHCR_DE | USB_DMACHCR_TE | USB_DMACHCR_SP;
+		if (chcr & USB_DMACHCR_DE)
+			xfer_end = true;
+		ret |= IRQ_HANDLED;
+	}
 	if (chcr & USB_DMACHCR_NULL) {
 		/* An interruption of TE will happen after we set FTE */
 		mask |= USB_DMACHCR_NULL;
 		chcr |= USB_DMACHCR_FTE;
 		ret |= IRQ_HANDLED;
 	}
-	usb_dmac_chan_write(chan, USB_DMACHCR, chcr & ~mask);
+	if (mask)
+		usb_dmac_chan_write(chan, USB_DMACHCR, chcr & ~mask);
 
-	if (chcr & check_bits) {
+	if (xfer_end)
 		usb_dmac_isr_transfer_end(chan);
-		ret |= IRQ_HANDLED;
-	}
 
 	spin_unlock(&chan->vc.lock);
 
@@ -636,9 +638,6 @@ static bool usb_dmac_chan_filter(struct dma_chan *chan, void *arg)
 	struct usb_dmac_chan *uchan = to_usb_dmac_chan(chan);
 	struct of_phandle_args *dma_spec = arg;
 
-	if (dma_spec->np != chan->device->dev->of_node)
-		return false;
-
 	/* USB-DMAC should be used with fixed usb controller's FIFO */
 	if (uchan->index != dma_spec->args[0])
 		return false;
@@ -649,7 +648,6 @@ static bool usb_dmac_chan_filter(struct dma_chan *chan, void *arg)
 static struct dma_chan *usb_dmac_of_xlate(struct of_phandle_args *dma_spec,
 					  struct of_dma *ofdma)
 {
-	struct usb_dmac_chan *uchan;
 	struct dma_chan *chan;
 	dma_cap_mask_t mask;
 
@@ -660,11 +658,10 @@ static struct dma_chan *usb_dmac_of_xlate(struct of_phandle_args *dma_spec,
 	dma_cap_zero(mask);
 	dma_cap_set(DMA_SLAVE, mask);
 
-	chan = dma_request_channel(mask, usb_dmac_chan_filter, dma_spec);
+	chan = __dma_request_channel(&mask, usb_dmac_chan_filter, dma_spec,
+				     ofdma->of_node);
 	if (!chan)
 		return NULL;
-
-	uchan = to_usb_dmac_chan(chan);
 
 	return chan;
 }
@@ -697,6 +694,8 @@ static int usb_dmac_runtime_resume(struct device *dev)
 #endif /* CONFIG_PM */
 
 static const struct dev_pm_ops usb_dmac_pm = {
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				      pm_runtime_force_resume)
 	SET_RUNTIME_PM_OPS(usb_dmac_runtime_suspend, usb_dmac_runtime_resume,
 			   NULL)
 };
@@ -720,10 +719,8 @@ static int usb_dmac_chan_probe(struct usb_dmac *dmac,
 	/* Request the channel interrupt. */
 	sprintf(pdev_irqname, "ch%u", index);
 	uchan->irq = platform_get_irq_byname(pdev, pdev_irqname);
-	if (uchan->irq < 0) {
-		dev_err(dmac->dev, "no IRQ specified for channel %u\n", index);
+	if (uchan->irq < 0)
 		return -ENODEV;
-	}
 
 	irqname = devm_kasprintf(dmac->dev, GFP_KERNEL, "%s:%u",
 				 dev_name(dmac->dev), index);

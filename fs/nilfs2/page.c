@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * page.c - buffer/page management specific to NILFS
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * Written by Ryusuke Konishi and Seiji Kihara.
  */
@@ -30,9 +21,9 @@
 #include "mdt.h"
 
 
-#define NILFS_BUFFER_INHERENT_BITS  \
-	((1UL << BH_Uptodate) | (1UL << BH_Mapped) | (1UL << BH_NILFS_Node) | \
-	 (1UL << BH_NILFS_Volatile) | (1UL << BH_NILFS_Checked))
+#define NILFS_BUFFER_INHERENT_BITS					\
+	(BIT(BH_Uptodate) | BIT(BH_Mapped) | BIT(BH_NILFS_Node) |	\
+	 BIT(BH_NILFS_Volatile) | BIT(BH_NILFS_Checked))
 
 static struct buffer_head *
 __nilfs_get_page_block(struct page *page, unsigned long block, pgoff_t index,
@@ -78,16 +69,15 @@ struct buffer_head *nilfs_grab_buffer(struct inode *inode,
 
 /**
  * nilfs_forget_buffer - discard dirty state
- * @inode: owner inode of the buffer
  * @bh: buffer head of the buffer to be discarded
  */
 void nilfs_forget_buffer(struct buffer_head *bh)
 {
 	struct page *page = bh->b_page;
 	const unsigned long clear_bits =
-		(1 << BH_Uptodate | 1 << BH_Dirty | 1 << BH_Mapped |
-		 1 << BH_Async_Write | 1 << BH_NILFS_Volatile |
-		 1 << BH_NILFS_Checked | 1 << BH_NILFS_Redirected);
+		(BIT(BH_Uptodate) | BIT(BH_Dirty) | BIT(BH_Mapped) |
+		 BIT(BH_Async_Write) | BIT(BH_NILFS_Volatile) |
+		 BIT(BH_NILFS_Checked) | BIT(BH_NILFS_Redirected));
 
 	lock_buffer(bh);
 	set_mask_bits(&bh->b_state, clear_bits, 0);
@@ -124,17 +114,17 @@ void nilfs_copy_buffer(struct buffer_head *dbh, struct buffer_head *sbh)
 	dbh->b_bdev = sbh->b_bdev;
 
 	bh = dbh;
-	bits = sbh->b_state & ((1UL << BH_Uptodate) | (1UL << BH_Mapped));
+	bits = sbh->b_state & (BIT(BH_Uptodate) | BIT(BH_Mapped));
 	while ((bh = bh->b_this_page) != dbh) {
 		lock_buffer(bh);
 		bits &= bh->b_state;
 		unlock_buffer(bh);
 	}
-	if (bits & (1UL << BH_Uptodate))
+	if (bits & BIT(BH_Uptodate))
 		SetPageUptodate(dpage);
 	else
 		ClearPageUptodate(dpage);
-	if (bits & (1UL << BH_Mapped))
+	if (bits & BIT(BH_Mapped))
 		SetPageMappedToDisk(dpage);
 	else
 		ClearPageMappedToDisk(dpage);
@@ -215,7 +205,7 @@ static void nilfs_copy_page(struct page *dst, struct page *src, int copy_dirty)
 		create_empty_buffers(dst, sbh->b_size, 0);
 
 	if (copy_dirty)
-		mask |= (1UL << BH_Dirty);
+		mask |= BIT(BH_Dirty);
 
 	dbh = dbufs = page_buffers(dst);
 	do {
@@ -255,10 +245,9 @@ int nilfs_copy_dirty_pages(struct address_space *dmap,
 	pgoff_t index = 0;
 	int err = 0;
 
-	pagevec_init(&pvec, 0);
+	pagevec_init(&pvec);
 repeat:
-	if (!pagevec_lookup_tag(&pvec, smap, &index, PAGECACHE_TAG_DIRTY,
-				PAGEVEC_SIZE))
+	if (!pagevec_lookup_tag(&pvec, smap, &index, PAGECACHE_TAG_DIRTY))
 		return 0;
 
 	for (i = 0; i < pagevec_count(&pvec); i++) {
@@ -299,7 +288,7 @@ repeat:
  * @dmap: destination page cache
  * @smap: source page cache
  *
- * No pages must no be added to the cache during this process.
+ * No pages must be added to the cache during this process.
  * This must be ensured by the caller.
  */
 void nilfs_copy_back_pages(struct address_space *dmap,
@@ -308,14 +297,12 @@ void nilfs_copy_back_pages(struct address_space *dmap,
 	struct pagevec pvec;
 	unsigned int i, n;
 	pgoff_t index = 0;
-	int err;
 
-	pagevec_init(&pvec, 0);
+	pagevec_init(&pvec);
 repeat:
-	n = pagevec_lookup(&pvec, smap, index, PAGEVEC_SIZE);
+	n = pagevec_lookup(&pvec, smap, &index);
 	if (!n)
 		return;
-	index = pvec.pages[n - 1]->index + 1;
 
 	for (i = 0; i < pagevec_count(&pvec); i++) {
 		struct page *page = pvec.pages[i], *dpage;
@@ -324,37 +311,36 @@ repeat:
 		lock_page(page);
 		dpage = find_lock_page(dmap, offset);
 		if (dpage) {
-			/* override existing page on the destination cache */
+			/* overwrite existing page in the destination cache */
 			WARN_ON(PageDirty(dpage));
 			nilfs_copy_page(dpage, page, 0);
 			unlock_page(dpage);
 			put_page(dpage);
+			/* Do we not need to remove page from smap here? */
 		} else {
-			struct page *page2;
+			struct page *p;
 
 			/* move the page to the destination cache */
-			spin_lock_irq(&smap->tree_lock);
-			page2 = radix_tree_delete(&smap->page_tree, offset);
-			WARN_ON(page2 != page);
-
+			xa_lock_irq(&smap->i_pages);
+			p = __xa_erase(&smap->i_pages, offset);
+			WARN_ON(page != p);
 			smap->nrpages--;
-			spin_unlock_irq(&smap->tree_lock);
+			xa_unlock_irq(&smap->i_pages);
 
-			spin_lock_irq(&dmap->tree_lock);
-			err = radix_tree_insert(&dmap->page_tree, offset, page);
-			if (unlikely(err < 0)) {
-				WARN_ON(err == -EEXIST);
+			xa_lock_irq(&dmap->i_pages);
+			p = __xa_store(&dmap->i_pages, offset, page, GFP_NOFS);
+			if (unlikely(p)) {
+				/* Probably -ENOMEM */
 				page->mapping = NULL;
-				put_page(page); /* for cache */
+				put_page(page);
 			} else {
 				page->mapping = dmap;
 				dmap->nrpages++;
 				if (PageDirty(page))
-					radix_tree_tag_set(&dmap->page_tree,
-							   offset,
-							   PAGECACHE_TAG_DIRTY);
+					__xa_set_mark(&dmap->i_pages, offset,
+							PAGECACHE_TAG_DIRTY);
 			}
-			spin_unlock_irq(&dmap->tree_lock);
+			xa_unlock_irq(&dmap->i_pages);
 		}
 		unlock_page(page);
 	}
@@ -375,10 +361,10 @@ void nilfs_clear_dirty_pages(struct address_space *mapping, bool silent)
 	unsigned int i;
 	pgoff_t index = 0;
 
-	pagevec_init(&pvec, 0);
+	pagevec_init(&pvec);
 
-	while (pagevec_lookup_tag(&pvec, mapping, &index, PAGECACHE_TAG_DIRTY,
-				  PAGEVEC_SIZE)) {
+	while (pagevec_lookup_tag(&pvec, mapping, &index,
+					PAGECACHE_TAG_DIRTY)) {
 		for (i = 0; i < pagevec_count(&pvec); i++) {
 			struct page *page = pvec.pages[i];
 
@@ -403,11 +389,9 @@ void nilfs_clear_dirty_page(struct page *page, bool silent)
 
 	BUG_ON(!PageLocked(page));
 
-	if (!silent) {
-		nilfs_warning(sb, __func__,
-				"discard page: offset %lld, ino %lu",
-				page_offset(page), inode->i_ino);
-	}
+	if (!silent)
+		nilfs_warn(sb, "discard dirty page: offset=%lld, ino=%lu",
+			   page_offset(page), inode->i_ino);
 
 	ClearPageUptodate(page);
 	ClearPageMappedToDisk(page);
@@ -415,18 +399,18 @@ void nilfs_clear_dirty_page(struct page *page, bool silent)
 	if (page_has_buffers(page)) {
 		struct buffer_head *bh, *head;
 		const unsigned long clear_bits =
-			(1 << BH_Uptodate | 1 << BH_Dirty | 1 << BH_Mapped |
-			 1 << BH_Async_Write | 1 << BH_NILFS_Volatile |
-			 1 << BH_NILFS_Checked | 1 << BH_NILFS_Redirected);
+			(BIT(BH_Uptodate) | BIT(BH_Dirty) | BIT(BH_Mapped) |
+			 BIT(BH_Async_Write) | BIT(BH_NILFS_Volatile) |
+			 BIT(BH_NILFS_Checked) | BIT(BH_NILFS_Redirected));
 
 		bh = head = page_buffers(page);
 		do {
 			lock_buffer(bh);
-			if (!silent) {
-				nilfs_warning(sb, __func__,
-					"discard block %llu, size %zu",
-					(u64)bh->b_blocknr, bh->b_size);
-			}
+			if (!silent)
+				nilfs_warn(sb,
+					   "discard dirty block: blocknr=%llu, size=%zu",
+					   (u64)bh->b_blocknr, bh->b_size);
+
 			set_mask_bits(&bh->b_state, clear_bits, 0);
 			unlock_buffer(bh);
 		} while (bh = bh->b_this_page, bh != head);
@@ -477,15 +461,14 @@ int __nilfs_clear_page_dirty(struct page *page)
 	struct address_space *mapping = page->mapping;
 
 	if (mapping) {
-		spin_lock_irq(&mapping->tree_lock);
+		xa_lock_irq(&mapping->i_pages);
 		if (test_bit(PG_dirty, &page->flags)) {
-			radix_tree_tag_clear(&mapping->page_tree,
-					     page_index(page),
+			__xa_clear_mark(&mapping->i_pages, page_index(page),
 					     PAGECACHE_TAG_DIRTY);
-			spin_unlock_irq(&mapping->tree_lock);
+			xa_unlock_irq(&mapping->i_pages);
 			return clear_page_dirty_for_io(page);
 		}
-		spin_unlock_irq(&mapping->tree_lock);
+		xa_unlock_irq(&mapping->i_pages);
 		return 0;
 	}
 	return TestClearPageDirty(page);
@@ -521,7 +504,7 @@ unsigned long nilfs_find_uncommitted_extent(struct inode *inode,
 	index = start_blk >> (PAGE_SHIFT - inode->i_blkbits);
 	nblocks_in_page = 1U << (PAGE_SHIFT - inode->i_blkbits);
 
-	pagevec_init(&pvec, 0);
+	pagevec_init(&pvec);
 
 repeat:
 	pvec.nr = find_get_pages_contig(inode->i_mapping, index, PAGEVEC_SIZE,

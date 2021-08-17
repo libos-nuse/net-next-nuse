@@ -8,6 +8,7 @@
  */
 #include <linux/clockchips.h>
 #include <linux/interrupt.h>
+#include <linux/cpufreq.h>
 #include <linux/percpu.h>
 #include <linux/smp.h>
 #include <linux/irq.h>
@@ -80,7 +81,7 @@ static unsigned int calculate_min_delta(void)
 		}
 
 		/* Sorted insert of 75th percentile into buf2 */
-		for (k = 0; k < i; ++k) {
+		for (k = 0; k < i && k < ARRAY_SIZE(buf2); ++k) {
 			if (buf1[ARRAY_SIZE(buf1) - 1] < buf2[k]) {
 				l = min_t(unsigned int,
 					  i, ARRAY_SIZE(buf2) - 1);
@@ -250,8 +251,52 @@ unsigned int __weak get_c0_compare_int(void)
 	return MIPS_CPU_IRQ_BASE + cp0_compare_irq;
 }
 
+#ifdef CONFIG_CPU_FREQ
+
+static unsigned long mips_ref_freq;
+
+static int r4k_cpufreq_callback(struct notifier_block *nb,
+				unsigned long val, void *data)
+{
+	struct cpufreq_freqs *freq = data;
+	struct clock_event_device *cd;
+	unsigned long rate;
+	int cpu;
+
+	if (!mips_ref_freq)
+		mips_ref_freq = freq->old;
+
+	if (val == CPUFREQ_POSTCHANGE) {
+		rate = cpufreq_scale(mips_hpt_frequency, mips_ref_freq,
+				     freq->new);
+
+		for_each_cpu(cpu, freq->policy->cpus) {
+			cd = &per_cpu(mips_clockevent_device, cpu);
+
+			clockevents_update_freq(cd, rate);
+		}
+	}
+
+	return 0;
+}
+
+static struct notifier_block r4k_cpufreq_notifier = {
+	.notifier_call  = r4k_cpufreq_callback,
+};
+
+static int __init r4k_register_cpufreq_notifier(void)
+{
+	return cpufreq_register_notifier(&r4k_cpufreq_notifier,
+					 CPUFREQ_TRANSITION_NOTIFIER);
+
+}
+core_initcall(r4k_register_cpufreq_notifier);
+
+#endif /* !CONFIG_CPU_FREQ */
+
 int r4k_clockevent_init(void)
 {
+	unsigned long flags = IRQF_PERCPU | IRQF_TIMER | IRQF_SHARED;
 	unsigned int cpu = smp_processor_id();
 	struct clock_event_device *cd;
 	unsigned int irq, min_delta;
@@ -276,12 +321,7 @@ int r4k_clockevent_init(void)
 				  CLOCK_EVT_FEAT_C3STOP |
 				  CLOCK_EVT_FEAT_PERCPU;
 
-	clockevent_set_clock(cd, mips_hpt_frequency);
-
-	/* Calculate the min / max delta */
-	cd->max_delta_ns	= clockevent_delta2ns(0x7fffffff, cd);
 	min_delta		= calculate_min_delta();
-	cd->min_delta_ns	= clockevent_delta2ns(min_delta, cd);
 
 	cd->rating		= 300;
 	cd->irq			= irq;
@@ -289,14 +329,16 @@ int r4k_clockevent_init(void)
 	cd->set_next_event	= mips_next_event;
 	cd->event_handler	= mips_event_handler;
 
-	clockevents_register_device(cd);
+	clockevents_config_and_register(cd, mips_hpt_frequency, min_delta, 0x7fffffff);
 
 	if (cp0_timer_irq_installed)
 		return 0;
 
 	cp0_timer_irq_installed = 1;
 
-	setup_irq(irq, &c0_compare_irqaction);
+	if (request_irq(irq, c0_compare_interrupt, flags, "timer",
+			c0_compare_interrupt))
+		pr_err("Failed to request irq %d (timer)\n", irq);
 
 	return 0;
 }

@@ -45,7 +45,7 @@
 #include <linux/mutex.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include "mconsole.h"
 
 MODULE_LICENSE("GPL");
@@ -85,7 +85,7 @@ static int harddog_open(struct inode *inode, struct file *file)
 	timer_alive = 1;
 	spin_unlock(&lock);
 	mutex_unlock(&harddog_mutex);
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 err:
 	spin_unlock(&lock);
 	mutex_unlock(&harddog_mutex);
@@ -165,6 +165,7 @@ static const struct file_operations harddog_fops = {
 	.owner		= THIS_MODULE,
 	.write		= harddog_write,
 	.unlocked_ioctl	= harddog_ioctl,
+	.compat_ioctl	= compat_ptr_ioctl,
 	.open		= harddog_open,
 	.release	= harddog_release,
 	.llseek		= no_llseek,
@@ -175,27 +176,4 @@ static struct miscdevice harddog_miscdev = {
 	.name		= "watchdog",
 	.fops		= &harddog_fops,
 };
-
-static char banner[] __initdata = KERN_INFO "UML Watchdog Timer\n";
-
-static int __init harddog_init(void)
-{
-	int ret;
-
-	ret = misc_register(&harddog_miscdev);
-
-	if (ret)
-		return ret;
-
-	printk(banner);
-
-	return 0;
-}
-
-static void __exit harddog_exit(void)
-{
-	misc_deregister(&harddog_miscdev);
-}
-
-module_init(harddog_init);
-module_exit(harddog_exit);
+module_misc_device(harddog_miscdev);

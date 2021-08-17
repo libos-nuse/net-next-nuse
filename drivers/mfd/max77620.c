@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Maxim MAX77620 MFD Driver
  *
@@ -7,10 +8,6 @@
  *	Laxman Dewangan <ldewangan@nvidia.com>
  *	Chaitanya Bandi <bandik@nvidia.com>
  *	Mallikarjun Kasoju <mkasoju@nvidia.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 /****************** Teminology used in driver ********************
@@ -31,25 +28,27 @@
 #include <linux/interrupt.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/max77620.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 
-static struct resource gpio_resources[] = {
+static struct max77620_chip *max77620_scratch;
+
+static const struct resource gpio_resources[] = {
 	DEFINE_RES_IRQ(MAX77620_IRQ_TOP_GPIO),
 };
 
-static struct resource power_resources[] = {
+static const struct resource power_resources[] = {
 	DEFINE_RES_IRQ(MAX77620_IRQ_LBT_MBATLOW),
 };
 
-static struct resource rtc_resources[] = {
+static const struct resource rtc_resources[] = {
 	DEFINE_RES_IRQ(MAX77620_IRQ_TOP_RTC),
 };
 
-static struct resource thermal_resources[] = {
+static const struct resource thermal_resources[] = {
 	DEFINE_RES_IRQ(MAX77620_IRQ_LBT_TJALRM1),
 	DEFINE_RES_IRQ(MAX77620_IRQ_LBT_TJALRM2),
 };
@@ -111,13 +110,24 @@ static const struct mfd_cell max20024_children[] = {
 	},
 };
 
-static struct regmap_irq_chip max77620_top_irq_chip = {
-	.name = "max77620-top",
-	.irqs = max77620_top_irqs,
-	.num_irqs = ARRAY_SIZE(max77620_top_irqs),
-	.num_regs = 2,
-	.status_base = MAX77620_REG_IRQTOP,
-	.mask_base = MAX77620_REG_IRQTOPM,
+static const struct mfd_cell max77663_children[] = {
+	{ .name = "max77620-pinctrl", },
+	{ .name = "max77620-clock", },
+	{ .name = "max77663-pmic", },
+	{ .name = "max77620-watchdog", },
+	{
+		.name = "max77620-gpio",
+		.resources = gpio_resources,
+		.num_resources = ARRAY_SIZE(gpio_resources),
+	}, {
+		.name = "max77620-rtc",
+		.resources = rtc_resources,
+		.num_resources = ARRAY_SIZE(rtc_resources),
+	}, {
+		.name = "max77663-power",
+		.resources = power_resources,
+		.num_resources = ARRAY_SIZE(power_resources),
+	},
 };
 
 static const struct regmap_range max77620_readable_ranges[] = {
@@ -167,6 +177,7 @@ static const struct regmap_config max77620_regmap_config = {
 	.rd_table = &max77620_readable_table,
 	.wr_table = &max77620_writable_table,
 	.volatile_table = &max77620_volatile_table,
+	.use_single_write = true,
 };
 
 static const struct regmap_config max20024_regmap_config = {
@@ -178,6 +189,80 @@ static const struct regmap_config max20024_regmap_config = {
 	.rd_table = &max20024_readable_table,
 	.wr_table = &max77620_writable_table,
 	.volatile_table = &max77620_volatile_table,
+};
+
+static const struct regmap_range max77663_readable_ranges[] = {
+	regmap_reg_range(MAX77620_REG_CNFGGLBL1, MAX77620_REG_CID5),
+};
+
+static const struct regmap_access_table max77663_readable_table = {
+	.yes_ranges = max77663_readable_ranges,
+	.n_yes_ranges = ARRAY_SIZE(max77663_readable_ranges),
+};
+
+static const struct regmap_range max77663_writable_ranges[] = {
+	regmap_reg_range(MAX77620_REG_CNFGGLBL1, MAX77620_REG_CID5),
+};
+
+static const struct regmap_access_table max77663_writable_table = {
+	.yes_ranges = max77663_writable_ranges,
+	.n_yes_ranges = ARRAY_SIZE(max77663_writable_ranges),
+};
+
+static const struct regmap_config max77663_regmap_config = {
+	.name = "power-slave",
+	.reg_bits = 8,
+	.val_bits = 8,
+	.max_register = MAX77620_REG_CID5 + 1,
+	.cache_type = REGCACHE_RBTREE,
+	.rd_table = &max77663_readable_table,
+	.wr_table = &max77663_writable_table,
+	.volatile_table = &max77620_volatile_table,
+};
+
+/*
+ * MAX77620 and MAX20024 has the following steps of the interrupt handling
+ * for TOP interrupts:
+ * 1. When interrupt occurs from PMIC, mask the PMIC interrupt by setting GLBLM.
+ * 2. Read IRQTOP and service the interrupt.
+ * 3. Once all interrupts has been checked and serviced, the interrupt service
+ *    routine un-masks the hardware interrupt line by clearing GLBLM.
+ */
+static int max77620_irq_global_mask(void *irq_drv_data)
+{
+	struct max77620_chip *chip = irq_drv_data;
+	int ret;
+
+	ret = regmap_update_bits(chip->rmap, MAX77620_REG_INTENLBT,
+				 MAX77620_GLBLM_MASK, MAX77620_GLBLM_MASK);
+	if (ret < 0)
+		dev_err(chip->dev, "Failed to set GLBLM: %d\n", ret);
+
+	return ret;
+}
+
+static int max77620_irq_global_unmask(void *irq_drv_data)
+{
+	struct max77620_chip *chip = irq_drv_data;
+	int ret;
+
+	ret = regmap_update_bits(chip->rmap, MAX77620_REG_INTENLBT,
+				 MAX77620_GLBLM_MASK, 0);
+	if (ret < 0)
+		dev_err(chip->dev, "Failed to reset GLBLM: %d\n", ret);
+
+	return ret;
+}
+
+static struct regmap_irq_chip max77620_top_irq_chip = {
+	.name = "max77620-top",
+	.irqs = max77620_top_irqs,
+	.num_irqs = ARRAY_SIZE(max77620_top_irqs),
+	.num_regs = 2,
+	.status_base = MAX77620_REG_IRQTOP,
+	.mask_base = MAX77620_REG_IRQTOPM,
+	.handle_pre_irq = max77620_irq_global_mask,
+	.handle_post_irq = max77620_irq_global_unmask,
 };
 
 /* max77620_get_fps_period_reg_value:  Get FPS bit field value from
@@ -203,6 +288,10 @@ static int max77620_get_fps_period_reg_value(struct max77620_chip *chip,
 		break;
 	case MAX77620:
 		fps_min_period = MAX77620_FPS_PERIOD_MIN_US;
+		break;
+	case MAX77663:
+		fps_min_period = MAX20024_FPS_PERIOD_MIN_US;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -236,18 +325,22 @@ static int max77620_config_fps(struct max77620_chip *chip,
 		break;
 	case MAX77620:
 		fps_max_period = MAX77620_FPS_PERIOD_MAX_US;
+		break;
+	case MAX77663:
+		fps_max_period = MAX20024_FPS_PERIOD_MAX_US;
+		break;
 	default:
 		return -EINVAL;
 	}
 
 	for (fps_id = 0; fps_id < MAX77620_FPS_COUNT; fps_id++) {
 		sprintf(fps_name, "fps%d", fps_id);
-		if (!strcmp(fps_np->name, fps_name))
+		if (of_node_name_eq(fps_np, fps_name))
 			break;
 	}
 
 	if (fps_id == MAX77620_FPS_COUNT) {
-		dev_err(dev, "FPS node name %s is not valid\n", fps_np->name);
+		dev_err(dev, "FPS node name %pOFn is not valid\n", fps_np);
 		return -EINVAL;
 	}
 
@@ -324,8 +417,10 @@ static int max77620_initialise_fps(struct max77620_chip *chip)
 
 	for_each_child_of_node(fps_np, fps_child) {
 		ret = max77620_config_fps(chip, fps_child);
-		if (ret < 0)
+		if (ret < 0) {
+			of_node_put(fps_child);
 			return ret;
+		}
 	}
 
 	config = chip->enable_global_lpm ? MAX77620_ONOFFCNFG2_SLP_LPM_MSK : 0;
@@ -337,6 +432,9 @@ static int max77620_initialise_fps(struct max77620_chip *chip)
 	}
 
 skip_fps:
+	if (chip->chip_id == MAX77663)
+		return 0;
+
 	/* Enable wake on EN0 pin */
 	ret = regmap_update_bits(chip->rmap, MAX77620_REG_ONOFFCNFG2,
 				 MAX77620_ONOFFCNFG2_WK_EN0,
@@ -385,6 +483,15 @@ static int max77620_read_es_version(struct max77620_chip *chip)
 	return ret;
 }
 
+static void max77620_pm_power_off(void)
+{
+	struct max77620_chip *chip = max77620_scratch;
+
+	regmap_update_bits(chip->rmap, MAX77620_REG_ONOFFCNFG1,
+			   MAX77620_ONOFFCNFG1_SFT_RST,
+			   MAX77620_ONOFFCNFG1_SFT_RST);
+}
+
 static int max77620_probe(struct i2c_client *client,
 			  const struct i2c_device_id *id)
 {
@@ -392,6 +499,7 @@ static int max77620_probe(struct i2c_client *client,
 	struct max77620_chip *chip;
 	const struct mfd_cell *mfd_cells;
 	int n_mfd_cells;
+	bool pm_off;
 	int ret;
 
 	chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
@@ -400,7 +508,6 @@ static int max77620_probe(struct i2c_client *client,
 
 	i2c_set_clientdata(client, chip);
 	chip->dev = &client->dev;
-	chip->irq_base = -1;
 	chip->chip_irq = client->irq;
 	chip->chip_id = (enum max77620_chip_id)id->driver_data;
 
@@ -415,6 +522,11 @@ static int max77620_probe(struct i2c_client *client,
 		n_mfd_cells = ARRAY_SIZE(max20024_children);
 		rmap_config = &max20024_regmap_config;
 		break;
+	case MAX77663:
+		mfd_cells = max77663_children;
+		n_mfd_cells = ARRAY_SIZE(max77663_children);
+		rmap_config = &max77663_regmap_config;
+		break;
 	default:
 		dev_err(chip->dev, "ChipID is invalid %d\n", chip->chip_id);
 		return -EINVAL;
@@ -423,7 +535,7 @@ static int max77620_probe(struct i2c_client *client,
 	chip->rmap = devm_regmap_init_i2c(client, rmap_config);
 	if (IS_ERR(chip->rmap)) {
 		ret = PTR_ERR(chip->rmap);
-		dev_err(chip->dev, "Failed to intialise regmap: %d\n", ret);
+		dev_err(chip->dev, "Failed to initialise regmap: %d\n", ret);
 		return ret;
 	}
 
@@ -431,9 +543,10 @@ static int max77620_probe(struct i2c_client *client,
 	if (ret < 0)
 		return ret;
 
+	max77620_top_irq_chip.irq_drv_data = chip;
 	ret = devm_regmap_add_irq_chip(chip->dev, chip->rmap, client->irq,
-				       IRQF_ONESHOT | IRQF_SHARED,
-				       chip->irq_base, &max77620_top_irq_chip,
+				       IRQF_ONESHOT | IRQF_SHARED, 0,
+				       &max77620_top_irq_chip,
 				       &chip->top_irq_data);
 	if (ret < 0) {
 		dev_err(chip->dev, "Failed to add regmap irq: %d\n", ret);
@@ -450,6 +563,12 @@ static int max77620_probe(struct i2c_client *client,
 	if (ret < 0) {
 		dev_err(chip->dev, "Failed to add MFD children: %d\n", ret);
 		return ret;
+	}
+
+	pm_off = of_device_is_system_power_controller(client->dev.of_node);
+	if (pm_off && !pm_power_off) {
+		max77620_scratch = chip;
+		pm_power_off = max77620_pm_power_off;
 	}
 
 	return 0;
@@ -507,6 +626,9 @@ static int max77620_i2c_suspend(struct device *dev)
 		return ret;
 	}
 
+	if (chip->chip_id == MAX77663)
+		goto out;
+
 	/* Disable WK_EN0 */
 	ret = regmap_update_bits(chip->rmap, MAX77620_REG_ONOFFCNFG2,
 				 MAX77620_ONOFFCNFG2_WK_EN0, 0);
@@ -542,7 +664,7 @@ static int max77620_i2c_resume(struct device *dev)
 	 * For MAX20024: No need to configure WKEN0 on resume as
 	 * it is configured on Init.
 	 */
-	if (chip->chip_id == MAX20024)
+	if (chip->chip_id == MAX20024 || chip->chip_id == MAX77663)
 		goto out;
 
 	/* Enable WK_EN0 */
@@ -564,9 +686,9 @@ out:
 static const struct i2c_device_id max77620_id[] = {
 	{"max77620", MAX77620},
 	{"max20024", MAX20024},
+	{"max77663", MAX77663},
 	{},
 };
-MODULE_DEVICE_TABLE(i2c, max77620_id);
 
 static const struct dev_pm_ops max77620_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(max77620_i2c_suspend, max77620_i2c_resume)
@@ -580,11 +702,4 @@ static struct i2c_driver max77620_driver = {
 	.probe = max77620_probe,
 	.id_table = max77620_id,
 };
-
-module_i2c_driver(max77620_driver);
-
-MODULE_DESCRIPTION("MAX77620/MAX20024 Multi Function Device Core Driver");
-MODULE_AUTHOR("Laxman Dewangan <ldewangan@nvidia.com>");
-MODULE_AUTHOR("Chaitanya Bandi <bandik@nvidia.com>");
-MODULE_AUTHOR("Mallikarjun Kasoju <mkasoju@nvidia.com>");
-MODULE_LICENSE("GPL v2");
+builtin_i2c_driver(max77620_driver);

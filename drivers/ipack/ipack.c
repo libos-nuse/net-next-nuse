@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Industry-pack bus support functions.
  *
  * Copyright (C) 2011-2012 CERN (www.cern.ch)
  * Author: Samuel Iglesias Gonsalvez <siglesias@igalia.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; version 2 of the License.
  */
 
 #include <linux/module.h>
@@ -178,7 +175,7 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
 		       idev->id_vendor, idev->id_device);
 }
 
-ipack_device_attr(id_format, "0x%hhu\n");
+ipack_device_attr(id_format, "0x%hhx\n");
 
 static DEVICE_ATTR_RO(id);
 static DEVICE_ATTR_RO(id_device);
@@ -212,7 +209,7 @@ struct ipack_bus_device *ipack_bus_register(struct device *parent, int slots,
 	int bus_nr;
 	struct ipack_bus_device *bus;
 
-	bus = kzalloc(sizeof(struct ipack_bus_device), GFP_KERNEL);
+	bus = kzalloc(sizeof(*bus), GFP_KERNEL);
 	if (!bus)
 		return NULL;
 
@@ -402,7 +399,6 @@ static int ipack_device_read_id(struct ipack_device *dev)
 	 * ID ROM contents */
 	dev->id = kmalloc(dev->id_avail, GFP_KERNEL);
 	if (!dev->id) {
-		dev_err(&dev->dev, "dev->id alloc failed.\n");
 		ret = -ENOMEM;
 		goto out;
 	}

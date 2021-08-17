@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -5,17 +6,11 @@
  *
  *		"Ping" sockets
  *
- *		This program is free software; you can redistribute it and/or
- *		modify it under the terms of the GNU General Public License
- *		as published by the Free Software Foundation; either version
- *		2 of the License, or (at your option) any later version.
- *
  * Based on ipv4/ping.c code.
  *
  * Authors:	Lorenzo Colitti (IPv6 support)
  *		Vasiliy Kulikov / Openwall (IPv4 implementation, for Linux 2.6),
  *		Pavel Kankovsky (IPv4 implementation, for Linux 2.4.32)
- *
  */
 
 #include <net/addrconf.h>
@@ -24,6 +19,7 @@
 #include <net/protocol.h>
 #include <net/udp.h>
 #include <net/transp_v6.h>
+#include <linux/proc_fs.h>
 #include <net/ping.h>
 
 /* Compatibility glue so we can support IPv6 when it's compiled as a module */
@@ -55,13 +51,12 @@ static int ping_v6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	struct icmp6hdr user_icmph;
 	int addr_type;
 	struct in6_addr *daddr;
-	int iif = 0;
+	int oif = 0;
 	struct flowi6 fl6;
 	int err;
 	struct dst_entry *dst;
 	struct rt6_info *rt;
 	struct pingfakehdr pfh;
-	struct sockcm_cookie junk = {0};
 	struct ipcm6_cookie ipc6;
 
 	pr_debug("ping_v6_sendmsg(sk=%p,sk->num=%u)\n", inet, inet->inet_num);
@@ -78,25 +73,30 @@ static int ping_v6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		if (u->sin6_family != AF_INET6) {
 			return -EAFNOSUPPORT;
 		}
-		if (sk->sk_bound_dev_if &&
-		    sk->sk_bound_dev_if != u->sin6_scope_id) {
-			return -EINVAL;
-		}
 		daddr = &(u->sin6_addr);
-		iif = u->sin6_scope_id;
+		if (__ipv6_addr_needs_scope_id(ipv6_addr_type(daddr)))
+			oif = u->sin6_scope_id;
 	} else {
 		if (sk->sk_state != TCP_ESTABLISHED)
 			return -EDESTADDRREQ;
 		daddr = &sk->sk_v6_daddr;
 	}
 
-	if (!iif)
-		iif = sk->sk_bound_dev_if;
+	if (!oif)
+		oif = sk->sk_bound_dev_if;
+
+	if (!oif)
+		oif = np->sticky_pktinfo.ipi6_ifindex;
+
+	if (!oif && ipv6_addr_is_multicast(daddr))
+		oif = np->mcast_oif;
+	else if (!oif)
+		oif = np->ucast_oif;
 
 	addr_type = ipv6_addr_type(daddr);
-	if (__ipv6_addr_needs_scope_id(addr_type) && !iif)
-		return -EINVAL;
-	if (addr_type & IPV6_ADDR_MAPPED)
+	if ((__ipv6_addr_needs_scope_id(addr_type) && !oif) ||
+	    (addr_type & IPV6_ADDR_MAPPED) ||
+	    (oif && sk->sk_bound_dev_if && oif != sk->sk_bound_dev_if))
 		return -EINVAL;
 
 	/* TODO: use ip6_datagram_send_ctl to get options from cmsg */
@@ -106,27 +106,21 @@ static int ping_v6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	fl6.flowi6_proto = IPPROTO_ICMPV6;
 	fl6.saddr = np->saddr;
 	fl6.daddr = *daddr;
+	fl6.flowi6_oif = oif;
 	fl6.flowi6_mark = sk->sk_mark;
+	fl6.flowi6_uid = sk->sk_uid;
 	fl6.fl6_icmp_type = user_icmph.icmp6_type;
 	fl6.fl6_icmp_code = user_icmph.icmp6_code;
 	security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
 
-	if (!fl6.flowi6_oif && ipv6_addr_is_multicast(&fl6.daddr))
-		fl6.flowi6_oif = np->mcast_oif;
-	else if (!fl6.flowi6_oif)
-		fl6.flowi6_oif = np->ucast_oif;
-
-	ipc6.tclass = np->tclass;
+	ipcm6_init_sk(&ipc6, np);
+	ipc6.sockc.mark = sk->sk_mark;
 	fl6.flowlabel = ip6_make_flowinfo(ipc6.tclass, fl6.flowlabel);
 
-	dst = ip6_sk_dst_lookup_flow(sk, &fl6,  daddr);
+	dst = ip6_sk_dst_lookup_flow(sk, &fl6, daddr, false);
 	if (IS_ERR(dst))
 		return PTR_ERR(dst);
 	rt = (struct rt6_info *) dst;
-
-	np = inet6_sk(sk);
-	if (!np)
-		return -EBADF;
 
 	if (!fl6.flowi6_oif && ipv6_addr_is_multicast(&fl6.daddr))
 		fl6.flowi6_oif = np->mcast_oif;
@@ -143,24 +137,23 @@ static int ping_v6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	pfh.family = AF_INET6;
 
 	ipc6.hlimit = ip6_sk_dst_hoplimit(np, &fl6, dst);
-	ipc6.dontfrag = np->dontfrag;
-	ipc6.opt = NULL;
 
 	lock_sock(sk);
 	err = ip6_append_data(sk, ping_getfrag, &pfh, len,
 			      0, &ipc6, &fl6, rt,
-			      MSG_DONTWAIT, &junk);
+			      MSG_DONTWAIT);
 
 	if (err) {
 		ICMP6_INC_STATS(sock_net(sk), rt->rt6i_idev,
 				ICMP6_MIB_OUTERRORS);
 		ip6_flush_pending_frames(sk);
 	} else {
-		err = icmpv6_push_pending_frames(sk, &fl6,
-						 (struct icmp6hdr *) &pfh.icmph,
-						 len);
+		icmpv6_push_pending_frames(sk, &fl6,
+					   (struct icmp6hdr *)&pfh.icmph, len);
 	}
 	release_sock(sk);
+
+	dst_release(dst);
 
 	if (err)
 		return err;
@@ -174,7 +167,7 @@ struct proto pingv6_prot = {
 	.init =		ping_init_sock,
 	.close =	ping_close,
 	.connect =	ip6_datagram_connect_v6_only,
-	.disconnect =	udp_disconnect,
+	.disconnect =	__udp_disconnect,
 	.setsockopt =	ipv6_setsockopt,
 	.getsockopt =	ipv6_getsockopt,
 	.sendmsg =	ping_v6_sendmsg,
@@ -192,7 +185,7 @@ static struct inet_protosw pingv6_protosw = {
 	.type =      SOCK_DGRAM,
 	.protocol =  IPPROTO_ICMPV6,
 	.prot =      &pingv6_prot,
-	.ops =       &inet6_dgram_ops,
+	.ops =       &inet6_sockraw_ops,
 	.flags =     INET_PROTOSW_REUSE,
 };
 
@@ -216,26 +209,24 @@ static int ping_v6_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct ping_seq_afinfo ping_v6_seq_afinfo = {
-	.name		= "icmp6",
-	.family		= AF_INET6,
-	.seq_fops       = &ping_seq_fops,
-	.seq_ops	= {
-		.start		= ping_v6_seq_start,
-		.show		= ping_v6_seq_show,
-		.next		= ping_seq_next,
-		.stop		= ping_seq_stop,
-	},
+static const struct seq_operations ping_v6_seq_ops = {
+	.start		= ping_v6_seq_start,
+	.show		= ping_v6_seq_show,
+	.next		= ping_seq_next,
+	.stop		= ping_seq_stop,
 };
 
 static int __net_init ping_v6_proc_init_net(struct net *net)
 {
-	return ping_proc_register(net, &ping_v6_seq_afinfo);
+	if (!proc_create_net("icmp6", 0444, net->proc_net, &ping_v6_seq_ops,
+			sizeof(struct ping_iter_state)))
+		return -ENOMEM;
+	return 0;
 }
 
-static void __net_init ping_v6_proc_exit_net(struct net *net)
+static void __net_exit ping_v6_proc_exit_net(struct net *net)
 {
-	return ping_proc_unregister(net, &ping_v6_seq_afinfo);
+	remove_proc_entry("icmp6", net->proc_net);
 }
 
 static struct pernet_operations ping_v6_net_ops = {

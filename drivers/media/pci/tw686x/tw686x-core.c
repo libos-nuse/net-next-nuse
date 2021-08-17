@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2015 VanguardiaSur - www.vanguardiasur.com.ar
  *
  * Based on original driver by Krzysztof Ha?asa:
  * Copyright (C) 2015 Industrial Research Institute for Automation
  * and Measurements PIAP
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License
- * as published by the Free Software Foundation.
  *
  * Notes
  * -----
@@ -21,12 +18,14 @@
  * under stress testings it has been found that the machine can
  * freeze completely if DMA registers are programmed while streaming
  * is active.
- * This driver tries to access hardware registers as infrequently
- * as possible by:
- *   i.  allocating fixed DMA buffers and memcpy'ing into
- *       vmalloc'ed buffers
- *   ii. using a timer to mitigate the rate of DMA reset operations,
- *       on DMA channels error.
+ *
+ * Therefore, driver implements a dma_mode called 'memcpy' which
+ * avoids cycling the DMA buffers, and insteads allocates extra DMA buffers
+ * and then copies into vmalloc'ed user buffers.
+ *
+ * In addition to this, when streaming is on, the driver tries to access
+ * hardware registers as infrequently as possible. This is done by using
+ * a timer to limit the rate at which DMA is reset on DMA channels error.
  */
 
 #include <linux/init.h>
@@ -54,6 +53,42 @@
 static u32 dma_interval = 0x00098968;
 module_param(dma_interval, int, 0444);
 MODULE_PARM_DESC(dma_interval, "Minimum time span for DMA interrupting host");
+
+static unsigned int dma_mode = TW686X_DMA_MODE_MEMCPY;
+static const char *dma_mode_name(unsigned int mode)
+{
+	switch (mode) {
+	case TW686X_DMA_MODE_MEMCPY:
+		return "memcpy";
+	case TW686X_DMA_MODE_CONTIG:
+		return "contig";
+	case TW686X_DMA_MODE_SG:
+		return "sg";
+	default:
+		return "unknown";
+	}
+}
+
+static int tw686x_dma_mode_get(char *buffer, const struct kernel_param *kp)
+{
+	return sprintf(buffer, "%s", dma_mode_name(dma_mode));
+}
+
+static int tw686x_dma_mode_set(const char *val, const struct kernel_param *kp)
+{
+	if (!strcasecmp(val, dma_mode_name(TW686X_DMA_MODE_MEMCPY)))
+		dma_mode = TW686X_DMA_MODE_MEMCPY;
+	else if (!strcasecmp(val, dma_mode_name(TW686X_DMA_MODE_CONTIG)))
+		dma_mode = TW686X_DMA_MODE_CONTIG;
+	else if (!strcasecmp(val, dma_mode_name(TW686X_DMA_MODE_SG)))
+		dma_mode = TW686X_DMA_MODE_SG;
+	else
+		return -EINVAL;
+	return 0;
+}
+module_param_call(dma_mode, tw686x_dma_mode_set, tw686x_dma_mode_get,
+		  &dma_mode, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(dma_mode, "DMA operation mode (memcpy/contig/sg, default=memcpy)");
 
 void tw686x_disable_channel(struct tw686x_dev *dev, unsigned int channel)
 {
@@ -88,9 +123,9 @@ void tw686x_enable_channel(struct tw686x_dev *dev, unsigned int channel)
  * channels "too fast" which makes some TW686x devices very
  * angry and freeze the CPU (see note 1).
  */
-static void tw686x_dma_delay(unsigned long data)
+static void tw686x_dma_delay(struct timer_list *t)
 {
-	struct tw686x_dev *dev = (struct tw686x_dev *)data;
+	struct tw686x_dev *dev = from_timer(dev, t, dma_delay_timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&dev->lock, flags);
@@ -212,6 +247,7 @@ static int tw686x_probe(struct pci_dev *pci_dev,
 	if (!dev)
 		return -ENOMEM;
 	dev->type = pci_id->driver_data;
+	dev->dma_mode = dma_mode;
 	sprintf(dev->name, "tw%04X", pci_dev->device);
 
 	dev->video_channels = kcalloc(max_channels(dev),
@@ -228,9 +264,10 @@ static int tw686x_probe(struct pci_dev *pci_dev,
 		goto free_video;
 	}
 
-	pr_info("%s: PCI %s, IRQ %d, MMIO 0x%lx\n", dev->name,
+	pr_info("%s: PCI %s, IRQ %d, MMIO 0x%lx (%s mode)\n", dev->name,
 		pci_name(pci_dev), pci_dev->irq,
-		(unsigned long)pci_resource_start(pci_dev, 0));
+		(unsigned long)pci_resource_start(pci_dev, 0),
+		dma_mode_name(dma_mode));
 
 	dev->pci_dev = pci_dev;
 	if (pci_enable_device(pci_dev)) {
@@ -285,8 +322,7 @@ static int tw686x_probe(struct pci_dev *pci_dev,
 		goto iounmap;
 	}
 
-	setup_timer(&dev->dma_delay_timer,
-		    tw686x_dma_delay, (unsigned long) dev);
+	timer_setup(&dev->dma_delay_timer, tw686x_dma_delay, 0);
 
 	/*
 	 * This must be set right before initializing v4l2_dev.

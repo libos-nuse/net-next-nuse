@@ -1,19 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) STMicroelectronics SA 2014
  * Authors: Fabien Dessenne <fabien.dessenne@st.com> for STMicroelectronics.
- * License terms:  GNU General Public License (GPL), version 2
  */
 
 #include <linux/component.h>
+#include <linux/delay.h>
+#include <linux/dma-mapping.h>
 #include <linux/firmware.h>
+#include <linux/io.h>
+#include <linux/module.h>
 #include <linux/reset.h>
 #include <linux/seq_file.h>
 
 #include <drm/drm_atomic.h>
+#include <drm/drm_device.h>
 #include <drm/drm_fb_cma_helper.h>
+#include <drm/drm_fourcc.h>
 #include <drm/drm_gem_cma_helper.h>
 
 #include "sti_compositor.h"
+#include "sti_drv.h"
 #include "sti_hqvdp_lut.h"
 #include "sti_plane.h"
 #include "sti_vtg.h"
@@ -331,6 +338,7 @@ struct sti_hqvdp_cmd {
  * @hqvdp_cmd_paddr:   physical address of hqvdp_cmd
  * @vtg:               vtg for main data path
  * @xp70_initialized:  true if xp70 is already initialized
+ * @vtg_registered:    true if registered to VTG
  */
 struct sti_hqvdp {
 	struct device *dev;
@@ -346,6 +354,7 @@ struct sti_hqvdp {
 	u32 hqvdp_cmd_paddr;
 	struct sti_vtg *vtg;
 	bool xp70_initialized;
+	bool vtg_registered;
 };
 
 #define to_sti_hqvdp(x) container_of(x, struct sti_hqvdp, plane)
@@ -555,14 +564,8 @@ static int hqvdp_dbg_show(struct seq_file *s, void *data)
 {
 	struct drm_info_node *node = s->private;
 	struct sti_hqvdp *hqvdp = (struct sti_hqvdp *)node->info_ent->data;
-	struct drm_device *dev = node->minor->dev;
 	int cmd, cmd_offset, infoxp70;
 	void *virt;
-	int ret;
-
-	ret = mutex_lock_interruptible(&dev->struct_mutex);
-	if (ret)
-		return ret;
 
 	seq_printf(s, "%s: (vaddr = 0x%p)",
 		   sti_plane_to_str(&hqvdp->plane), hqvdp->regs);
@@ -628,9 +631,7 @@ static int hqvdp_dbg_show(struct seq_file *s, void *data)
 		hqvdp_dbg_dump_cmd(s, (struct sti_hqvdp_cmd *)virt);
 	}
 
-	seq_puts(s, "\n");
-
-	mutex_unlock(&dev->struct_mutex);
+	seq_putc(s, '\n');
 	return 0;
 }
 
@@ -638,16 +639,16 @@ static struct drm_info_list hqvdp_debugfs_files[] = {
 	{ "hqvdp", hqvdp_dbg_show, 0, NULL },
 };
 
-static int hqvdp_debugfs_init(struct sti_hqvdp *hqvdp, struct drm_minor *minor)
+static void hqvdp_debugfs_init(struct sti_hqvdp *hqvdp, struct drm_minor *minor)
 {
 	unsigned int i;
 
 	for (i = 0; i < ARRAY_SIZE(hqvdp_debugfs_files); i++)
 		hqvdp_debugfs_files[i].data = hqvdp;
 
-	return drm_debugfs_create_files(hqvdp_debugfs_files,
-					ARRAY_SIZE(hqvdp_debugfs_files),
-					minor->debugfs_root, minor);
+	drm_debugfs_create_files(hqvdp_debugfs_files,
+				 ARRAY_SIZE(hqvdp_debugfs_files),
+				 minor->debugfs_root, minor);
 }
 
 /**
@@ -777,6 +778,7 @@ static void sti_hqvdp_disable(struct sti_hqvdp *hqvdp)
 		DRM_ERROR("XP70 could not revert to idle\n");
 
 	hqvdp->plane.status = STI_PLANE_DISABLED;
+	hqvdp->vtg_registered = false;
 }
 
 /**
@@ -790,7 +792,7 @@ static void sti_hqvdp_disable(struct sti_hqvdp *hqvdp)
  * RETURNS:
  * 0 on success.
  */
-int sti_hqvdp_vtg_cb(struct notifier_block *nb, unsigned long evt, void *data)
+static int sti_hqvdp_vtg_cb(struct notifier_block *nb, unsigned long evt, void *data)
 {
 	struct sti_hqvdp *hqvdp = container_of(nb, struct sti_hqvdp, vtg_nb);
 	int btm_cmd_offset, top_cmd_offest;
@@ -962,6 +964,7 @@ static void sti_hqvdp_start_xp70(struct sti_hqvdp *hqvdp)
 	}
 	if (i == POLL_MAX_ATTEMPT) {
 		DRM_ERROR("Could not reset\n");
+		clk_disable_unprepare(hqvdp->clk);
 		goto out;
 	}
 
@@ -998,6 +1001,7 @@ static void sti_hqvdp_start_xp70(struct sti_hqvdp *hqvdp)
 	}
 	if (i == POLL_MAX_ATTEMPT) {
 		DRM_ERROR("Could not boot\n");
+		clk_disable_unprepare(hqvdp->clk);
 		goto out;
 	}
 
@@ -1019,7 +1023,6 @@ static int sti_hqvdp_atomic_check(struct drm_plane *drm_plane,
 	struct sti_hqvdp *hqvdp = to_sti_hqvdp(plane);
 	struct drm_crtc *crtc = state->crtc;
 	struct drm_framebuffer *fb = state->fb;
-	bool first_prepare = plane->status == STI_PLANE_DISABLED ? true : false;
 	struct drm_crtc_state *crtc_state;
 	struct drm_display_mode *mode;
 	int dst_x, dst_y, dst_w, dst_h;
@@ -1033,17 +1036,17 @@ static int sti_hqvdp_atomic_check(struct drm_plane *drm_plane,
 	mode = &crtc_state->mode;
 	dst_x = state->crtc_x;
 	dst_y = state->crtc_y;
-	dst_w = clamp_val(state->crtc_w, 0, mode->crtc_hdisplay - dst_x);
-	dst_h = clamp_val(state->crtc_h, 0, mode->crtc_vdisplay - dst_y);
+	dst_w = clamp_val(state->crtc_w, 0, mode->hdisplay - dst_x);
+	dst_h = clamp_val(state->crtc_h, 0, mode->vdisplay - dst_y);
 	/* src_x are in 16.16 format */
 	src_x = state->src_x >> 16;
 	src_y = state->src_y >> 16;
 	src_w = state->src_w >> 16;
 	src_h = state->src_h >> 16;
 
-	if (!sti_hqvdp_check_hw_scaling(hqvdp, mode,
-					src_w, src_h,
-					dst_w, dst_h)) {
+	if (mode->clock && !sti_hqvdp_check_hw_scaling(hqvdp, mode,
+						       src_w, src_h,
+						       dst_w, dst_h)) {
 		DRM_ERROR("Scaling beyond HW capabilities\n");
 		return -EINVAL;
 	}
@@ -1070,10 +1073,11 @@ static int sti_hqvdp_atomic_check(struct drm_plane *drm_plane,
 		return -EINVAL;
 	}
 
-	if (first_prepare) {
+	if (!hqvdp->xp70_initialized)
 		/* Start HQVDP XP70 coprocessor */
 		sti_hqvdp_start_xp70(hqvdp);
 
+	if (!hqvdp->vtg_registered) {
 		/* Prevent VTG shutdown */
 		if (clk_prepare_enable(hqvdp->clk_pix_main)) {
 			DRM_ERROR("Failed to prepare/enable pix main clk\n");
@@ -1085,8 +1089,10 @@ static int sti_hqvdp_atomic_check(struct drm_plane *drm_plane,
 					    &hqvdp->vtg_nb,
 					    crtc)) {
 			DRM_ERROR("Cannot register VTG notifier\n");
+			clk_disable_unprepare(hqvdp->clk_pix_main);
 			return -EINVAL;
 		}
+		hqvdp->vtg_registered = true;
 	}
 
 	DRM_DEBUG_KMS("CRTC:%d (%s) drm plane:%d (%s)\n",
@@ -1119,11 +1125,26 @@ static void sti_hqvdp_atomic_update(struct drm_plane *drm_plane,
 	if (!crtc || !fb)
 		return;
 
+	if ((oldstate->fb == state->fb) &&
+	    (oldstate->crtc_x == state->crtc_x) &&
+	    (oldstate->crtc_y == state->crtc_y) &&
+	    (oldstate->crtc_w == state->crtc_w) &&
+	    (oldstate->crtc_h == state->crtc_h) &&
+	    (oldstate->src_x == state->src_x) &&
+	    (oldstate->src_y == state->src_y) &&
+	    (oldstate->src_w == state->src_w) &&
+	    (oldstate->src_h == state->src_h)) {
+		/* No change since last update, do not post cmd */
+		DRM_DEBUG_DRIVER("No change, not posting cmd\n");
+		plane->status = STI_PLANE_UPDATED;
+		return;
+	}
+
 	mode = &crtc->mode;
 	dst_x = state->crtc_x;
 	dst_y = state->crtc_y;
-	dst_w = clamp_val(state->crtc_w, 0, mode->crtc_hdisplay - dst_x);
-	dst_h = clamp_val(state->crtc_h, 0, mode->crtc_vdisplay - dst_y);
+	dst_w = clamp_val(state->crtc_w, 0, mode->hdisplay - dst_x);
+	dst_h = clamp_val(state->crtc_h, 0, mode->vdisplay - dst_y);
 	/* src_x are in 16.16 format */
 	src_x = state->src_x >> 16;
 	src_y = state->src_y >> 16;
@@ -1153,7 +1174,7 @@ static void sti_hqvdp_atomic_update(struct drm_plane *drm_plane,
 	cma_obj = drm_fb_cma_get_gem_obj(fb, 0);
 
 	DRM_DEBUG_DRIVER("drm FB:%d format:%.4s phys@:0x%lx\n", fb->base.id,
-			 (char *)&fb->pixel_format,
+			 (char *)&fb->format->format,
 			 (unsigned long)cma_obj->paddr);
 
 	/* Buffer planes address */
@@ -1221,15 +1242,15 @@ static void sti_hqvdp_atomic_disable(struct drm_plane *drm_plane,
 {
 	struct sti_plane *plane = to_sti_plane(drm_plane);
 
-	if (!drm_plane->crtc) {
+	if (!oldstate->crtc) {
 		DRM_DEBUG_DRIVER("drm plane:%d not enabled\n",
 				 drm_plane->base.id);
 		return;
 	}
 
 	DRM_DEBUG_DRIVER("CRTC:%d (%s) drm plane:%d (%s)\n",
-			 drm_plane->crtc->base.id,
-			 sti_mixer_to_str(to_sti_mixer(drm_plane->crtc)),
+			 oldstate->crtc->base.id,
+			 sti_mixer_to_str(to_sti_mixer(oldstate->crtc)),
 			 drm_plane->base.id, sti_plane_to_str(plane));
 
 	plane->status = STI_PLANE_DISABLING;
@@ -1239,6 +1260,33 @@ static const struct drm_plane_helper_funcs sti_hqvdp_helpers_funcs = {
 	.atomic_check = sti_hqvdp_atomic_check,
 	.atomic_update = sti_hqvdp_atomic_update,
 	.atomic_disable = sti_hqvdp_atomic_disable,
+};
+
+static void sti_hqvdp_destroy(struct drm_plane *drm_plane)
+{
+	DRM_DEBUG_DRIVER("\n");
+
+	drm_plane_cleanup(drm_plane);
+}
+
+static int sti_hqvdp_late_register(struct drm_plane *drm_plane)
+{
+	struct sti_plane *plane = to_sti_plane(drm_plane);
+	struct sti_hqvdp *hqvdp = to_sti_hqvdp(plane);
+
+	hqvdp_debugfs_init(hqvdp, drm_plane->dev->primary);
+
+	return 0;
+}
+
+static const struct drm_plane_funcs sti_hqvdp_plane_helpers_funcs = {
+	.update_plane = drm_atomic_helper_update_plane,
+	.disable_plane = drm_atomic_helper_disable_plane,
+	.destroy = sti_hqvdp_destroy,
+	.reset = sti_plane_reset,
+	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
+	.late_register = sti_hqvdp_late_register,
 };
 
 static struct drm_plane *sti_hqvdp_create(struct drm_device *drm_dev,
@@ -1253,10 +1301,10 @@ static struct drm_plane *sti_hqvdp_create(struct drm_device *drm_dev,
 	sti_hqvdp_init(hqvdp);
 
 	res = drm_universal_plane_init(drm_dev, &hqvdp->plane.drm_plane, 1,
-				       &sti_plane_helpers_funcs,
+				       &sti_hqvdp_plane_helpers_funcs,
 				       hqvdp_supported_formats,
 				       ARRAY_SIZE(hqvdp_supported_formats),
-				       DRM_PLANE_TYPE_OVERLAY, NULL);
+				       NULL, DRM_PLANE_TYPE_OVERLAY, NULL);
 	if (res) {
 		DRM_ERROR("Failed to initialize universal plane\n");
 		return NULL;
@@ -1266,13 +1314,10 @@ static struct drm_plane *sti_hqvdp_create(struct drm_device *drm_dev,
 
 	sti_plane_init_property(&hqvdp->plane, DRM_PLANE_TYPE_OVERLAY);
 
-	if (hqvdp_debugfs_init(hqvdp, drm_dev->primary))
-		DRM_ERROR("HQVDP debugfs setup failed\n");
-
 	return &hqvdp->plane.drm_plane;
 }
 
-int sti_hqvdp_bind(struct device *dev, struct device *master, void *data)
+static int sti_hqvdp_bind(struct device *dev, struct device *master, void *data)
 {
 	struct sti_hqvdp *hqvdp = dev_get_drvdata(dev);
 	struct drm_device *drm_dev = data;
@@ -1320,12 +1365,12 @@ static int sti_hqvdp_probe(struct platform_device *pdev)
 
 	/* Get Memory resources */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (res == NULL) {
+	if (!res) {
 		DRM_ERROR("Get memory resource failed\n");
 		return -ENXIO;
 	}
 	hqvdp->regs = devm_ioremap(dev, res->start, resource_size(res));
-	if (hqvdp->regs == NULL) {
+	if (!hqvdp->regs) {
 		DRM_ERROR("Register mapping failed\n");
 		return -ENXIO;
 	}
@@ -1346,6 +1391,7 @@ static int sti_hqvdp_probe(struct platform_device *pdev)
 	vtg_np = of_parse_phandle(pdev->dev.of_node, "st,vtg", 0);
 	if (vtg_np)
 		hqvdp->vtg = of_vtg_find(vtg_np);
+	of_node_put(vtg_np);
 
 	platform_set_drvdata(pdev, hqvdp);
 
@@ -1358,7 +1404,7 @@ static int sti_hqvdp_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct of_device_id hqvdp_of_match[] = {
+static const struct of_device_id hqvdp_of_match[] = {
 	{ .compatible = "st,stih407-hqvdp", },
 	{ /* end node */ }
 };

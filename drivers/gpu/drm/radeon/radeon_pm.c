@@ -20,14 +20,19 @@
  * Authors: Rafał Miłecki <zajec5@gmail.com>
  *          Alex Deucher <alexdeucher@gmail.com>
  */
-#include <drm/drmP.h>
-#include "radeon.h"
-#include "avivod.h"
-#include "atom.h"
-#include "r600_dpm.h"
-#include <linux/power_supply.h>
-#include <linux/hwmon.h>
+
 #include <linux/hwmon-sysfs.h>
+#include <linux/hwmon.h>
+#include <linux/pci.h>
+#include <linux/power_supply.h>
+
+#include <drm/drm_debugfs.h>
+#include <drm/drm_vblank.h>
+
+#include "atom.h"
+#include "avivod.h"
+#include "r600_dpm.h"
+#include "radeon.h"
 
 #define RADEON_IDLE_LOOP_MS 100
 #define RADEON_RECLOCK_DELAY_MS 200
@@ -246,6 +251,7 @@ static void radeon_set_power_state(struct radeon_device *rdev)
 
 static void radeon_pm_set_clocks(struct radeon_device *rdev)
 {
+	struct drm_crtc *crtc;
 	int i, r;
 
 	/* no need to take locks, etc. if nothing's going to change */
@@ -274,26 +280,30 @@ static void radeon_pm_set_clocks(struct radeon_device *rdev)
 	radeon_unmap_vram_bos(rdev);
 
 	if (rdev->irq.installed) {
-		for (i = 0; i < rdev->num_crtc; i++) {
+		i = 0;
+		drm_for_each_crtc(crtc, rdev->ddev) {
 			if (rdev->pm.active_crtcs & (1 << i)) {
 				/* This can fail if a modeset is in progress */
-				if (drm_vblank_get(rdev->ddev, i) == 0)
+				if (drm_crtc_vblank_get(crtc) == 0)
 					rdev->pm.req_vblank |= (1 << i);
 				else
 					DRM_DEBUG_DRIVER("crtc %d no vblank, can glitch\n",
 							 i);
 			}
+			i++;
 		}
 	}
 
 	radeon_set_power_state(rdev);
 
 	if (rdev->irq.installed) {
-		for (i = 0; i < rdev->num_crtc; i++) {
+		i = 0;
+		drm_for_each_crtc(crtc, rdev->ddev) {
 			if (rdev->pm.req_vblank & (1 << i)) {
 				rdev->pm.req_vblank &= ~(1 << i);
-				drm_vblank_put(rdev->ddev, i);
+				drm_crtc_vblank_put(crtc);
 			}
+			i++;
 		}
 	}
 
@@ -702,6 +712,31 @@ static SENSOR_DEVICE_ATTR(pwm1_enable, S_IRUGO | S_IWUSR, radeon_hwmon_get_pwm1_
 static SENSOR_DEVICE_ATTR(pwm1_min, S_IRUGO, radeon_hwmon_get_pwm1_min, NULL, 0);
 static SENSOR_DEVICE_ATTR(pwm1_max, S_IRUGO, radeon_hwmon_get_pwm1_max, NULL, 0);
 
+static ssize_t radeon_hwmon_show_sclk(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	struct radeon_device *rdev = dev_get_drvdata(dev);
+	struct drm_device *ddev = rdev->ddev;
+	u32 sclk = 0;
+
+	/* Can't get clock frequency when the card is off */
+	if ((rdev->flags & RADEON_IS_PX) &&
+	    (ddev->switch_power_state != DRM_SWITCH_POWER_ON))
+		return -EINVAL;
+
+	if (rdev->asic->dpm.get_current_sclk)
+		sclk = radeon_dpm_get_current_sclk(rdev);
+
+	/* Value returned by dpm is in 10 KHz units, need to convert it into Hz 
+	   for hwmon */
+	sclk *= 10000;
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", sclk);
+}
+
+static SENSOR_DEVICE_ATTR(freq1_input, S_IRUGO, radeon_hwmon_show_sclk, NULL,
+			  0);
+
 
 static struct attribute *hwmon_attributes[] = {
 	&sensor_dev_attr_temp1_input.dev_attr.attr,
@@ -711,6 +746,7 @@ static struct attribute *hwmon_attributes[] = {
 	&sensor_dev_attr_pwm1_enable.dev_attr.attr,
 	&sensor_dev_attr_pwm1_min.dev_attr.attr,
 	&sensor_dev_attr_pwm1_max.dev_attr.attr,
+	&sensor_dev_attr_freq1_input.dev_attr.attr,
 	NULL
 };
 
@@ -728,7 +764,8 @@ static umode_t hwmon_attributes_visible(struct kobject *kobj,
 	     attr == &sensor_dev_attr_pwm1.dev_attr.attr ||
 	     attr == &sensor_dev_attr_pwm1_enable.dev_attr.attr ||
 	     attr == &sensor_dev_attr_pwm1_max.dev_attr.attr ||
-	     attr == &sensor_dev_attr_pwm1_min.dev_attr.attr))
+	     attr == &sensor_dev_attr_pwm1_min.dev_attr.attr ||
+	     attr == &sensor_dev_attr_freq1_input.dev_attr.attr))
 		return 0;
 
 	/* Skip fan attributes if fan is not present */
@@ -1710,6 +1747,7 @@ static void radeon_pm_compute_clocks_dpm(struct radeon_device *rdev)
 	struct drm_device *ddev = rdev->ddev;
 	struct drm_crtc *crtc;
 	struct radeon_crtc *radeon_crtc;
+	struct radeon_connector *radeon_connector;
 
 	if (!rdev->pm.dpm_enabled)
 		return;
@@ -1719,6 +1757,7 @@ static void radeon_pm_compute_clocks_dpm(struct radeon_device *rdev)
 	/* update active crtc counts */
 	rdev->pm.dpm.new_active_crtcs = 0;
 	rdev->pm.dpm.new_active_crtc_count = 0;
+	rdev->pm.dpm.high_pixelclock_count = 0;
 	if (rdev->num_crtc && rdev->mode_info.mode_config_initialized) {
 		list_for_each_entry(crtc,
 				    &ddev->mode_config.crtc_list, head) {
@@ -1726,6 +1765,12 @@ static void radeon_pm_compute_clocks_dpm(struct radeon_device *rdev)
 			if (crtc->enabled) {
 				rdev->pm.dpm.new_active_crtcs |= (1 << radeon_crtc->crtc_id);
 				rdev->pm.dpm.new_active_crtc_count++;
+				if (!radeon_crtc->connector)
+					continue;
+
+				radeon_connector = to_radeon_connector(radeon_crtc->connector);
+				if (radeon_connector->pixelclock_for_modeset > 297000)
+					rdev->pm.dpm.high_pixelclock_count++;
 			}
 		}
 	}
@@ -1779,7 +1824,7 @@ static bool radeon_pm_debug_check_in_vbl(struct radeon_device *rdev, bool finish
 	u32 stat_crtc = 0;
 	bool in_vbl = radeon_pm_in_vbl(rdev);
 
-	if (in_vbl == false)
+	if (!in_vbl)
 		DRM_DEBUG_DRIVER("not in vbl for pm change %08x at %s\n", stat_crtc,
 			 finish ? "exit" : "entry");
 	return in_vbl;

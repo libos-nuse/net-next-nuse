@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Toshiba Bluetooth Enable Driver
  *
@@ -6,10 +7,6 @@
  *
  * Thanks to Matthew Garrett for background info on ACPI innards which
  * normal people aren't meant to understand :-)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -80,7 +77,9 @@ static int toshiba_bluetooth_present(acpi_handle handle)
 	if (ACPI_FAILURE(result)) {
 		pr_err("ACPI call to query Bluetooth presence failed\n");
 		return -ENXIO;
-	} else if (!bt_present) {
+	}
+
+	if (!bt_present) {
 		pr_info("Bluetooth device not present\n");
 		return -ENODEV;
 	}

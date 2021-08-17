@@ -33,15 +33,13 @@
 		stdout-path = &uart0;
 	};
 
-	memory {
+	memory@28000000 {
 		device_type = "memory";
 		reg = <0x28000000 0x800000>; /* 8 MB */
 	};
 
 	pca_buttons {
 		compatible = "gpio-keys-polled";
-		#address-cells = <1>;
-		#size-cells = <0>;
 		poll-interval = <100>;
 		autorepeat;
 
@@ -424,12 +422,12 @@
 
 	/* NXP SE97BTP with temperature sensor + eeprom */
 	sensor@18 {
-		compatible = "nxp,jc42";
+		compatible = "nxp,se97", "jedec,jc-42.4-temp";
 		reg = <0x18>;
 	};
 
 	eeprom@50 {
-		compatible = "nxp,24c02";
+		compatible = "nxp,24c02", "atmel,24c02";
 		reg = <0x50>;
 	};
 

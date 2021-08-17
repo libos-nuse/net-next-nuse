@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2015 IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/spinlock.h>
@@ -89,7 +85,7 @@ static ssize_t guest_collect_vpd(struct cxl *adapter, struct cxl_afu *afu,
 		mod = 0;
 	}
 
-	vpd_buf = kzalloc(entries * sizeof(unsigned long *), GFP_KERNEL);
+	vpd_buf = kcalloc(entries, sizeof(unsigned long *), GFP_KERNEL);
 	if (!vpd_buf)
 		return -ENOMEM;
 
@@ -169,7 +165,7 @@ static irqreturn_t guest_psl_irq(int irq, void *data)
 		return IRQ_HANDLED;
 	}
 
-	rc = cxl_irq(irq, ctx, &irq_info);
+	rc = cxl_irq_psl8(irq, ctx, &irq_info);
 	return rc;
 }
 
@@ -196,15 +192,18 @@ static irqreturn_t guest_slice_irq_err(int irq, void *data)
 {
 	struct cxl_afu *afu = data;
 	int rc;
-	u64 serr;
+	u64 serr, afu_error, dsisr;
 
-	WARN(irq, "CXL SLICE ERROR interrupt %i\n", irq);
 	rc = cxl_h_get_fn_error_interrupt(afu->guest->handle, &serr);
 	if (rc) {
 		dev_crit(&afu->dev, "Couldn't read PSL_SERR_An: %d\n", rc);
 		return IRQ_HANDLED;
 	}
-	dev_crit(&afu->dev, "PSL_SERR_An: 0x%.16llx\n", serr);
+	afu_error = cxl_p2n_read(afu, CXL_AFU_ERR_An);
+	dsisr = cxl_p2n_read(afu, CXL_PSL_DSISR_An);
+	cxl_afu_decode_psl_serr(afu, serr);
+	dev_crit(&afu->dev, "AFU_ERR_An: 0x%.16llx\n", afu_error);
+	dev_crit(&afu->dev, "PSL_DSISR_An: 0x%.16llx\n", dsisr);
 
 	rc = cxl_h_ack_fn_error_interrupt(afu->guest->handle, serr);
 	if (rc)
@@ -264,6 +263,7 @@ static int guest_reset(struct cxl *adapter)
 	int i, rc;
 
 	pr_devel("Adapter reset request\n");
+	spin_lock(&adapter->afu_list_lock);
 	for (i = 0; i < adapter->slices; i++) {
 		if ((afu = adapter->afu[i])) {
 			pci_error_handlers(afu, CXL_ERROR_DETECTED_EVENT,
@@ -280,6 +280,7 @@ static int guest_reset(struct cxl *adapter)
 			pci_error_handlers(afu, CXL_RESUME_EVENT, 0);
 		}
 	}
+	spin_unlock(&adapter->afu_list_lock);
 	return rc;
 }
 
@@ -548,13 +549,13 @@ static int attach_afu_directed(struct cxl_context *ctx, u64 wed, u64 amr)
 	elem->common.tid    = cpu_to_be32(0); /* Unused */
 	elem->common.pid    = cpu_to_be32(pid);
 	elem->common.csrp   = cpu_to_be64(0); /* disable */
-	elem->common.aurp0  = cpu_to_be64(0); /* disable */
-	elem->common.aurp1  = cpu_to_be64(0); /* disable */
+	elem->common.u.psl8.aurp0  = cpu_to_be64(0); /* disable */
+	elem->common.u.psl8.aurp1  = cpu_to_be64(0); /* disable */
 
 	cxl_prefault(ctx, wed);
 
-	elem->common.sstp0  = cpu_to_be64(ctx->sstp0);
-	elem->common.sstp1  = cpu_to_be64(ctx->sstp1);
+	elem->common.u.psl8.sstp0  = cpu_to_be64(ctx->sstp0);
+	elem->common.u.psl8.sstp1  = cpu_to_be64(ctx->sstp1);
 
 	/*
 	 * Ensure we have at least one interrupt allocated to take faults for
@@ -619,9 +620,6 @@ out_free:
 static int guest_attach_process(struct cxl_context *ctx, bool kernel, u64 wed, u64 amr)
 {
 	pr_devel("in %s\n", __func__);
-
-	if (ctx->real_mode)
-		return -EPERM;
 
 	ctx->kernel = kernel;
 	if (ctx->afu->current_mode == CXL_MODE_DIRECTED)
@@ -884,7 +882,7 @@ static void afu_handle_errstate(struct work_struct *work)
 	    afu_guest->previous_state == H_STATE_PERM_UNAVAILABLE)
 		return;
 
-	if (afu_guest->handle_err == true)
+	if (afu_guest->handle_err)
 		schedule_delayed_work(&afu_guest->work_err,
 				      msecs_to_jiffies(3000));
 }
@@ -910,11 +908,6 @@ static int afu_properties_look_ok(struct cxl_afu *afu)
 
 	if (afu->max_procs_virtualised < 1) {
 		dev_err(&afu->dev, "Unexpected max number of processes virtualised value\n");
-		return -EINVAL;
-	}
-
-	if (afu->crs_len < 0) {
-		dev_err(&afu->dev, "Unexpected configuration record size value\n");
 		return -EINVAL;
 	}
 
@@ -1023,8 +1016,6 @@ err1:
 
 void cxl_guest_remove_afu(struct cxl_afu *afu)
 {
-	pr_devel("in %s - AFU(%d)\n", __func__, afu->slice);
-
 	if (!afu)
 		return;
 
@@ -1052,16 +1043,18 @@ static void free_adapter(struct cxl *adapter)
 	struct irq_avail *cur;
 	int i;
 
-	if (adapter->guest->irq_avail) {
-		for (i = 0; i < adapter->guest->irq_nranges; i++) {
-			cur = &adapter->guest->irq_avail[i];
-			kfree(cur->bitmap);
+	if (adapter->guest) {
+		if (adapter->guest->irq_avail) {
+			for (i = 0; i < adapter->guest->irq_nranges; i++) {
+				cur = &adapter->guest->irq_avail[i];
+				kfree(cur->bitmap);
+			}
+			kfree(adapter->guest->irq_avail);
 		}
-		kfree(adapter->guest->irq_avail);
+		kfree(adapter->guest->status);
+		kfree(adapter->guest);
 	}
-	kfree(adapter->guest->status);
 	cxl_remove_adapter_nr(adapter);
-	kfree(adapter->guest);
 	kfree(adapter);
 }
 
@@ -1147,6 +1140,9 @@ struct cxl *cxl_guest_init_adapter(struct device_node *np, struct platform_devic
 	if ((rc = cxl_sysfs_adapter_add(adapter)))
 		goto err_put1;
 
+	/* release the context lock as the adapter is configured */
+	cxl_adapter_context_unlock(adapter);
+
 	return adapter;
 
 err_put1:
@@ -1182,6 +1178,7 @@ const struct cxl_backend_ops cxl_guest_ops = {
 	.ack_irq = guest_ack_irq,
 	.attach_process = guest_attach_process,
 	.detach_process = guest_detach_process,
+	.update_ivtes = NULL,
 	.support_attributes = guest_support_attributes,
 	.link_ok = guest_link_ok,
 	.release_afu = guest_release_afu,

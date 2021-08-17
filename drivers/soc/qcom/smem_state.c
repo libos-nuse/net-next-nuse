@@ -1,15 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015, Sony Mobile Communications Inc.
  * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 #include <linux/device.h>
 #include <linux/list.h>
@@ -104,26 +96,26 @@ struct qcom_smem_state *qcom_smem_state_get(struct device *dev,
 
 	if (con_id) {
 		index = of_property_match_string(dev->of_node,
-						 "qcom,state-names",
+						 "qcom,smem-state-names",
 						 con_id);
 		if (index < 0) {
-			dev_err(dev, "missing qcom,state-names\n");
+			dev_err(dev, "missing qcom,smem-state-names\n");
 			return ERR_PTR(index);
 		}
 	}
 
 	ret = of_parse_phandle_with_args(dev->of_node,
-					 "qcom,state",
-					 "#qcom,state-cells",
+					 "qcom,smem-states",
+					 "#qcom,smem-state-cells",
 					 index,
 					 &args);
 	if (ret) {
-		dev_err(dev, "failed to parse qcom,state property\n");
+		dev_err(dev, "failed to parse qcom,smem-states property\n");
 		return ERR_PTR(ret);
 	}
 
 	if (args.args_count != 1) {
-		dev_err(dev, "invalid #qcom,state-cells\n");
+		dev_err(dev, "invalid #qcom,smem-state-cells\n");
 		return ERR_PTR(-EINVAL);
 	}
 

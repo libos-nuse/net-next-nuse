@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #if !defined(_TRACE_KVM_HV_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_KVM_HV_H
 
@@ -8,8 +9,6 @@
 
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM kvm_hv
-#define TRACE_INCLUDE_PATH .
-#define TRACE_INCLUDE_FILE trace_hv
 
 #define kvm_trace_symbol_hcall \
 	{H_REMOVE,			"H_REMOVE"}, \
@@ -90,7 +89,7 @@
 	{H_CREATE_RPT,			"H_CREATE_RPT"}, \
 	{H_REMOVE_RPT,			"H_REMOVE_RPT"}, \
 	{H_REGISTER_RPAGES,		"H_REGISTER_RPAGES"}, \
-	{H_DISABLE_AND_GETC,		"H_DISABLE_AND_GETC"}, \
+	{H_DISABLE_AND_GET,		"H_DISABLE_AND_GET"}, \
 	{H_ERROR_DATA,			"H_ERROR_DATA"}, \
 	{H_GET_HCA_INFO,		"H_GET_HCA_INFO"}, \
 	{H_GET_PERF_COUNT,		"H_GET_PERF_COUNT"}, \
@@ -432,6 +431,28 @@ TRACE_EVENT(kvmppc_vcore_blocked,
 		   __entry->runner_vcpu, __entry->n_runnable, __entry->tgid)
 );
 
+TRACE_EVENT(kvmppc_vcore_wakeup,
+	TP_PROTO(int do_sleep, __u64 ns),
+
+	TP_ARGS(do_sleep, ns),
+
+	TP_STRUCT__entry(
+		__field(__u64,  ns)
+		__field(int,    waited)
+		__field(pid_t,  tgid)
+	),
+
+	TP_fast_assign(
+		__entry->ns     = ns;
+		__entry->waited = do_sleep;
+		__entry->tgid   = current->tgid;
+	),
+
+	TP_printk("%s time %llu ns, tgid=%d",
+		__entry->waited ? "wait" : "poll",
+		__entry->ns, __entry->tgid)
+);
+
 TRACE_EVENT(kvmppc_run_vcpu_enter,
 	TP_PROTO(struct kvm_vcpu *vcpu),
 
@@ -451,9 +472,9 @@ TRACE_EVENT(kvmppc_run_vcpu_enter,
 );
 
 TRACE_EVENT(kvmppc_run_vcpu_exit,
-	TP_PROTO(struct kvm_vcpu *vcpu, struct kvm_run *run),
+	TP_PROTO(struct kvm_vcpu *vcpu),
 
-	TP_ARGS(vcpu, run),
+	TP_ARGS(vcpu),
 
 	TP_STRUCT__entry(
 		__field(int,		vcpu_id)
@@ -463,7 +484,7 @@ TRACE_EVENT(kvmppc_run_vcpu_exit,
 
 	TP_fast_assign(
 		__entry->vcpu_id  = vcpu->vcpu_id;
-		__entry->exit     = run->exit_reason;
+		__entry->exit     = vcpu->run->exit_reason;
 		__entry->ret      = vcpu->arch.ret;
 	),
 
@@ -474,4 +495,11 @@ TRACE_EVENT(kvmppc_run_vcpu_exit,
 #endif /* _TRACE_KVM_HV_H */
 
 /* This part must be outside protection */
+
+#undef TRACE_INCLUDE_PATH
+#undef TRACE_INCLUDE_FILE
+
+#define TRACE_INCLUDE_PATH .
+#define TRACE_INCLUDE_FILE trace_hv
+
 #include <trace/define_trace.h>

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __LINUX_GRE_H
 #define __LINUX_GRE_H
 
@@ -7,7 +8,15 @@
 struct gre_base_hdr {
 	__be16 flags;
 	__be16 protocol;
-};
+} __packed;
+
+struct gre_full_hdr {
+	struct gre_base_hdr fixed_header;
+	__be16 csum;
+	__be16 reserved1;
+	__be32 key;
+	__be32 seq;
+} __packed;
 #define GRE_HEADER_SECTION 4
 
 #define GREPROTO_CISCO		0
@@ -27,6 +36,18 @@ struct net_device *gretap_fb_dev_create(struct net *net, const char *name,
 				       u8 name_assign_type);
 int gre_parse_header(struct sk_buff *skb, struct tnl_ptk_info *tpi,
 		     bool *csum_err, __be16 proto, int nhs);
+
+static inline bool netif_is_gretap(const struct net_device *dev)
+{
+	return dev->rtnl_link_ops &&
+	       !strcmp(dev->rtnl_link_ops->kind, "gretap");
+}
+
+static inline bool netif_is_ip6gretap(const struct net_device *dev)
+{
+	return dev->rtnl_link_ops &&
+	       !strcmp(dev->rtnl_link_ops->kind, "ip6gretap");
+}
 
 static inline int gre_calc_hlen(__be16 o_flags)
 {
@@ -104,6 +125,7 @@ static inline void gre_build_header(struct sk_buff *skb, int hdr_len,
 
 	skb_push(skb, hdr_len);
 
+	skb_set_inner_protocol(skb, proto);
 	skb_reset_transport_header(skb);
 	greh = (struct gre_base_hdr *)skb->data;
 	greh->flags = gre_tnl_flags_to_gre_flags(flags);

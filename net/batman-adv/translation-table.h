@@ -1,18 +1,7 @@
-/* Copyright (C) 2007-2016  B.A.T.M.A.N. contributors:
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Copyright (C) 2007-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner, Simon Wunderlich, Antonio Quartulli
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of version 2 of the GNU General Public
- * License as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _NET_BATMAN_ADV_TRANSLATION_TABLE_H_
@@ -20,10 +9,11 @@
 
 #include "main.h"
 
+#include <linux/netdevice.h>
+#include <linux/netlink.h>
+#include <linux/seq_file.h>
+#include <linux/skbuff.h>
 #include <linux/types.h>
-
-struct net_device;
-struct seq_file;
 
 int batadv_tt_init(struct batadv_priv *bat_priv);
 bool batadv_tt_local_add(struct net_device *soft_iface, const u8 *addr,
@@ -33,9 +23,15 @@ u16 batadv_tt_local_remove(struct batadv_priv *bat_priv,
 			   const char *message, bool roaming);
 int batadv_tt_local_seq_print_text(struct seq_file *seq, void *offset);
 int batadv_tt_global_seq_print_text(struct seq_file *seq, void *offset);
+int batadv_tt_local_dump(struct sk_buff *msg, struct netlink_callback *cb);
+int batadv_tt_global_dump(struct sk_buff *msg, struct netlink_callback *cb);
 void batadv_tt_global_del_orig(struct batadv_priv *bat_priv,
 			       struct batadv_orig_node *orig_node,
 			       s32 match_vid, const char *message);
+struct batadv_tt_global_entry *
+batadv_tt_global_hash_find(struct batadv_priv *bat_priv, const u8 *addr,
+			   unsigned short vid);
+void batadv_tt_global_entry_put(struct batadv_tt_global_entry *tt_global_entry);
 int batadv_tt_global_hash_count(struct batadv_priv *bat_priv,
 				const u8 *addr, unsigned short vid);
 struct batadv_orig_node *batadv_transtable_search(struct batadv_priv *bat_priv,
@@ -58,5 +54,8 @@ bool batadv_tt_add_temporary_global_entry(struct batadv_priv *bat_priv,
 					  unsigned short vid);
 bool batadv_tt_global_is_isolated(struct batadv_priv *bat_priv,
 				  const u8 *addr, unsigned short vid);
+
+int batadv_tt_cache_init(void);
+void batadv_tt_cache_destroy(void);
 
 #endif /* _NET_BATMAN_ADV_TRANSLATION_TABLE_H_ */

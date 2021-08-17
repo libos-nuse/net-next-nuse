@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Samsung EXYNOS4x12 FIMC-IS (Imaging Subsystem) driver
  *
@@ -5,10 +6,6 @@
  *
  * Authors: Younghwan Joo <yhwan.joo@samsung.com>
  *          Sylwester Nawrocki <s.nawrocki@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #ifndef FIMC_IS_H_
 #define FIMC_IS_H_
@@ -77,6 +74,9 @@ enum {
 	ISS_CLK_DRC,
 	ISS_CLK_FD,
 	ISS_CLK_MCUISP,
+	ISS_CLK_GICISP,
+	ISS_CLK_PWM_ISP,
+	ISS_CLK_MCUCTL_ISP,
 	ISS_CLK_UART,
 	ISS_GATE_CLKS_MAX,
 	ISS_CLK_ISP_DIV0 = ISS_GATE_CLKS_MAX,
@@ -233,7 +233,6 @@ struct chain_config {
  * @pdev: pointer to FIMC-IS platform device
  * @pctrl: pointer to pinctrl structure for this device
  * @v4l2_dev: pointer to top the level v4l2_device
- * @alloc_ctx: videobuf2 memory allocator context
  * @lock: mutex serializing video device and the subdev operations
  * @slock: spinlock protecting this data structure and the hw registers
  * @clocks: FIMC-LITE gate clock
@@ -256,7 +255,6 @@ struct fimc_is {
 	struct fimc_is_sensor		sensor[FIMC_IS_SENSORS_NUM];
 	struct fimc_is_setfile		setfile;
 
-	struct vb2_alloc_ctx		*alloc_ctx;
 	struct v4l2_ctrl_handler	ctrl_handler;
 
 	struct mutex			lock;

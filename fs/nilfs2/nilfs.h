@@ -1,17 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * nilfs.h - NILFS local header file.
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * Written by Koji Sato and Ryusuke Konishi.
  */
@@ -23,7 +14,8 @@
 #include <linux/buffer_head.h>
 #include <linux/spinlock.h>
 #include <linux/blkdev.h>
-#include <linux/nilfs2_fs.h>
+#include <linux/nilfs2_api.h>
+#include <linux/nilfs2_ondisk.h>
 #include "the_nilfs.h"
 #include "bmap.h"
 
@@ -119,20 +111,19 @@ enum {
 /*
  * Macros to check inode numbers
  */
-#define NILFS_MDT_INO_BITS   \
-	((unsigned int)(1 << NILFS_DAT_INO | 1 << NILFS_CPFILE_INO |	\
-			1 << NILFS_SUFILE_INO | 1 << NILFS_IFILE_INO |	\
-			1 << NILFS_ATIME_INO | 1 << NILFS_SKETCH_INO))
+#define NILFS_MDT_INO_BITS						\
+	(BIT(NILFS_DAT_INO) | BIT(NILFS_CPFILE_INO) |			\
+	 BIT(NILFS_SUFILE_INO) | BIT(NILFS_IFILE_INO) |			\
+	 BIT(NILFS_ATIME_INO) | BIT(NILFS_SKETCH_INO))
 
-#define NILFS_SYS_INO_BITS   \
-	((unsigned int)(1 << NILFS_ROOT_INO) | NILFS_MDT_INO_BITS)
+#define NILFS_SYS_INO_BITS (BIT(NILFS_ROOT_INO) | NILFS_MDT_INO_BITS)
 
 #define NILFS_FIRST_INO(sb) (((struct the_nilfs *)sb->s_fs_info)->ns_first_ino)
 
 #define NILFS_MDT_INODE(sb, ino) \
-	((ino) < NILFS_FIRST_INO(sb) && (NILFS_MDT_INO_BITS & (1 << (ino))))
+	((ino) < NILFS_FIRST_INO(sb) && (NILFS_MDT_INO_BITS & BIT(ino)))
 #define NILFS_VALID_INODE(sb, ino) \
-	((ino) >= NILFS_FIRST_INO(sb) || (NILFS_SYS_INO_BITS & (1 << (ino))))
+	((ino) >= NILFS_FIRST_INO(sb) || (NILFS_SYS_INO_BITS & BIT(ino)))
 
 /**
  * struct nilfs_transaction_info: context information for synchronization
@@ -261,7 +252,6 @@ int nilfs_ioctl_prepare_clean_segments(struct the_nilfs *, struct nilfs_argv *,
 void nilfs_inode_add_blocks(struct inode *inode, int n);
 void nilfs_inode_sub_blocks(struct inode *inode, int n);
 extern struct inode *nilfs_new_inode(struct inode *, umode_t);
-extern void nilfs_free_inode(struct inode *);
 extern int nilfs_get_block(struct inode *, sector_t, struct buffer_head *, int);
 extern void nilfs_set_inode_flags(struct inode *);
 extern int nilfs_read_inode_common(struct inode *, struct nilfs_inode *);
@@ -298,11 +288,44 @@ static inline int nilfs_mark_inode_dirty_sync(struct inode *inode)
 
 /* super.c */
 extern struct inode *nilfs_alloc_inode(struct super_block *);
-extern void nilfs_destroy_inode(struct inode *);
+
+__printf(2, 3)
+void __nilfs_msg(struct super_block *sb, const char *fmt, ...);
 extern __printf(3, 4)
-void nilfs_error(struct super_block *, const char *, const char *, ...);
-extern __printf(3, 4)
-void nilfs_warning(struct super_block *, const char *, const char *, ...);
+void __nilfs_error(struct super_block *sb, const char *function,
+		   const char *fmt, ...);
+
+#ifdef CONFIG_PRINTK
+
+#define nilfs_msg(sb, level, fmt, ...)					\
+	__nilfs_msg(sb, level fmt, ##__VA_ARGS__)
+#define nilfs_error(sb, fmt, ...)					\
+	__nilfs_error(sb, __func__, fmt, ##__VA_ARGS__)
+
+#else
+
+#define nilfs_msg(sb, level, fmt, ...)					\
+	do {								\
+		no_printk(level fmt, ##__VA_ARGS__);			\
+		(void)(sb);						\
+	} while (0)
+#define nilfs_error(sb, fmt, ...)					\
+	do {								\
+		no_printk(fmt, ##__VA_ARGS__);				\
+		__nilfs_error(sb, "", " ");				\
+	} while (0)
+
+#endif /* CONFIG_PRINTK */
+
+#define nilfs_crit(sb, fmt, ...)					\
+	nilfs_msg(sb, KERN_CRIT, fmt, ##__VA_ARGS__)
+#define nilfs_err(sb, fmt, ...)						\
+	nilfs_msg(sb, KERN_ERR, fmt, ##__VA_ARGS__)
+#define nilfs_warn(sb, fmt, ...)					\
+	nilfs_msg(sb, KERN_WARNING, fmt, ##__VA_ARGS__)
+#define nilfs_info(sb, fmt, ...)					\
+	nilfs_msg(sb, KERN_INFO, fmt, ##__VA_ARGS__)
+
 extern struct nilfs_super_block *
 nilfs_read_super_block(struct super_block *, u64, int, struct buffer_head **);
 extern int nilfs_store_magic_and_option(struct super_block *,

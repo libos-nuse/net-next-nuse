@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * comedi/drivers/rtd520.c
  * Comedi driver for Real Time Devices (RTD) PCI4520/DM7520
  *
  * COMEDI - Linux Control and Measurement Device Interface
  * Copyright (C) 2001 David A. Schleef <ds@schleef.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
  */
 
 /*
@@ -362,7 +353,7 @@ struct rtd_private {
 	long ai_count;		/* total transfer size (samples) */
 	int xfer_count;		/* # to transfer data. 0->1/2FIFO */
 	int flags;		/* flag event modes */
-	unsigned fifosz;
+	unsigned int fifosz;
 
 	/* 8254 Timer/Counter gate and clock sources */
 	unsigned char timer_gate_src[3];
@@ -491,9 +482,9 @@ static void rtd_load_channelgain_list(struct comedi_device *dev,
 static int rtd520_probe_fifo_depth(struct comedi_device *dev)
 {
 	unsigned int chanspec = CR_PACK(0, 0, AREF_GROUND);
-	unsigned i;
-	static const unsigned limit = 0x2000;
-	unsigned fifo_size = 0;
+	unsigned int i;
+	static const unsigned int limit = 0x2000;
+	unsigned int fifo_size = 0;
 
 	writel(0, dev->mmio + LAS0_ADC_FIFO_CLEAR);
 	rtd_load_channelgain_list(dev, 1, &chanspec);
@@ -501,7 +492,7 @@ static int rtd520_probe_fifo_depth(struct comedi_device *dev)
 	writel(0, dev->mmio + LAS0_ADC_CONVERSION);
 	/* convert  samples */
 	for (i = 0; i < limit; ++i) {
-		unsigned fifo_status;
+		unsigned int fifo_status;
 		/* trigger conversion */
 		writew(0, dev->mmio + LAS0_ADC);
 		usleep_range(1, 1000);
@@ -824,9 +815,8 @@ static int rtd_ai_cmdtest(struct comedi_device *dev,
 
 		if (cmd->scan_begin_src == TRIG_TIMER) {
 			arg = cmd->convert_arg * cmd->scan_end_arg;
-			err |= comedi_check_trigger_arg_min(&cmd->
-							    scan_begin_arg,
-							    arg);
+			err |= comedi_check_trigger_arg_min(
+					&cmd->scan_begin_arg, arg);
 		}
 	}
 
@@ -1175,7 +1165,7 @@ static void rtd_reset(struct comedi_device *dev)
 
 	writel(0, dev->mmio + LAS0_BOARD_RESET);
 	usleep_range(100, 1000);	/* needed? */
-	writel(0, devpriv->lcfg + PLX_INTRCS_REG);
+	writel(0, devpriv->lcfg + PLX_REG_INTCSR);
 	writew(0, dev->mmio + LAS0_IT);
 	writew(~0, dev->mmio + LAS0_CLEAR);
 	readw(dev->mmio + LAS0_CLEAR);
@@ -1316,7 +1306,8 @@ static int rtd_auto_attach(struct comedi_device *dev,
 	devpriv->fifosz = ret;
 
 	if (dev->irq)
-		writel(ICS_PIE | ICS_PLIE, devpriv->lcfg + PLX_INTRCS_REG);
+		writel(PLX_INTCSR_PIEN | PLX_INTCSR_PLIEN,
+		       devpriv->lcfg + PLX_REG_INTCSR);
 
 	return 0;
 }
@@ -1369,6 +1360,6 @@ static struct pci_driver rtd520_pci_driver = {
 };
 module_comedi_pci_driver(rtd520_driver, rtd520_pci_driver);
 
-MODULE_AUTHOR("Comedi http://www.comedi.org");
+MODULE_AUTHOR("Comedi https://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");
 MODULE_LICENSE("GPL");

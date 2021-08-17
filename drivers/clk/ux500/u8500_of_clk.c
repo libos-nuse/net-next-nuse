@@ -1,17 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Clock definitions for u8500 platform.
  *
  * Copyright (C) 2012 ST-Ericsson SA
  * Author: Ulf Hansson <ulf.hansson@linaro.org>
- *
- * License terms: GNU General Public License (GPL) version 2
  */
 
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/clk-provider.h>
 #include <linux/mfd/dbx500-prcmu.h>
-#include <linux/platform_data/clk-ux500.h>
 #include "clk.h"
 
 #define PRCC_NUM_PERIPH_CLUSTERS 6
@@ -48,11 +46,6 @@ static struct clk *ux500_twocell_get(struct of_phandle_args *clkspec,
 	return PRCC_SHOW(clk_data, base, bit);
 }
 
-static const struct of_device_id u8500_clk_of_match[] = {
-	{ .compatible = "stericsson,u8500-clks", },
-	{ },
-};
-
 /* CLKRST4 is missing making it hard to index things */
 enum clkrst_index {
 	CLKRST1_INDEX = 0,
@@ -63,22 +56,15 @@ enum clkrst_index {
 	CLKRST_MAX,
 };
 
-void u8500_clk_init(void)
+static void u8500_clk_init(struct device_node *np)
 {
 	struct prcmu_fw_version *fw_version;
-	struct device_node *np = NULL;
 	struct device_node *child = NULL;
 	const char *sgaclk_parent = NULL;
 	struct clk *clk, *rtc_clk, *twd_clk;
 	u32 bases[CLKRST_MAX];
 	int i;
 
-	if (of_have_populated_dt())
-		np = of_find_matching_node(NULL, u8500_clk_of_match);
-	if (!np) {
-		pr_err("Either DT or U8500 Clock node not found\n");
-		return;
-	}
 	for (i = 0; i < ARRAY_SIZE(bases); i++) {
 		struct resource r;
 
@@ -113,8 +99,10 @@ void u8500_clk_init(void)
 	if (fw_version != NULL) {
 		switch (fw_version->project) {
 		case PRCMU_FW_PROJECT_U8500_C2:
+		case PRCMU_FW_PROJECT_U8500_MBL:
 		case PRCMU_FW_PROJECT_U8520:
 		case PRCMU_FW_PROJECT_U8420:
+		case PRCMU_FW_PROJECT_U8420_SYSCLK:
 			sgaclk_parent = "soc0_pll";
 			break;
 		default:
@@ -218,6 +206,9 @@ void u8500_clk_init(void)
 
 	clk = clk_reg_prcmu_gate("timclk", NULL, PRCMU_TIMCLK, 0);
 	prcmu_clk[PRCMU_TIMCLK] = clk;
+
+	clk = clk_reg_prcmu_gate("ab8500_sysclk", NULL, PRCMU_SYSCLK, 0);
+	prcmu_clk[PRCMU_SYSCLK] = clk;
 
 	clk = clk_reg_prcmu_opp_volt_scalable("sdmmcclk", NULL, PRCMU_SDMMCCLK,
 					100000000, CLK_SET_RATE_GATE);
@@ -555,21 +546,22 @@ void u8500_clk_init(void)
 	for_each_child_of_node(np, child) {
 		static struct clk_onecell_data clk_data;
 
-		if (!of_node_cmp(child->name, "prcmu-clock")) {
+		if (of_node_name_eq(child, "prcmu-clock")) {
 			clk_data.clks = prcmu_clk;
 			clk_data.clk_num = ARRAY_SIZE(prcmu_clk);
 			of_clk_add_provider(child, of_clk_src_onecell_get, &clk_data);
 		}
-		if (!of_node_cmp(child->name, "prcc-periph-clock"))
+		if (of_node_name_eq(child, "prcc-periph-clock"))
 			of_clk_add_provider(child, ux500_twocell_get, prcc_pclk);
 
-		if (!of_node_cmp(child->name, "prcc-kernel-clock"))
+		if (of_node_name_eq(child, "prcc-kernel-clock"))
 			of_clk_add_provider(child, ux500_twocell_get, prcc_kclk);
 
-		if (!of_node_cmp(child->name, "rtc32k-clock"))
+		if (of_node_name_eq(child, "rtc32k-clock"))
 			of_clk_add_provider(child, of_clk_src_simple_get, rtc_clk);
 
-		if (!of_node_cmp(child->name, "smp-twd-clock"))
+		if (of_node_name_eq(child, "smp-twd-clock"))
 			of_clk_add_provider(child, of_clk_src_simple_get, twd_clk);
 	}
 }
+CLK_OF_DECLARE(u8500_clks, "stericsson,u8500-clks", u8500_clk_init);

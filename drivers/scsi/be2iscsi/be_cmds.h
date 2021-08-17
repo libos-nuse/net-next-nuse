@@ -1,18 +1,10 @@
-/**
- * Copyright (C) 2005 - 2015 Emulex
- * All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.  The full GNU General
- * Public License is included in this distribution in the file called COPYING.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright 2017 Broadcom. All Rights Reserved.
+ * The term "Broadcom" refers to Broadcom Limited and/or its subsidiaries.
  *
  * Contact Information:
- * linux-drivers@avagotech.com
- *
- * Emulex
- * 3333 Susan Street
- * Costa Mesa, CA 92626
+ * linux-drivers@broadcom.com
  */
 
 #ifndef BEISCSI_CMDS_H
@@ -31,10 +23,16 @@ struct be_sge {
 	__le32 len;
 };
 
-#define MCC_WRB_SGE_CNT_SHIFT 3	/* bits 3 - 7 of dword 0 */
-#define MCC_WRB_SGE_CNT_MASK 0x1F	/* bits 3 - 7 of dword 0 */
 struct be_mcc_wrb {
-	u32 embedded;		/* dword 0 */
+	u32 emb_sgecnt_special;	/* dword 0 */
+	/* bits 0 - embedded    */
+	/* bits 1 - 2 reserved	*/
+	/* bits 3 - 7 sge count	*/
+	/* bits 8 - 23 reserved	*/
+	/* bits 24 - 31 special	*/
+#define MCC_WRB_EMBEDDED_MASK 1
+#define MCC_WRB_SGE_CNT_SHIFT 3
+#define MCC_WRB_SGE_CNT_MASK 0x1F
 	u32 payload_length;	/* dword 1 */
 	u32 tag0;		/* dword 2 */
 	u32 tag1;		/* dword 3 */
@@ -57,6 +55,7 @@ struct be_mcc_wrb {
 #define MCC_STATUS_ILLEGAL_REQUEST 0x2
 #define MCC_STATUS_ILLEGAL_FIELD 0x3
 #define MCC_STATUS_INSUFFICIENT_BUFFER 0x4
+#define MCC_STATUS_INVALID_LENGTH 0x74
 
 #define CQE_STATUS_COMPL_MASK	0xFFFF
 #define CQE_STATUS_COMPL_SHIFT	0		/* bits 0 - 15 */
@@ -97,20 +96,29 @@ struct be_mcc_compl {
 #define MPU_MAILBOX_DB_RDY_MASK	0x1	/* bit 0 */
 #define MPU_MAILBOX_DB_HI_MASK	0x2	/* bit 1 */
 
-/********** MPU semphore ******************/
-#define MPU_EP_SEMAPHORE_OFFSET 0xac
-#define EP_SEMAPHORE_POST_STAGE_MASK 0x0000FFFF
-#define EP_SEMAPHORE_POST_ERR_MASK 0x1
-#define EP_SEMAPHORE_POST_ERR_SHIFT 31
+/********** MPU semphore: used for SH & BE ******************/
+#define SLIPORT_SOFTRESET_OFFSET		0x5c	/* CSR BAR offset */
+#define SLIPORT_SEMAPHORE_OFFSET_BEx		0xac	/* CSR BAR offset */
+#define SLIPORT_SEMAPHORE_OFFSET_SH		0x94	/* PCI-CFG offset */
+#define POST_STAGE_MASK				0x0000FFFF
+#define POST_ERROR_BIT				0x80000000
+#define POST_ERR_RECOVERY_CODE_MASK		0xF000
+
+/* Soft Reset register masks */
+#define SLIPORT_SOFTRESET_SR_MASK		0x00000080	/* SR bit */
+
+/* MPU semphore POST stage values */
+#define POST_STAGE_AWAITING_HOST_RDY	0x1 /* FW awaiting goahead from host */
+#define POST_STAGE_HOST_RDY		0x2 /* Host has given go-ahed to FW */
+#define POST_STAGE_BE_RESET		0x3 /* Host wants to reset chip */
+#define POST_STAGE_ARMFW_RDY		0xC000 /* FW is done with POST */
+#define POST_STAGE_RECOVERABLE_ERR	0xE000 /* Recoverable err detected */
 
 /********** MCC door bell ************/
 #define DB_MCCQ_OFFSET 0x140
 #define DB_MCCQ_RING_ID_MASK 0xFFFF		/* bits 0 - 15 */
 /* Number of entries posted */
 #define DB_MCCQ_NUM_POSTED_SHIFT 16		/* bits 16 - 29 */
-
-/* MPU semphore POST stage values */
-#define POST_STAGE_ARMFW_RDY		0xc000	/* FW is done with POST */
 
 /**
  * When the async bit of mcc_compl is set, the last 4 bytes of
@@ -217,6 +225,8 @@ struct be_mcc_mailbox {
 #define OPCODE_COMMON_QUERY_FIRMWARE_CONFIG		58
 #define OPCODE_COMMON_FUNCTION_RESET			61
 #define OPCODE_COMMON_GET_PORT_NAME			77
+#define OPCODE_COMMON_SET_HOST_DATA			93
+#define OPCODE_COMMON_SET_FEATURES			191
 
 /**
  * LIST of opcodes that are common between Initiator and Target
@@ -345,8 +355,8 @@ struct be_cmd_req_logout_fw_sess {
 
 struct be_cmd_resp_logout_fw_sess {
 	struct be_cmd_resp_hdr hdr;	/* dw[4] */
-#define BEISCSI_MGMT_SESSION_CLOSE 0x20
 	uint32_t session_status;
+#define BE_SESS_STATUS_CLOSE		0x20
 } __packed;
 
 struct mgmt_conn_login_options {
@@ -365,6 +375,14 @@ struct ip_addr_format {
 	u16 size_of_structure;
 	u8 reserved;
 	u8 ip_type;
+#define BEISCSI_IP_TYPE_V4		0x1
+#define BEISCSI_IP_TYPE_STATIC_V4	0x3
+#define BEISCSI_IP_TYPE_DHCP_V4		0x5
+/* type v4 values < type v6 values */
+#define BEISCSI_IP_TYPE_V6		0x10
+#define BEISCSI_IP_TYPE_ROUTABLE_V6	0x30
+#define BEISCSI_IP_TYPE_LINK_LOCAL_V6	0x50
+#define BEISCSI_IP_TYPE_AUTO_V6		0x90
 	u8 addr[16];
 	u32 rsvd0;
 } __packed;
@@ -430,8 +448,13 @@ struct be_cmd_get_boot_target_req {
 
 struct be_cmd_get_boot_target_resp {
 	struct be_cmd_resp_hdr hdr;
-	u32  boot_session_count;
-	int  boot_session_handle;
+	u32 boot_session_count;
+	u32 boot_session_handle;
+/**
+ * FW returns 0xffffffff if it couldn't establish connection with
+ * configured boot target.
+ */
+#define BE_BOOT_INVALID_SHANDLE	0xffffffff
 };
 
 struct be_cmd_reopen_session_req {
@@ -699,15 +722,82 @@ struct be_cmd_get_nic_conf_resp {
 	u8 mac_address[ETH_ALEN];
 } __packed;
 
-#define BEISCSI_ALIAS_LEN 32
+/******************** Get HBA NAME *******************/
 
 struct be_cmd_hba_name {
 	struct be_cmd_req_hdr hdr;
 	u16 flags;
 	u16 rsvd0;
 	u8 initiator_name[ISCSI_NAME_LEN];
-	u8 initiator_alias[BEISCSI_ALIAS_LEN];
+#define BE_INI_ALIAS_LEN 32
+	u8 initiator_alias[BE_INI_ALIAS_LEN];
 } __packed;
+
+/******************** COMMON SET HOST DATA *******************/
+#define BE_CMD_SET_HOST_PARAM_ID	0x2
+#define BE_CMD_MAX_DRV_VERSION		0x30
+struct be_sethost_req {
+	u32 param_id;
+	u32 param_len;
+	u32 param_data[32];
+};
+
+struct be_sethost_resp {
+	u32 rsvd0;
+};
+
+struct be_cmd_set_host_data {
+	union {
+		struct be_cmd_req_hdr req_hdr;
+		struct be_cmd_resp_hdr resp_hdr;
+	} h;
+	union {
+		struct be_sethost_req req;
+		struct be_sethost_resp resp;
+	} param;
+} __packed;
+
+/******************** COMMON SET Features *******************/
+#define BE_CMD_SET_FEATURE_UER	0x10
+#define BE_CMD_UER_SUPP_BIT	0x1
+struct be_uer_req {
+	u32 uer;
+	u32 rsvd;
+};
+
+struct be_uer_resp {
+	u32 uer;
+	u16 ue2rp;
+	u16 ue2sr;
+};
+
+struct be_cmd_set_features {
+	union {
+		struct be_cmd_req_hdr req_hdr;
+		struct be_cmd_resp_hdr resp_hdr;
+	} h;
+	u32 feature;
+	u32 param_len;
+	union {
+		struct be_uer_req req;
+		struct be_uer_resp resp;
+		u32 rsvd[2];
+	} param;
+} __packed;
+
+int beiscsi_cmd_function_reset(struct beiscsi_hba *phba);
+
+int beiscsi_cmd_special_wrb(struct be_ctrl_info *ctrl, u32 load);
+
+int beiscsi_check_fw_rdy(struct beiscsi_hba *phba);
+
+int beiscsi_init_sliport(struct beiscsi_hba *phba);
+
+int beiscsi_cmd_iscsi_cleanup(struct beiscsi_hba *phba, unsigned short ulp_num);
+
+int beiscsi_detect_ue(struct beiscsi_hba *phba);
+
+int beiscsi_detect_tpe(struct beiscsi_hba *phba);
 
 int beiscsi_cmd_eq_create(struct be_ctrl_info *ctrl,
 			  struct be_queue_info *eq, int eq_delay);
@@ -723,24 +813,19 @@ int beiscsi_cmd_mccq_create(struct beiscsi_hba *phba,
 			struct be_queue_info *mccq,
 			struct be_queue_info *cq);
 
-int be_poll_mcc(struct be_ctrl_info *ctrl);
-int mgmt_check_supported_fw(struct be_ctrl_info *ctrl,
-				      struct beiscsi_hba *phba);
-unsigned int be_cmd_get_initname(struct beiscsi_hba *phba);
-
 void free_mcc_wrb(struct be_ctrl_info *ctrl, unsigned int tag);
 
-int be_cmd_modify_eq_delay(struct beiscsi_hba *phba, struct be_set_eqd *,
+int beiscsi_modify_eq_delay(struct beiscsi_hba *phba, struct be_set_eqd *,
 			    int num);
 int beiscsi_mccq_compl_wait(struct beiscsi_hba *phba,
-			    uint32_t tag, struct be_mcc_wrb **wrb,
+			    unsigned int tag,
+			    struct be_mcc_wrb **wrb,
 			    struct be_dma_mem *mbx_cmd_mem);
-/*ISCSI Functuions */
-int be_cmd_fw_initialize(struct be_ctrl_info *ctrl);
-int be_cmd_fw_uninit(struct be_ctrl_info *ctrl);
-
+int __beiscsi_mcc_compl_status(struct beiscsi_hba *phba,
+			       unsigned int tag,
+			       struct be_mcc_wrb **wrb,
+			       struct be_dma_mem *mbx_cmd_mem);
 struct be_mcc_wrb *wrb_from_mbox(struct be_dma_mem *mbox_mem);
-int be_mcc_compl_poll(struct beiscsi_hba *phba, unsigned int tag);
 void be_mcc_notify(struct beiscsi_hba *phba, unsigned int tag);
 struct be_mcc_wrb *alloc_mcc_wrb(struct beiscsi_hba *phba,
 				 unsigned int *ref_tag);
@@ -748,9 +833,6 @@ void beiscsi_process_async_event(struct beiscsi_hba *phba,
 				struct be_mcc_compl *compl);
 int beiscsi_process_mcc_compl(struct be_ctrl_info *ctrl,
 			      struct be_mcc_compl *compl);
-
-
-int be_mbox_notify(struct be_ctrl_info *ctrl);
 
 int be_cmd_create_default_pdu_queue(struct be_ctrl_info *ctrl,
 				    struct be_queue_info *cq,
@@ -767,8 +849,6 @@ int be_cmd_iscsi_post_sgl_pages(struct be_ctrl_info *ctrl,
 				struct be_dma_mem *q_mem, u32 page_offset,
 				u32 num_pages);
 
-int beiscsi_cmd_reset_function(struct beiscsi_hba *phba);
-
 int be_cmd_wrbq_create(struct be_ctrl_info *ctrl, struct be_dma_mem *q_mem,
 		       struct be_queue_info *wrbq,
 		       struct hwi_wrb_context *pwrb_context,
@@ -776,6 +856,16 @@ int be_cmd_wrbq_create(struct be_ctrl_info *ctrl, struct be_dma_mem *q_mem,
 
 /* Configuration Functions */
 int be_cmd_set_vlan(struct beiscsi_hba *phba, uint16_t vlan_tag);
+
+int beiscsi_check_supported_fw(struct be_ctrl_info *ctrl,
+			       struct beiscsi_hba *phba);
+
+int beiscsi_get_fw_config(struct be_ctrl_info *ctrl, struct beiscsi_hba *phba);
+
+int beiscsi_get_port_name(struct be_ctrl_info *ctrl, struct beiscsi_hba *phba);
+
+int beiscsi_set_uer_feature(struct beiscsi_hba *phba);
+int beiscsi_set_host_data(struct beiscsi_hba *phba);
 
 struct be_default_pdu_context {
 	u32 dw[4];
@@ -999,7 +1089,16 @@ struct iscsi_cleanup_req {
 	u16 chute;
 	u8 hdr_ring_id;
 	u8 data_ring_id;
+} __packed;
 
+struct iscsi_cleanup_req_v1 {
+	struct be_cmd_req_hdr hdr;
+	u16 chute;
+	u16 rsvd1;
+	u16 hdr_ring_id;
+	u16 rsvd2;
+	u16 data_ring_id;
+	u16 rsvd3;
 } __packed;
 
 struct eq_delay {
@@ -1056,35 +1155,55 @@ struct tcp_connect_and_offload_out {
 
 } __packed;
 
-struct be_mcc_wrb_context {
-	struct MCC_WRB *wrb;
-	int *users_final_status;
-} __packed;
-
 #define DB_DEF_PDU_RING_ID_MASK	0x3FFF	/* bits 0 - 13 */
 #define DB_DEF_PDU_CQPROC_MASK		0x3FFF	/* bits 16 - 29 */
 #define DB_DEF_PDU_REARM_SHIFT		14
 #define DB_DEF_PDU_EVENT_SHIFT		15
 #define DB_DEF_PDU_CQPROC_SHIFT		16
 
-struct dmsg_cqe {
-	u32 dw[4];
+struct be_invalidate_connection_params_in {
+	struct be_cmd_req_hdr hdr;
+	u32 session_handle;
+	u16 cid;
+	u16 unused;
+#define BE_CLEANUP_TYPE_INVALIDATE	0x8001
+#define BE_CLEANUP_TYPE_ISSUE_TCP_RST	0x8002
+	u16 cleanup_type;
+	u16 save_cfg;
 } __packed;
 
-struct tcp_upload_params_in {
+struct be_invalidate_connection_params_out {
+	u32 session_handle;
+	u16 cid;
+	u16 unused;
+} __packed;
+
+union be_invalidate_connection_params {
+	struct be_invalidate_connection_params_in req;
+	struct be_invalidate_connection_params_out resp;
+} __packed;
+
+struct be_tcp_upload_params_in {
 	struct be_cmd_req_hdr hdr;
 	u16 id;
+#define BE_UPLOAD_TYPE_GRACEFUL		1
+/* abortive upload with reset */
+#define BE_UPLOAD_TYPE_ABORT_RESET	2
+/* abortive upload without reset */
+#define BE_UPLOAD_TYPE_ABORT		3
+/* abortive upload with reset, sequence number by driver */
+#define BE_UPLOAD_TYPE_ABORT_WITH_SEQ	4
 	u16 upload_type;
 	u32 reset_seq;
 } __packed;
 
-struct tcp_upload_params_out {
+struct be_tcp_upload_params_out {
 	u32 dw[32];
 } __packed;
 
-union tcp_upload_params {
-	struct tcp_upload_params_in request;
-	struct tcp_upload_params_out response;
+union be_tcp_upload_params {
+	struct be_tcp_upload_params_in request;
+	struct be_tcp_upload_params_out response;
 } __packed;
 
 struct be_ulp_fw_cfg {
@@ -1165,10 +1284,7 @@ struct be_cmd_get_port_name {
 #define OPCODE_COMMON_WRITE_FLASH		96
 #define OPCODE_COMMON_READ_FLASH		97
 
-/* --- CMD_ISCSI_INVALIDATE_CONNECTION_TYPE --- */
 #define CMD_ISCSI_COMMAND_INVALIDATE		1
-#define CMD_ISCSI_CONNECTION_INVALIDATE		0x8001
-#define CMD_ISCSI_CONNECTION_ISSUE_TCP_RST	0x8002
 
 #define INI_WR_CMD			1	/* Initiator write command */
 #define INI_TMF_CMD			2	/* Initiator TMF command */
@@ -1177,45 +1293,14 @@ struct be_cmd_get_port_name {
 						 * a read command
 						 */
 #define TGT_CTX_UPDT_CMD		7	/* Target context update */
-#define TGT_STS_CMD			8	/* Target R2T and other BHS
-						 * where only the status number
-						 * need to be updated
-						 */
-#define TGT_DATAIN_CMD			9	/* Target Data-Ins in response
-						 * to read command
-						 */
-#define TGT_SOS_PDU			10	/* Target:standalone status
-						 * response
-						 */
 #define TGT_DM_CMD			11	/* Indicates that the bhs
-						 *  preparedby
-						 * driver should not be touched
+						 * prepared by driver should not
+						 * be touched.
 						 */
-/* --- CMD_CHUTE_TYPE --- */
-#define CMD_CONNECTION_CHUTE_0		1
-#define CMD_CONNECTION_CHUTE_1		2
-#define CMD_CONNECTION_CHUTE_2		3
-
-#define EQ_MAJOR_CODE_COMPLETION	0
-
-#define CMD_ISCSI_SESSION_DEL_CFG_FROM_FLASH 0
-#define CMD_ISCSI_SESSION_SAVE_CFG_ON_FLASH 1
-
-/* --- CONNECTION_UPLOAD_PARAMS --- */
-/* These parameters are used to define the type of upload desired.  */
-#define CONNECTION_UPLOAD_GRACEFUL      1	/* Graceful upload  */
-#define CONNECTION_UPLOAD_ABORT_RESET   2	/* Abortive upload with
-						 * reset
-						 */
-#define CONNECTION_UPLOAD_ABORT		3	/* Abortive upload without
-						 * reset
-						 */
-#define CONNECTION_UPLOAD_ABORT_WITH_SEQ 4	/* Abortive upload with reset,
-						 * sequence number by driver  */
 
 /* Returns the number of items in the field array. */
 #define BE_NUMBER_OF_FIELD(_type_, _field_)	\
-	(FIELD_SIZEOF(_type_, _field_)/sizeof((((_type_ *)0)->_field_[0])))\
+	(sizeof_field(_type_, _field_)/sizeof((((_type_ *)0)->_field_[0])))\
 
 /**
  * Different types of iSCSI completions to host driver for both initiator
@@ -1368,14 +1453,9 @@ struct be_cmd_get_port_name {
 						 * the cxn
 						 */
 
-int beiscsi_pci_soft_reset(struct beiscsi_hba *phba);
-int be_chk_reset_complete(struct beiscsi_hba *phba);
-
-void be_wrb_hdr_prepare(struct be_mcc_wrb *wrb, int payload_len,
+void be_wrb_hdr_prepare(struct be_mcc_wrb *wrb, u32 payload_len,
 			bool embedded, u8 sge_cnt);
 
 void be_cmd_hdr_prepare(struct be_cmd_req_hdr *req_hdr,
-			u8 subsystem, u8 opcode, int cmd_len);
-
-void beiscsi_fail_session(struct iscsi_cls_session *cls_session);
+			u8 subsystem, u8 opcode, u32 cmd_len);
 #endif /* !BEISCSI_CMDS_H */

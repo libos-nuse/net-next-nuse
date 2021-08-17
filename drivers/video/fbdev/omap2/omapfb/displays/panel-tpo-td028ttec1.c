@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Toppoly TD028TTEC1 panel support
  *
@@ -10,26 +11,13 @@
  *
  * Ported and adapted from Neo 1973 U-Boot by:
  * H. Nikolaus Schaller <hns@goldelico.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/spi/spi.h>
 #include <linux/gpio.h>
-#include <video/omapdss.h>
-#include <video/omap-panel-data.h>
+#include <video/omapfb_dss.h>
 
 struct panel_drv_data {
 	struct omap_dss_device dssdev;
@@ -42,7 +30,7 @@ struct panel_drv_data {
 	struct spi_device *spi_dev;
 };
 
-static struct omap_video_timings td028ttec1_panel_timings = {
+static const struct omap_video_timings td028ttec1_panel_timings = {
 	.x_res		= 480,
 	.y_res		= 640,
 	.pixelclock	= 22153000,
@@ -365,31 +353,6 @@ static struct omap_dss_driver td028ttec1_ops = {
 	.check_timings	= td028ttec1_panel_check_timings,
 };
 
-static int td028ttec1_panel_probe_pdata(struct spi_device *spi)
-{
-	const struct panel_tpo_td028ttec1_platform_data *pdata;
-	struct panel_drv_data *ddata = dev_get_drvdata(&spi->dev);
-	struct omap_dss_device *dssdev, *in;
-
-	pdata = dev_get_platdata(&spi->dev);
-
-	in = omap_dss_find_output(pdata->source);
-	if (in == NULL) {
-		dev_err(&spi->dev, "failed to find video source '%s'\n",
-				pdata->source);
-		return -EPROBE_DEFER;
-	}
-
-	ddata->in = in;
-
-	ddata->data_lines = pdata->data_lines;
-
-	dssdev = &ddata->dssdev;
-	dssdev->name = pdata->name;
-
-	return 0;
-}
-
 static int td028ttec1_probe_of(struct spi_device *spi)
 {
 	struct device_node *node = spi->dev.of_node;
@@ -415,6 +378,9 @@ static int td028ttec1_panel_probe(struct spi_device *spi)
 
 	dev_dbg(&spi->dev, "%s\n", __func__);
 
+	if (!spi->dev.of_node)
+		return -ENODEV;
+
 	spi->bits_per_word = 9;
 	spi->mode = SPI_MODE_3;
 
@@ -432,17 +398,9 @@ static int td028ttec1_panel_probe(struct spi_device *spi)
 
 	ddata->spi_dev = spi;
 
-	if (dev_get_platdata(&spi->dev)) {
-		r = td028ttec1_panel_probe_pdata(spi);
-		if (r)
-			return r;
-	} else if (spi->dev.of_node) {
-		r = td028ttec1_probe_of(spi);
-		if (r)
-			return r;
-	} else {
-		return -ENODEV;
-	}
+	r = td028ttec1_probe_of(spi);
+	if (r)
+		return r;
 
 	ddata->videomode = td028ttec1_panel_timings;
 
@@ -486,15 +444,26 @@ static int td028ttec1_panel_remove(struct spi_device *spi)
 }
 
 static const struct of_device_id td028ttec1_of_match[] = {
+	{ .compatible = "omapdss,tpo,td028ttec1", },
+	/* keep to not break older DTB */
 	{ .compatible = "omapdss,toppoly,td028ttec1", },
 	{},
 };
 
 MODULE_DEVICE_TABLE(of, td028ttec1_of_match);
 
+static const struct spi_device_id td028ttec1_ids[] = {
+	{ "toppoly,td028ttec1", 0 },
+	{ "tpo,td028ttec1", 0},
+	{ /* sentinel */ }
+};
+
+MODULE_DEVICE_TABLE(spi, td028ttec1_ids);
+
 static struct spi_driver td028ttec1_spi_driver = {
 	.probe		= td028ttec1_panel_probe,
 	.remove		= td028ttec1_panel_remove,
+	.id_table	= td028ttec1_ids,
 
 	.driver         = {
 		.name   = "panel-tpo-td028ttec1",
@@ -505,7 +474,6 @@ static struct spi_driver td028ttec1_spi_driver = {
 
 module_spi_driver(td028ttec1_spi_driver);
 
-MODULE_ALIAS("spi:toppoly,td028ttec1");
 MODULE_AUTHOR("H. Nikolaus Schaller <hns@goldelico.com>");
 MODULE_DESCRIPTION("Toppoly TD028TTEC1 panel driver");
 MODULE_LICENSE("GPL");

@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2006-2007 PA Semi, Inc
  *
  * Driver for the PA Semi PWRficient onchip 1G/10G Ethernet MACs
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/module.h>
@@ -53,7 +42,7 @@
  * - Multiqueue RX/TX
  */
 
-#define PE_MIN_MTU	64
+#define PE_MIN_MTU	(ETH_ZLEN + ETH_HLEN)
 #define PE_MAX_MTU	9000
 #define PE_DEF_MTU	ETH_DATA_LEN
 
@@ -212,9 +201,7 @@ static int pasemi_get_mac_addr(struct pasemi_mac *mac)
 		return -ENOENT;
 	}
 
-	if (sscanf(maddr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-		   &addr[0], &addr[1], &addr[2], &addr[3], &addr[4], &addr[5])
-	    != ETH_ALEN) {
+	if (!mac_pton(maddr, addr)) {
 		dev_warn(&pdev->dev,
 			 "can't parse mac address, not configuring\n");
 		return -EINVAL;
@@ -392,8 +379,9 @@ static int pasemi_mac_setup_rx_resources(const struct net_device *dev)
 	spin_lock_init(&ring->lock);
 
 	ring->size = RX_RING_SIZE;
-	ring->ring_info = kzalloc(sizeof(struct pasemi_mac_buffer) *
-				  RX_RING_SIZE, GFP_KERNEL);
+	ring->ring_info = kcalloc(RX_RING_SIZE,
+				  sizeof(struct pasemi_mac_buffer),
+				  GFP_KERNEL);
 
 	if (!ring->ring_info)
 		goto out_ring_info;
@@ -402,9 +390,9 @@ static int pasemi_mac_setup_rx_resources(const struct net_device *dev)
 	if (pasemi_dma_alloc_ring(&ring->chan, RX_RING_SIZE))
 		goto out_ring_desc;
 
-	ring->buffers = dma_zalloc_coherent(&mac->dma_pdev->dev,
-					    RX_RING_SIZE * sizeof(u64),
-					    &ring->buf_dma, GFP_KERNEL);
+	ring->buffers = dma_alloc_coherent(&mac->dma_pdev->dev,
+					   RX_RING_SIZE * sizeof(u64),
+					   &ring->buf_dma, GFP_KERNEL);
 	if (!ring->buffers)
 		goto out_ring_desc;
 
@@ -475,8 +463,9 @@ pasemi_mac_setup_tx_resources(const struct net_device *dev)
 	spin_lock_init(&ring->lock);
 
 	ring->size = TX_RING_SIZE;
-	ring->ring_info = kzalloc(sizeof(struct pasemi_mac_buffer) *
-				  TX_RING_SIZE, GFP_KERNEL);
+	ring->ring_info = kcalloc(TX_RING_SIZE,
+				  sizeof(struct pasemi_mac_buffer),
+				  GFP_KERNEL);
 	if (!ring->ring_info)
 		goto out_ring_info;
 
@@ -943,9 +932,9 @@ static irqreturn_t pasemi_mac_rx_intr(int irq, void *data)
 
 #define TX_CLEAN_INTERVAL HZ
 
-static void pasemi_mac_tx_timer(unsigned long data)
+static void pasemi_mac_tx_timer(struct timer_list *t)
 {
-	struct pasemi_mac_txring *txring = (struct pasemi_mac_txring *)data;
+	struct pasemi_mac_txring *txring = from_timer(txring, t, clean_timer);
 	struct pasemi_mac *mac = txring->mac;
 
 	pasemi_mac_clean_tx(txring);
@@ -989,7 +978,7 @@ static void pasemi_adjust_link(struct net_device *dev)
 	unsigned int flags;
 	unsigned int new_flags;
 
-	if (!mac->phydev->link) {
+	if (!dev->phydev->link) {
 		/* If no link, MAC speed settings don't matter. Just report
 		 * link down and return.
 		 */
@@ -1010,10 +999,10 @@ static void pasemi_adjust_link(struct net_device *dev)
 	new_flags = flags & ~(PAS_MAC_CFG_PCFG_HD | PAS_MAC_CFG_PCFG_SPD_M |
 			      PAS_MAC_CFG_PCFG_TSR_M);
 
-	if (!mac->phydev->duplex)
+	if (!dev->phydev->duplex)
 		new_flags |= PAS_MAC_CFG_PCFG_HD;
 
-	switch (mac->phydev->speed) {
+	switch (dev->phydev->speed) {
 	case 1000:
 		new_flags |= PAS_MAC_CFG_PCFG_SPD_1G |
 			     PAS_MAC_CFG_PCFG_TSR_1G;
@@ -1027,15 +1016,15 @@ static void pasemi_adjust_link(struct net_device *dev)
 			     PAS_MAC_CFG_PCFG_TSR_10M;
 		break;
 	default:
-		printk("Unsupported speed %d\n", mac->phydev->speed);
+		printk("Unsupported speed %d\n", dev->phydev->speed);
 	}
 
 	/* Print on link or speed/duplex change */
-	msg = mac->link != mac->phydev->link || flags != new_flags;
+	msg = mac->link != dev->phydev->link || flags != new_flags;
 
-	mac->duplex = mac->phydev->duplex;
-	mac->speed = mac->phydev->speed;
-	mac->link = mac->phydev->link;
+	mac->duplex = dev->phydev->duplex;
+	mac->speed = dev->phydev->speed;
+	mac->link = dev->phydev->link;
 
 	if (new_flags != flags)
 		write_mac_reg(mac, PAS_MAC_CFG_PCFG, new_flags);
@@ -1053,7 +1042,6 @@ static int pasemi_mac_phy_init(struct net_device *dev)
 
 	dn = pci_device_to_OF_node(mac->pdev);
 	phy_dn = of_parse_phandle(dn, "phy-handle", 0);
-	of_node_put(phy_dn);
 
 	mac->link = 0;
 	mac->speed = 0;
@@ -1062,12 +1050,11 @@ static int pasemi_mac_phy_init(struct net_device *dev)
 	phydev = of_phy_connect(dev, phy_dn, &pasemi_adjust_link, 0,
 				PHY_INTERFACE_MODE_SGMII);
 
+	of_node_put(phy_dn);
 	if (!phydev) {
 		printk(KERN_ERR "%s: Could not attach to phy\n", dev->name);
 		return -ENODEV;
 	}
-
-	mac->phydev = phydev;
 
 	return 0;
 }
@@ -1091,16 +1078,20 @@ static int pasemi_mac_open(struct net_device *dev)
 
 	mac->tx = pasemi_mac_setup_tx_resources(dev);
 
-	if (!mac->tx)
+	if (!mac->tx) {
+		ret = -ENOMEM;
 		goto out_tx_ring;
+	}
 
 	/* We might already have allocated rings in case mtu was changed
 	 * before interface was brought up.
 	 */
 	if (dev->mtu > 1500 && !mac->num_cs) {
 		pasemi_mac_setup_csrings(mac);
-		if (!mac->num_cs)
+		if (!mac->num_cs) {
+			ret = -ENOMEM;
 			goto out_tx_ring;
+		}
 	}
 
 	/* Zero out rmon counters */
@@ -1198,11 +1189,10 @@ static int pasemi_mac_open(struct net_device *dev)
 		goto out_rx_int;
 	}
 
-	if (mac->phydev)
-		phy_start(mac->phydev);
+	if (dev->phydev)
+		phy_start(dev->phydev);
 
-	setup_timer(&mac->tx->clean_timer, pasemi_mac_tx_timer,
-		    (unsigned long)mac->tx);
+	timer_setup(&mac->tx->clean_timer, pasemi_mac_tx_timer, 0);
 	mod_timer(&mac->tx->clean_timer, jiffies + HZ);
 
 	return 0;
@@ -1293,9 +1283,9 @@ static int pasemi_mac_close(struct net_device *dev)
 	rxch = rx_ring(mac)->chan.chno;
 	txch = tx_ring(mac)->chan.chno;
 
-	if (mac->phydev) {
-		phy_stop(mac->phydev);
-		phy_disconnect(mac->phydev);
+	if (dev->phydev) {
+		phy_stop(dev->phydev);
+		phy_disconnect(dev->phydev);
 	}
 
 	del_timer_sync(&mac->tx->clean_timer);
@@ -1358,7 +1348,7 @@ static void pasemi_mac_queue_csdesc(const struct sk_buff *skb,
 	const int nh_off = skb_network_offset(skb);
 	const int nh_len = skb_network_header_len(skb);
 	const int nfrags = skb_shinfo(skb)->nr_frags;
-	int cs_size, i, fill, hdr, cpyhdr, evt;
+	int cs_size, i, fill, hdr, evt;
 	dma_addr_t csdma;
 
 	fund = XCT_FUN_ST | XCT_FUN_RR_8BRES |
@@ -1399,7 +1389,6 @@ static void pasemi_mac_queue_csdesc(const struct sk_buff *skb,
 		fill++;
 
 	/* Copy the result into the TCP packet */
-	cpyhdr = fill;
 	CS_DESC(csring, fill++) = XCT_FUN_O | XCT_FUN_FUN(csring->fun) |
 				  XCT_FUN_LLEN(2) | XCT_FUN_SE;
 	CS_DESC(csring, fill++) = XCT_PTR_LEN(2) | XCT_PTR_ADDR(cs_dest) | XCT_PTR_T;
@@ -1577,7 +1566,7 @@ static int pasemi_mac_poll(struct napi_struct *napi, int budget)
 	pkts = pasemi_mac_clean_rx(rx_ring(mac), budget);
 	if (pkts < budget) {
 		/* all done, no more packets present */
-		napi_complete(napi);
+		napi_complete_done(napi, pkts);
 
 		pasemi_mac_restart_rx_intr(mac);
 		pasemi_mac_restart_tx_intr(mac);
@@ -1613,9 +1602,6 @@ static int pasemi_mac_change_mtu(struct net_device *dev, int new_mtu)
 	int running;
 	int ret = 0;
 
-	if (new_mtu < PE_MIN_MTU || new_mtu > PE_MAX_MTU)
-		return -EINVAL;
-
 	running = netif_running(dev);
 
 	if (running) {
@@ -1637,7 +1623,7 @@ static int pasemi_mac_change_mtu(struct net_device *dev, int new_mtu)
 	}
 
 	/* Setup checksum channels if large MTU and none already allocated */
-	if (new_mtu > 1500 && !mac->num_cs) {
+	if (new_mtu > PE_DEF_MTU && !mac->num_cs) {
 		pasemi_mac_setup_csrings(mac);
 		if (!mac->num_cs) {
 			ret = -ENOMEM;
@@ -1722,6 +1708,7 @@ pasemi_mac_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		err = -ENODEV;
 		goto out;
 	}
+	dma_set_mask(&mac->dma_pdev->dev, DMA_BIT_MASK(64));
 
 	mac->iob_pdev = pci_get_device(PCI_VENDOR_ID_PASEMI, 0xa001, NULL);
 	if (!mac->iob_pdev) {
@@ -1759,6 +1746,11 @@ pasemi_mac_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	dev->netdev_ops = &pasemi_netdev_ops;
 	dev->mtu = PE_DEF_MTU;
+
+	/* MTU range: 64 - 9000 */
+	dev->min_mtu = PE_MIN_MTU;
+	dev->max_mtu = PE_MAX_MTU;
+
 	/* 1500 MTU + ETH_HLEN + VLAN_HLEN + 2 64B cachelines */
 	mac->bufsz = dev->mtu + ETH_HLEN + ETH_FCS_LEN + LOCAL_SKB_ALIGN + 128;
 
@@ -1839,7 +1831,7 @@ static void __exit pasemi_mac_cleanup_module(void)
 	pci_unregister_driver(&pasemi_mac_driver);
 }
 
-int pasemi_mac_init_module(void)
+static int pasemi_mac_init_module(void)
 {
 	int err;
 

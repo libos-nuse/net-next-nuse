@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *    Hypervisor filesystem for Linux on s390. z/VM implementation.
  *
@@ -70,7 +71,7 @@ static int diag2fc(int size, char* query, void *addr)
 	diag_stat_inc(DIAG_STAT_X2FC);
 	asm volatile(
 		"	diag    %0,%1,0x2fc\n"
-		"0:\n"
+		"0:	nopr	%%r7\n"
 		EX_TABLE(0b,0b)
 		: "=d" (residual_cnt), "+d" (rc) : "0" (&parm_list) : "memory");
 
@@ -117,7 +118,7 @@ do { \
 		return PTR_ERR(rc); \
 } while(0)
 
-static int hpyfs_vm_create_guest(struct dentry *systems_dir,
+static int hypfs_vm_create_guest(struct dentry *systems_dir,
 				 struct diag2fc_data *data)
 {
 	char guest_name[NAME_LEN + 1] = {};
@@ -218,7 +219,7 @@ int hypfs_vm_create_files(struct dentry *root)
 	}
 
 	for (i = 0; i < count; i++) {
-		rc = hpyfs_vm_create_guest(dir, &(data[i]));
+		rc = hypfs_vm_create_guest(dir, &(data[i]));
 		if (rc)
 			goto failed;
 	}
@@ -278,7 +279,8 @@ int hypfs_vm_init(void)
 		guest_query = local_guest;
 	else
 		return -EACCES;
-	return hypfs_dbfs_create_file(&dbfs_file_2fc);
+	hypfs_dbfs_create_file(&dbfs_file_2fc);
+	return 0;
 }
 
 void hypfs_vm_exit(void)

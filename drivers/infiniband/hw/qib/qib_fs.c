@@ -34,6 +34,7 @@
 
 #include <linux/module.h>
 #include <linux/fs.h>
+#include <linux/fs_context.h>
 #include <linux/mount.h>
 #include <linux/pagemap.h>
 #include <linux/init.h>
@@ -64,7 +65,7 @@ static int qibfs_mknod(struct inode *dir, struct dentry *dentry,
 	inode->i_uid = GLOBAL_ROOT_UID;
 	inode->i_gid = GLOBAL_ROOT_GID;
 	inode->i_blocks = 0;
-	inode->i_atime = CURRENT_TIME;
+	inode->i_atime = current_time(inode);
 	inode->i_mtime = inode->i_atime;
 	inode->i_ctime = inode->i_atime;
 	inode->i_private = data;
@@ -328,26 +329,12 @@ static ssize_t flash_write(struct file *file, const char __user *buf,
 
 	pos = *ppos;
 
-	if (pos != 0) {
-		ret = -EINVAL;
-		goto bail;
-	}
+	if (pos != 0 || count != sizeof(struct qib_flash))
+		return -EINVAL;
 
-	if (count != sizeof(struct qib_flash)) {
-		ret = -EINVAL;
-		goto bail;
-	}
-
-	tmp = kmalloc(count, GFP_KERNEL);
-	if (!tmp) {
-		ret = -ENOMEM;
-		goto bail;
-	}
-
-	if (copy_from_user(tmp, buf, count)) {
-		ret = -EFAULT;
-		goto bail_tmp;
-	}
+	tmp = memdup_user(buf, count);
+	if (IS_ERR(tmp))
+		return PTR_ERR(tmp);
 
 	dd = private2dd(file);
 	if (qib_eeprom_write(dd, pos, tmp, count)) {
@@ -361,8 +348,6 @@ static ssize_t flash_write(struct file *file, const char __user *buf,
 
 bail_tmp:
 	kfree(tmp);
-
-bail:
 	return ret;
 }
 
@@ -508,7 +493,7 @@ static int remove_device_files(struct super_block *sb,
 	remove_file(dir, "flash");
 	inode_unlock(d_inode(dir));
 	ret = simple_rmdir(d_inode(root), dir);
-	d_delete(dir);
+	d_drop(dir);
 	dput(dir);
 
 bail:
@@ -522,13 +507,13 @@ bail:
  * after device init.  The direct add_cntr_files() call handles adding
  * them from the init code, when the fs is already mounted.
  */
-static int qibfs_fill_super(struct super_block *sb, void *data, int silent)
+static int qibfs_fill_super(struct super_block *sb, struct fs_context *fc)
 {
-	struct qib_devdata *dd, *tmp;
-	unsigned long flags;
+	struct qib_devdata *dd;
+	unsigned long index;
 	int ret;
 
-	static struct tree_descr files[] = {
+	static const struct tree_descr files[] = {
 		[2] = {"driver_stats", &driver_ops[0], S_IRUGO},
 		[3] = {"driver_stats_names", &driver_ops[1], S_IRUGO},
 		{""},
@@ -540,31 +525,32 @@ static int qibfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto bail;
 	}
 
-	spin_lock_irqsave(&qib_devs_lock, flags);
-
-	list_for_each_entry_safe(dd, tmp, &qib_dev_list, list) {
-		spin_unlock_irqrestore(&qib_devs_lock, flags);
+	xa_for_each(&qib_dev_table, index, dd) {
 		ret = add_cntr_files(sb, dd);
 		if (ret)
 			goto bail;
-		spin_lock_irqsave(&qib_devs_lock, flags);
 	}
-
-	spin_unlock_irqrestore(&qib_devs_lock, flags);
 
 bail:
 	return ret;
 }
 
-static struct dentry *qibfs_mount(struct file_system_type *fs_type, int flags,
-			const char *dev_name, void *data)
+static int qibfs_get_tree(struct fs_context *fc)
 {
-	struct dentry *ret;
-
-	ret = mount_single(fs_type, flags, data, qibfs_fill_super);
-	if (!IS_ERR(ret))
-		qib_super = ret->d_sb;
+	int ret = get_tree_single(fc, qibfs_fill_super);
+	if (ret == 0)
+		qib_super = fc->root->d_sb;
 	return ret;
+}
+
+static const struct fs_context_operations qibfs_context_ops = {
+	.get_tree	= qibfs_get_tree,
+};
+
+static int qibfs_init_fs_context(struct fs_context *fc)
+{
+	fc->ops = &qibfs_context_ops;
+	return 0;
 }
 
 static void qibfs_kill_super(struct super_block *s)
@@ -605,7 +591,7 @@ int qibfs_remove(struct qib_devdata *dd)
 static struct file_system_type qibfs_fs_type = {
 	.owner =        THIS_MODULE,
 	.name =         "ipathfs",
-	.mount =        qibfs_mount,
+	.init_fs_context = qibfs_init_fs_context,
 	.kill_sb =      qibfs_kill_super,
 };
 MODULE_ALIAS_FS("ipathfs");

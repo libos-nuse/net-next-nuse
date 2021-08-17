@@ -1,25 +1,11 @@
-/*
- * max8997-irq.c - Interrupt controller support for MAX8997
- *
- * Copyright (C) 2011 Samsung Electronics Co.Ltd
- * MyungJoo Ham <myungjoo.ham@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * This driver is based on max8998-irq.c
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// max8997-irq.c - Interrupt controller support for MAX8997
+//
+// Copyright (C) 2011 Samsung Electronics Co.Ltd
+// MyungJoo Ham <myungjoo.ham@samsung.com>
+//
+// This driver is based on max8998-irq.c
 
 #include <linux/err.h>
 #include <linux/irq.h>
@@ -139,7 +125,7 @@ static void max8997_irq_sync_unlock(struct irq_data *data)
 	mutex_unlock(&max8997->irqlock);
 }
 
-static const inline struct max8997_irq_data *
+inline static const struct max8997_irq_data *
 irq_to_max8997_irq(struct max8997_dev *max8997, struct irq_data *data)
 {
 	return &max8997_irqs[data->hwirq];

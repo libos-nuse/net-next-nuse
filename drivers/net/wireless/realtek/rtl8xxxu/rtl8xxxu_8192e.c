@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * RTL8XXXU mac80211 USB driver - 8192e specific subdriver
  *
- * Copyright (c) 2014 - 2016 Jes Sorensen <Jes.Sorensen@redhat.com>
+ * Copyright (c) 2014 - 2017 Jes Sorensen <Jes.Sorensen@gmail.com>
  *
  * Portions, notably calibration code:
  * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
@@ -10,15 +11,6 @@
  * rtl8723au driver. As the Realtek 8xxx chips are very similar in
  * their programming interface, I have started adding support for
  * additional 8xxx chips like the 8192cu, 8188cus, etc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
  */
 
 #include <linux/init.h>
@@ -614,7 +606,10 @@ static int rtl8192eu_parse_efuse(struct rtl8xxxu_priv *priv)
 
 	dev_info(&priv->udev->dev, "Vendor: %.7s\n", efuse->vendor_name);
 	dev_info(&priv->udev->dev, "Product: %.11s\n", efuse->device_name);
-	dev_info(&priv->udev->dev, "Serial: %.11s\n", efuse->serial);
+	if (memchr_inv(efuse->serial, 0xff, 11))
+		dev_info(&priv->udev->dev, "Serial: %.11s\n", efuse->serial);
+	else
+		dev_info(&priv->udev->dev, "Serial not available.\n");
 
 	if (rtl8xxxu_debug & RTL8XXXU_DEBUG_EFUSE) {
 		unsigned char *raw = priv->efuse_wifi.raw;
@@ -622,13 +617,8 @@ static int rtl8192eu_parse_efuse(struct rtl8xxxu_priv *priv)
 		dev_info(&priv->udev->dev,
 			 "%s: dumping efuse (0x%02zx bytes):\n",
 			 __func__, sizeof(struct rtl8192eu_efuse));
-		for (i = 0; i < sizeof(struct rtl8192eu_efuse); i += 8) {
-			dev_info(&priv->udev->dev, "%02x: "
-				 "%02x %02x %02x %02x %02x %02x %02x %02x\n", i,
-				 raw[i], raw[i + 1], raw[i + 2],
-				 raw[i + 3], raw[i + 4], raw[i + 5],
-				 raw[i + 6], raw[i + 7]);
-		}
+		for (i = 0; i < sizeof(struct rtl8192eu_efuse); i += 8)
+			dev_info(&priv->udev->dev, "%02x: %8ph\n", i, &raw[i]);
 	}
 	return 0;
 }
@@ -1021,7 +1011,7 @@ static void rtl8192eu_phy_iqcalibrate(struct rtl8xxxu_priv *priv,
 	u32 i, val32;
 	int path_a_ok, path_b_ok;
 	int retry = 2;
-	const u32 adda_regs[RTL8XXXU_ADDA_REGS] = {
+	static const u32 adda_regs[RTL8XXXU_ADDA_REGS] = {
 		REG_FPGA0_XCD_SWITCH_CTRL, REG_BLUETOOTH,
 		REG_RX_WAIT_CCA, REG_TX_CCK_RFON,
 		REG_TX_CCK_BBON, REG_TX_OFDM_RFON,
@@ -1031,11 +1021,11 @@ static void rtl8192eu_phy_iqcalibrate(struct rtl8xxxu_priv *priv,
 		REG_RX_TO_RX, REG_STANDBY,
 		REG_SLEEP, REG_PMPD_ANAEN
 	};
-	const u32 iqk_mac_regs[RTL8XXXU_MAC_REGS] = {
+	static const u32 iqk_mac_regs[RTL8XXXU_MAC_REGS] = {
 		REG_TXPAUSE, REG_BEACON_CTRL,
 		REG_BEACON_CTRL_1, REG_GPIO_MUXCFG
 	};
-	const u32 iqk_bb_regs[RTL8XXXU_BB_REGS] = {
+	static const u32 iqk_bb_regs[RTL8XXXU_BB_REGS] = {
 		REG_OFDM0_TRX_PATH_ENABLE, REG_OFDM0_TR_MUX_PAR,
 		REG_FPGA0_XCD_RF_SW_CTRL, REG_CONFIG_ANT_A, REG_CONFIG_ANT_B,
 		REG_FPGA0_XAB_RF_SW_CTRL, REG_FPGA0_XA_RF_INT_OE,
@@ -1249,11 +1239,9 @@ static void rtl8192eu_phy_iq_calibrate(struct rtl8xxxu_priv *priv)
 		reg_e94 = result[i][0];
 		reg_e9c = result[i][1];
 		reg_ea4 = result[i][2];
-		reg_eac = result[i][3];
 		reg_eb4 = result[i][4];
 		reg_ebc = result[i][5];
 		reg_ec4 = result[i][6];
-		reg_ecc = result[i][7];
 	}
 
 	if (candidate >= 0) {
@@ -1271,8 +1259,8 @@ static void rtl8192eu_phy_iq_calibrate(struct rtl8xxxu_priv *priv)
 		reg_ecc = result[candidate][7];
 		dev_dbg(dev, "%s: candidate is %x\n", __func__, candidate);
 		dev_dbg(dev,
-			"%s: e94 =%x e9c=%x ea4=%x eac=%x eb4=%x ebc=%x ec4=%x "
-			"ecc=%x\n ", __func__, reg_e94, reg_e9c,
+			"%s: e94 =%x e9c=%x ea4=%x eac=%x eb4=%x ebc=%x ec4=%x ecc=%x\n",
+			__func__, reg_e94, reg_e9c,
 			reg_ea4, reg_eac, reg_eb4, reg_ebc, reg_ec4, reg_ecc);
 		path_a_ok = true;
 		path_b_ok = true;
@@ -1403,6 +1391,116 @@ exit:
 	return ret;
 }
 
+static int rtl8192eu_active_to_lps(struct rtl8xxxu_priv *priv)
+{
+	struct device *dev = &priv->udev->dev;
+	u8 val8;
+	u16 val16;
+	u32 val32;
+	int retry, retval;
+
+	rtl8xxxu_write8(priv, REG_TXPAUSE, 0xff);
+
+	retry = 100;
+	retval = -EBUSY;
+	/*
+	 * Poll 32 bit wide 0x05f8 for 0x00000000 to ensure no TX is pending.
+	 */
+	do {
+		val32 = rtl8xxxu_read32(priv, REG_SCH_TX_CMD);
+		if (!val32) {
+			retval = 0;
+			break;
+		}
+	} while (retry--);
+
+	if (!retry) {
+		dev_warn(dev, "Failed to flush TX queue\n");
+		retval = -EBUSY;
+		goto out;
+	}
+
+	/* Disable CCK and OFDM, clock gated */
+	val8 = rtl8xxxu_read8(priv, REG_SYS_FUNC);
+	val8 &= ~SYS_FUNC_BBRSTB;
+	rtl8xxxu_write8(priv, REG_SYS_FUNC, val8);
+
+	udelay(2);
+
+	/* Reset whole BB */
+	val8 = rtl8xxxu_read8(priv, REG_SYS_FUNC);
+	val8 &= ~SYS_FUNC_BB_GLB_RSTN;
+	rtl8xxxu_write8(priv, REG_SYS_FUNC, val8);
+
+	/* Reset MAC TRX */
+	val16 = rtl8xxxu_read16(priv, REG_CR);
+	val16 &= 0xff00;
+	val16 |= (CR_HCI_TXDMA_ENABLE | CR_HCI_RXDMA_ENABLE);
+	rtl8xxxu_write16(priv, REG_CR, val16);
+
+	val16 = rtl8xxxu_read16(priv, REG_CR);
+	val16 &= ~CR_SECURITY_ENABLE;
+	rtl8xxxu_write16(priv, REG_CR, val16);
+
+	val8 = rtl8xxxu_read8(priv, REG_DUAL_TSF_RST);
+	val8 |= DUAL_TSF_TX_OK;
+	rtl8xxxu_write8(priv, REG_DUAL_TSF_RST, val8);
+
+out:
+	return retval;
+}
+
+static int rtl8192eu_active_to_emu(struct rtl8xxxu_priv *priv)
+{
+	u8 val8;
+	int count, ret = 0;
+
+	/* Turn off RF */
+	val8 = rtl8xxxu_read8(priv, REG_RF_CTRL);
+	val8 &= ~RF_ENABLE;
+	rtl8xxxu_write8(priv, REG_RF_CTRL, val8);
+
+	/* Switch DPDT_SEL_P output from register 0x65[2] */
+	val8 = rtl8xxxu_read8(priv, REG_LEDCFG2);
+	val8 &= ~LEDCFG2_DPDT_SELECT;
+	rtl8xxxu_write8(priv, REG_LEDCFG2, val8);
+
+	/* 0x0005[1] = 1 turn off MAC by HW state machine*/
+	val8 = rtl8xxxu_read8(priv, REG_APS_FSMCO + 1);
+	val8 |= BIT(1);
+	rtl8xxxu_write8(priv, REG_APS_FSMCO + 1, val8);
+
+	for (count = RTL8XXXU_MAX_REG_POLL; count; count--) {
+		val8 = rtl8xxxu_read8(priv, REG_APS_FSMCO + 1);
+		if ((val8 & BIT(1)) == 0)
+			break;
+		udelay(10);
+	}
+
+	if (!count) {
+		dev_warn(&priv->udev->dev, "%s: Disabling MAC timed out\n",
+			 __func__);
+		ret = -EBUSY;
+		goto exit;
+	}
+
+exit:
+	return ret;
+}
+
+static int rtl8192eu_emu_to_disabled(struct rtl8xxxu_priv *priv)
+{
+	u8 val8;
+
+	/* 0x04[12:11] = 01 enable WL suspend */
+	val8 = rtl8xxxu_read8(priv, REG_APS_FSMCO + 1);
+	val8 &= ~(BIT(3) | BIT(4));
+	val8 |= BIT(3);
+	rtl8xxxu_write8(priv, REG_APS_FSMCO + 1, val8);
+
+	return 0;
+}
+
 static int rtl8192eu_power_on(struct rtl8xxxu_priv *priv)
 {
 	u16 val16;
@@ -1453,10 +1551,48 @@ exit:
 	return ret;
 }
 
+static void rtl8192eu_power_off(struct rtl8xxxu_priv *priv)
+{
+	u8 val8;
+	u16 val16;
+
+	rtl8xxxu_flush_fifo(priv);
+
+	val8 = rtl8xxxu_read8(priv, REG_TX_REPORT_CTRL);
+	val8 &= ~TX_REPORT_CTRL_TIMER_ENABLE;
+	rtl8xxxu_write8(priv, REG_TX_REPORT_CTRL, val8);
+
+	/* Turn off RF */
+	rtl8xxxu_write8(priv, REG_RF_CTRL, 0x00);
+
+	rtl8192eu_active_to_lps(priv);
+
+	/* Reset Firmware if running in RAM */
+	if (rtl8xxxu_read8(priv, REG_MCU_FW_DL) & MCU_FW_RAM_SEL)
+		rtl8xxxu_firmware_self_reset(priv);
+
+	/* Reset MCU */
+	val16 = rtl8xxxu_read16(priv, REG_SYS_FUNC);
+	val16 &= ~SYS_FUNC_CPU_ENABLE;
+	rtl8xxxu_write16(priv, REG_SYS_FUNC, val16);
+
+	/* Reset MCU ready status */
+	rtl8xxxu_write8(priv, REG_MCU_FW_DL, 0x00);
+
+	rtl8xxxu_reset_8051(priv);
+
+	rtl8192eu_active_to_emu(priv);
+	rtl8192eu_emu_to_disabled(priv);
+}
+
 static void rtl8192e_enable_rf(struct rtl8xxxu_priv *priv)
 {
 	u32 val32;
 	u8 val8;
+
+	val32 = rtl8xxxu_read32(priv, REG_RX_WAIT_CCA);
+	val32 |= (BIT(22) | BIT(23));
+	rtl8xxxu_write32(priv, REG_RX_WAIT_CCA, val32);
 
 	val8 = rtl8xxxu_read8(priv, REG_GPIO_MUXCFG);
 	val8 |= BIT(5);
@@ -1494,7 +1630,7 @@ struct rtl8xxxu_fileops rtl8192eu_fops = {
 	.parse_efuse = rtl8192eu_parse_efuse,
 	.load_firmware = rtl8192eu_load_firmware,
 	.power_on = rtl8192eu_power_on,
-	.power_off = rtl8xxxu_power_off,
+	.power_off = rtl8192eu_power_off,
 	.reset_8051 = rtl8xxxu_reset_8051,
 	.llt_init = rtl8xxxu_auto_llt_table,
 	.init_phy_bb = rtl8192eu_init_phy_bb,
@@ -1508,10 +1644,12 @@ struct rtl8xxxu_fileops rtl8192eu_fops = {
 	.set_tx_power = rtl8192e_set_tx_power,
 	.update_rate_mask = rtl8xxxu_gen2_update_rate_mask,
 	.report_connect = rtl8xxxu_gen2_report_connect,
+	.fill_txdesc = rtl8xxxu_fill_txdesc_v2,
 	.writeN_block_size = 128,
 	.tx_desc_size = sizeof(struct rtl8xxxu_txdesc40),
 	.rx_desc_size = sizeof(struct rtl8xxxu_rxdesc24),
 	.has_s0s1 = 0,
+	.gen2_thermal_meter = 1,
 	.adda_1t_init = 0x0fc01616,
 	.adda_1t_path_on = 0x0fc01616,
 	.adda_2t_path_on_a = 0x0fc01616,

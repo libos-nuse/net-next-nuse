@@ -1,29 +1,29 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * SAMSUNG SMDK5420 board device tree source
+ * Samsung SMDK5420 board device tree source
  *
  * Copyright (c) 2013 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
-*/
+ */
 
 /dts-v1/;
 #include "exynos5420.dtsi"
 #include "exynos5420-cpus.dtsi"
+#include <dt-bindings/clock/samsung,s2mps11.h>
 #include <dt-bindings/gpio/gpio.h>
 
 / {
-	model = "Samsung SMDK5420 board based on EXYNOS5420";
+	model = "Samsung SMDK5420 board based on Exynos5420";
 	compatible = "samsung,smdk5420", "samsung,exynos5420", "samsung,exynos5";
 
-	memory {
+	memory@20000000 {
+		device_type = "memory";
 		reg = <0x20000000 0x80000000>;
 	};
 
 	chosen {
-		bootargs = "console=ttySAC2,115200 init=/linuxrc";
+		bootargs = "init=/linuxrc";
+		stdout-path = "serial2:115200n8";
 	};
 
 	fixed-rate-clocks {
@@ -33,40 +33,31 @@
 		};
 	};
 
-	regulators {
-		compatible = "simple-bus";
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		vdd: fixed-regulator@0 {
-			compatible = "regulator-fixed";
-			reg = <0>;
-			regulator-name = "vdd-supply";
-			regulator-min-microvolt = <1800000>;
-			regulator-max-microvolt = <1800000>;
-			regulator-always-on;
-		};
-
-		dbvdd: fixed-regulator@1 {
-			compatible = "regulator-fixed";
-			reg = <1>;
-			regulator-name = "dbvdd-supply";
-			regulator-min-microvolt = <3300000>;
-			regulator-max-microvolt = <3300000>;
-			regulator-always-on;
-		};
-
-		spkvdd: fixed-regulator@2 {
-			compatible = "regulator-fixed";
-			reg = <2>;
-			regulator-name = "spkvdd-supply";
-			regulator-min-microvolt = <5000000>;
-			regulator-max-microvolt = <5000000>;
-			regulator-always-on;
-		};
+	vdd: regulator-0 {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd-supply";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
 	};
 
-	usb300_vbus_reg: regulator-usb300 {
+	dbvdd: regulator-1 {
+		compatible = "regulator-fixed";
+		regulator-name = "dbvdd-supply";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
+	spkvdd: regulator-2 {
+		compatible = "regulator-fixed";
+		regulator-name = "spkvdd-supply";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
+	};
+
+	usb300_vbus_reg: regulator-3 {
 		compatible = "regulator-fixed";
 		regulator-name = "VBUS0";
 		regulator-min-microvolt = <5000000>;
@@ -77,7 +68,7 @@
 		enable-active-high;
 	};
 
-	usb301_vbus_reg: regulator-usb301 {
+	usb301_vbus_reg: regulator-4 {
 		compatible = "regulator-fixed";
 		regulator-name = "VBUS1";
 		regulator-min-microvolt = <5000000>;
@@ -129,7 +120,8 @@
 
 &hdmi {
 	status = "okay";
-	hpd-gpio = <&gpx3 7 GPIO_ACTIVE_HIGH>;
+	ddc = <&i2c_2>;
+	hpd-gpios = <&gpx3 7 GPIO_ACTIVE_HIGH>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&hdmi_hpd_irq>;
 };
@@ -142,6 +134,7 @@
 		reg = <0x66>;
 
 		s2mps11_osc: clocks {
+			compatible = "samsung,s2mps11-clk";
 			#clock-cells = <1>;
 			clock-output-names = "s2mps11_ap",
 					"s2mps11_cp", "s2mps11_bt";
@@ -346,17 +339,12 @@
 &i2c_2 {
 	samsung,i2c-sda-delay = <100>;
 	samsung,i2c-max-bus-freq = <66000>;
+	/* used by HDMI DDC */
 	status = "okay";
-
-	hdmiddc@50 {
-		compatible = "samsung,exynos4210-hdmiddc";
-		reg = <0x50>;
-	};
 };
 
-&mfc {
-	samsung,mfc-r = <0x43000000 0x800000>;
-	samsung,mfc-l = <0x51000000 0x800000>;
+&mixer {
+	status = "okay";
 };
 
 &mmc_0 {
@@ -390,30 +378,32 @@
 &pinctrl_0 {
 	hdmi_hpd_irq: hdmi-hpd-irq {
 		samsung,pins = "gpx3-7";
-		samsung,pin-function = <0>;
-		samsung,pin-pud = <1>;
-		samsung,pin-drv = <0>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_DOWN>;
+		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
 	};
 };
 
 &pinctrl_2 {
 	usb300_vbus_en: usb300-vbus-en {
 		samsung,pins = "gpg0-5";
-		samsung,pin-function = <1>;
-		samsung,pin-pud = <0>;
-		samsung,pin-drv = <0>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_OUTPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
 	};
 
 	usb301_vbus_en: usb301-vbus-en {
 		samsung,pins = "gpg1-4";
-		samsung,pin-function = <1>;
-		samsung,pin-pud = <0>;
-		samsung,pin-drv = <0>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_OUTPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
 	};
 };
 
 &rtc {
 	status = "okay";
+	clocks = <&clock CLK_RTC>, <&s2mps11_osc S2MPS11_CLK_AP>;
+	clock-names = "rtc", "rtc_src";
 };
 
 &usbdrd_phy0 {

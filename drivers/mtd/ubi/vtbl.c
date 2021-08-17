@@ -1,20 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) International Business Machines Corp., 2006
  * Copyright (c) Nokia Corporation, 2006, 2007
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
- * the GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  *
  * Author: Artem Bityutskiy (Битюцкий Артём)
  */
@@ -299,14 +286,17 @@ static int create_vtbl(struct ubi_device *ubi, struct ubi_attach_info *ai,
 		       int copy, void *vtbl)
 {
 	int err, tries = 0;
+	struct ubi_vid_io_buf *vidb;
 	struct ubi_vid_hdr *vid_hdr;
 	struct ubi_ainf_peb *new_aeb;
 
 	dbg_gen("create volume table (copy #%d)", copy + 1);
 
-	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_KERNEL);
-	if (!vid_hdr)
+	vidb = ubi_alloc_vid_buf(ubi, GFP_KERNEL);
+	if (!vidb)
 		return -ENOMEM;
+
+	vid_hdr = ubi_get_vid_hdr(vidb);
 
 retry:
 	new_aeb = ubi_early_get_peb(ubi, ai);
@@ -324,7 +314,7 @@ retry:
 	vid_hdr->sqnum = cpu_to_be64(++ai->max_sqnum);
 
 	/* The EC header is already there, write the VID header */
-	err = ubi_io_write_vid_hdr(ubi, new_aeb->pnum, vid_hdr);
+	err = ubi_io_write_vid_hdr(ubi, new_aeb->pnum, vidb);
 	if (err)
 		goto write_error;
 
@@ -338,8 +328,8 @@ retry:
 	 * of this LEB as it will be deleted and freed in 'ubi_add_to_av()'.
 	 */
 	err = ubi_add_to_av(ubi, ai, new_aeb->pnum, new_aeb->ec, vid_hdr, 0);
-	kmem_cache_free(ai->aeb_slab_cache, new_aeb);
-	ubi_free_vid_hdr(ubi, vid_hdr);
+	ubi_free_aeb(ai, new_aeb);
+	ubi_free_vid_buf(vidb);
 	return err;
 
 write_error:
@@ -351,9 +341,9 @@ write_error:
 		list_add(&new_aeb->u.list, &ai->erase);
 		goto retry;
 	}
-	kmem_cache_free(ai->aeb_slab_cache, new_aeb);
+	ubi_free_aeb(ai, new_aeb);
 out_free:
-	ubi_free_vid_hdr(ubi, vid_hdr);
+	ubi_free_vid_buf(vidb);
 	return err;
 
 }
@@ -531,7 +521,7 @@ static int init_volumes(struct ubi_device *ubi,
 			const struct ubi_attach_info *ai,
 			const struct ubi_vtbl_record *vtbl)
 {
-	int i, reserved_pebs = 0;
+	int i, err, reserved_pebs = 0;
 	struct ubi_ainf_volume *av;
 	struct ubi_volume *vol;
 
@@ -557,6 +547,9 @@ static int init_volumes(struct ubi_device *ubi,
 		vol->name[vol->name_len] = '\0';
 		vol->vol_id = i;
 
+		if (vtbl[i].flags & UBI_VTBL_SKIP_CRC_CHECK_FLG)
+			vol->skip_check = 1;
+
 		if (vtbl[i].flags & UBI_VTBL_AUTORESIZE_FLG) {
 			/* Auto re-size flag may be set only for one volume */
 			if (ubi->autoresize_vol_id != -1) {
@@ -574,6 +567,16 @@ static int init_volumes(struct ubi_device *ubi,
 		ubi->vol_count += 1;
 		vol->ubi = ubi;
 		reserved_pebs += vol->reserved_pebs;
+
+		/*
+		 * We use ubi->peb_count and not vol->reserved_pebs because
+		 * we want to keep the code simple. Otherwise we'd have to
+		 * resize/check the bitmap upon volume resize too.
+		 * Allocating a few bytes more does not hurt.
+		 */
+		err = ubi_fastmap_init_checkmap(vol, ubi->peb_count);
+		if (err)
+			return err;
 
 		/*
 		 * In case of dynamic volume UBI knows nothing about how many
@@ -642,6 +645,9 @@ static int init_volumes(struct ubi_device *ubi,
 	reserved_pebs += vol->reserved_pebs;
 	ubi->vol_count += 1;
 	vol->ubi = ubi;
+	err = ubi_fastmap_init_checkmap(vol, UBI_LAYOUT_VOLUME_EBS);
+	if (err)
+		return err;
 
 	if (reserved_pebs > ubi->avail_pebs) {
 		ubi_err(ubi, "not enough PEBs, required %d, available %d",
@@ -776,7 +782,7 @@ static int check_attaching_info(const struct ubi_device *ubi,
  */
 int ubi_read_volume_table(struct ubi_device *ubi, struct ubi_attach_info *ai)
 {
-	int i, err;
+	int err;
 	struct ubi_ainf_volume *av;
 
 	empty_vtbl_record.crc = cpu_to_be32(0xf116c36b);
@@ -845,10 +851,7 @@ int ubi_read_volume_table(struct ubi_device *ubi, struct ubi_attach_info *ai)
 
 out_free:
 	vfree(ubi->vtbl);
-	for (i = 0; i < ubi->vtbl_slots + UBI_INT_VOL_COUNT; i++) {
-		kfree(ubi->volumes[i]);
-		ubi->volumes[i] = NULL;
-	}
+	ubi_free_all_volumes(ubi);
 	return err;
 }
 

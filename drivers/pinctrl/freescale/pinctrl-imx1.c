@@ -1,15 +1,10 @@
-/*
- * i.MX1 pinctrl driver based on imx pinmux core
- *
- * Copyright (C) 2014 Alexander Shiyan <shc_work@mail.ru>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// i.MX1 pinctrl driver based on imx pinmux core
+//
+// Copyright (C) 2014 Alexander Shiyan <shc_work@mail.ru>
 
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pinctrl/pinctrl.h>
@@ -262,7 +257,6 @@ static const struct of_device_id imx1_pinctrl_of_match[] = {
 	{ .compatible = "fsl,imx1-iomuxc", },
 	{ }
 };
-MODULE_DEVICE_TABLE(of, imx1_pinctrl_of_match);
 
 static struct platform_driver imx1_pinctrl_driver = {
 	.driver	= {
@@ -270,8 +264,4 @@ static struct platform_driver imx1_pinctrl_driver = {
 		.of_match_table	= imx1_pinctrl_of_match,
 	},
 };
-module_platform_driver_probe(imx1_pinctrl_driver, imx1_pinctrl_probe);
-
-MODULE_AUTHOR("Alexander Shiyan <shc_work@mail.ru>");
-MODULE_DESCRIPTION("Freescale i.MX1 pinctrl driver");
-MODULE_LICENSE("GPL");
+builtin_platform_driver_probe(imx1_pinctrl_driver, imx1_pinctrl_probe);

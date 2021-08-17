@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Vineetg: Aug 2009
  *  -Moved core context switch macro out of entry.S into this file.
@@ -23,6 +20,7 @@
 	.global __switch_to
 	.type   __switch_to, @function
 __switch_to:
+	CFI_STARTPROC
 
 	/* Save regs on kernel mode stack of task */
 	st.a    blink, [sp, -4]
@@ -59,4 +57,4 @@ __switch_to:
 	ld.ab   blink, [sp, 4]
 	j       [blink]
 
-END(__switch_to)
+END_CFI(__switch_to)

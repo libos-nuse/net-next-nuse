@@ -1,18 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  sst_mfld_platform.c - Intel MID Platform driver
  *
  *  Copyright (C) 2010-2014 Intel Corp
  *  Author: Vinod Koul <vinod.koul@intel.com>
  *  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; version 2 of the License.
- *
- *  This program is distributed in the hope that it will be useful, but
- *  WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  General Public License for more details.
  *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
@@ -47,10 +39,10 @@ static void sst_drain_notify(void *arg)
 		snd_compr_drain_notify(cstream);
 }
 
-static int sst_platform_compr_open(struct snd_compr_stream *cstream)
+static int sst_platform_compr_open(struct snd_soc_component *component,
+				   struct snd_compr_stream *cstream)
 {
-
-	int ret_val = 0;
+	int ret_val;
 	struct snd_compr_runtime *runtime = cstream->runtime;
 	struct sst_runtime_stream *stream;
 
@@ -80,7 +72,8 @@ out_ops:
 	return ret_val;
 }
 
-static int sst_platform_compr_free(struct snd_compr_stream *cstream)
+static int sst_platform_compr_free(struct snd_soc_component *component,
+				   struct snd_compr_stream *cstream)
 {
 	struct sst_runtime_stream *stream;
 	int ret_val = 0, str_id;
@@ -99,16 +92,15 @@ static int sst_platform_compr_free(struct snd_compr_stream *cstream)
 	return 0;
 }
 
-static int sst_platform_compr_set_params(struct snd_compr_stream *cstream,
-					struct snd_compr_params *params)
+static int sst_platform_compr_set_params(struct snd_soc_component *component,
+					 struct snd_compr_stream *cstream,
+					 struct snd_compr_params *params)
 {
 	struct sst_runtime_stream *stream;
 	int retval;
 	struct snd_sst_params str_params;
 	struct sst_compress_cb cb;
-	struct snd_soc_pcm_runtime *rtd = cstream->private_data;
-	struct snd_soc_platform *platform = rtd->platform;
-	struct sst_data *ctx = snd_soc_platform_get_drvdata(platform);
+	struct sst_data *ctx = snd_soc_component_get_drvdata(component);
 
 	stream = cstream->runtime->private_data;
 	/* construct fw structure for this*/
@@ -174,7 +166,8 @@ static int sst_platform_compr_set_params(struct snd_compr_stream *cstream,
 	return 0;
 }
 
-static int sst_platform_compr_trigger(struct snd_compr_stream *cstream, int cmd)
+static int sst_platform_compr_trigger(struct snd_soc_component *component,
+				      struct snd_compr_stream *cstream, int cmd)
 {
 	struct sst_runtime_stream *stream = cstream->runtime->private_data;
 
@@ -182,28 +175,34 @@ static int sst_platform_compr_trigger(struct snd_compr_stream *cstream, int cmd)
 	case SNDRV_PCM_TRIGGER_START:
 		if (stream->compr_ops->stream_start)
 			return stream->compr_ops->stream_start(sst->dev, stream->id);
+		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 		if (stream->compr_ops->stream_drop)
 			return stream->compr_ops->stream_drop(sst->dev, stream->id);
+		break;
 	case SND_COMPR_TRIGGER_DRAIN:
 		if (stream->compr_ops->stream_drain)
 			return stream->compr_ops->stream_drain(sst->dev, stream->id);
+		break;
 	case SND_COMPR_TRIGGER_PARTIAL_DRAIN:
 		if (stream->compr_ops->stream_partial_drain)
 			return stream->compr_ops->stream_partial_drain(sst->dev, stream->id);
+		break;
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 		if (stream->compr_ops->stream_pause)
 			return stream->compr_ops->stream_pause(sst->dev, stream->id);
+		break;
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		if (stream->compr_ops->stream_pause_release)
 			return stream->compr_ops->stream_pause_release(sst->dev, stream->id);
-	default:
-		return -EINVAL;
+		break;
 	}
+	return -EINVAL;
 }
 
-static int sst_platform_compr_pointer(struct snd_compr_stream *cstream,
-					struct snd_compr_tstamp *tstamp)
+static int sst_platform_compr_pointer(struct snd_soc_component *component,
+				      struct snd_compr_stream *cstream,
+				      struct snd_compr_tstamp *tstamp)
 {
 	struct sst_runtime_stream *stream;
 
@@ -215,8 +214,9 @@ static int sst_platform_compr_pointer(struct snd_compr_stream *cstream,
 	return 0;
 }
 
-static int sst_platform_compr_ack(struct snd_compr_stream *cstream,
-					size_t bytes)
+static int sst_platform_compr_ack(struct snd_soc_component *component,
+				  struct snd_compr_stream *cstream,
+				  size_t bytes)
 {
 	struct sst_runtime_stream *stream;
 
@@ -227,8 +227,9 @@ static int sst_platform_compr_ack(struct snd_compr_stream *cstream,
 	return 0;
 }
 
-static int sst_platform_compr_get_caps(struct snd_compr_stream *cstream,
-					struct snd_compr_caps *caps)
+static int sst_platform_compr_get_caps(struct snd_soc_component *component,
+				       struct snd_compr_stream *cstream,
+				       struct snd_compr_caps *caps)
 {
 	struct sst_runtime_stream *stream =
 		cstream->runtime->private_data;
@@ -236,8 +237,9 @@ static int sst_platform_compr_get_caps(struct snd_compr_stream *cstream,
 	return stream->compr_ops->get_caps(caps);
 }
 
-static int sst_platform_compr_get_codec_caps(struct snd_compr_stream *cstream,
-					struct snd_compr_codec_caps *codec)
+static int sst_platform_compr_get_codec_caps(struct snd_soc_component *component,
+					     struct snd_compr_stream *cstream,
+					     struct snd_compr_codec_caps *codec)
 {
 	struct sst_runtime_stream *stream =
 		cstream->runtime->private_data;
@@ -245,8 +247,9 @@ static int sst_platform_compr_get_codec_caps(struct snd_compr_stream *cstream,
 	return stream->compr_ops->get_codec_caps(codec);
 }
 
-static int sst_platform_compr_set_metadata(struct snd_compr_stream *cstream,
-					struct snd_compr_metadata *metadata)
+static int sst_platform_compr_set_metadata(struct snd_soc_component *component,
+					   struct snd_compr_stream *cstream,
+					   struct snd_compr_metadata *metadata)
 {
 	struct sst_runtime_stream *stream  =
 		 cstream->runtime->private_data;
@@ -254,7 +257,7 @@ static int sst_platform_compr_set_metadata(struct snd_compr_stream *cstream,
 	return stream->compr_ops->set_metadata(sst->dev, stream->id, metadata);
 }
 
-struct snd_compr_ops sst_platform_compr_ops = {
+const struct snd_compress_ops sst_platform_compress_ops = {
 
 	.open = sst_platform_compr_open,
 	.free = sst_platform_compr_free,

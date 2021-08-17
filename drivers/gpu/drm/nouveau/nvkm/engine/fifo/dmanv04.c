@@ -37,7 +37,10 @@ nv04_fifo_dma_object_dtor(struct nvkm_fifo_chan *base, int cookie)
 {
 	struct nv04_fifo_chan *chan = nv04_fifo_chan(base);
 	struct nvkm_instmem *imem = chan->fifo->base.engine.subdev.device->imem;
+
+	mutex_lock(&chan->fifo->base.engine.subdev.mutex);
 	nvkm_ramht_remove(imem->ramht, cookie);
+	mutex_unlock(&chan->fifo->base.engine.subdev.mutex);
 }
 
 static int
@@ -92,6 +95,7 @@ nv04_fifo_dma_fini(struct nvkm_fifo_chan *base)
 		nvkm_mask(device, NV04_PFIFO_CACHE1_PULL0, 0x00000001, 0);
 
 		c = fifo->ramfc;
+		nvkm_kmap(fctx);
 		do {
 			u32 rm = ((1ULL << c->bits) - 1) << c->regs;
 			u32 cm = ((1ULL << c->bits) - 1) << c->ctxs;
@@ -99,6 +103,7 @@ nv04_fifo_dma_fini(struct nvkm_fifo_chan *base)
 			u32 cv = (nvkm_ro32(fctx, c->ctxp + data) & ~cm);
 			nvkm_wo32(fctx, c->ctxp + data, cv | (rv << c->ctxs));
 		} while ((++c)->bits);
+		nvkm_done(fctx);
 
 		c = fifo->ramfc;
 		do {

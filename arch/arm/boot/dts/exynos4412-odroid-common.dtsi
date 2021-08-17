@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Common definition for Hardkernel's Exynos4412 based ODROID-X/X2/U2/U3 boards
  * device tree source
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
 */
 
 #include <dt-bindings/sound/samsung-i2s.h>
@@ -13,13 +10,14 @@
 #include "exynos4412.dtsi"
 #include "exynos4412-ppmu-common.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include "exynos-mfc-reserved-memory.dtsi"
 
 / {
 	chosen {
 		stdout-path = &serial_1;
 	};
 
-	firmware@0204F000 {
+	firmware@204f000 {
 		compatible = "samsung,secure-firmware";
 		reg = <0x0204F000 0x1000>;
 	};
@@ -30,8 +28,6 @@
 		pinctrl-0 = <&gpio_power_key>;
 
 		power_key {
-			interrupt-parent = <&gpx1>;
-			interrupts = <3 0>;
 			gpios = <&gpx1 3 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_POWER>;
 			label = "power key";
@@ -41,44 +37,22 @@
 	};
 
 	sound: sound {
-		compatible = "simple-audio-card";
-		assigned-clocks = <&clock_audss EXYNOS_MOUT_AUDSS>,
-				<&clock_audss EXYNOS_MOUT_I2S>,
-				<&clock_audss EXYNOS_DOUT_SRP>,
-				<&clock_audss EXYNOS_DOUT_AUD_BUS>;
-		assigned-clock-parents = <&clock CLK_FOUT_EPLL>,
-				<&clock_audss EXYNOS_MOUT_AUDSS>;
-		assigned-clock-rates = <0>,
-				<0>,
-				<192000000>,
-				<19200000>;
+		compatible = "hardkernel,odroid-xu4-audio";
 
-		simple-audio-card,format = "i2s";
-		simple-audio-card,bitclock-master = <&link0_codec>;
-		simple-audio-card,frame-master = <&link0_codec>;
-
-		simple-audio-card,cpu {
+		cpu {
 			sound-dai = <&i2s0 0>;
-			system-clock-frequency = <19200000>;
 		};
 
-		link0_codec: simple-audio-card,codec {
-			sound-dai = <&max98090>;
-			clocks = <&i2s0 CLK_I2S_CDCLK>;
+		codec {
+			sound-dai = <&hdmi>, <&max98090>;
 		};
 	};
 
 	emmc_pwrseq: pwrseq {
-		pinctrl-0 = <&sd1_cd>;
+		pinctrl-0 = <&emmc_rstn>;
 		pinctrl-names = "default";
 		compatible = "mmc-pwrseq-emmc";
 		reset-gpios = <&gpk1 2 GPIO_ACTIVE_LOW>;
-	};
-
-	camera {
-		status = "okay";
-		pinctrl-names = "default";
-		pinctrl-0 = <>;
 	};
 
 	fixed-rate-clocks {
@@ -90,21 +64,6 @@
 		xusbxti {
 			compatible = "samsung,clock-xusbxti";
 			clock-frequency = <24000000>;
-		};
-	};
-
-	thermal-zones {
-		cpu_thermal: cpu-thermal {
-			cooling-maps {
-				map0 {
-				     /* Corresponds to 800MHz at freq_table */
-				     cooling-device = <&cpu0 7 7>;
-				};
-				map1 {
-				     /* Corresponds to 200MHz at freq_table */
-				     cooling-device = <&cpu0 13 13>;
-			       };
-		       };
 		};
 	};
 };
@@ -156,32 +115,82 @@
 	status = "okay";
 };
 
+&camera {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <>;
+};
+
+&clock {
+	assigned-clocks = <&clock CLK_FOUT_EPLL>;
+	assigned-clock-rates = <45158401>;
+};
+
+&clock_audss {
+	assigned-clocks = <&clock_audss EXYNOS_MOUT_AUDSS>,
+			<&clock_audss EXYNOS_MOUT_I2S>,
+			<&clock_audss EXYNOS_DOUT_SRP>,
+			<&clock_audss EXYNOS_DOUT_AUD_BUS>,
+			<&clock_audss EXYNOS_DOUT_I2S>;
+
+	assigned-clock-parents = <&clock CLK_FOUT_EPLL>,
+			  <&clock_audss EXYNOS_MOUT_AUDSS>;
+
+	assigned-clock-rates = <0>, <0>,
+			<196608001>,
+			<(196608001 / 2)>,
+			<(196608001 / 8)>;
+};
+
 &cpu0 {
 	cpu0-supply = <&buck2_reg>;
 };
 
-/* RSTN signal for eMMC */
-&sd1_cd {
-	samsung,pin-pud = <0>;
-	samsung,pin-drv = <0>;
+&cpu0_opp_table {
+	opp-1000000000 {
+		opp-suspend;
+	};
+	opp-800000000 {
+		/delete-property/opp-suspend;
+	};
+};
+
+&cpu_thermal {
+	cooling-maps {
+		cooling_map0: map0 {
+			/* Corresponds to 800MHz at freq_table */
+			cooling-device = <&cpu0 7 7>, <&cpu1 7 7>,
+					 <&cpu2 7 7>, <&cpu3 7 7>;
+		};
+		cooling_map1: map1 {
+			/* Corresponds to 200MHz at freq_table */
+			cooling-device = <&cpu0 13 13>, <&cpu1 13 13>,
+					 <&cpu2 13 13>, <&cpu3 13 13>;
+		};
+	};
 };
 
 &pinctrl_1 {
 	gpio_power_key: power_key {
 		samsung,pins = "gpx1-3";
-		samsung,pin-pud = <0>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
 	};
 
 	max77686_irq: max77686-irq {
 		samsung,pins = "gpx3-2";
-		samsung,pin-function = <0>;
-		samsung,pin-pud = <0>;
-		samsung,pin-drv = <0>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS4_PIN_DRV_LV1>;
 	};
 
 	hdmi_hpd: hdmi-hpd {
 		samsung,pins = "gpx3-7";
-		samsung,pin-pud = <1>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_DOWN>;
+	};
+
+	emmc_rstn: emmc-rstn {
+		samsung,pins = "gpk1-2";
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
 	};
 };
 
@@ -225,8 +234,13 @@
 	assigned-clock-rates = <0>, <176000000>;
 };
 
+&gpu {
+	mali-supply = <&buck4_reg>;
+	status = "okay";
+};
+
 &hdmi {
-	hpd-gpio = <&gpx3 7 GPIO_ACTIVE_HIGH>;
+	hpd-gpios = <&gpx3 7 GPIO_ACTIVE_HIGH>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&hdmi_hpd>;
 	vdd-supply = <&ldo8_reg>;
@@ -252,20 +266,20 @@
 	samsung,i2c-max-bus-freq = <400000>;
 	status = "okay";
 
-	usb3503: usb3503@08 {
+	usb3503: usb3503@8 {
 		compatible = "smsc,usb3503";
 		reg = <0x08>;
 
 		intn-gpios = <&gpx3 0 GPIO_ACTIVE_HIGH>;
 		connect-gpios = <&gpx3 4 GPIO_ACTIVE_HIGH>;
-		reset-gpios = <&gpx3 5 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpx3 5 GPIO_ACTIVE_LOW>;
 		initial-mode = <1>;
 	};
 
-	max77686: pmic@09 {
+	max77686: pmic@9 {
 		compatible = "maxim,max77686";
 		interrupt-parent = <&gpx3>;
-		interrupts = <2 0>;
+		interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&max77686_irq>;
 		reg = <0x09>;
@@ -297,7 +311,6 @@
 				regulator-name = "VDDQ_MMC2_2.8V";
 				regulator-min-microvolt = <2800000>;
 				regulator-max-microvolt = <2800000>;
-				regulator-always-on;
 				regulator-boot-on;
 			};
 
@@ -386,14 +399,21 @@
 				regulator-name = "LDO20_1.8V";
 				regulator-min-microvolt = <1800000>;
 				regulator-max-microvolt = <1800000>;
-				regulator-boot-on;
 			};
 
 			ldo21_reg: LDO21 {
-				regulator-name = "LDO21_3.3V";
-				regulator-min-microvolt = <3300000>;
-				regulator-max-microvolt = <3300000>;
-				regulator-always-on;
+				regulator-name = "TFLASH_2.8V";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-boot-on;
+			};
+
+			ldo22_reg: LDO22 {
+				/*
+				 * Only U3 uses it, so let it define the
+				 * constraints
+				 */
+				regulator-name = "LDO22";
 				regulator-boot-on;
 			};
 
@@ -406,7 +426,7 @@
 			};
 
 			buck1_reg: BUCK1 {
-				regulator-name = "vdd_mif";
+				regulator-name = "VDD_MIF";
 				regulator-min-microvolt = <900000>;
 				regulator-max-microvolt = <1100000>;
 				regulator-always-on;
@@ -414,7 +434,7 @@
 			};
 
 			buck2_reg: BUCK2 {
-				regulator-name = "vdd_arm";
+				regulator-name = "VDD_ARM";
 				regulator-min-microvolt = <900000>;
 				regulator-max-microvolt = <1350000>;
 				regulator-always-on;
@@ -422,7 +442,7 @@
 			};
 
 			buck3_reg: BUCK3 {
-				regulator-name = "vdd_int";
+				regulator-name = "VDD_INT";
 				regulator-min-microvolt = <900000>;
 				regulator-max-microvolt = <1050000>;
 				regulator-always-on;
@@ -430,7 +450,7 @@
 			};
 
 			buck4_reg: BUCK4 {
-				regulator-name = "vdd_g3d";
+				regulator-name = "VDD_G3D";
 				regulator-min-microvolt = <900000>;
 				regulator-max-microvolt = <1100000>;
 				regulator-microvolt-offset = <50000>;
@@ -460,9 +480,11 @@
 			};
 
 			buck8_reg: BUCK8 {
+				/*
+				 * Constraints set by specific board: X,
+				 * X2 and U3.
+				 */
 				regulator-name = "BUCK8_2.8V";
-				regulator-min-microvolt = <2800000>;
-				regulator-max-microvolt = <2800000>;
 			};
 		};
 	};
@@ -474,7 +496,7 @@
 		compatible = "maxim,max98090";
 		reg = <0x10>;
 		interrupt-parent = <&gpx0>;
-		interrupts = <0 0>;
+		interrupts = <0 IRQ_TYPE_NONE>;
 		clocks = <&i2s0 CLK_I2S_CDCLK>;
 		clock-names = "mclk";
 		#sound-dai-cells = <0>;
@@ -493,10 +515,8 @@
 	pinctrl-0 = <&i2s0_bus>;
 	pinctrl-names = "default";
 	status = "okay";
-	clocks = <&clock_audss EXYNOS_I2S_BUS>,
-		 <&clock_audss EXYNOS_DOUT_AUD_BUS>,
-		 <&clock_audss EXYNOS_SCLK_I2S>;
-	clock-names = "iis", "i2s_opclk0", "i2s_opclk1";
+	assigned-clocks = <&i2s0 CLK_I2S_RCLK_SRC>;
+	assigned-clock-parents = <&clock_audss EXYNOS_SCLK_I2S>;
 };
 
 &mixer {
@@ -506,11 +526,10 @@
 &mshc_0 {
 	pinctrl-0 = <&sd4_clk &sd4_cmd &sd4_bus4 &sd4_bus8>;
 	pinctrl-names = "default";
-	vmmc-supply = <&ldo20_reg &buck8_reg>;
+	vmmc-supply = <&ldo20_reg>;
 	mmc-pwrseq = <&emmc_pwrseq>;
 	status = "okay";
 
-	num-slots = <1>;
 	broken-cd;
 	card-detect-delay = <200>;
 	samsung,dw-mshc-ciu-div = <3>;
@@ -530,9 +549,9 @@
 	bus-width = <4>;
 	pinctrl-0 = <&sd2_clk &sd2_cmd &sd2_cd &sd2_bus4>;
 	pinctrl-names = "default";
-	vmmc-supply = <&ldo4_reg &ldo21_reg>;
-	cd-gpios = <&gpk2 2 GPIO_ACTIVE_HIGH>;
-	cd-inverted;
+	vmmc-supply = <&ldo21_reg>;
+	vqmmc-supply = <&ldo4_reg>;
+	cd-gpios = <&gpk2 2 GPIO_ACTIVE_LOW>;
 	status = "okay";
 };
 
@@ -546,9 +565,5 @@
 
 &tmu {
 	vtmu-supply = <&ldo10_reg>;
-	status = "okay";
-};
-
-&watchdog {
 	status = "okay";
 };

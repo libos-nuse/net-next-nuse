@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * MEN Chameleon Bus.
  *
  * Copyright (C) 2013 MEN Mikroelektronik GmbH (www.men.de)
  * Author: Johannes Thumshirn <johannes.thumshirn@men.de>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; version 2 of the License.
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -194,7 +191,7 @@ int __mcb_register_driver(struct mcb_driver *drv, struct module *owner,
 
 	return driver_register(&drv->driver);
 }
-EXPORT_SYMBOL_GPL(__mcb_register_driver);
+EXPORT_SYMBOL_NS_GPL(__mcb_register_driver, MCB);
 
 /**
  * mcb_unregister_driver() - Unregister a @mcb_driver from the system
@@ -206,7 +203,7 @@ void mcb_unregister_driver(struct mcb_driver *drv)
 {
 	driver_unregister(&drv->driver);
 }
-EXPORT_SYMBOL_GPL(mcb_unregister_driver);
+EXPORT_SYMBOL_NS_GPL(mcb_unregister_driver, MCB);
 
 static void mcb_release_dev(struct device *dev)
 {
@@ -233,6 +230,7 @@ int mcb_device_register(struct mcb_bus *bus, struct mcb_device *dev)
 	dev->dev.bus = &mcb_bus_type;
 	dev->dev.parent = bus->dev.parent;
 	dev->dev.release = mcb_release_dev;
+	dev->dma_dev = bus->carrier;
 
 	device_id = dev->id;
 	dev_set_name(&dev->dev, "mcb%d-16z%03d-%d:%d:%d",
@@ -251,7 +249,7 @@ out:
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(mcb_device_register);
+EXPORT_SYMBOL_NS_GPL(mcb_device_register, MCB);
 
 static void mcb_free_bus(struct device *dev)
 {
@@ -303,7 +301,7 @@ err_free:
 	kfree(bus);
 	return ERR_PTR(rc);
 }
-EXPORT_SYMBOL_GPL(mcb_alloc_bus);
+EXPORT_SYMBOL_NS_GPL(mcb_alloc_bus, MCB);
 
 static int __mcb_devices_unregister(struct device *dev, void *data)
 {
@@ -325,7 +323,7 @@ void mcb_release_bus(struct mcb_bus *bus)
 {
 	mcb_devices_unregister(bus);
 }
-EXPORT_SYMBOL_GPL(mcb_release_bus);
+EXPORT_SYMBOL_NS_GPL(mcb_release_bus, MCB);
 
 /**
  * mcb_bus_put() - Increment refcnt
@@ -340,7 +338,7 @@ struct mcb_bus *mcb_bus_get(struct mcb_bus *bus)
 
 	return bus;
 }
-EXPORT_SYMBOL_GPL(mcb_bus_get);
+EXPORT_SYMBOL_NS_GPL(mcb_bus_get, MCB);
 
 /**
  * mcb_bus_put() - Decrement refcnt
@@ -353,7 +351,7 @@ void mcb_bus_put(struct mcb_bus *bus)
 	if (bus)
 		put_device(&bus->dev);
 }
-EXPORT_SYMBOL_GPL(mcb_bus_put);
+EXPORT_SYMBOL_NS_GPL(mcb_bus_put, MCB);
 
 /**
  * mcb_alloc_dev() - Allocate a device
@@ -369,12 +367,11 @@ struct mcb_device *mcb_alloc_dev(struct mcb_bus *bus)
 	if (!dev)
 		return NULL;
 
-	INIT_LIST_HEAD(&dev->bus_list);
 	dev->bus = bus;
 
 	return dev;
 }
-EXPORT_SYMBOL_GPL(mcb_alloc_dev);
+EXPORT_SYMBOL_NS_GPL(mcb_alloc_dev, MCB);
 
 /**
  * mcb_free_dev() - Free @mcb_device
@@ -386,7 +383,7 @@ void mcb_free_dev(struct mcb_device *dev)
 {
 	kfree(dev);
 }
-EXPORT_SYMBOL_GPL(mcb_free_dev);
+EXPORT_SYMBOL_NS_GPL(mcb_free_dev, MCB);
 
 static int __mcb_bus_add_devices(struct device *dev, void *data)
 {
@@ -405,20 +402,6 @@ static int __mcb_bus_add_devices(struct device *dev, void *data)
 	return 0;
 }
 
-static int __mcb_bus_add_child(struct device *dev, void *data)
-{
-	struct mcb_device *mdev = to_mcb_device(dev);
-	struct mcb_bus *child;
-
-	BUG_ON(!mdev->is_added);
-	child = mdev->subordinate;
-
-	if (child)
-		mcb_bus_add_devices(child);
-
-	return 0;
-}
-
 /**
  * mcb_bus_add_devices() - Add devices in the bus' internal device list
  * @bus: The @mcb_bus we add the devices
@@ -428,10 +411,24 @@ static int __mcb_bus_add_child(struct device *dev, void *data)
 void mcb_bus_add_devices(const struct mcb_bus *bus)
 {
 	bus_for_each_dev(&mcb_bus_type, NULL, NULL, __mcb_bus_add_devices);
-	bus_for_each_dev(&mcb_bus_type, NULL, NULL, __mcb_bus_add_child);
-
 }
-EXPORT_SYMBOL_GPL(mcb_bus_add_devices);
+EXPORT_SYMBOL_NS_GPL(mcb_bus_add_devices, MCB);
+
+/**
+ * mcb_get_resource() - get a resource for a mcb device
+ * @dev: the mcb device
+ * @type: the type of resource
+ */
+struct resource *mcb_get_resource(struct mcb_device *dev, unsigned int type)
+{
+	if (type == IORESOURCE_MEM)
+		return &dev->mem;
+	else if (type == IORESOURCE_IRQ)
+		return &dev->irq;
+	else
+		return NULL;
+}
+EXPORT_SYMBOL_NS_GPL(mcb_get_resource, MCB);
 
 /**
  * mcb_request_mem() - Request memory
@@ -457,7 +454,7 @@ struct resource *mcb_request_mem(struct mcb_device *dev, const char *name)
 
 	return mem;
 }
-EXPORT_SYMBOL_GPL(mcb_request_mem);
+EXPORT_SYMBOL_NS_GPL(mcb_request_mem, MCB);
 
 /**
  * mcb_release_mem() - Release memory requested by device
@@ -472,11 +469,13 @@ void mcb_release_mem(struct resource *mem)
 	size = resource_size(mem);
 	release_mem_region(mem->start, size);
 }
-EXPORT_SYMBOL_GPL(mcb_release_mem);
+EXPORT_SYMBOL_NS_GPL(mcb_release_mem, MCB);
 
 static int __mcb_get_irq(struct mcb_device *dev)
 {
-	struct resource *irq = &dev->irq;
+	struct resource *irq;
+
+	irq = mcb_get_resource(dev, IORESOURCE_IRQ);
 
 	return irq->start;
 }
@@ -496,7 +495,7 @@ int mcb_get_irq(struct mcb_device *dev)
 
 	return __mcb_get_irq(dev);
 }
-EXPORT_SYMBOL_GPL(mcb_get_irq);
+EXPORT_SYMBOL_NS_GPL(mcb_get_irq, MCB);
 
 static int mcb_init(void)
 {

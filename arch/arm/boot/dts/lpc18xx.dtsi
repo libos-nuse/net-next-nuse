@@ -20,6 +20,9 @@
 #define LPC_GPIO(port, pin)	(port * 32 + pin)
 
 / {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -112,7 +115,6 @@
 			compatible = "snps,dw-mshc";
 			reg = <0x40004000 0x1000>;
 			interrupts = <6>;
-			num-slots = <1>;
 			clocks = <&ccu2 CLK_SDIO>, <&ccu1 CLK_CPU_SDIO>;
 			clock-names = "ciu", "biu";
 			resets = <&rgu 20>;
@@ -186,6 +188,10 @@
 			clock-names = "stmmaceth";
 			resets = <&rgu 22>;
 			reset-names = "stmmaceth";
+			rx-fifo-depth = <256>;
+			tx-fifo-depth = <256>;
+			snps,pbl = <4>; /* 32 (8x mode) */
+			snps,force_thresh_dma_mode;
 			status = "disabled";
 		};
 

@@ -1,12 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2015, Christoph Hellwig.
  * Copyright (c) 2015, Intel Corporation.
  */
 #include <linux/platform_device.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/ioport.h>
 
-static int found(u64 start, u64 end, void *data)
+static int found(struct resource *res, void *data)
 {
 	return 1;
 }

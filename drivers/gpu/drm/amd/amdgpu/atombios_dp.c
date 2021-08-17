@@ -24,7 +24,7 @@
  *          Alex Deucher
  *          Jerome Glisse
  */
-#include <drm/drmP.h>
+
 #include <drm/amdgpu_drm.h>
 #include "amdgpu.h"
 
@@ -60,7 +60,7 @@ static int amdgpu_atombios_dp_process_aux_ch(struct amdgpu_i2c_chan *chan,
 				      u8 delay, u8 *ack)
 {
 	struct drm_device *dev = chan->dev;
-	struct amdgpu_device *adev = dev->dev_private;
+	struct amdgpu_device *adev = drm_to_adev(dev);
 	union aux_channel_transaction args;
 	int index = GetIndexIntoMasterTable(COMMAND, ProcessAuxChannelTransaction);
 	unsigned char *base;
@@ -88,7 +88,6 @@ static int amdgpu_atombios_dp_process_aux_ch(struct amdgpu_i2c_chan *chan,
 
 	/* timeout */
 	if (args.v2.ucReplyStatus == 1) {
-		DRM_DEBUG_KMS("dp_aux_ch timeout\n");
 		r = -ETIMEDOUT;
 		goto done;
 	}
@@ -187,16 +186,10 @@ amdgpu_atombios_dp_aux_transfer(struct drm_dp_aux *aux, struct drm_dp_aux_msg *m
 
 void amdgpu_atombios_dp_aux_init(struct amdgpu_connector *amdgpu_connector)
 {
-	int ret;
-
 	amdgpu_connector->ddc_bus->rec.hpd = amdgpu_connector->hpd.hpd;
-	amdgpu_connector->ddc_bus->aux.dev = amdgpu_connector->base.kdev;
 	amdgpu_connector->ddc_bus->aux.transfer = amdgpu_atombios_dp_aux_transfer;
-	ret = drm_dp_aux_register(&amdgpu_connector->ddc_bus->aux);
-	if (!ret)
-		amdgpu_connector->ddc_bus->has_aux = true;
-
-	WARN(ret, "drm_dp_aux_register_i2c_bus() failed with error %d\n", ret);
+	drm_dp_aux_init(&amdgpu_connector->ddc_bus->aux);
+	amdgpu_connector->ddc_bus->has_aux = true;
 }
 
 /***** general DP utility functions *****/
@@ -312,7 +305,7 @@ static u8 amdgpu_atombios_dp_encoder_service(struct amdgpu_device *adev,
 u8 amdgpu_atombios_dp_get_sinktype(struct amdgpu_connector *amdgpu_connector)
 {
 	struct drm_device *dev = amdgpu_connector->base.dev;
-	struct amdgpu_device *adev = dev->dev_private;
+	struct amdgpu_device *adev = drm_to_adev(dev);
 
 	return amdgpu_atombios_dp_encoder_service(adev, ATOM_DP_ACTION_GET_SINK_TYPE, 0,
 					   amdgpu_connector->ddc_bus->rec.i2c_id, 0);
@@ -335,26 +328,41 @@ static void amdgpu_atombios_dp_probe_oui(struct amdgpu_connector *amdgpu_connect
 			      buf[0], buf[1], buf[2]);
 }
 
+static void amdgpu_atombios_dp_ds_ports(struct amdgpu_connector *amdgpu_connector)
+{
+	struct amdgpu_connector_atom_dig *dig_connector = amdgpu_connector->con_priv;
+	int ret;
+
+	if (dig_connector->dpcd[DP_DPCD_REV] > 0x10) {
+		ret = drm_dp_dpcd_read(&amdgpu_connector->ddc_bus->aux,
+				       DP_DOWNSTREAM_PORT_0,
+				       dig_connector->downstream_ports,
+				       DP_MAX_DOWNSTREAM_PORTS);
+		if (ret)
+			memset(dig_connector->downstream_ports, 0,
+			       DP_MAX_DOWNSTREAM_PORTS);
+	}
+}
+
 int amdgpu_atombios_dp_get_dpcd(struct amdgpu_connector *amdgpu_connector)
 {
 	struct amdgpu_connector_atom_dig *dig_connector = amdgpu_connector->con_priv;
 	u8 msg[DP_DPCD_SIZE];
-	int ret, i;
+	int ret;
 
-	for (i = 0; i < 7; i++) {
-		ret = drm_dp_dpcd_read(&amdgpu_connector->ddc_bus->aux, DP_DPCD_REV, msg,
-				       DP_DPCD_SIZE);
-		if (ret == DP_DPCD_SIZE) {
-			memcpy(dig_connector->dpcd, msg, DP_DPCD_SIZE);
+	ret = drm_dp_dpcd_read(&amdgpu_connector->ddc_bus->aux, DP_DPCD_REV,
+			       msg, DP_DPCD_SIZE);
+	if (ret == DP_DPCD_SIZE) {
+		memcpy(dig_connector->dpcd, msg, DP_DPCD_SIZE);
 
-			DRM_DEBUG_KMS("DPCD: %*ph\n", (int)sizeof(dig_connector->dpcd),
-				      dig_connector->dpcd);
+		DRM_DEBUG_KMS("DPCD: %*ph\n", (int)sizeof(dig_connector->dpcd),
+			      dig_connector->dpcd);
 
-			amdgpu_atombios_dp_probe_oui(amdgpu_connector);
-
-			return 0;
-		}
+		amdgpu_atombios_dp_probe_oui(amdgpu_connector);
+		amdgpu_atombios_dp_ds_ports(amdgpu_connector);
+		return 0;
 	}
+
 	dig_connector->dpcd[0] = 0;
 	return -EINVAL;
 }
@@ -363,15 +371,12 @@ int amdgpu_atombios_dp_get_panel_mode(struct drm_encoder *encoder,
 			       struct drm_connector *connector)
 {
 	struct amdgpu_connector *amdgpu_connector = to_amdgpu_connector(connector);
-	struct amdgpu_connector_atom_dig *dig_connector;
 	int panel_mode = DP_PANEL_MODE_EXTERNAL_DP_MODE;
 	u16 dp_bridge = amdgpu_connector_encoder_get_dp_bridge_encoder_id(connector);
 	u8 tmp;
 
 	if (!amdgpu_connector->con_priv)
 		return panel_mode;
-
-	dig_connector = amdgpu_connector->con_priv;
 
 	if (dp_bridge != ENCODER_OBJECT_ID_NONE) {
 		/* DP bridge chips */
@@ -713,9 +718,8 @@ void amdgpu_atombios_dp_link_train(struct drm_encoder *encoder,
 			    struct drm_connector *connector)
 {
 	struct drm_device *dev = encoder->dev;
-	struct amdgpu_device *adev = dev->dev_private;
+	struct amdgpu_device *adev = drm_to_adev(dev);
 	struct amdgpu_encoder *amdgpu_encoder = to_amdgpu_encoder(encoder);
-	struct amdgpu_encoder_atom_dig *dig;
 	struct amdgpu_connector *amdgpu_connector;
 	struct amdgpu_connector_atom_dig *dig_connector;
 	struct amdgpu_atombios_dp_link_train_info dp_info;
@@ -723,7 +727,6 @@ void amdgpu_atombios_dp_link_train(struct drm_encoder *encoder,
 
 	if (!amdgpu_encoder->enc_priv)
 		return;
-	dig = amdgpu_encoder->enc_priv;
 
 	amdgpu_connector = to_amdgpu_connector(connector);
 	if (!amdgpu_connector->con_priv)

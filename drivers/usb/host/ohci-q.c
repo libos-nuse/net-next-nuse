@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-1.0+
 /*
  * OHCI HCD (Host Controller Driver) for USB.
  *
@@ -646,7 +647,7 @@ static void td_submit_urb (
 		/* ... and periodic urbs have extra accounting */
 		periodic = ohci_to_hcd(ohci)->self.bandwidth_int_reqs++ == 0
 			&& ohci_to_hcd(ohci)->self.bandwidth_isoc_reqs == 0;
-		/* FALLTHROUGH */
+		fallthrough;
 	case PIPE_BULK:
 		info = is_out
 			? TD_T_TOGGLE | TD_CC | TD_DP_OUT
@@ -878,11 +879,11 @@ static void ed_halted(struct ohci_hcd *ohci, struct td *td, int cc)
 	case TD_DATAUNDERRUN:
 		if ((urb->transfer_flags & URB_SHORT_NOT_OK) == 0)
 			break;
-		/* fallthrough */
+		fallthrough;
 	case TD_CC_STALL:
 		if (usb_pipecontrol (urb->pipe))
 			break;
-		/* fallthrough */
+		fallthrough;
 	default:
 		ohci_dbg (ohci,
 			"urb %p path %s ep%d%s %08x cc %d --> status %d\n",
@@ -1018,6 +1019,8 @@ skip_ed:
 		 * have modified this list.  normally it's just prepending
 		 * entries (which we'd ignore), but paranoia won't hurt.
 		 */
+		*last = ed->ed_next;
+		ed->ed_next = NULL;
 		modified = 0;
 
 		/* unlink urbs as requested, but rescan the list after
@@ -1076,21 +1079,22 @@ rescan_this:
 			goto rescan_this;
 
 		/*
-		 * If no TDs are queued, take ED off the ed_rm_list.
+		 * If no TDs are queued, ED is now idle.
 		 * Otherwise, if the HC is running, reschedule.
-		 * If not, leave it on the list for further dequeues.
+		 * If the HC isn't running, add ED back to the
+		 * start of the list for later processing.
 		 */
 		if (list_empty(&ed->td_list)) {
-			*last = ed->ed_next;
-			ed->ed_next = NULL;
 			ed->state = ED_IDLE;
 			list_del(&ed->in_use_list);
 		} else if (ohci->rh_state == OHCI_RH_RUNNING) {
-			*last = ed->ed_next;
-			ed->ed_next = NULL;
 			ed_schedule(ohci, ed);
 		} else {
-			last = &ed->ed_next;
+			ed->ed_next = ohci->ed_rm_list;
+			ohci->ed_rm_list = ed;
+			/* Don't loop on the same ED */
+			if (last == &ohci->ed_rm_list)
+				last = &ed->ed_next;
 		}
 
 		if (modified)

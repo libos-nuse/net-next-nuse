@@ -1,12 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * gmidi.c -- USB MIDI Gadget Driver
  *
  * Copyright (C) 2006 Thumtronics Pty Ltd.
  * Developed for Thumtronics by Grey Innovation
  * Ben Williamson <ben.williamson@greyinnovation.com>
- *
- * This software is distributed under the terms of the GNU General Public
- * License ("GPL") version 2, as published by the Free Software Foundation.
  *
  * This code is based in part on:
  *
@@ -47,7 +45,7 @@ static char *id = SNDRV_DEFAULT_STR1;
 module_param(id, charp, S_IRUGO);
 MODULE_PARM_DESC(id, "ID string for the USB MIDI Gadget adapter.");
 
-static unsigned int buflen = 256;
+static unsigned int buflen = 512;
 module_param(buflen, uint, S_IRUGO);
 MODULE_PARM_DESC(buflen, "MIDI buffer length");
 
@@ -176,7 +174,7 @@ put:
 }
 
 static struct usb_composite_driver midi_driver = {
-	.name		= (char *) longname,
+	.name		= longname,
 	.dev		= &device_desc,
 	.strings	= dev_strings,
 	.max_speed	= USB_SPEED_HIGH,

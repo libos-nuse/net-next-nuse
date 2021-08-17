@@ -1,19 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2014 Red Hat, Inc.
  * All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it would be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write the Free Software Foundation,
- * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #include "xfs.h"
@@ -22,9 +10,7 @@
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_sysfs.h"
-#include "xfs_log.h"
 #include "xfs_log_priv.h"
-#include "xfs_stats.h"
 #include "xfs_mount.h"
 
 struct xfs_sysfs_attr {
@@ -77,62 +63,7 @@ static const struct sysfs_ops xfs_sysfs_ops = {
 	.store = xfs_sysfs_object_store,
 };
 
-/*
- * xfs_mount kobject. The mp kobject also serves as the per-mount parent object
- * that is identified by the fsname under sysfs.
- */
-
-static inline struct xfs_mount *
-to_mp(struct kobject *kobject)
-{
-	struct xfs_kobj *kobj = to_kobj(kobject);
-
-	return container_of(kobj, struct xfs_mount, m_kobj);
-}
-
-#ifdef DEBUG
-
-STATIC ssize_t
-fail_writes_store(
-	struct kobject		*kobject,
-	const char		*buf,
-	size_t			count)
-{
-	struct xfs_mount	*mp = to_mp(kobject);
-	int			ret;
-	int			val;
-
-	ret = kstrtoint(buf, 0, &val);
-	if (ret)
-		return ret;
-
-	if (val == 1)
-		mp->m_fail_writes = true;
-	else if (val == 0)
-		mp->m_fail_writes = false;
-	else
-		return -EINVAL;
-
-	return count;
-}
-
-STATIC ssize_t
-fail_writes_show(
-	struct kobject		*kobject,
-	char			*buf)
-{
-	struct xfs_mount	*mp = to_mp(kobject);
-
-	return snprintf(buf, PAGE_SIZE, "%d\n", mp->m_fail_writes ? 1 : 0);
-}
-XFS_SYSFS_ATTR_RW(fail_writes);
-
-#endif /* DEBUG */
-
 static struct attribute *xfs_mp_attrs[] = {
-#ifdef DEBUG
-	ATTR_LIST(fail_writes),
-#endif
 	NULL,
 };
 
@@ -144,6 +75,38 @@ struct kobj_type xfs_mp_ktype = {
 
 #ifdef DEBUG
 /* debug */
+
+STATIC ssize_t
+bug_on_assert_store(
+	struct kobject		*kobject,
+	const char		*buf,
+	size_t			count)
+{
+	int			ret;
+	int			val;
+
+	ret = kstrtoint(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	if (val == 1)
+		xfs_globals.bug_on_assert = true;
+	else if (val == 0)
+		xfs_globals.bug_on_assert = false;
+	else
+		return -EINVAL;
+
+	return count;
+}
+
+STATIC ssize_t
+bug_on_assert_show(
+	struct kobject		*kobject,
+	char			*buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", xfs_globals.bug_on_assert ? 1 : 0);
+}
+XFS_SYSFS_ATTR_RW(bug_on_assert);
 
 STATIC ssize_t
 log_recovery_delay_store(
@@ -175,8 +138,104 @@ log_recovery_delay_show(
 }
 XFS_SYSFS_ATTR_RW(log_recovery_delay);
 
+STATIC ssize_t
+mount_delay_store(
+	struct kobject	*kobject,
+	const char	*buf,
+	size_t		count)
+{
+	int		ret;
+	int		val;
+
+	ret = kstrtoint(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	if (val < 0 || val > 60)
+		return -EINVAL;
+
+	xfs_globals.mount_delay = val;
+
+	return count;
+}
+
+STATIC ssize_t
+mount_delay_show(
+	struct kobject	*kobject,
+	char		*buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", xfs_globals.mount_delay);
+}
+XFS_SYSFS_ATTR_RW(mount_delay);
+
+static ssize_t
+always_cow_store(
+	struct kobject	*kobject,
+	const char	*buf,
+	size_t		count)
+{
+	ssize_t		ret;
+
+	ret = kstrtobool(buf, &xfs_globals.always_cow);
+	if (ret < 0)
+		return ret;
+	return count;
+}
+
+static ssize_t
+always_cow_show(
+	struct kobject	*kobject,
+	char		*buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", xfs_globals.always_cow);
+}
+XFS_SYSFS_ATTR_RW(always_cow);
+
+#ifdef DEBUG
+/*
+ * Override how many threads the parallel work queue is allowed to create.
+ * This has to be a debug-only global (instead of an errortag) because one of
+ * the main users of parallel workqueues is mount time quotacheck.
+ */
+STATIC ssize_t
+pwork_threads_store(
+	struct kobject	*kobject,
+	const char	*buf,
+	size_t		count)
+{
+	int		ret;
+	int		val;
+
+	ret = kstrtoint(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	if (val < -1 || val > num_possible_cpus())
+		return -EINVAL;
+
+	xfs_globals.pwork_threads = val;
+
+	return count;
+}
+
+STATIC ssize_t
+pwork_threads_show(
+	struct kobject	*kobject,
+	char		*buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", xfs_globals.pwork_threads);
+}
+XFS_SYSFS_ATTR_RW(pwork_threads);
+#endif /* DEBUG */
+
 static struct attribute *xfs_dbg_attrs[] = {
+	ATTR_LIST(bug_on_assert),
 	ATTR_LIST(log_recovery_delay),
+	ATTR_LIST(mount_delay),
+	ATTR_LIST(always_cow),
+#ifdef DEBUG
+	ATTR_LIST(pwork_threads),
+#endif
 	NULL,
 };
 
@@ -314,47 +373,11 @@ write_grant_head_show(
 }
 XFS_SYSFS_ATTR_RO(write_grant_head);
 
-#ifdef DEBUG
-STATIC ssize_t
-log_badcrc_factor_store(
-	struct kobject	*kobject,
-	const char	*buf,
-	size_t		count)
-{
-	struct xlog	*log = to_xlog(kobject);
-	int		ret;
-	uint32_t	val;
-
-	ret = kstrtouint(buf, 0, &val);
-	if (ret)
-		return ret;
-
-	log->l_badcrc_factor = val;
-
-	return count;
-}
-
-STATIC ssize_t
-log_badcrc_factor_show(
-	struct kobject	*kobject,
-	char		*buf)
-{
-	struct xlog	*log = to_xlog(kobject);
-
-	return snprintf(buf, PAGE_SIZE, "%d\n", log->l_badcrc_factor);
-}
-
-XFS_SYSFS_ATTR_RW(log_badcrc_factor);
-#endif	/* DEBUG */
-
 static struct attribute *xfs_log_attrs[] = {
 	ATTR_LIST(log_head_lsn),
 	ATTR_LIST(log_tail_lsn),
 	ATTR_LIST(reserve_grant_head),
 	ATTR_LIST(write_grant_head),
-#ifdef DEBUG
-	ATTR_LIST(log_badcrc_factor),
-#endif
 	NULL,
 };
 
@@ -393,9 +416,15 @@ max_retries_show(
 	struct kobject	*kobject,
 	char		*buf)
 {
+	int		retries;
 	struct xfs_error_cfg *cfg = to_error_cfg(kobject);
 
-	return snprintf(buf, PAGE_SIZE, "%d\n", cfg->max_retries);
+	if (cfg->max_retries == XFS_ERR_RETRY_FOREVER)
+		retries = -1;
+	else
+		retries = cfg->max_retries;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", retries);
 }
 
 static ssize_t
@@ -415,7 +444,10 @@ max_retries_store(
 	if (val < -1)
 		return -EINVAL;
 
-	cfg->max_retries = val;
+	if (val == -1)
+		cfg->max_retries = XFS_ERR_RETRY_FOREVER;
+	else
+		cfg->max_retries = val;
 	return count;
 }
 XFS_SYSFS_ATTR_RW(max_retries);
@@ -425,10 +457,15 @@ retry_timeout_seconds_show(
 	struct kobject	*kobject,
 	char		*buf)
 {
+	int		timeout;
 	struct xfs_error_cfg *cfg = to_error_cfg(kobject);
 
-	return snprintf(buf, PAGE_SIZE, "%ld\n",
-			jiffies_to_msecs(cfg->retry_timeout) / MSEC_PER_SEC);
+	if (cfg->retry_timeout == XFS_ERR_RETRY_FOREVER)
+		timeout = -1;
+	else
+		timeout = jiffies_to_msecs(cfg->retry_timeout) / MSEC_PER_SEC;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", timeout);
 }
 
 static ssize_t
@@ -445,11 +482,16 @@ retry_timeout_seconds_store(
 	if (ret)
 		return ret;
 
-	/* 1 day timeout maximum */
-	if (val < 0 || val > 86400)
+	/* 1 day timeout maximum, -1 means infinite */
+	if (val < -1 || val > 86400)
 		return -EINVAL;
 
-	cfg->retry_timeout = msecs_to_jiffies(val * MSEC_PER_SEC);
+	if (val == -1)
+		cfg->retry_timeout = XFS_ERR_RETRY_FOREVER;
+	else {
+		cfg->retry_timeout = msecs_to_jiffies(val * MSEC_PER_SEC);
+		ASSERT(msecs_to_jiffies(val * MSEC_PER_SEC) < LONG_MAX);
+	}
 	return count;
 }
 XFS_SYSFS_ATTR_RW(retry_timeout_seconds);
@@ -493,13 +535,13 @@ static struct attribute *xfs_error_attrs[] = {
 };
 
 
-struct kobj_type xfs_error_cfg_ktype = {
+static struct kobj_type xfs_error_cfg_ktype = {
 	.release = xfs_sysfs_release,
 	.sysfs_ops = &xfs_sysfs_ops,
 	.default_attrs = xfs_error_attrs,
 };
 
-struct kobj_type xfs_error_ktype = {
+static struct kobj_type xfs_error_ktype = {
 	.release = xfs_sysfs_release,
 	.sysfs_ops = &xfs_sysfs_ops,
 };
@@ -519,18 +561,19 @@ struct xfs_error_init {
 static const struct xfs_error_init xfs_error_meta_init[XFS_ERR_ERRNO_MAX] = {
 	{ .name = "default",
 	  .max_retries = XFS_ERR_RETRY_FOREVER,
-	  .retry_timeout = 0,
+	  .retry_timeout = XFS_ERR_RETRY_FOREVER,
 	},
 	{ .name = "EIO",
 	  .max_retries = XFS_ERR_RETRY_FOREVER,
-	  .retry_timeout = 0,
+	  .retry_timeout = XFS_ERR_RETRY_FOREVER,
 	},
 	{ .name = "ENOSPC",
 	  .max_retries = XFS_ERR_RETRY_FOREVER,
-	  .retry_timeout = 0,
+	  .retry_timeout = XFS_ERR_RETRY_FOREVER,
 	},
 	{ .name = "ENODEV",
-	  .max_retries = 0,
+	  .max_retries = 0,	/* We can't recover from devices disappearing */
+	  .retry_timeout = 0,
 	},
 };
 
@@ -561,7 +604,10 @@ xfs_error_sysfs_init_class(
 			goto out_error;
 
 		cfg->max_retries = init[i].max_retries;
-		cfg->retry_timeout = msecs_to_jiffies(
+		if (init[i].retry_timeout == XFS_ERR_RETRY_FOREVER)
+			cfg->retry_timeout = XFS_ERR_RETRY_FOREVER;
+		else
+			cfg->retry_timeout = msecs_to_jiffies(
 					init[i].retry_timeout * MSEC_PER_SEC);
 	}
 	return 0;
@@ -633,6 +679,9 @@ xfs_error_get_cfg(
 	int			error)
 {
 	struct xfs_error_cfg	*cfg;
+
+	if (error < 0)
+		error = -error;
 
 	switch (error) {
 	case EIO:

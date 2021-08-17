@@ -1,11 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
+ * AB8500 system control driver
+ *
  * Copyright (C) ST-Ericsson SA 2010
  * Author: Mattias Nilsson <mattias.i.nilsson@stericsson.com> for ST Ericsson.
- * License terms: GNU General Public License (GPL) version 2
  */
 
 #include <linux/err.h>
-#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/export.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/reboot.h>
@@ -98,7 +101,7 @@ int ab8500_sysctrl_read(u16 reg, u8 *value)
 	u8 bank;
 
 	if (sysctrl_dev == NULL)
-		return -EINVAL;
+		return -EPROBE_DEFER;
 
 	bank = (reg >> 8);
 	if (!valid_bank(bank))
@@ -114,11 +117,13 @@ int ab8500_sysctrl_write(u16 reg, u8 mask, u8 value)
 	u8 bank;
 
 	if (sysctrl_dev == NULL)
-		return -EINVAL;
+		return -EPROBE_DEFER;
 
 	bank = (reg >> 8);
-	if (!valid_bank(bank))
+	if (!valid_bank(bank)) {
+		pr_err("invalid bank\n");
 		return -EINVAL;
+	}
 
 	return abx500_mask_and_set_register_interruptible(sysctrl_dev, bank,
 		(u8)(reg & 0xFF), mask, value);
@@ -127,44 +132,10 @@ EXPORT_SYMBOL(ab8500_sysctrl_write);
 
 static int ab8500_sysctrl_probe(struct platform_device *pdev)
 {
-	struct ab8500 *ab8500 = dev_get_drvdata(pdev->dev.parent);
-	struct ab8500_platform_data *plat;
-	struct ab8500_sysctrl_platform_data *pdata;
-
-	plat = dev_get_platdata(pdev->dev.parent);
-
-	if (!plat)
-		return -EINVAL;
-
 	sysctrl_dev = &pdev->dev;
 
 	if (!pm_power_off)
 		pm_power_off = ab8500_power_off;
-
-	pdata = plat->sysctrl;
-	if (pdata) {
-		int last, ret, i, j;
-
-		if (is_ab8505(ab8500))
-			last = AB8500_SYSCLKREQ4RFCLKBUF;
-		else
-			last = AB8500_SYSCLKREQ8RFCLKBUF;
-
-		for (i = AB8500_SYSCLKREQ1RFCLKBUF; i <= last; i++) {
-			j = i - AB8500_SYSCLKREQ1RFCLKBUF;
-			ret = ab8500_sysctrl_write(i, 0xff,
-					pdata->initial_req_buf_config[j]);
-			dev_dbg(&pdev->dev,
-					"Setting SysClkReq%dRfClkBuf 0x%X\n",
-					j + 1,
-					pdata->initial_req_buf_config[j]);
-			if (ret < 0) {
-				dev_err(&pdev->dev,
-					"Can't set sysClkReq%dRfClkBuf: %d\n",
-					j + 1, ret);
-			}
-		}
-	}
 
 	return 0;
 }
@@ -179,9 +150,15 @@ static int ab8500_sysctrl_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static const struct of_device_id ab8500_sysctrl_match[] = {
+	{ .compatible = "stericsson,ab8500-sysctrl", },
+	{}
+};
+
 static struct platform_driver ab8500_sysctrl_driver = {
 	.driver = {
 		.name = "ab8500-sysctrl",
+		.of_match_table = ab8500_sysctrl_match,
 	},
 	.probe = ab8500_sysctrl_probe,
 	.remove = ab8500_sysctrl_remove,
@@ -192,7 +169,3 @@ static int __init ab8500_sysctrl_init(void)
 	return platform_driver_register(&ab8500_sysctrl_driver);
 }
 arch_initcall(ab8500_sysctrl_init);
-
-MODULE_AUTHOR("Mattias Nilsson <mattias.i.nilsson@stericsson.com");
-MODULE_DESCRIPTION("AB8500 system control driver");
-MODULE_LICENSE("GPL v2");

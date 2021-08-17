@@ -92,10 +92,9 @@ struct pnfs_block_volume {
 };
 
 struct pnfs_block_dev_map {
-	sector_t			start;
-	sector_t			len;
-
-	sector_t			disk_offset;
+	u64			start;
+	u64			len;
+	u64			disk_offset;
 	struct block_device		*bdev;
 };
 
@@ -141,6 +140,7 @@ struct pnfs_block_layout {
 	struct rb_root		bl_ext_ro;
 	spinlock_t		bl_ext_lock;   /* Protects list manipulation */
 	bool			bl_scsi_layout;
+	u64			bl_lwb;
 };
 
 static inline struct pnfs_block_layout *
@@ -182,7 +182,7 @@ int ext_tree_insert(struct pnfs_block_layout *bl,
 int ext_tree_remove(struct pnfs_block_layout *bl, bool rw, sector_t start,
 		sector_t end);
 int ext_tree_mark_written(struct pnfs_block_layout *bl, sector_t start,
-		sector_t len);
+		sector_t len, u64 lwb);
 bool ext_tree_lookup(struct pnfs_block_layout *bl, sector_t isect,
 		struct pnfs_block_extent *ret, bool rw);
 int ext_tree_prepare_commit(struct nfs4_layoutcommit_args *arg);

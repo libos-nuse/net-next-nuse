@@ -1,20 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Analog Devices AD9389B/AD9889B video encoder driver
  *
  * Copyright 2012 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
- *
- * This program is free software; you may redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
  */
 
 /*
@@ -98,7 +86,6 @@ struct ad9389b_state {
 	struct ad9389b_state_edid edid;
 	/* Running counter of the number of detected EDIDs (for debugging) */
 	unsigned edid_detect_counter;
-	struct workqueue_struct *work_queue;
 	struct delayed_work edid_handler; /* work entry */
 };
 
@@ -591,7 +578,7 @@ static const struct v4l2_dv_timings_cap ad9389b_timings_cap = {
 	.type = V4L2_DV_BT_656_1120,
 	/* keep this initialization for compatibility with GCC < 4.4.6 */
 	.reserved = { 0 },
-	V4L2_INIT_BT_TIMINGS(0, 1920, 0, 1200, 25000000, 170000000,
+	V4L2_INIT_BT_TIMINGS(640, 1920, 350, 1200, 25000000, 170000000,
 		V4L2_DV_BT_STD_CEA861 | V4L2_DV_BT_STD_DMT |
 			V4L2_DV_BT_STD_GTF | V4L2_DV_BT_STD_CVT,
 		V4L2_DV_BT_CAP_PROGRESSIVE | V4L2_DV_BT_CAP_REDUCED_BLANKING |
@@ -843,8 +830,7 @@ static void ad9389b_edid_handler(struct work_struct *work)
 			v4l2_dbg(1, debug, sd, "%s: edid read failed\n", __func__);
 			ad9389b_s_power(sd, false);
 			ad9389b_s_power(sd, true);
-			queue_delayed_work(state->work_queue,
-					   &state->edid_handler, EDID_DELAY);
+			schedule_delayed_work(&state->edid_handler, EDID_DELAY);
 			return;
 		}
 	}
@@ -933,8 +919,7 @@ static void ad9389b_update_monitor_present_status(struct v4l2_subdev *sd)
 		ad9389b_setup(sd);
 		ad9389b_notify_monitor_detect(sd);
 		state->edid.read_retries = EDID_MAX_RETRIES;
-		queue_delayed_work(state->work_queue,
-				   &state->edid_handler, EDID_DELAY);
+		schedule_delayed_work(&state->edid_handler, EDID_DELAY);
 	} else if (!(status & MASK_AD9389B_HPD_DETECT)) {
 		v4l2_dbg(1, debug, sd, "%s: hotplug not detected\n", __func__);
 		state->have_monitor = false;
@@ -1065,8 +1050,7 @@ static bool ad9389b_check_edid_status(struct v4l2_subdev *sd)
 		ad9389b_wr(sd, 0xc9, 0xf);
 		ad9389b_wr(sd, 0xc4, state->edid.segments);
 		state->edid.read_retries = EDID_MAX_RETRIES;
-		queue_delayed_work(state->work_queue,
-				   &state->edid_handler, EDID_DELAY);
+		schedule_delayed_work(&state->edid_handler, EDID_DELAY);
 		return false;
 	}
 
@@ -1150,6 +1134,7 @@ static int ad9389b_probe(struct i2c_client *client, const struct i2c_device_id *
 		goto err_hdl;
 	}
 	state->pad.flags = MEDIA_PAD_FL_SINK;
+	sd->entity.function = MEDIA_ENT_F_DV_ENCODER;
 	err = media_entity_pads_init(&sd->entity, 1, &state->pad);
 	if (err)
 		goto err_hdl;
@@ -1163,18 +1148,11 @@ static int ad9389b_probe(struct i2c_client *client, const struct i2c_device_id *
 	v4l2_dbg(1, debug, sd, "reg 0x41 0x%x, chip version (reg 0x00) 0x%x\n",
 		 ad9389b_rd(sd, 0x41), state->chip_revision);
 
-	state->edid_i2c_client = i2c_new_dummy(client->adapter, (0x7e>>1));
-	if (state->edid_i2c_client == NULL) {
+	state->edid_i2c_client = i2c_new_dummy_device(client->adapter, (0x7e >> 1));
+	if (IS_ERR(state->edid_i2c_client)) {
 		v4l2_err(sd, "failed to register edid i2c client\n");
-		err = -ENOMEM;
+		err = PTR_ERR(state->edid_i2c_client);
 		goto err_entity;
-	}
-
-	state->work_queue = create_singlethread_workqueue(sd->name);
-	if (state->work_queue == NULL) {
-		v4l2_err(sd, "could not create workqueue\n");
-		err = -ENOMEM;
-		goto err_unreg;
 	}
 
 	INIT_DELAYED_WORK(&state->edid_handler, ad9389b_edid_handler);
@@ -1187,8 +1165,6 @@ static int ad9389b_probe(struct i2c_client *client, const struct i2c_device_id *
 		  client->addr << 1, client->adapter->name);
 	return 0;
 
-err_unreg:
-	i2c_unregister_device(state->edid_i2c_client);
 err_entity:
 	media_entity_cleanup(&sd->entity);
 err_hdl:
@@ -1211,9 +1187,8 @@ static int ad9389b_remove(struct i2c_client *client)
 	ad9389b_s_stream(sd, false);
 	ad9389b_s_audio_stream(sd, false);
 	ad9389b_init_setup(sd);
-	cancel_delayed_work(&state->edid_handler);
+	cancel_delayed_work_sync(&state->edid_handler);
 	i2c_unregister_device(state->edid_i2c_client);
-	destroy_workqueue(state->work_queue);
 	v4l2_device_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);
 	v4l2_ctrl_handler_free(sd->ctrl_handler);
@@ -1222,7 +1197,7 @@ static int ad9389b_remove(struct i2c_client *client)
 
 /* ----------------------------------------------------------------------- */
 
-static struct i2c_device_id ad9389b_id[] = {
+static const struct i2c_device_id ad9389b_id[] = {
 	{ "ad9389b", 0 },
 	{ "ad9889b", 0 },
 	{ }
@@ -1231,7 +1206,6 @@ MODULE_DEVICE_TABLE(i2c, ad9389b_id);
 
 static struct i2c_driver ad9389b_driver = {
 	.driver = {
-		.owner = THIS_MODULE,
 		.name = "ad9389b",
 	},
 	.probe = ad9389b_probe,

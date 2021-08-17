@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ssi_protocol.c
  *
@@ -7,20 +8,6 @@
  * Copyright (C) 2013 Sebastian Reichel <sre@kernel.org>
  *
  * Contact: Carlos Chinea <carlos.chinea@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
  */
 
 #include <linux/atomic.h>
@@ -88,6 +75,8 @@ void ssi_waketest(struct hsi_client *cl, unsigned int enable);
 #define SSIP_READY_CMD		SSIP_CMD(SSIP_READY, 0)
 #define SSIP_SWBREAK_CMD	SSIP_CMD(SSIP_SW_BREAK, 0)
 
+#define SSIP_WAKETEST_FLAG 0
+
 /* Main state machine states */
 enum {
 	INIT,
@@ -116,7 +105,7 @@ enum {
  * @main_state: Main state machine
  * @send_state: TX state machine
  * @recv_state: RX state machine
- * @waketest: Flag to follow wake line test
+ * @flags: Flags, currently only used to follow wake line test
  * @rxid: RX data id
  * @txid: TX data id
  * @txqueue_len: TX queue length
@@ -137,7 +126,7 @@ struct ssi_protocol {
 	unsigned int		main_state;
 	unsigned int		send_state;
 	unsigned int		recv_state;
-	unsigned int		waketest:1;
+	unsigned long		flags;
 	u8			rxid;
 	u8			txid;
 	unsigned int		txqueue_len;
@@ -148,6 +137,7 @@ struct ssi_protocol {
 	struct net_device	*netdev;
 	struct list_head	txqueue;
 	struct list_head	cmdqueue;
+	struct work_struct	work;
 	struct hsi_client	*cl;
 	struct list_head	link;
 	atomic_t		tx_usecnt;
@@ -191,7 +181,8 @@ static void ssip_skb_to_msg(struct sk_buff *skb, struct hsi_msg *msg)
 		sg = sg_next(sg);
 		BUG_ON(!sg);
 		frag = &skb_shinfo(skb)->frags[i];
-		sg_set_page(sg, frag->page.p, frag->size, frag->page_offset);
+		sg_set_page(sg, skb_frag_page(frag), skb_frag_size(frag),
+				skb_frag_off(frag));
 	}
 }
 
@@ -300,7 +291,7 @@ static void ssip_set_rxstate(struct ssi_protocol *ssi, unsigned int state)
 		/* CMT speech workaround */
 		if (atomic_read(&ssi->tx_usecnt))
 			break;
-		/* Otherwise fall through */
+		fallthrough;
 	case RECEIVING:
 		mod_timer(&ssi->keep_alive, jiffies +
 						msecs_to_jiffies(SSIP_KATOUT));
@@ -405,15 +396,17 @@ static void ssip_reset(struct hsi_client *cl)
 	spin_lock_bh(&ssi->lock);
 	if (ssi->send_state != SEND_IDLE)
 		hsi_stop_tx(cl);
-	if (ssi->waketest)
-		ssi_waketest(cl, 0);
+	spin_unlock_bh(&ssi->lock);
+	if (test_and_clear_bit(SSIP_WAKETEST_FLAG, &ssi->flags))
+		ssi_waketest(cl, 0); /* FIXME: To be removed */
+	spin_lock_bh(&ssi->lock);
 	del_timer(&ssi->rx_wd);
 	del_timer(&ssi->tx_wd);
 	del_timer(&ssi->keep_alive);
 	ssi->main_state = 0;
 	ssi->send_state = 0;
 	ssi->recv_state = 0;
-	ssi->waketest = 0;
+	ssi->flags = 0;
 	ssi->rxid = 0;
 	ssi->txid = 0;
 	list_for_each_safe(head, tmp, &ssi->txqueue) {
@@ -437,7 +430,8 @@ static void ssip_dump_state(struct hsi_client *cl)
 	dev_err(&cl->device, "Send state: %d\n", ssi->send_state);
 	dev_err(&cl->device, "CMT %s\n", (ssi->main_state == ACTIVE) ?
 							"Online" : "Offline");
-	dev_err(&cl->device, "Wake test %d\n", ssi->waketest);
+	dev_err(&cl->device, "Wake test %d\n",
+				test_bit(SSIP_WAKETEST_FLAG, &ssi->flags));
 	dev_err(&cl->device, "Data RX id: %d\n", ssi->rxid);
 	dev_err(&cl->device, "Data TX id: %d\n", ssi->txid);
 
@@ -458,10 +452,10 @@ static void ssip_error(struct hsi_client *cl)
 	hsi_async_read(cl, msg);
 }
 
-static void ssip_keep_alive(unsigned long data)
+static void ssip_keep_alive(struct timer_list *t)
 {
-	struct hsi_client *cl = (struct hsi_client *)data;
-	struct ssi_protocol *ssi = hsi_client_drvdata(cl);
+	struct ssi_protocol *ssi = from_timer(ssi, t, keep_alive);
+	struct hsi_client *cl = ssi->cl;
 
 	dev_dbg(&cl->device, "Keep alive kick in: m(%d) r(%d) s(%d)\n",
 		ssi->main_state, ssi->recv_state, ssi->send_state);
@@ -472,9 +466,10 @@ static void ssip_keep_alive(unsigned long data)
 		case SEND_READY:
 			if (atomic_read(&ssi->tx_usecnt) == 0)
 				break;
+			fallthrough;
 			/*
-			 * Fall through. Workaround for cmt-speech
-			 * in that case we relay on audio timers.
+			 * Workaround for cmt-speech in that case
+			 * we relay on audio timers.
 			 */
 		case SEND_IDLE:
 			spin_unlock(&ssi->lock);
@@ -484,11 +479,21 @@ static void ssip_keep_alive(unsigned long data)
 	spin_unlock(&ssi->lock);
 }
 
-static void ssip_wd(unsigned long data)
+static void ssip_rx_wd(struct timer_list *t)
 {
-	struct hsi_client *cl = (struct hsi_client *)data;
+	struct ssi_protocol *ssi = from_timer(ssi, t, rx_wd);
+	struct hsi_client *cl = ssi->cl;
 
-	dev_err(&cl->device, "Watchdog trigerred\n");
+	dev_err(&cl->device, "Watchdog triggered\n");
+	ssip_error(cl);
+}
+
+static void ssip_tx_wd(struct timer_list *t)
+{
+	struct ssi_protocol *ssi = from_timer(ssi, t, tx_wd);
+	struct hsi_client *cl = ssi->cl;
+
+	dev_err(&cl->device, "Watchdog triggered\n");
 	ssip_error(cl);
 }
 
@@ -515,17 +520,17 @@ static void ssip_start_rx(struct hsi_client *cl)
 
 	dev_dbg(&cl->device, "RX start M(%d) R(%d)\n", ssi->main_state,
 						ssi->recv_state);
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	/*
 	 * We can have two UP events in a row due to a short low
 	 * high transition. Therefore we need to ignore the sencond UP event.
 	 */
 	if ((ssi->main_state != ACTIVE) || (ssi->recv_state == RECV_READY)) {
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		return;
 	}
 	ssip_set_rxstate(ssi, RECV_READY);
-	spin_unlock(&ssi->lock);
+	spin_unlock_bh(&ssi->lock);
 
 	msg = ssip_claim_cmd(ssi);
 	ssip_set_cmd(msg, SSIP_READY_CMD);
@@ -539,10 +544,10 @@ static void ssip_stop_rx(struct hsi_client *cl)
 	struct ssi_protocol *ssi = hsi_client_drvdata(cl);
 
 	dev_dbg(&cl->device, "RX stop M(%d)\n", ssi->main_state);
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	if (likely(ssi->main_state == ACTIVE))
 		ssip_set_rxstate(ssi, RECV_IDLE);
-	spin_unlock(&ssi->lock);
+	spin_unlock_bh(&ssi->lock);
 }
 
 static void ssip_free_strans(struct hsi_msg *msg)
@@ -559,9 +564,9 @@ static void ssip_strans_complete(struct hsi_msg *msg)
 
 	data = msg->context;
 	ssip_release_cmd(msg);
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	ssip_set_txstate(ssi, SENDING);
-	spin_unlock(&ssi->lock);
+	spin_unlock_bh(&ssi->lock);
 	hsi_async_write(cl, data);
 }
 
@@ -663,18 +668,20 @@ static void ssip_rx_bootinforeq(struct hsi_client *cl, u32 cmd)
 	case ACTIVE:
 		dev_err(&cl->device, "Boot info req on active state\n");
 		ssip_error(cl);
-		/* Fall through */
+		fallthrough;
 	case INIT:
 	case HANDSHAKE:
-		spin_lock(&ssi->lock);
+		spin_lock_bh(&ssi->lock);
 		ssi->main_state = HANDSHAKE;
-		if (!ssi->waketest) {
-			ssi->waketest = 1;
+		spin_unlock_bh(&ssi->lock);
+
+		if (!test_and_set_bit(SSIP_WAKETEST_FLAG, &ssi->flags))
 			ssi_waketest(cl, 1); /* FIXME: To be removed */
-		}
+
+		spin_lock_bh(&ssi->lock);
 		/* Start boot handshake watchdog */
 		mod_timer(&ssi->tx_wd, jiffies + msecs_to_jiffies(SSIP_WDTOUT));
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		dev_dbg(&cl->device, "Send BOOTINFO_RESP\n");
 		if (SSIP_DATA_VERSION(cmd) != SSIP_LOCAL_VERID)
 			dev_warn(&cl->device, "boot info req verid mismatch\n");
@@ -696,14 +703,14 @@ static void ssip_rx_bootinforesp(struct hsi_client *cl, u32 cmd)
 	if (SSIP_DATA_VERSION(cmd) != SSIP_LOCAL_VERID)
 		dev_warn(&cl->device, "boot info resp verid mismatch\n");
 
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	if (ssi->main_state != ACTIVE)
 		/* Use tx_wd as a boot watchdog in non ACTIVE state */
 		mod_timer(&ssi->tx_wd, jiffies + msecs_to_jiffies(SSIP_WDTOUT));
 	else
 		dev_dbg(&cl->device, "boot info resp ignored M(%d)\n",
 							ssi->main_state);
-	spin_unlock(&ssi->lock);
+	spin_unlock_bh(&ssi->lock);
 }
 
 static void ssip_rx_waketest(struct hsi_client *cl, u32 cmd)
@@ -711,20 +718,22 @@ static void ssip_rx_waketest(struct hsi_client *cl, u32 cmd)
 	struct ssi_protocol *ssi = hsi_client_drvdata(cl);
 	unsigned int wkres = SSIP_PAYLOAD(cmd);
 
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	if (ssi->main_state != HANDSHAKE) {
 		dev_dbg(&cl->device, "wake lines test ignored M(%d)\n",
 							ssi->main_state);
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		return;
 	}
-	if (ssi->waketest) {
-		ssi->waketest = 0;
+	spin_unlock_bh(&ssi->lock);
+
+	if (test_and_clear_bit(SSIP_WAKETEST_FLAG, &ssi->flags))
 		ssi_waketest(cl, 0); /* FIXME: To be removed */
-	}
+
+	spin_lock_bh(&ssi->lock);
 	ssi->main_state = ACTIVE;
 	del_timer(&ssi->tx_wd); /* Stop boot handshake timer */
-	spin_unlock(&ssi->lock);
+	spin_unlock_bh(&ssi->lock);
 
 	dev_notice(&cl->device, "WAKELINES TEST %s\n",
 				wkres & SSIP_WAKETEST_FAILED ? "FAILED" : "OK");
@@ -741,20 +750,20 @@ static void ssip_rx_ready(struct hsi_client *cl)
 {
 	struct ssi_protocol *ssi = hsi_client_drvdata(cl);
 
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	if (unlikely(ssi->main_state != ACTIVE)) {
 		dev_dbg(&cl->device, "READY on wrong state: S(%d) M(%d)\n",
 					ssi->send_state, ssi->main_state);
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		return;
 	}
 	if (ssi->send_state != WAIT4READY) {
 		dev_dbg(&cl->device, "Ignore spurious READY command\n");
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		return;
 	}
 	ssip_set_txstate(ssi, SEND_READY);
-	spin_unlock(&ssi->lock);
+	spin_unlock_bh(&ssi->lock);
 	ssip_xmit(cl);
 }
 
@@ -766,22 +775,22 @@ static void ssip_rx_strans(struct hsi_client *cl, u32 cmd)
 	int len = SSIP_PDU_LENGTH(cmd);
 
 	dev_dbg(&cl->device, "RX strans: %d frames\n", len);
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	if (unlikely(ssi->main_state != ACTIVE)) {
 		dev_err(&cl->device, "START TRANS wrong state: S(%d) M(%d)\n",
 					ssi->send_state, ssi->main_state);
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		return;
 	}
 	ssip_set_rxstate(ssi, RECEIVING);
 	if (unlikely(SSIP_MSG_ID(cmd) != ssi->rxid)) {
 		dev_err(&cl->device, "START TRANS id %d expected %d\n",
 					SSIP_MSG_ID(cmd), ssi->rxid);
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		goto out1;
 	}
 	ssi->rxid++;
-	spin_unlock(&ssi->lock);
+	spin_unlock_bh(&ssi->lock);
 	skb = netdev_alloc_skb(ssi->netdev, len * 4);
 	if (unlikely(!skb)) {
 		dev_err(&cl->device, "No memory for rx skb\n");
@@ -849,7 +858,7 @@ static void ssip_swbreak_complete(struct hsi_msg *msg)
 	struct ssi_protocol *ssi = hsi_client_drvdata(cl);
 
 	ssip_release_cmd(msg);
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	if (list_empty(&ssi->txqueue)) {
 		if (atomic_read(&ssi->tx_usecnt)) {
 			ssip_set_txstate(ssi, SEND_READY);
@@ -857,9 +866,9 @@ static void ssip_swbreak_complete(struct hsi_msg *msg)
 			ssip_set_txstate(ssi, SEND_IDLE);
 			hsi_stop_tx(cl);
 		}
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 	} else {
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		ssip_xmit(cl);
 	}
 	netif_wake_queue(ssi->netdev);
@@ -876,17 +885,17 @@ static void ssip_tx_data_complete(struct hsi_msg *msg)
 		ssip_error(cl);
 		goto out;
 	}
-	spin_lock(&ssi->lock);
+	spin_lock_bh(&ssi->lock);
 	if (list_empty(&ssi->txqueue)) {
 		ssip_set_txstate(ssi, SENDING_SWBREAK);
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		cmsg = ssip_claim_cmd(ssi);
 		ssip_set_cmd(cmsg, SSIP_SWBREAK_CMD);
 		cmsg->complete = ssip_swbreak_complete;
 		dev_dbg(&cl->device, "Send SWBREAK\n");
 		hsi_async_write(cl, cmsg);
 	} else {
-		spin_unlock(&ssi->lock);
+		spin_unlock_bh(&ssi->lock);
 		ssip_xmit(cl);
 	}
 out:
@@ -926,11 +935,11 @@ static int ssip_pn_open(struct net_device *dev)
 	}
 	dev_dbg(&cl->device, "Configuring SSI port\n");
 	hsi_setup(cl);
-	spin_lock_bh(&ssi->lock);
-	if (!ssi->waketest) {
-		ssi->waketest = 1;
+
+	if (!test_and_set_bit(SSIP_WAKETEST_FLAG, &ssi->flags))
 		ssi_waketest(cl, 1); /* FIXME: To be removed */
-	}
+
+	spin_lock_bh(&ssi->lock);
 	ssi->main_state = HANDSHAKE;
 	spin_unlock_bh(&ssi->lock);
 
@@ -950,13 +959,13 @@ static int ssip_pn_stop(struct net_device *dev)
 	return 0;
 }
 
-static int ssip_pn_set_mtu(struct net_device *dev, int new_mtu)
+static void ssip_xmit_work(struct work_struct *work)
 {
-	if (new_mtu > SSIP_MAX_MTU || new_mtu < PHONET_MIN_MTU)
-		return -EINVAL;
-	dev->mtu = new_mtu;
+	struct ssi_protocol *ssi =
+				container_of(work, struct ssi_protocol, work);
+	struct hsi_client *cl = ssi->cl;
 
-	return 0;
+	ssip_xmit(cl);
 }
 
 static int ssip_pn_xmit(struct sk_buff *skb, struct net_device *dev)
@@ -970,11 +979,11 @@ static int ssip_pn_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto drop;
 	/* Pad to 32-bits - FIXME: Revisit*/
 	if ((skb->len & 3) && skb_pad(skb, 4 - (skb->len & 3)))
-		goto drop;
+		goto inc_dropped;
 
 	/*
-	 * Modem sends Phonet messages over SSI with its own endianess...
-	 * Assume that modem has the same endianess as we do.
+	 * Modem sends Phonet messages over SSI with its own endianness.
+	 * Assume that modem has the same endianness as we do.
 	 */
 	if (skb_cow_head(skb, 0))
 		goto drop;
@@ -1011,7 +1020,7 @@ static int ssip_pn_xmit(struct sk_buff *skb, struct net_device *dev)
 		dev_dbg(&cl->device, "Start TX on SEND READY qlen %d\n",
 							ssi->txqueue_len);
 		spin_unlock_bh(&ssi->lock);
-		ssip_xmit(cl);
+		schedule_work(&ssi->work);
 	} else {
 		spin_unlock_bh(&ssi->lock);
 	}
@@ -1022,8 +1031,9 @@ static int ssip_pn_xmit(struct sk_buff *skb, struct net_device *dev)
 drop2:
 	hsi_free_msg(msg);
 drop:
-	dev->stats.tx_dropped++;
 	dev_kfree_skb(skb);
+inc_dropped:
+	dev->stats.tx_dropped++;
 
 	return 0;
 }
@@ -1041,7 +1051,6 @@ static const struct net_device_ops ssip_pn_ops = {
 	.ndo_open	= ssip_pn_open,
 	.ndo_stop	= ssip_pn_stop,
 	.ndo_start_xmit	= ssip_pn_xmit,
-	.ndo_change_mtu	= ssip_pn_set_mtu,
 };
 
 static void ssip_pn_setup(struct net_device *dev)
@@ -1056,7 +1065,7 @@ static void ssip_pn_setup(struct net_device *dev)
 	dev->addr_len		= 1;
 	dev->tx_queue_len	= SSIP_TXQUEUE_LEN;
 
-	dev->destructor		= free_netdev;
+	dev->needs_free_netdev	= true;
 	dev->header_ops		= &phonet_header_ops;
 }
 
@@ -1068,26 +1077,19 @@ static int ssi_protocol_probe(struct device *dev)
 	int err;
 
 	ssi = kzalloc(sizeof(*ssi), GFP_KERNEL);
-	if (!ssi) {
-		dev_err(dev, "No memory for ssi protocol\n");
+	if (!ssi)
 		return -ENOMEM;
-	}
 
 	spin_lock_init(&ssi->lock);
-	init_timer_deferrable(&ssi->rx_wd);
-	init_timer_deferrable(&ssi->tx_wd);
-	init_timer(&ssi->keep_alive);
-	ssi->rx_wd.data = (unsigned long)cl;
-	ssi->rx_wd.function = ssip_wd;
-	ssi->tx_wd.data = (unsigned long)cl;
-	ssi->tx_wd.function = ssip_wd;
-	ssi->keep_alive.data = (unsigned long)cl;
-	ssi->keep_alive.function = ssip_keep_alive;
+	timer_setup(&ssi->rx_wd, ssip_rx_wd, TIMER_DEFERRABLE);
+	timer_setup(&ssi->tx_wd, ssip_tx_wd, TIMER_DEFERRABLE);
+	timer_setup(&ssi->keep_alive, ssip_keep_alive, 0);
 	INIT_LIST_HEAD(&ssi->txqueue);
 	INIT_LIST_HEAD(&ssi->cmdqueue);
 	atomic_set(&ssi->tx_usecnt, 0);
 	hsi_client_set_drvdata(cl, ssi);
 	ssi->cl = cl;
+	INIT_WORK(&ssi->work, ssip_xmit_work);
 
 	ssi->channel_id_cmd = hsi_get_channel_id_by_name(cl, "mcsaab-control");
 	if (ssi->channel_id_cmd < 0) {
@@ -1115,6 +1117,10 @@ static int ssi_protocol_probe(struct device *dev)
 		err = -ENOMEM;
 		goto out1;
 	}
+
+	/* MTU range: 6 - 65535 */
+	ssi->netdev->min_mtu = PHONET_MIN_MTU;
+	ssi->netdev->max_mtu = SSIP_MAX_MTU;
 
 	SET_NETDEV_DEV(ssi->netdev, dev);
 	netif_carrier_off(ssi->netdev);

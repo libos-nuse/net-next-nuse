@@ -34,7 +34,7 @@ g84_mc_reset[] = {
 	{}
 };
 
-const struct nvkm_mc_map
+static const struct nvkm_mc_map
 g84_mc_intr[] = {
 	{ 0x04000000, NVKM_ENGINE_DISP },
 	{ 0x00020000, NVKM_ENGINE_VP },
@@ -57,7 +57,7 @@ g84_mc = {
 	.intr = g84_mc_intr,
 	.intr_unarm = nv04_mc_intr_unarm,
 	.intr_rearm = nv04_mc_intr_rearm,
-	.intr_mask = nv04_mc_intr_mask,
+	.intr_stat = nv04_mc_intr_stat,
 	.reset = g84_mc_reset,
 };
 

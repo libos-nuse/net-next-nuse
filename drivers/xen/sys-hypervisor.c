@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  copyright (c) 2006 IBM Corporation
  *  Authored by: Mike D. Day <ncmike@us.ibm.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 
 #include <linux/slab.h>
@@ -48,6 +45,35 @@ HYPERVISOR_ATTR_RO(type);
 static int __init xen_sysfs_type_init(void)
 {
 	return sysfs_create_file(hypervisor_kobj, &type_attr.attr);
+}
+
+static ssize_t guest_type_show(struct hyp_sysfs_attr *attr, char *buffer)
+{
+	const char *type;
+
+	switch (xen_domain_type) {
+	case XEN_NATIVE:
+		/* ARM only. */
+		type = "Xen";
+		break;
+	case XEN_PV_DOMAIN:
+		type = "PV";
+		break;
+	case XEN_HVM_DOMAIN:
+		type = xen_pvh_domain() ? "PVH" : "HVM";
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return sprintf(buffer, "%s\n", type);
+}
+
+HYPERVISOR_ATTR_RO(guest_type);
+
+static int __init xen_sysfs_guest_type_init(void)
+{
+	return sysfs_create_file(hypervisor_kobj, &guest_type_attr.attr);
 }
 
 /* xen version attributes */
@@ -215,7 +241,7 @@ static const struct attribute_group xen_compilation_group = {
 	.attrs = xen_compile_attrs,
 };
 
-static int __init xen_compilation_init(void)
+static int __init xen_sysfs_compilation_init(void)
 {
 	return sysfs_create_group(hypervisor_kobj, &xen_compilation_group);
 }
@@ -327,12 +353,40 @@ static ssize_t features_show(struct hyp_sysfs_attr *attr, char *buffer)
 
 HYPERVISOR_ATTR_RO(features);
 
+static ssize_t buildid_show(struct hyp_sysfs_attr *attr, char *buffer)
+{
+	ssize_t ret;
+	struct xen_build_id *buildid;
+
+	ret = HYPERVISOR_xen_version(XENVER_build_id, NULL);
+	if (ret < 0) {
+		if (ret == -EPERM)
+			ret = sprintf(buffer, "<denied>");
+		return ret;
+	}
+
+	buildid = kmalloc(sizeof(*buildid) + ret, GFP_KERNEL);
+	if (!buildid)
+		return -ENOMEM;
+
+	buildid->len = ret;
+	ret = HYPERVISOR_xen_version(XENVER_build_id, buildid);
+	if (ret > 0)
+		ret = sprintf(buffer, "%s", buildid->buf);
+	kfree(buildid);
+
+	return ret;
+}
+
+HYPERVISOR_ATTR_RO(buildid);
+
 static struct attribute *xen_properties_attrs[] = {
 	&capabilities_attr.attr,
 	&changeset_attr.attr,
 	&virtual_start_attr.attr,
 	&pagesize_attr.attr,
 	&features_attr.attr,
+	&buildid_attr.attr,
 	NULL
 };
 
@@ -341,7 +395,7 @@ static const struct attribute_group xen_properties_group = {
 	.attrs = xen_properties_attrs,
 };
 
-static int __init xen_properties_init(void)
+static int __init xen_sysfs_properties_init(void)
 {
 	return sysfs_create_group(hypervisor_kobj, &xen_properties_group);
 }
@@ -455,7 +509,7 @@ static const struct attribute_group xen_pmu_group = {
 	.attrs = xen_pmu_attrs,
 };
 
-static int __init xen_pmu_init(void)
+static int __init xen_sysfs_pmu_init(void)
 {
 	return sysfs_create_group(hypervisor_kobj, &xen_pmu_group);
 }
@@ -471,21 +525,24 @@ static int __init hyper_sysfs_init(void)
 	ret = xen_sysfs_type_init();
 	if (ret)
 		goto out;
+	ret = xen_sysfs_guest_type_init();
+	if (ret)
+		goto guest_type_out;
 	ret = xen_sysfs_version_init();
 	if (ret)
 		goto version_out;
-	ret = xen_compilation_init();
+	ret = xen_sysfs_compilation_init();
 	if (ret)
 		goto comp_out;
 	ret = xen_sysfs_uuid_init();
 	if (ret)
 		goto uuid_out;
-	ret = xen_properties_init();
+	ret = xen_sysfs_properties_init();
 	if (ret)
 		goto prop_out;
 #ifdef CONFIG_XEN_HAVE_VPMU
 	if (xen_initial_domain()) {
-		ret = xen_pmu_init();
+		ret = xen_sysfs_pmu_init();
 		if (ret) {
 			sysfs_remove_group(hypervisor_kobj,
 					   &xen_properties_group);
@@ -502,6 +559,8 @@ uuid_out:
 comp_out:
 	sysfs_remove_group(hypervisor_kobj, &version_group);
 version_out:
+	sysfs_remove_file(hypervisor_kobj, &guest_type_attr.attr);
+guest_type_out:
 	sysfs_remove_file(hypervisor_kobj, &type_attr.attr);
 out:
 	return ret;

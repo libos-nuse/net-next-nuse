@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * coupled.c - helper functions to enter the same idle state on multiple cpus
  *
  * Copyright (c) 2011 Google, Inc.
  *
  * Author: Colin Cross <ccross@android.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #include <linux/kernel.h>
@@ -98,6 +89,7 @@
  * @coupled_cpus: mask of cpus that are part of the coupled set
  * @requested_state: array of requested states for cpus in the coupled set
  * @ready_waiting_counts: combined count of cpus  in ready or waiting loops
+ * @abort_barrier: synchronisation point for abort cases
  * @online_count: count of cpus that are online
  * @refcnt: reference count of cpuidle devices that are using this struct
  * @prevent: flag to prevent coupled idle while a cpu is hotplugging
@@ -119,13 +111,13 @@ struct cpuidle_coupled {
 
 #define CPUIDLE_COUPLED_NOT_IDLE	(-1)
 
-static DEFINE_PER_CPU(struct call_single_data, cpuidle_coupled_poke_cb);
+static DEFINE_PER_CPU(call_single_data_t, cpuidle_coupled_poke_cb);
 
 /*
  * The cpuidle_coupled_poke_pending mask is used to avoid calling
- * __smp_call_function_single with the per cpu call_single_data struct already
+ * __smp_call_function_single with the per cpu call_single_data_t struct already
  * in use.  This prevents a deadlock where two cpus are waiting for each others
- * call_single_data struct to be available
+ * call_single_data_t struct to be available
  */
 static cpumask_t cpuidle_coupled_poke_pending;
 
@@ -339,7 +331,7 @@ static void cpuidle_coupled_handle_poke(void *info)
  */
 static void cpuidle_coupled_poke(int cpu)
 {
-	struct call_single_data *csd = &per_cpu(cpuidle_coupled_poke_cb, cpu);
+	call_single_data_t *csd = &per_cpu(cpuidle_coupled_poke_cb, cpu);
 
 	if (!cpumask_test_and_set_cpu(cpu, &cpuidle_coupled_poke_pending))
 		smp_call_function_single_async(cpu, csd);
@@ -347,7 +339,7 @@ static void cpuidle_coupled_poke(int cpu)
 
 /**
  * cpuidle_coupled_poke_others - wake up all other cpus that may be waiting
- * @dev: struct cpuidle_device for this cpu
+ * @this_cpu: target cpu
  * @coupled: the struct coupled that contains the current cpu
  *
  * Calls cpuidle_coupled_poke on all other online cpus.
@@ -364,7 +356,7 @@ static void cpuidle_coupled_poke_others(int this_cpu,
 
 /**
  * cpuidle_coupled_set_waiting - mark this cpu as in the wait loop
- * @dev: struct cpuidle_device for this cpu
+ * @cpu: target cpu
  * @coupled: the struct coupled that contains the current cpu
  * @next_state: the index in drv->states of the requested state for this cpu
  *
@@ -385,7 +377,7 @@ static int cpuidle_coupled_set_waiting(int cpu,
 
 /**
  * cpuidle_coupled_set_not_waiting - mark this cpu as leaving the wait loop
- * @dev: struct cpuidle_device for this cpu
+ * @cpu: target cpu
  * @coupled: the struct coupled that contains the current cpu
  *
  * Removes the requested idle state for the specified cpuidle device.
@@ -421,7 +413,7 @@ static void cpuidle_coupled_set_done(int cpu, struct cpuidle_coupled *coupled)
 
 /**
  * cpuidle_coupled_clear_pokes - spin until the poke interrupt is processed
- * @cpu - this cpu
+ * @cpu: this cpu
  *
  * Turns on interrupts and spins until any outstanding poke interrupts have
  * been processed and the poke bit has been cleared.
@@ -651,7 +643,7 @@ int cpuidle_coupled_register_device(struct cpuidle_device *dev)
 {
 	int cpu;
 	struct cpuidle_device *other_dev;
-	struct call_single_data *csd;
+	call_single_data_t *csd;
 	struct cpuidle_coupled *coupled;
 
 	if (cpumask_empty(&dev->coupled_cpus))
@@ -749,65 +741,52 @@ static void cpuidle_coupled_allow_idle(struct cpuidle_coupled *coupled)
 	put_cpu();
 }
 
-/**
- * cpuidle_coupled_cpu_notify - notifier called during hotplug transitions
- * @nb: notifier block
- * @action: hotplug transition
- * @hcpu: target cpu number
- *
- * Called when a cpu is brought on or offline using hotplug.  Updates the
- * coupled cpu set appropriately
- */
-static int cpuidle_coupled_cpu_notify(struct notifier_block *nb,
-		unsigned long action, void *hcpu)
+static int coupled_cpu_online(unsigned int cpu)
 {
-	int cpu = (unsigned long)hcpu;
 	struct cpuidle_device *dev;
-
-	switch (action & ~CPU_TASKS_FROZEN) {
-	case CPU_UP_PREPARE:
-	case CPU_DOWN_PREPARE:
-	case CPU_ONLINE:
-	case CPU_DEAD:
-	case CPU_UP_CANCELED:
-	case CPU_DOWN_FAILED:
-		break;
-	default:
-		return NOTIFY_OK;
-	}
 
 	mutex_lock(&cpuidle_lock);
 
 	dev = per_cpu(cpuidle_devices, cpu);
-	if (!dev || !dev->coupled)
-		goto out;
-
-	switch (action & ~CPU_TASKS_FROZEN) {
-	case CPU_UP_PREPARE:
-	case CPU_DOWN_PREPARE:
-		cpuidle_coupled_prevent_idle(dev->coupled);
-		break;
-	case CPU_ONLINE:
-	case CPU_DEAD:
+	if (dev && dev->coupled) {
 		cpuidle_coupled_update_online_cpus(dev->coupled);
-		/* Fall through */
-	case CPU_UP_CANCELED:
-	case CPU_DOWN_FAILED:
 		cpuidle_coupled_allow_idle(dev->coupled);
-		break;
 	}
 
-out:
 	mutex_unlock(&cpuidle_lock);
-	return NOTIFY_OK;
+	return 0;
 }
 
-static struct notifier_block cpuidle_coupled_cpu_notifier = {
-	.notifier_call = cpuidle_coupled_cpu_notify,
-};
+static int coupled_cpu_up_prepare(unsigned int cpu)
+{
+	struct cpuidle_device *dev;
+
+	mutex_lock(&cpuidle_lock);
+
+	dev = per_cpu(cpuidle_devices, cpu);
+	if (dev && dev->coupled)
+		cpuidle_coupled_prevent_idle(dev->coupled);
+
+	mutex_unlock(&cpuidle_lock);
+	return 0;
+}
 
 static int __init cpuidle_coupled_init(void)
 {
-	return register_cpu_notifier(&cpuidle_coupled_cpu_notifier);
+	int ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_CPUIDLE_COUPLED_PREPARE,
+					"cpuidle/coupled:prepare",
+					coupled_cpu_up_prepare,
+					coupled_cpu_online);
+	if (ret)
+		return ret;
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
+					"cpuidle/coupled:online",
+					coupled_cpu_online,
+					coupled_cpu_up_prepare);
+	if (ret < 0)
+		cpuhp_remove_state_nocalls(CPUHP_CPUIDLE_COUPLED_PREPARE);
+	return ret;
 }
 core_initcall(cpuidle_coupled_init);

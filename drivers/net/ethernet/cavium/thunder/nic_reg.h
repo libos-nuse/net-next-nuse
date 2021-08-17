@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2015 Cavium, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License
- * as published by the Free Software Foundation.
  */
 
 #ifndef NIC_REG_H
@@ -36,6 +33,20 @@
 #define   NIC_PF_MAILBOX_ENA_W1C		(0x0450)
 #define   NIC_PF_MAILBOX_ENA_W1S		(0x0470)
 #define   NIC_PF_RX_ETYPE_0_7			(0x0500)
+#define   NIC_PF_RX_GENEVE_DEF			(0x0580)
+#define    UDP_GENEVE_PORT_NUM				0x17C1ULL
+#define   NIC_PF_RX_GENEVE_PROT_DEF		(0x0588)
+#define    IPV6_PROT					0x86DDULL
+#define    IPV4_PROT					0x800ULL
+#define    ET_PROT					0x6558ULL
+#define   NIC_PF_RX_NVGRE_PROT_DEF		(0x0598)
+#define   NIC_PF_RX_VXLAN_DEF_0_1		(0x05A0)
+#define    UDP_VXLAN_PORT_NUM				0x12B5
+#define   NIC_PF_RX_VXLAN_PROT_DEF		(0x05B0)
+#define    IPV6_PROT_DEF				0x2ULL
+#define    IPV4_PROT_DEF				0x1ULL
+#define    ET_PROT_DEF					0x3ULL
+#define   NIC_PF_RX_CFG				(0x05D0)
 #define   NIC_PF_PKIND_0_15_CFG			(0x0600)
 #define   NIC_PF_ECC0_FLIP0			(0x1000)
 #define   NIC_PF_ECC1_FLIP0			(0x1008)
@@ -85,6 +96,7 @@
 #define   NIC_PF_ECC3_DBE_INT_W1S		(0x2708)
 #define   NIC_PF_ECC3_DBE_ENA_W1C		(0x2710)
 #define   NIC_PF_ECC3_DBE_ENA_W1S		(0x2718)
+#define   NIC_PF_INTFX_SEND_CFG			(0x4000)
 #define   NIC_PF_MCAM_0_191_ENA			(0x100000)
 #define   NIC_PF_MCAM_0_191_M_0_5_DATA		(0x110000)
 #define   NIC_PF_MCAM_CTRL			(0x120000)
@@ -92,6 +104,7 @@
 #define   NIC_PF_MPI_0_2047_CFG			(0x210000)
 #define   NIC_PF_RSSI_0_4097_RQ			(0x220000)
 #define   NIC_PF_LMAC_0_7_CFG			(0x240000)
+#define   NIC_PF_LMAC_0_7_CFG2			(0x240100)
 #define   NIC_PF_LMAC_0_7_SW_XOFF		(0x242000)
 #define   NIC_PF_LMAC_0_7_CREDIT		(0x244000)
 #define   NIC_PF_CHAN_0_255_TX_CFG		(0x400000)
@@ -103,6 +116,7 @@
 #define   NIC_PF_SW_SYNC_RX_DONE		(0x490008)
 #define   NIC_PF_TL2_0_63_CFG			(0x500000)
 #define   NIC_PF_TL2_0_63_PRI			(0x520000)
+#define   NIC_PF_TL2_LMAC			(0x540000)
 #define   NIC_PF_TL2_0_63_SH_STATUS		(0x580000)
 #define   NIC_PF_TL3A_0_63_CFG			(0x5F0000)
 #define   NIC_PF_TL3_0_255_CFG			(0x600000)
@@ -170,7 +184,6 @@
 #define   NIC_QSET_SQ_0_7_DOOR			(0x010838)
 #define   NIC_QSET_SQ_0_7_STATUS		(0x010840)
 #define   NIC_QSET_SQ_0_7_DEBUG			(0x010848)
-#define   NIC_QSET_SQ_0_7_CNM_CHG		(0x010860)
 #define   NIC_QSET_SQ_0_7_STAT_0_1		(0x010900)
 
 #define   NIC_QSET_RBDR_0_1_CFG			(0x010C00)

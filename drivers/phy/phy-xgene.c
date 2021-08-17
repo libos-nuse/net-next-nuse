@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * AppliedMicro X-Gene Multi-purpose PHY driver
  *
@@ -5,19 +6,6 @@
  * Author: Loc Ho <lho@apm.com>
  *         Tuan Phan <tphan@apm.com>
  *         Suman Tripathi <stripathi@apm.com>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * The APM X-Gene PHY consists of two PLL clock macro's (CMU) and lanes.
  * The first PLL clock macro is used for internal reference clock. The second
@@ -518,7 +506,7 @@ enum clk_type_t {
 	CLK_INT_SING = 2,	/* Internal single ended */
 };
 
-enum phy_mode {
+enum xgene_phy_mode {
 	MODE_SATA	= 0,	/* List them for simple reference */
 	MODE_SGMII	= 1,
 	MODE_PCIE	= 2,
@@ -542,7 +530,7 @@ struct xgene_sata_override_param {
 struct xgene_phy_ctx {
 	struct device *dev;
 	struct phy *phy;
-	enum phy_mode mode;		/* Mode of operation */
+	enum xgene_phy_mode mode;		/* Mode of operation */
 	enum clk_type_t clk_type;	/* Input clock selection */
 	void __iomem *sds_base;		/* PHY CSR base addr */
 	struct clk *clk;		/* Optional clock */
@@ -1354,7 +1342,7 @@ static int xgene_phy_hw_initialize(struct xgene_phy_ctx *ctx,
 static void xgene_phy_force_lat_summer_cal(struct xgene_phy_ctx *ctx, int lane)
 {
 	int i;
-	struct {
+	static const struct {
 		u32 reg;
 		u32 val;
 	} serdes_reg[] = {
@@ -1627,7 +1615,7 @@ static struct phy *xgene_phy_xlate(struct device *dev,
 
 	if (args->args_count <= 0)
 		return ERR_PTR(-EINVAL);
-	if (args->args[0] < MODE_SATA || args->args[0] >= MODE_MAX)
+	if (args->args[0] >= MODE_MAX)
 		return ERR_PTR(-EINVAL);
 
 	ctx->mode = args->args[0];

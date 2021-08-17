@@ -1,25 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * This contain platform specific code for APM PPC460EX based Canyonlands
  * board.
  *
  * Copyright (c) 2010, Applied Micro Circuits Corporation
  * Author: Rupjyoti Sarmah <rsarmah@apm.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
- *
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -53,11 +38,10 @@ machine_device_initcall(canyonlands, ppc460ex_device_probe);
 
 static int __init ppc460ex_probe(void)
 {
-	unsigned long root = of_get_flat_dt_root();
-	if (of_flat_dt_is_compatible(root, "amcc,canyonlands")) {
+	if (of_machine_is_compatible("amcc,canyonlands")) {
 		pci_set_flags(PCI_REASSIGN_ALL_RSRC);
 		return 1;
-		}
+	}
 	return 0;
 }
 

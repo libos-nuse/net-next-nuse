@@ -1,20 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * arch/arm/include/asm/hardware/cache-l2x0.h
  *
  * Copyright (C) 2007 ARM Limited
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #ifndef __ASM_ARM_HARDWARE_L2X0_H
@@ -87,6 +75,15 @@
 #define L310_CACHE_ID_RTL_R3P2		0x08
 #define L310_CACHE_ID_RTL_R3P3		0x09
 
+#define L2X0_EVENT_CNT_CTRL_ENABLE	BIT(0)
+
+#define L2X0_EVENT_CNT_CFG_SRC_SHIFT	2
+#define L2X0_EVENT_CNT_CFG_SRC_MASK	0xf
+#define L2X0_EVENT_CNT_CFG_SRC_DISABLED	0
+#define L2X0_EVENT_CNT_CFG_INT_DISABLED	0
+#define L2X0_EVENT_CNT_CFG_INT_INCR	1
+#define L2X0_EVENT_CNT_CFG_INT_OVERFLOW	2
+
 /* L2C auxiliary control register - bits common to L2C-210/220/310 */
 #define L2C_AUX_CTRL_WAY_SIZE_SHIFT		17
 #define L2C_AUX_CTRL_WAY_SIZE_MASK		(7 << 17)
@@ -121,6 +118,8 @@
 #define L310_AUX_CTRL_STORE_LIMITATION		BIT(11)	/* R2P0+ */
 #define L310_AUX_CTRL_EXCLUSIVE_CACHE		BIT(12)
 #define L310_AUX_CTRL_ASSOCIATIVITY_16		BIT(16)
+#define L310_AUX_CTRL_FWA_SHIFT			23
+#define L310_AUX_CTRL_FWA_MASK			(3 << 23)
 #define L310_AUX_CTRL_CACHE_REPLACE_RR		BIT(25)	/* R2P0+ */
 #define L310_AUX_CTRL_NS_LOCKDOWN		BIT(26)
 #define L310_AUX_CTRL_NS_INT_CTRL		BIT(27)
@@ -155,6 +154,16 @@ static inline int l2x0_of_init(u32 aux_val, u32 aux_mask)
 {
 	return -ENODEV;
 }
+#endif
+
+#ifdef CONFIG_CACHE_L2X0_PMU
+void l2x0_pmu_register(void __iomem *base, u32 part);
+void l2x0_pmu_suspend(void);
+void l2x0_pmu_resume(void);
+#else
+static inline void l2x0_pmu_register(void __iomem *base, u32 part) {}
+static inline void l2x0_pmu_suspend(void) {}
+static inline void l2x0_pmu_resume(void) {}
 #endif
 
 struct l2x0_regs {

@@ -1,11 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (C) 2013 Boris BREZILLON <b.brezillon@overkiz.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
  */
 
 #include <linux/clk-provider.h>
@@ -16,8 +11,6 @@
 #include <linux/regmap.h>
 
 #include "pmc.h"
-
-#define SMD_SOURCE_MAX		2
 
 #define SMD_DIV_SHIFT		8
 #define SMD_MAX_DIV		0xf
@@ -111,13 +104,14 @@ static const struct clk_ops at91sam9x5_smd_ops = {
 	.set_rate = at91sam9x5_clk_smd_set_rate,
 };
 
-static struct clk * __init
+struct clk_hw * __init
 at91sam9x5_clk_register_smd(struct regmap *regmap, const char *name,
 			    const char **parent_names, u8 num_parents)
 {
 	struct at91sam9x5_clk_smd *smd;
-	struct clk *clk = NULL;
+	struct clk_hw *hw;
 	struct clk_init_data init;
+	int ret;
 
 	smd = kzalloc(sizeof(*smd), GFP_KERNEL);
 	if (!smd)
@@ -132,39 +126,12 @@ at91sam9x5_clk_register_smd(struct regmap *regmap, const char *name,
 	smd->hw.init = &init;
 	smd->regmap = regmap;
 
-	clk = clk_register(NULL, &smd->hw);
-	if (IS_ERR(clk))
+	hw = &smd->hw;
+	ret = clk_hw_register(NULL, &smd->hw);
+	if (ret) {
 		kfree(smd);
+		hw = ERR_PTR(ret);
+	}
 
-	return clk;
+	return hw;
 }
-
-static void __init of_at91sam9x5_clk_smd_setup(struct device_node *np)
-{
-	struct clk *clk;
-	unsigned int num_parents;
-	const char *parent_names[SMD_SOURCE_MAX];
-	const char *name = np->name;
-	struct regmap *regmap;
-
-	num_parents = of_clk_get_parent_count(np);
-	if (num_parents == 0 || num_parents > SMD_SOURCE_MAX)
-		return;
-
-	of_clk_parent_fill(np, parent_names, num_parents);
-
-	of_property_read_string(np, "clock-output-names", &name);
-
-	regmap = syscon_node_to_regmap(of_get_parent(np));
-	if (IS_ERR(regmap))
-		return;
-
-	clk = at91sam9x5_clk_register_smd(regmap, name, parent_names,
-					  num_parents);
-	if (IS_ERR(clk))
-		return;
-
-	of_clk_add_provider(np, of_clk_src_simple_get, clk);
-}
-CLK_OF_DECLARE(at91sam9x5_clk_smd, "atmel,at91sam9x5-clk-smd",
-	       of_at91sam9x5_clk_smd_setup);

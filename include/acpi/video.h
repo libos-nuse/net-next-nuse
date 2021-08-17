@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ACPI_VIDEO_H
 #define __ACPI_VIDEO_H
 
@@ -30,6 +31,17 @@ struct acpi_device;
 #define ACPI_VIDEO_DISPLAY_LEGACY_PANEL   0x0110
 #define ACPI_VIDEO_DISPLAY_LEGACY_TV      0x0200
 
+#define ACPI_VIDEO_NOTIFY_SWITCH		0x80
+#define ACPI_VIDEO_NOTIFY_PROBE			0x81
+#define ACPI_VIDEO_NOTIFY_CYCLE			0x82
+#define ACPI_VIDEO_NOTIFY_NEXT_OUTPUT		0x83
+#define ACPI_VIDEO_NOTIFY_PREV_OUTPUT		0x84
+#define ACPI_VIDEO_NOTIFY_CYCLE_BRIGHTNESS	0x85
+#define ACPI_VIDEO_NOTIFY_INC_BRIGHTNESS	0x86
+#define ACPI_VIDEO_NOTIFY_DEC_BRIGHTNESS	0x87
+#define ACPI_VIDEO_NOTIFY_ZERO_BRIGHTNESS	0x88
+#define ACPI_VIDEO_NOTIFY_DISPLAY_OFF		0x89
+
 enum acpi_backlight_type {
 	acpi_backlight_undef = -1,
 	acpi_backlight_none = 0,
@@ -54,7 +66,7 @@ extern int acpi_video_get_levels(struct acpi_device *device,
 				 struct acpi_video_device_brightness **dev_br,
 				 int *pmax_level);
 #else
-static inline int acpi_video_register(void) { return 0; }
+static inline int acpi_video_register(void) { return -ENODEV; }
 static inline void acpi_video_unregister(void) { return; }
 static inline int acpi_video_get_edid(struct acpi_device *device, int type,
 				      int device_id, void **edid)

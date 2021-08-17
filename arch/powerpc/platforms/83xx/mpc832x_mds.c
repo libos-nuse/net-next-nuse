@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2006 Freescale Semiconductor, Inc. All rights reserved.
  *
  * Description:
  * MPC832xE MDS board specific routines.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/stddef.h>
@@ -37,7 +33,6 @@
 #include <sysdev/fsl_soc.h>
 #include <sysdev/fsl_pci.h>
 #include <soc/fsl/qe/qe.h>
-#include <soc/fsl/qe/qe_ic.h>
 
 #include "mpc83xx.h"
 
@@ -58,8 +53,7 @@ static void __init mpc832x_sys_setup_arch(void)
 	struct device_node *np;
 	u8 __iomem *bcsr_regs = NULL;
 
-	if (ppc_md.progress)
-		ppc_md.progress("mpc832x_sys_setup_arch()", 0);
+	mpc83xx_setup_arch();
 
 	/* Map BCSR area */
 	np = of_find_node_by_name(NULL, "bcsr");
@@ -71,14 +65,12 @@ static void __init mpc832x_sys_setup_arch(void)
 		of_node_put(np);
 	}
 
-	mpc83xx_setup_pci();
-
 #ifdef CONFIG_QUICC_ENGINE
 	if ((np = of_find_node_by_name(NULL, "par_io")) != NULL) {
 		par_io_init(np);
 		of_node_put(np);
 
-		for (np = NULL; (np = of_find_node_by_name(np, "ucc")) != NULL;)
+		for_each_node_by_name(np, "ucc")
 			par_io_of_config(np);
 	}
 
@@ -102,16 +94,14 @@ machine_device_initcall(mpc832x_mds, mpc83xx_declare_of_platform_devices);
  */
 static int __init mpc832x_sys_probe(void)
 {
-        unsigned long root = of_get_flat_dt_root();
-
-        return of_flat_dt_is_compatible(root, "MPC832xMDS");
+	return of_machine_is_compatible("MPC832xMDS");
 }
 
 define_machine(mpc832x_mds) {
 	.name 		= "MPC832x MDS",
 	.probe 		= mpc832x_sys_probe,
 	.setup_arch 	= mpc832x_sys_setup_arch,
-	.init_IRQ	= mpc83xx_ipic_and_qe_init_IRQ,
+	.init_IRQ	= mpc83xx_ipic_init_IRQ,
 	.get_irq 	= ipic_get_irq,
 	.restart 	= mpc83xx_restart,
 	.time_init 	= mpc83xx_time_init,

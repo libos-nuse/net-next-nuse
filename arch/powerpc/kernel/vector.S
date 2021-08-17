@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <asm/processor.h>
 #include <asm/ppc_asm.h>
 #include <asm/reg.h>
@@ -6,31 +7,8 @@
 #include <asm/thread_info.h>
 #include <asm/page.h>
 #include <asm/ptrace.h>
-
-#ifdef CONFIG_PPC_TRANSACTIONAL_MEM
-/* void do_load_up_transact_altivec(struct thread_struct *thread)
- *
- * This is similar to load_up_altivec but for the transactional version of the
- * vector regs.  It doesn't mess with the task MSR or valid flags.
- * Furthermore, VEC laziness is not supported with TM currently.
- */
-_GLOBAL(do_load_up_transact_altivec)
-	mfmsr	r6
-	oris	r5,r6,MSR_VEC@h
-	MTMSRD(r5)
-	isync
-
-	li	r4,1
-	stw	r4,THREAD_USED_VR(r3)
-
-	li	r10,THREAD_TRANSACT_VRSTATE+VRSTATE_VSCR
-	lvx	v0,r10,r3
-	mtvscr	v0
-	addi	r10,r3,THREAD_TRANSACT_VRSTATE
-	REST_32VRS(0,r4,r10)
-
-	blr
-#endif
+#include <asm/export.h>
+#include <asm/asm-compat.h>
 
 /*
  * Load state from memory into VMX registers including VSCR.
@@ -42,6 +20,8 @@ _GLOBAL(load_vr_state)
 	mtvscr	v0
 	REST_32VRS(0,r4,r3)
 	blr
+EXPORT_SYMBOL(load_vr_state)
+_ASM_NOKPROBE_SYMBOL(load_vr_state); /* used by restore_math */
 
 /*
  * Store VMX state into memory, including VSCR.
@@ -53,6 +33,7 @@ _GLOBAL(store_vr_state)
 	li	r4, VRSTATE_VSCR
 	stvx	v0, r4, r3
 	blr
+EXPORT_SYMBOL(store_vr_state)
 
 /*
  * Disable VMX for the task which had it previously,
@@ -70,10 +51,11 @@ _GLOBAL(load_up_altivec)
 	MTMSRD(r5)			/* enable use of AltiVec now */
 	isync
 
-	/* Hack: if we get an altivec unavailable trap with VRSAVE
-	 * set to all zeros, we assume this is a broken application
-	 * that fails to set it properly, and thus we switch it to
-	 * all 1's
+	/*
+	 * While userspace in general ignores VRSAVE, glibc uses it as a boolean
+	 * to optimise userspace context save/restore. Whenever we take an
+	 * altivec unavailable exception we must set VRSAVE to something non
+	 * zero. Set it to all 1s. See also the programming note in the ISA.
 	 */
 	mfspr	r4,SPRN_VRSAVE
 	cmpwi	0,r4,0
@@ -85,15 +67,16 @@ _GLOBAL(load_up_altivec)
 #ifdef CONFIG_PPC32
 	mfspr	r5,SPRN_SPRG_THREAD		/* current task's THREAD (phys) */
 	oris	r9,r9,MSR_VEC@h
+#ifdef CONFIG_VMAP_STACK
+	tovirt(r5, r5)
+#endif
 #else
 	ld	r4,PACACURRENT(r13)
 	addi	r5,r4,THREAD		/* Get THREAD */
 	oris	r12,r12,MSR_VEC@h
 	std	r12,_MSR(r1)
 #endif
-	/* Don't care if r4 overflows, this is desired behaviour */
-	lbz	r4,THREAD_LOAD_VEC(r5)
-	addi	r4,r4,1
+	li	r4,1
 	stb	r4,THREAD_LOAD_VEC(r5)
 	addi	r6,r5,THREAD_VRSTATE
 	li	r4,1
@@ -104,6 +87,7 @@ _GLOBAL(load_up_altivec)
 	REST_32VRS(0,r4,r6)
 	/* restore registers and return */
 	blr
+_ASM_NOKPROBE_SYMBOL(load_up_altivec)
 
 /*
  * save_altivec(tsk)
@@ -149,7 +133,7 @@ _GLOBAL(load_up_vsx)
 	/* enable use of VSX after return */
 	oris	r12,r12,MSR_VSX@h
 	std	r12,_MSR(r1)
-	b	fast_exception_return
+	b	fast_interrupt_return
 
 #endif /* CONFIG_VSX */
 

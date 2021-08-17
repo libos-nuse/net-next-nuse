@@ -9,14 +9,15 @@
 
 #include <linux/init.h>
 #include <linux/bitops.h>
-#include <linux/bootmem.h>
-#include <linux/clk-provider.h>
+#include <linux/memblock.h>
 #include <linux/ioport.h>
 #include <linux/kernel.h>
 #include <linux/io.h>
 #include <linux/of.h>
+#include <linux/of_clk.h>
 #include <linux/of_fdt.h>
 #include <linux/of_platform.h>
+#include <linux/libfdt.h>
 #include <linux/smp.h>
 #include <asm/addrspace.h>
 #include <asm/bmips.h>
@@ -98,7 +99,7 @@ static void bcm6328_quirks(void)
 static void bcm6358_quirks(void)
 {
 	/*
-	 * BCM6358 needs special handling for its shared TLB, so
+	 * BCM3368/BCM6358 need special handling for their shared TLB, so
 	 * disable SMP for now
 	 */
 	bmips_smp_enabled = 0;
@@ -110,10 +111,12 @@ static void bcm6368_quirks(void)
 }
 
 static const struct bmips_quirk bmips_quirk_list[] = {
+	{ "brcm,bcm3368",		&bcm6358_quirks			},
 	{ "brcm,bcm3384-viper",		&bcm3384_viper_quirks		},
 	{ "brcm,bcm33843-viper",	&bcm3384_viper_quirks		},
 	{ "brcm,bcm6328",		&bcm6328_quirks			},
 	{ "brcm,bcm6358",		&bcm6358_quirks			},
+	{ "brcm,bcm6362",		&bcm6368_quirks			},
 	{ "brcm,bcm6368",		&bcm6368_quirks			},
 	{ "brcm,bcm63168",		&bcm6368_quirks			},
 	{ "brcm,bcm63268",		&bcm6368_quirks			},
@@ -159,11 +162,11 @@ void __init plat_mem_setup(void)
 	ioport_resource.start = 0;
 	ioport_resource.end = ~0;
 
-	/* intended to somewhat resemble ARM; see Documentation/arm/Booting */
+	/* intended to somewhat resemble ARM; see Documentation/arm/booting.rst */
 	if (fw_arg0 == 0 && fw_arg1 == 0xffffffff)
 		dtb = phys_to_virt(fw_arg2);
-	else if (fw_arg0 == -2) /* UHI interface */
-		dtb = (void *)fw_arg1;
+	else if (fw_passed_dtb) /* UHI interface or appended dtb */
+		dtb = (void *)fw_passed_dtb;
 	else if (__dtb_start != __dtb_end)
 		dtb = (void *)__dtb_start;
 	else
@@ -191,13 +194,6 @@ void __init device_tree_init(void)
 		bmips_smp_enabled = 0;
 	of_node_put(np);
 }
-
-int __init plat_of_setup(void)
-{
-	return __dt_register_buses("simple-bus", NULL);
-}
-
-arch_initcall(plat_of_setup);
 
 static int __init plat_dev_init(void)
 {

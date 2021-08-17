@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 / {
 	compatible = "cdns,xtensa-xtfpga";
 	#address-cells = <1>;
@@ -19,9 +20,7 @@
 		cpu@0 {
 			compatible = "cdns,xtensa-cpu";
 			reg = <0>;
-			/* Filled in by platform_setup from FPGA register
-			 * clock-frequency = <100000000>;
-			 */
+			clocks = <&osc>;
 		};
 	};
 
@@ -36,11 +35,6 @@
 	};
 
 	clocks {
-		osc: main-oscillator {
-			#clock-cells = <0>;
-			compatible = "fixed-clock";
-		};
-
 		clk54: clk54 {
 			#clock-cells = <0>;
 			compatible = "fixed-clock";
@@ -53,6 +47,12 @@
 		#size-cells = <1>;
 		compatible = "simple-bus";
 		ranges = <0x00000000 0xf0000000 0x10000000>;
+
+		osc: main-oscillator {
+			#clock-cells = <0>;
+			compatible = "cdns,xtfpga-clock";
+			reg = <0x0d020004 0x4>;
+		};
 
 		serial0: serial@0d050020 {
 			device_type = "serial";
@@ -103,7 +103,7 @@
 			};
 		};
 
-		spi0: spi-master@0d0a0000 {
+		spi0: spi@0d0a0000 {
 			compatible = "cdns,xtfpga-spi";
 			#address-cells = <1>;
 			#size-cells = <0>;

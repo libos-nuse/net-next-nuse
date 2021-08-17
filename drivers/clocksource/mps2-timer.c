@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2015 ARM Limited
  *
  * Author: Vladimir Murzin <vladimir.murzin@arm.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
@@ -153,9 +149,9 @@ static int __init mps2_clockevent_init(struct device_node *np)
 	ce->clkevt.rating = 200;
 	ce->clkevt.features = CLOCK_EVT_FEAT_PERIODIC | CLOCK_EVT_FEAT_ONESHOT;
 	ce->clkevt.cpumask = cpu_possible_mask;
-	ce->clkevt.set_state_shutdown	= mps2_timer_shutdown,
-	ce->clkevt.set_state_periodic	= mps2_timer_set_periodic,
-	ce->clkevt.set_state_oneshot	= mps2_timer_shutdown,
+	ce->clkevt.set_state_shutdown	= mps2_timer_shutdown;
+	ce->clkevt.set_state_periodic	= mps2_timer_set_periodic;
+	ce->clkevt.set_state_oneshot	= mps2_timer_shutdown;
 	ce->clkevt.set_next_event	= mps2_timer_set_next_event;
 
 	/* Ensure timer is disabled */
@@ -250,7 +246,7 @@ out:
 	return ret;
 }
 
-static void __init mps2_timer_init(struct device_node *np)
+static int __init mps2_timer_init(struct device_node *np)
 {
 	static int has_clocksource, has_clockevent;
 	int ret;
@@ -259,7 +255,7 @@ static void __init mps2_timer_init(struct device_node *np)
 		ret = mps2_clocksource_init(np);
 		if (!ret) {
 			has_clocksource = 1;
-			return;
+			return 0;
 		}
 	}
 
@@ -267,9 +263,11 @@ static void __init mps2_timer_init(struct device_node *np)
 		ret = mps2_clockevent_init(np);
 		if (!ret) {
 			has_clockevent = 1;
-			return;
+			return 0;
 		}
 	}
+
+	return 0;
 }
 
-CLOCKSOURCE_OF_DECLARE(mps2_timer, "arm,mps2-timer", mps2_timer_init);
+TIMER_OF_DECLARE(mps2_timer, "arm,mps2-timer", mps2_timer_init);

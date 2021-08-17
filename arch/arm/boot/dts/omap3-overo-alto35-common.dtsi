@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2014 Florian Vaussard, EPFL Mobots group
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 /*
@@ -44,7 +41,7 @@
 		#size-cells = <0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&button_pins>;
-		button0@10 {
+		button0 {
 			label = "button0";
 			linux,code = <BTN_0>;
 			gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;		/* gpio_10 */

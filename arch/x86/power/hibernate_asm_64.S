@@ -1,7 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Hibernation support for x86-64
- *
- * Distribute under GPLv2.
  *
  * Copyright 2007 Rafael J. Wysocki <rjw@sisk.pl>
  * Copyright 2005 Andi Kleen <ak@suse.de>
@@ -23,8 +22,7 @@
 #include <asm/processor-flags.h>
 #include <asm/frame.h>
 
-ENTRY(swsusp_arch_suspend)
-	FRAME_BEGIN
+SYM_FUNC_START(swsusp_arch_suspend)
 	movq	$saved_context, %rax
 	movq	%rsp, pt_regs_sp(%rax)
 	movq	%rbp, pt_regs_bp(%rax)
@@ -44,44 +42,44 @@ ENTRY(swsusp_arch_suspend)
 	pushfq
 	popq	pt_regs_flags(%rax)
 
-	/* save the address of restore_registers */
-	movq	$restore_registers, %rax
-	movq	%rax, restore_jump_address(%rip)
 	/* save cr3 */
 	movq	%cr3, %rax
 	movq	%rax, restore_cr3(%rip)
 
+	FRAME_BEGIN
 	call swsusp_save
 	FRAME_END
 	ret
-ENDPROC(swsusp_arch_suspend)
+SYM_FUNC_END(swsusp_arch_suspend)
 
-ENTRY(restore_image)
-	/* switch to temporary page tables */
-	movq	$__PAGE_OFFSET, %rdx
-	movq	temp_level4_pgt(%rip), %rax
-	subq	%rdx, %rax
-	movq	%rax, %cr3
-	/* Flush TLB */
-	movq	mmu_cr4_features(%rip), %rax
-	movq	%rax, %rdx
-	andq	$~(X86_CR4_PGE), %rdx
-	movq	%rdx, %cr4;  # turn off PGE
-	movq	%cr3, %rcx;  # flush TLB
-	movq	%rcx, %cr3;
-	movq	%rax, %cr4;  # turn PGE back on
-
+SYM_CODE_START(restore_image)
 	/* prepare to jump to the image kernel */
-	movq	restore_jump_address(%rip), %rax
-	movq	restore_cr3(%rip), %rbx
+	movq	restore_jump_address(%rip), %r8
+	movq	restore_cr3(%rip), %r9
+
+	/* prepare to switch to temporary page tables */
+	movq	temp_pgt(%rip), %rax
+	movq	mmu_cr4_features(%rip), %rbx
 
 	/* prepare to copy image data to their original locations */
 	movq	restore_pblist(%rip), %rdx
+
+	/* jump to relocated restore code */
 	movq	relocated_restore_code(%rip), %rcx
 	jmpq	*%rcx
+SYM_CODE_END(restore_image)
 
 	/* code below has been relocated to a safe page */
-ENTRY(core_restore_code)
+SYM_CODE_START(core_restore_code)
+	/* switch to temporary page tables */
+	movq	%rax, %cr3
+	/* flush TLB */
+	movq	%rbx, %rcx
+	andq	$~(X86_CR4_PGE), %rcx
+	movq	%rcx, %cr4;  # turn off PGE
+	movq	%cr3, %rcx;  # flush TLB
+	movq	%rcx, %cr3;
+	movq	%rbx, %cr4;  # turn PGE back on
 .Lloop:
 	testq	%rdx, %rdx
 	jz	.Ldone
@@ -96,24 +94,17 @@ ENTRY(core_restore_code)
 	/* progress to the next pbe */
 	movq	pbe_next(%rdx), %rdx
 	jmp	.Lloop
+
 .Ldone:
 	/* jump to the restore_registers address from the image header */
-	jmpq	*%rax
-	/*
-	 * NOTE: This assumes that the boot kernel's text mapping covers the
-	 * image kernel's page containing restore_registers and the address of
-	 * this page is the same as in the image kernel's text mapping (it
-	 * should always be true, because the text mapping is linear, starting
-	 * from 0, and is supposed to cover the entire kernel text for every
-	 * kernel).
-	 *
-	 * code below belongs to the image kernel
-	 */
+	jmpq	*%r8
+SYM_CODE_END(core_restore_code)
 
-ENTRY(restore_registers)
-	FRAME_BEGIN
+	 /* code below belongs to the image kernel */
+	.align PAGE_SIZE
+SYM_FUNC_START(restore_registers)
 	/* go back to the original page tables */
-	movq    %rbx, %cr3
+	movq    %r9, %cr3
 
 	/* Flush TLB, including "global" things (vmalloc) */
 	movq	mmu_cr4_features(%rip), %rax
@@ -147,11 +138,10 @@ ENTRY(restore_registers)
 	/* Saved in save_processor_state. */
 	lgdt	saved_context_gdt_desc(%rax)
 
-	xorq	%rax, %rax
+	xorl	%eax, %eax
 
 	/* tell the hibernation core that we've just restored the memory */
 	movq	%rax, in_suspend(%rip)
 
-	FRAME_END
 	ret
-ENDPROC(restore_registers)
+SYM_FUNC_END(restore_registers)

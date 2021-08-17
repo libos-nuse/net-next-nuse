@@ -1,17 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * rz Core CPG Clocks
+ * RZ/A1 Core CPG Clocks
  *
  * Copyright (C) 2013 Ideas On Board SPRL
  * Copyright (C) 2014 Wolfram Sang, Sang Engineering <wsa@sang-engineering.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License.
  */
 
 #include <linux/clk-provider.h>
 #include <linux/clk/renesas.h>
 #include <linux/init.h>
+#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -25,9 +23,30 @@ struct rz_cpg {
 #define CPG_FRQCR	0x10
 #define CPG_FRQCR2	0x14
 
+#define PPR0		0xFCFE3200
+#define PIBC0		0xFCFE7000
+
+#define MD_CLK(x)	((x >> 2) & 1)	/* P0_2 */
+
 /* -----------------------------------------------------------------------------
  * Initialization
  */
+
+static u16 __init rz_cpg_read_mode_pins(void)
+{
+	void __iomem *ppr0, *pibc0;
+	u16 modes;
+
+	ppr0 = ioremap(PPR0, 2);
+	pibc0 = ioremap(PIBC0, 2);
+	BUG_ON(!ppr0 || !pibc0);
+	iowrite16(4, pibc0);	/* enable input buffer */
+	modes = ioread16(ppr0);
+	iounmap(ppr0);
+	iounmap(pibc0);
+
+	return modes;
+}
 
 static struct clk * __init
 rz_cpg_register_clock(struct device_node *np, struct rz_cpg *cpg, const char *name)
@@ -37,8 +56,7 @@ rz_cpg_register_clock(struct device_node *np, struct rz_cpg *cpg, const char *na
 	static const unsigned frqcr_tab[4] = { 3, 2, 0, 1 };
 
 	if (strcmp(name, "pll") == 0) {
-		/* FIXME: cpg_mode should be read from GPIO. But no GPIO support yet */
-		unsigned cpg_mode = 0; /* hardcoded to EXTAL for now */
+		unsigned int cpg_mode = MD_CLK(rz_cpg_read_mode_pins());
 		const char *parent_name = of_clk_get_parent_name(np, cpg_mode);
 
 		mult = cpg_mode ? (32 / 4) : 30;
@@ -55,9 +73,9 @@ rz_cpg_register_clock(struct device_node *np, struct rz_cpg *cpg, const char *na
 	 * let them run at fixed current speed and implement the details later.
 	 */
 	if (strcmp(name, "i") == 0)
-		val = (clk_readl(cpg->reg + CPG_FRQCR) >> 8) & 3;
+		val = (readl(cpg->reg + CPG_FRQCR) >> 8) & 3;
 	else if (strcmp(name, "g") == 0)
-		val = clk_readl(cpg->reg + CPG_FRQCR2) & 3;
+		val = readl(cpg->reg + CPG_FRQCR2) & 3;
 	else
 		return ERR_PTR(-EINVAL);
 
@@ -77,7 +95,7 @@ static void __init rz_cpg_clocks_init(struct device_node *np)
 		return;
 
 	cpg = kzalloc(sizeof(*cpg), GFP_KERNEL);
-	clks = kzalloc(num_clks * sizeof(*clks), GFP_KERNEL);
+	clks = kcalloc(num_clks, sizeof(*clks), GFP_KERNEL);
 	BUG_ON(!cpg || !clks);
 
 	cpg->data.clks = clks;
@@ -93,8 +111,8 @@ static void __init rz_cpg_clocks_init(struct device_node *np)
 
 		clk = rz_cpg_register_clock(np, cpg, name);
 		if (IS_ERR(clk))
-			pr_err("%s: failed to register %s %s clock (%ld)\n",
-			       __func__, np->name, name, PTR_ERR(clk));
+			pr_err("%s: failed to register %pOFn %s clock (%ld)\n",
+			       __func__, np, name, PTR_ERR(clk));
 		else
 			cpg->data.clks[i] = clk;
 	}

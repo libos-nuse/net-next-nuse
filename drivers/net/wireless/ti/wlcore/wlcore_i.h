@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * This file is part of wl1271
  *
@@ -5,21 +6,6 @@
  * Copyright (C) 2008-2009 Nokia Corporation
  *
  * Contact: Luciano Coelho <luciano.coelho@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #ifndef __WLCORE_I_H__
@@ -35,12 +21,11 @@
 #include "conf.h"
 #include "ini.h"
 
-/*
- * wl127x and wl128x are using the same NVS file name. However, the
- * ini parameters between them are different.  The driver validates
- * the correct NVS size in wl1271_boot_upload_nvs().
- */
-#define WL12XX_NVS_NAME "ti-connectivity/wl1271-nvs.bin"
+struct wilink_family_data {
+	const char *name;
+	const char *nvs_name;	/* wl12xx nvs file */
+	const char *cfg_name;	/* wl18xx cfg file */
+};
 
 #define WL1271_TX_SECURITY_LO16(s) ((u16)((s) & 0xffff))
 #define WL1271_TX_SECURITY_HI32(s) ((u32)(((s) >> 16) & 0xffffffff))
@@ -171,6 +156,12 @@ struct wl_fw_status {
 
 		/* Tx rate of the last transmitted packet */
 		u8 tx_last_rate;
+
+		/* Tx rate or Tx rate estimate pre calculated by fw in mbps */
+		u8 tx_last_rate_mbps;
+
+		/* hlid for which the rates were reported */
+		u8 hlid;
 	} counters;
 
 	u32 log_start_addr;
@@ -202,6 +193,7 @@ struct wl1271_if_operations {
 
 struct wlcore_platdev_data {
 	struct wl1271_if_operations *if_ops;
+	const struct wilink_family_data *family;
 
 	bool ref_clock_xtal;	/* specify whether the clock is XTAL or not */
 	u32 ref_clock_freq;	/* in Hertz */
@@ -220,6 +212,7 @@ struct wl1271_ap_key {
 	u8 hlid;
 	u32 tx_seq_32;
 	u16 tx_seq_16;
+	bool is_pairwise;
 };
 
 enum wl12xx_flags {
@@ -227,7 +220,6 @@ enum wl12xx_flags {
 	WL1271_FLAG_TX_QUEUE_STOPPED,
 	WL1271_FLAG_TX_PENDING,
 	WL1271_FLAG_IN_ELP,
-	WL1271_FLAG_ELP_REQUESTED,
 	WL1271_FLAG_IRQ_RUNNING,
 	WL1271_FLAG_FW_TX_BUSY,
 	WL1271_FLAG_DUMMY_PACKET_PENDING,
@@ -272,6 +264,12 @@ struct wl1271_link {
 
 	/* bitmap of TIDs where RX BA sessions are active for this link */
 	u8 ba_bitmap;
+
+	/* the last fw rate index we used for this link */
+	u8 fw_rate_idx;
+
+	/* the last fw rate [Mbps] we used for this link */
+	u8 fw_rate_mbps;
 
 	/* The wlvif this link belongs to. Might be null for global links */
 	struct wl12xx_vif *wlvif;
@@ -472,6 +470,7 @@ struct wl12xx_vif {
 
 	/* update rate conrol */
 	enum ieee80211_sta_rx_bandwidth rc_update_bw;
+	struct ieee80211_sta_ht_cap rc_ht_cap;
 	struct work_struct rc_update_work;
 
 	/*

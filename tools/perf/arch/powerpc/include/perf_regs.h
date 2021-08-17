@@ -1,9 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef ARCH_PERF_REGS_H
 #define ARCH_PERF_REGS_H
 
 #include <stdlib.h>
 #include <linux/types.h>
 #include <asm/perf_regs.h>
+
+void perf_regs_load(u64 *regs);
 
 #define PERF_REGS_MASK  ((1ULL << PERF_REG_POWERPC_MAX) - 1)
 #define PERF_REGS_MAX   PERF_REG_POWERPC_MAX
@@ -59,7 +62,15 @@ static const char *reg_names[] = {
 	[PERF_REG_POWERPC_SOFTE] = "softe",
 	[PERF_REG_POWERPC_TRAP] = "trap",
 	[PERF_REG_POWERPC_DAR] = "dar",
-	[PERF_REG_POWERPC_DSISR] = "dsisr"
+	[PERF_REG_POWERPC_DSISR] = "dsisr",
+	[PERF_REG_POWERPC_SIER] = "sier",
+	[PERF_REG_POWERPC_MMCRA] = "mmcra",
+	[PERF_REG_POWERPC_MMCR0] = "mmcr0",
+	[PERF_REG_POWERPC_MMCR1] = "mmcr1",
+	[PERF_REG_POWERPC_MMCR2] = "mmcr2",
+	[PERF_REG_POWERPC_MMCR3] = "mmcr3",
+	[PERF_REG_POWERPC_SIER2] = "sier2",
+	[PERF_REG_POWERPC_SIER3] = "sier3",
 };
 
 static inline const char *perf_reg_name(int id)

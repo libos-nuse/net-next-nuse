@@ -59,7 +59,7 @@
 			interrupts = <0 10 IRQ_TYPE_LEVEL_HIGH>;
 		};
 
-		L2: l2-cache {
+		L2: cache-controller {
 			compatible = "arm,l220-cache";
 			reg = <0x1f002000 0x1000>;
 			interrupt-parent = <&intc>;
@@ -148,11 +148,6 @@
 &kmi1 {
 	interrupt-parent = <&intc>;
 	interrupts = <0 8 IRQ_TYPE_LEVEL_HIGH>;
-};
-
-&charlcd {
-	interrupt-parent = <&intc>;
-	interrupts = <0  IRQ_TYPE_LEVEL_HIGH>;
 };
 
 &serial0 {

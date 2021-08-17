@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/drivers/mfd/ucb1x00-core.c
  *
  *  Copyright (C) 2001 Russell King, All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License.
  *
  *  The UCB1x00 core driver provides basic services for handling IO,
  *  the ADC, interrupts, and accessing registers.  It is designed
@@ -446,10 +443,6 @@ static int ucb1x00_detect_irq(struct ucb1x00 *ucb)
 	unsigned long mask;
 
 	mask = probe_irq_on();
-	if (!mask) {
-		probe_irq_off(mask);
-		return NO_IRQ;
-	}
 
 	/*
 	 * Enable the ADC interrupt.
@@ -541,7 +534,7 @@ static int ucb1x00_probe(struct mcp *mcp)
 	ucb1x00_enable(ucb);
 	ucb->irq = ucb1x00_detect_irq(ucb);
 	ucb1x00_disable(ucb);
-	if (ucb->irq == NO_IRQ) {
+	if (!ucb->irq) {
 		dev_err(&ucb->dev, "IRQ probe failed\n");
 		ret = -ENODEV;
 		goto err_no_irq;

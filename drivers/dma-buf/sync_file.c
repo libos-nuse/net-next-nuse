@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/dma-buf/sync_file.c
  *
  * Copyright (C) 2012 Google, Inc.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #include <linux/export.h>
@@ -28,11 +19,11 @@
 
 static const struct file_operations sync_file_fops;
 
-static struct sync_file *sync_file_alloc(int size)
+static struct sync_file *sync_file_alloc(void)
 {
 	struct sync_file *sync_file;
 
-	sync_file = kzalloc(size, GFP_KERNEL);
+	sync_file = kzalloc(sizeof(*sync_file), GFP_KERNEL);
 	if (!sync_file)
 		return NULL;
 
@@ -41,9 +32,9 @@ static struct sync_file *sync_file_alloc(int size)
 	if (IS_ERR(sync_file->file))
 		goto err;
 
-	kref_init(&sync_file->kref);
-
 	init_waitqueue_head(&sync_file->wq);
+
+	INIT_LIST_HEAD(&sync_file->cb.node);
 
 	return sync_file;
 
@@ -52,58 +43,38 @@ err:
 	return NULL;
 }
 
-static void fence_check_cb_func(struct fence *f, struct fence_cb *cb)
+static void fence_check_cb_func(struct dma_fence *f, struct dma_fence_cb *cb)
 {
-	struct sync_file_cb *check;
 	struct sync_file *sync_file;
 
-	check = container_of(cb, struct sync_file_cb, cb);
-	sync_file = check->sync_file;
+	sync_file = container_of(cb, struct sync_file, cb);
 
-	if (atomic_dec_and_test(&sync_file->status))
-		wake_up_all(&sync_file->wq);
+	wake_up_all(&sync_file->wq);
 }
 
 /**
  * sync_file_create() - creates a sync file
  * @fence:	fence to add to the sync_fence
  *
- * Creates a sync_file containg @fence. Once this is called, the sync_file
- * takes ownership of @fence. The sync_file can be released with
- * fput(sync_file->file). Returns the sync_file or NULL in case of error.
+ * Creates a sync_file containg @fence. This function acquires and additional
+ * reference of @fence for the newly-created &sync_file, if it succeeds. The
+ * sync_file can be released with fput(sync_file->file). Returns the
+ * sync_file or NULL in case of error.
  */
-struct sync_file *sync_file_create(struct fence *fence)
+struct sync_file *sync_file_create(struct dma_fence *fence)
 {
 	struct sync_file *sync_file;
 
-	sync_file = sync_file_alloc(offsetof(struct sync_file, cbs[1]));
+	sync_file = sync_file_alloc();
 	if (!sync_file)
 		return NULL;
 
-	sync_file->num_fences = 1;
-	atomic_set(&sync_file->status, 1);
-	snprintf(sync_file->name, sizeof(sync_file->name), "%s-%s%d-%d",
-		 fence->ops->get_driver_name(fence),
-		 fence->ops->get_timeline_name(fence), fence->context,
-		 fence->seqno);
-
-	sync_file->cbs[0].fence = fence;
-	sync_file->cbs[0].sync_file = sync_file;
-	if (fence_add_callback(fence, &sync_file->cbs[0].cb,
-			       fence_check_cb_func))
-		atomic_dec(&sync_file->status);
+	sync_file->fence = dma_fence_get(fence);
 
 	return sync_file;
 }
 EXPORT_SYMBOL(sync_file_create);
 
-/**
- * sync_file_fdget() - get a sync_file from an fd
- * @fd:		fd referencing a fence
- *
- * Ensures @fd references a valid sync_file, increments the refcount of the
- * backing file. Returns the sync_file or NULL in case of error.
- */
 static struct sync_file *sync_file_fdget(int fd)
 {
 	struct file *file = fget(fd);
@@ -121,15 +92,107 @@ err:
 	return NULL;
 }
 
-static void sync_file_add_pt(struct sync_file *sync_file, int *i,
-			     struct fence *fence)
+/**
+ * sync_file_get_fence - get the fence related to the sync_file fd
+ * @fd:		sync_file fd to get the fence from
+ *
+ * Ensures @fd references a valid sync_file and returns a fence that
+ * represents all fence in the sync_file. On error NULL is returned.
+ */
+struct dma_fence *sync_file_get_fence(int fd)
 {
-	sync_file->cbs[*i].fence = fence;
-	sync_file->cbs[*i].sync_file = sync_file;
+	struct sync_file *sync_file;
+	struct dma_fence *fence;
 
-	if (!fence_add_callback(fence, &sync_file->cbs[*i].cb,
-				fence_check_cb_func)) {
-		fence_get(fence);
+	sync_file = sync_file_fdget(fd);
+	if (!sync_file)
+		return NULL;
+
+	fence = dma_fence_get(sync_file->fence);
+	fput(sync_file->file);
+
+	return fence;
+}
+EXPORT_SYMBOL(sync_file_get_fence);
+
+/**
+ * sync_file_get_name - get the name of the sync_file
+ * @sync_file:		sync_file to get the fence from
+ * @buf:		destination buffer to copy sync_file name into
+ * @len:		available size of destination buffer.
+ *
+ * Each sync_file may have a name assigned either by the user (when merging
+ * sync_files together) or created from the fence it contains. In the latter
+ * case construction of the name is deferred until use, and so requires
+ * sync_file_get_name().
+ *
+ * Returns: a string representing the name.
+ */
+char *sync_file_get_name(struct sync_file *sync_file, char *buf, int len)
+{
+	if (sync_file->user_name[0]) {
+		strlcpy(buf, sync_file->user_name, len);
+	} else {
+		struct dma_fence *fence = sync_file->fence;
+
+		snprintf(buf, len, "%s-%s%llu-%lld",
+			 fence->ops->get_driver_name(fence),
+			 fence->ops->get_timeline_name(fence),
+			 fence->context,
+			 fence->seqno);
+	}
+
+	return buf;
+}
+
+static int sync_file_set_fence(struct sync_file *sync_file,
+			       struct dma_fence **fences, int num_fences)
+{
+	struct dma_fence_array *array;
+
+	/*
+	 * The reference for the fences in the new sync_file and held
+	 * in add_fence() during the merge procedure, so for num_fences == 1
+	 * we already own a new reference to the fence. For num_fence > 1
+	 * we own the reference of the dma_fence_array creation.
+	 */
+	if (num_fences == 1) {
+		sync_file->fence = fences[0];
+		kfree(fences);
+	} else {
+		array = dma_fence_array_create(num_fences, fences,
+					       dma_fence_context_alloc(1),
+					       1, false);
+		if (!array)
+			return -ENOMEM;
+
+		sync_file->fence = &array->base;
+	}
+
+	return 0;
+}
+
+static struct dma_fence **get_fences(struct sync_file *sync_file,
+				     int *num_fences)
+{
+	if (dma_fence_is_array(sync_file->fence)) {
+		struct dma_fence_array *array = to_dma_fence_array(sync_file->fence);
+
+		*num_fences = array->num_fences;
+		return array->fences;
+	}
+
+	*num_fences = 1;
+	return &sync_file->fence;
+}
+
+static void add_fence(struct dma_fence **fences,
+		      int *i, struct dma_fence *fence)
+{
+	fences[*i] = fence;
+
+	if (!dma_fence_is_signaled(fence)) {
+		dma_fence_get(fence);
 		(*i)++;
 	}
 }
@@ -147,16 +210,24 @@ static void sync_file_add_pt(struct sync_file *sync_file, int *i,
 static struct sync_file *sync_file_merge(const char *name, struct sync_file *a,
 					 struct sync_file *b)
 {
-	int num_fences = a->num_fences + b->num_fences;
 	struct sync_file *sync_file;
-	int i, i_a, i_b;
-	unsigned long size = offsetof(struct sync_file, cbs[num_fences]);
+	struct dma_fence **fences, **nfences, **a_fences, **b_fences;
+	int i, i_a, i_b, num_fences, a_num_fences, b_num_fences;
 
-	sync_file = sync_file_alloc(size);
+	sync_file = sync_file_alloc();
 	if (!sync_file)
 		return NULL;
 
-	atomic_set(&sync_file->status, num_fences);
+	a_fences = get_fences(a, &a_num_fences);
+	b_fences = get_fences(b, &b_num_fences);
+	if (a_num_fences > INT_MAX - b_num_fences)
+		goto err;
+
+	num_fences = a_num_fences + b_num_fences;
+
+	fences = kcalloc(num_fences, sizeof(*fences), GFP_KERNEL);
+	if (!fences)
+		goto err;
 
 	/*
 	 * Assume sync_file a and b are both ordered and have no
@@ -165,80 +236,88 @@ static struct sync_file *sync_file_merge(const char *name, struct sync_file *a,
 	 * If a sync_file can only be created with sync_file_merge
 	 * and sync_file_create, this is a reasonable assumption.
 	 */
-	for (i = i_a = i_b = 0; i_a < a->num_fences && i_b < b->num_fences; ) {
-		struct fence *pt_a = a->cbs[i_a].fence;
-		struct fence *pt_b = b->cbs[i_b].fence;
+	for (i = i_a = i_b = 0; i_a < a_num_fences && i_b < b_num_fences; ) {
+		struct dma_fence *pt_a = a_fences[i_a];
+		struct dma_fence *pt_b = b_fences[i_b];
 
 		if (pt_a->context < pt_b->context) {
-			sync_file_add_pt(sync_file, &i, pt_a);
+			add_fence(fences, &i, pt_a);
 
 			i_a++;
 		} else if (pt_a->context > pt_b->context) {
-			sync_file_add_pt(sync_file, &i, pt_b);
+			add_fence(fences, &i, pt_b);
 
 			i_b++;
 		} else {
-			if (pt_a->seqno - pt_b->seqno <= INT_MAX)
-				sync_file_add_pt(sync_file, &i, pt_a);
+			if (__dma_fence_is_later(pt_a->seqno, pt_b->seqno,
+						 pt_a->ops))
+				add_fence(fences, &i, pt_a);
 			else
-				sync_file_add_pt(sync_file, &i, pt_b);
+				add_fence(fences, &i, pt_b);
 
 			i_a++;
 			i_b++;
 		}
 	}
 
-	for (; i_a < a->num_fences; i_a++)
-		sync_file_add_pt(sync_file, &i, a->cbs[i_a].fence);
+	for (; i_a < a_num_fences; i_a++)
+		add_fence(fences, &i, a_fences[i_a]);
 
-	for (; i_b < b->num_fences; i_b++)
-		sync_file_add_pt(sync_file, &i, b->cbs[i_b].fence);
+	for (; i_b < b_num_fences; i_b++)
+		add_fence(fences, &i, b_fences[i_b]);
 
-	if (num_fences > i)
-		atomic_sub(num_fences - i, &sync_file->status);
-	sync_file->num_fences = i;
+	if (i == 0)
+		fences[i++] = dma_fence_get(a_fences[0]);
 
-	strlcpy(sync_file->name, name, sizeof(sync_file->name));
-	return sync_file;
-}
+	if (num_fences > i) {
+		nfences = krealloc(fences, i * sizeof(*fences),
+				  GFP_KERNEL);
+		if (!nfences)
+			goto err;
 
-static void sync_file_free(struct kref *kref)
-{
-	struct sync_file *sync_file = container_of(kref, struct sync_file,
-						     kref);
-	int i;
-
-	for (i = 0; i < sync_file->num_fences; ++i) {
-		fence_remove_callback(sync_file->cbs[i].fence,
-				      &sync_file->cbs[i].cb);
-		fence_put(sync_file->cbs[i].fence);
+		fences = nfences;
 	}
 
-	kfree(sync_file);
+	if (sync_file_set_fence(sync_file, fences, i) < 0) {
+		kfree(fences);
+		goto err;
+	}
+
+	strlcpy(sync_file->user_name, name, sizeof(sync_file->user_name));
+	return sync_file;
+
+err:
+	fput(sync_file->file);
+	return NULL;
+
 }
 
 static int sync_file_release(struct inode *inode, struct file *file)
 {
 	struct sync_file *sync_file = file->private_data;
 
-	kref_put(&sync_file->kref, sync_file_free);
+	if (test_bit(POLL_ENABLED, &sync_file->flags))
+		dma_fence_remove_callback(sync_file->fence, &sync_file->cb);
+	dma_fence_put(sync_file->fence);
+	kfree(sync_file);
+
 	return 0;
 }
 
-static unsigned int sync_file_poll(struct file *file, poll_table *wait)
+static __poll_t sync_file_poll(struct file *file, poll_table *wait)
 {
 	struct sync_file *sync_file = file->private_data;
-	int status;
 
 	poll_wait(file, &sync_file->wq, wait);
 
-	status = atomic_read(&sync_file->status);
+	if (list_empty(&sync_file->cb.node) &&
+	    !test_and_set_bit(POLL_ENABLED, &sync_file->flags)) {
+		if (dma_fence_add_callback(sync_file->fence, &sync_file->cb,
+					   fence_check_cb_func) < 0)
+			wake_up_all(&sync_file->wq);
+	}
 
-	if (!status)
-		return POLLIN;
-	if (status < 0)
-		return POLLERR;
-	return 0;
+	return dma_fence_is_signaled(sync_file->fence) ? EPOLLIN : 0;
 }
 
 static long sync_file_ioctl_merge(struct sync_file *sync_file,
@@ -296,18 +375,24 @@ err_put_fd:
 	return err;
 }
 
-static void sync_fill_fence_info(struct fence *fence,
+static int sync_fill_fence_info(struct dma_fence *fence,
 				 struct sync_fence_info *info)
 {
 	strlcpy(info->obj_name, fence->ops->get_timeline_name(fence),
 		sizeof(info->obj_name));
 	strlcpy(info->driver_name, fence->ops->get_driver_name(fence),
 		sizeof(info->driver_name));
-	if (fence_is_signaled(fence))
-		info->status = fence->status >= 0 ? 1 : fence->status;
-	else
-		info->status = 0;
-	info->timestamp_ns = ktime_to_ns(fence->timestamp);
+
+	info->status = dma_fence_get_status(fence);
+	while (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags) &&
+	       !test_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT, &fence->flags))
+		cpu_relax();
+	info->timestamp_ns =
+		test_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT, &fence->flags) ?
+		ktime_to_ns(fence->timestamp) :
+		ktime_set(0, 0);
+
+	return info->status;
 }
 
 static long sync_file_ioctl_fence_info(struct sync_file *sync_file,
@@ -315,8 +400,9 @@ static long sync_file_ioctl_fence_info(struct sync_file *sync_file,
 {
 	struct sync_file_info info;
 	struct sync_fence_info *fence_info = NULL;
+	struct dma_fence **fences;
 	__u32 size;
-	int ret, i;
+	int num_fences, ret, i;
 
 	if (copy_from_user(&info, (void __user *)arg, sizeof(info)))
 		return -EFAULT;
@@ -324,25 +410,33 @@ static long sync_file_ioctl_fence_info(struct sync_file *sync_file,
 	if (info.flags || info.pad)
 		return -EINVAL;
 
+	fences = get_fences(sync_file, &num_fences);
+
 	/*
 	 * Passing num_fences = 0 means that userspace doesn't want to
 	 * retrieve any sync_fence_info. If num_fences = 0 we skip filling
 	 * sync_fence_info and return the actual number of fences on
 	 * info->num_fences.
 	 */
-	if (!info.num_fences)
+	if (!info.num_fences) {
+		info.status = dma_fence_get_status(sync_file->fence);
 		goto no_fences;
+	} else {
+		info.status = 1;
+	}
 
-	if (info.num_fences < sync_file->num_fences)
+	if (info.num_fences < num_fences)
 		return -EINVAL;
 
-	size = sync_file->num_fences * sizeof(*fence_info);
+	size = num_fences * sizeof(*fence_info);
 	fence_info = kzalloc(size, GFP_KERNEL);
 	if (!fence_info)
 		return -ENOMEM;
 
-	for (i = 0; i < sync_file->num_fences; ++i)
-		sync_fill_fence_info(sync_file->cbs[i].fence, &fence_info[i]);
+	for (i = 0; i < num_fences; i++) {
+		int status = sync_fill_fence_info(fences[i], &fence_info[i]);
+		info.status = info.status <= 0 ? info.status : status;
+	}
 
 	if (copy_to_user(u64_to_user_ptr(info.sync_fence_info), fence_info,
 			 size)) {
@@ -351,12 +445,8 @@ static long sync_file_ioctl_fence_info(struct sync_file *sync_file,
 	}
 
 no_fences:
-	strlcpy(info.name, sync_file->name, sizeof(info.name));
-	info.status = atomic_read(&sync_file->status);
-	if (info.status >= 0)
-		info.status = !info.status;
-
-	info.num_fences = sync_file->num_fences;
+	sync_file_get_name(sync_file, info.name, sizeof(info.name));
+	info.num_fences = num_fences;
 
 	if (copy_to_user((void __user *)arg, &info, sizeof(info)))
 		ret = -EFAULT;
@@ -390,6 +480,5 @@ static const struct file_operations sync_file_fops = {
 	.release = sync_file_release,
 	.poll = sync_file_poll,
 	.unlocked_ioctl = sync_file_ioctl,
-	.compat_ioctl = sync_file_ioctl,
+	.compat_ioctl = compat_ptr_ioctl,
 };
-

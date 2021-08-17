@@ -14,14 +14,13 @@
 #include <linux/smp.h>
 #include <linux/mm.h>
 #include <linux/hugetlb.h>
-#include <linux/module.h>
+#include <linux/export.h>
 
 #include <asm/cpu.h>
 #include <asm/cpu-type.h>
 #include <asm/bootinfo.h>
 #include <asm/hazards.h>
 #include <asm/mmu_context.h>
-#include <asm/pgtable.h>
 #include <asm/tlb.h>
 #include <asm/tlbmisc.h>
 
@@ -35,10 +34,10 @@ extern void build_tlb_refill_handler(void);
 static inline void flush_micro_tlb(void)
 {
 	switch (current_cpu_type()) {
-	case CPU_LOONGSON2:
+	case CPU_LOONGSON2EF:
 		write_c0_diag(LOONGSON_DIAG_ITLB);
 		break;
-	case CPU_LOONGSON3:
+	case CPU_LOONGSON64:
 		write_c0_diag(LOONGSON_DIAG_ITLB | LOONGSON_DIAG_DTLB);
 		break;
 	default:
@@ -65,10 +64,13 @@ void local_flush_tlb_all(void)
 	write_c0_entrylo0(0);
 	write_c0_entrylo1(0);
 
-	entry = read_c0_wired();
+	entry = num_wired_entries();
 
-	/* Blast 'em all away. */
-	if (cpu_has_tlbinv) {
+	/*
+	 * Blast 'em all away.
+	 * If there are any wired entries, fall back to iterating
+	 */
+	if (cpu_has_tlbinv && !entry) {
 		if (current_cpu_data.tlbsizevtlb) {
 			write_c0_index(0);
 			mtc0_tlbw_hazard();
@@ -101,23 +103,6 @@ void local_flush_tlb_all(void)
 }
 EXPORT_SYMBOL(local_flush_tlb_all);
 
-/* All entries common to a mm share an asid.  To effectively flush
-   these entries, we just bump the asid. */
-void local_flush_tlb_mm(struct mm_struct *mm)
-{
-	int cpu;
-
-	preempt_disable();
-
-	cpu = smp_processor_id();
-
-	if (cpu_context(cpu, mm) != 0) {
-		drop_mmu_context(mm, cpu);
-	}
-
-	preempt_enable();
-}
-
 void local_flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
 	unsigned long end)
 {
@@ -134,14 +119,23 @@ void local_flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
 		if (size <= (current_cpu_data.tlbsizeftlbsets ?
 			     current_cpu_data.tlbsize / 8 :
 			     current_cpu_data.tlbsize / 2)) {
-			int oldpid = read_c0_entryhi();
+			unsigned long old_entryhi, old_mmid;
 			int newpid = cpu_asid(cpu, mm);
+
+			old_entryhi = read_c0_entryhi();
+			if (cpu_has_mmid) {
+				old_mmid = read_c0_memorymapid();
+				write_c0_memorymapid(newpid);
+			}
 
 			htw_stop();
 			while (start < end) {
 				int idx;
 
-				write_c0_entryhi(start | newpid);
+				if (cpu_has_mmid)
+					write_c0_entryhi(start);
+				else
+					write_c0_entryhi(start | newpid);
 				start += (PAGE_SIZE << 1);
 				mtc0_tlbw_hazard();
 				tlb_probe();
@@ -157,10 +151,12 @@ void local_flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
 				tlb_write_indexed();
 			}
 			tlbw_use_hazard();
-			write_c0_entryhi(oldpid);
+			write_c0_entryhi(old_entryhi);
+			if (cpu_has_mmid)
+				write_c0_memorymapid(old_mmid);
 			htw_start();
 		} else {
-			drop_mmu_context(mm, cpu);
+			drop_mmu_context(mm);
 		}
 		flush_micro_tlb();
 		local_irq_restore(flags);
@@ -217,15 +213,21 @@ void local_flush_tlb_page(struct vm_area_struct *vma, unsigned long page)
 	int cpu = smp_processor_id();
 
 	if (cpu_context(cpu, vma->vm_mm) != 0) {
-		unsigned long flags;
-		int oldpid, newpid, idx;
+		unsigned long old_mmid;
+		unsigned long flags, old_entryhi;
+		int idx;
 
-		newpid = cpu_asid(cpu, vma->vm_mm);
 		page &= (PAGE_MASK << 1);
 		local_irq_save(flags);
-		oldpid = read_c0_entryhi();
+		old_entryhi = read_c0_entryhi();
 		htw_stop();
-		write_c0_entryhi(page | newpid);
+		if (cpu_has_mmid) {
+			old_mmid = read_c0_memorymapid();
+			write_c0_entryhi(page);
+			write_c0_memorymapid(cpu_asid(cpu, vma->vm_mm));
+		} else {
+			write_c0_entryhi(page | cpu_asid(cpu, vma->vm_mm));
+		}
 		mtc0_tlbw_hazard();
 		tlb_probe();
 		tlb_probe_hazard();
@@ -241,7 +243,9 @@ void local_flush_tlb_page(struct vm_area_struct *vma, unsigned long page)
 		tlbw_use_hazard();
 
 	finish:
-		write_c0_entryhi(oldpid);
+		write_c0_entryhi(old_entryhi);
+		if (cpu_has_mmid)
+			write_c0_memorymapid(old_mmid);
 		htw_start();
 		flush_micro_tlb_vm(vma);
 		local_irq_restore(flags);
@@ -290,6 +294,7 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 {
 	unsigned long flags;
 	pgd_t *pgdp;
+	p4d_t *p4dp;
 	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
@@ -304,14 +309,19 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 	local_irq_save(flags);
 
 	htw_stop();
-	pid = read_c0_entryhi() & cpu_asid_mask(&current_cpu_data);
 	address &= (PAGE_MASK << 1);
-	write_c0_entryhi(address | pid);
+	if (cpu_has_mmid) {
+		write_c0_entryhi(address);
+	} else {
+		pid = read_c0_entryhi() & cpu_asid_mask(&current_cpu_data);
+		write_c0_entryhi(address | pid);
+	}
 	pgdp = pgd_offset(vma->vm_mm, address);
 	mtc0_tlbw_hazard();
 	tlb_probe();
 	tlb_probe_hazard();
-	pudp = pud_offset(pgdp, address);
+	p4dp = p4d_offset(pgdp, address);
+	pudp = pud_offset(p4dp, address);
 	pmdp = pmd_offset(pudp, address);
 	idx = read_c0_index();
 #ifdef CONFIG_MIPS_HUGE_TLB_SUPPORT
@@ -372,17 +382,22 @@ void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
 #ifdef CONFIG_XPA
 	panic("Broken for XPA kernels");
 #else
+	unsigned int old_mmid;
 	unsigned long flags;
 	unsigned long wired;
 	unsigned long old_pagemask;
 	unsigned long old_ctx;
 
 	local_irq_save(flags);
+	if (cpu_has_mmid) {
+		old_mmid = read_c0_memorymapid();
+		write_c0_memorymapid(MMID_KERNEL_WIRED);
+	}
 	/* Save old context and create impossible VPN2 value */
 	old_ctx = read_c0_entryhi();
 	htw_stop();
 	old_pagemask = read_c0_pagemask();
-	wired = read_c0_wired();
+	wired = num_wired_entries();
 	write_c0_wired(wired + 1);
 	write_c0_index(wired);
 	tlbw_use_hazard();	/* What is the hazard here? */
@@ -395,6 +410,8 @@ void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
 	tlbw_use_hazard();
 
 	write_c0_entryhi(old_ctx);
+	if (cpu_has_mmid)
+		write_c0_memorymapid(old_mmid);
 	tlbw_use_hazard();	/* What is the hazard here? */
 	htw_start();
 	write_c0_pagemask(old_pagemask);
@@ -421,6 +438,7 @@ int has_transparent_hugepage(void)
 	}
 	return mask == PM_HUGE_MASK;
 }
+EXPORT_SYMBOL(has_transparent_hugepage);
 
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE  */
 
@@ -446,7 +464,7 @@ __init int add_temporary_entry(unsigned long entrylo0, unsigned long entrylo1,
 	htw_stop();
 	old_ctx = read_c0_entryhi();
 	old_pagemask = read_c0_pagemask();
-	wired = read_c0_wired();
+	wired = num_wired_entries();
 	if (--temp_tlb_entry < wired) {
 		printk(KERN_WARNING
 		       "No TLB space left for add_temporary_entry\n");

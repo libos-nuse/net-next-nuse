@@ -1,19 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2007-2014 Nicira, Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of version 2 of the GNU General Public
- * License as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -54,6 +41,7 @@ static struct vport *gre_tnl_create(const struct vport_parms *parms)
 	struct net *net = ovs_dp_get_net(parms->dp);
 	struct net_device *dev;
 	struct vport *vport;
+	int err;
 
 	vport = ovs_vport_alloc(0, &ovs_gre_vport_ops, parms);
 	if (IS_ERR(vport))
@@ -67,9 +55,15 @@ static struct vport *gre_tnl_create(const struct vport_parms *parms)
 		return ERR_CAST(dev);
 	}
 
-	dev_change_flags(dev, dev->flags | IFF_UP);
-	rtnl_unlock();
+	err = dev_change_flags(dev, dev->flags | IFF_UP, NULL);
+	if (err < 0) {
+		rtnl_delete_link(dev);
+		rtnl_unlock();
+		ovs_vport_free(vport);
+		return ERR_PTR(err);
+	}
 
+	rtnl_unlock();
 	return vport;
 }
 

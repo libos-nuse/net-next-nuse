@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* -*- linux-c -*- --------------------------------------------------------- *
  *
  * linux/fs/devpts/inode.c
  *
  *  Copyright 1998-2004 H. Peter Anvin -- All Rights Reserved
- *
- * This file is part of the Linux kernel and is made available under
- * the terms of the GNU General Public License, version 2, or at your
- * option, any later version, incorporated herein by reference.
  *
  * ------------------------------------------------------------------------- */
 
@@ -46,7 +43,7 @@ static int pty_limit = NR_UNIX98_PTY_DEFAULT;
 static int pty_reserve = NR_UNIX98_PTY_RESERVE;
 static int pty_limit_min;
 static int pty_limit_max = INT_MAX;
-static int pty_count;
+static atomic_t pty_count = ATOMIC_INIT(0);
 
 static struct ctl_table pty_table[] = {
 	{
@@ -93,8 +90,6 @@ static struct ctl_table pty_root_table[] = {
 	{}
 };
 
-static DEFINE_MUTEX(allocated_ptys_lock);
-
 struct pts_mount_opts {
 	int setuid;
 	int setgid;
@@ -133,37 +128,98 @@ static inline struct pts_fs_info *DEVPTS_SB(struct super_block *sb)
 	return sb->s_fs_info;
 }
 
+static int devpts_ptmx_path(struct path *path)
+{
+	struct super_block *sb;
+	int err;
+
+	/* Is a devpts filesystem at "pts" in the same directory? */
+	err = path_pts(path);
+	if (err)
+		return err;
+
+	/* Is the path the root of a devpts filesystem? */
+	sb = path->mnt->mnt_sb;
+	if ((sb->s_magic != DEVPTS_SUPER_MAGIC) ||
+	    (path->mnt->mnt_root != sb->s_root))
+		return -ENODEV;
+
+	return 0;
+}
+
+/*
+ * Try to find a suitable devpts filesystem. We support the following
+ * scenarios:
+ * - The ptmx device node is located in the same directory as the devpts
+ *   mount where the pts device nodes are located.
+ *   This is e.g. the case when calling open on the /dev/pts/ptmx device
+ *   node when the devpts filesystem is mounted at /dev/pts.
+ * - The ptmx device node is located outside the devpts filesystem mount
+ *   where the pts device nodes are located. For example, the ptmx device
+ *   is a symlink, separate device node, or bind-mount.
+ *   A supported scenario is bind-mounting /dev/pts/ptmx to /dev/ptmx and
+ *   then calling open on /dev/ptmx. In this case a suitable pts
+ *   subdirectory can be found in the common parent directory /dev of the
+ *   devpts mount and the ptmx bind-mount, after resolving the /dev/ptmx
+ *   bind-mount.
+ *   If no suitable pts subdirectory can be found this function will fail.
+ *   This is e.g. the case when bind-mounting /dev/pts/ptmx to /ptmx.
+ */
+struct vfsmount *devpts_mntget(struct file *filp, struct pts_fs_info *fsi)
+{
+	struct path path;
+	int err = 0;
+
+	path = filp->f_path;
+	path_get(&path);
+
+	/* Walk upward while the start point is a bind mount of
+	 * a single file.
+	 */
+	while (path.mnt->mnt_root == path.dentry)
+		if (follow_up(&path) == 0)
+			break;
+
+	/* devpts_ptmx_path() finds a devpts fs or returns an error. */
+	if ((path.mnt->mnt_sb->s_magic != DEVPTS_SUPER_MAGIC) ||
+	    (DEVPTS_SB(path.mnt->mnt_sb) != fsi))
+		err = devpts_ptmx_path(&path);
+	dput(path.dentry);
+	if (!err) {
+		if (DEVPTS_SB(path.mnt->mnt_sb) == fsi)
+			return path.mnt;
+
+		err = -ENODEV;
+	}
+
+	mntput(path.mnt);
+	return ERR_PTR(err);
+}
+
 struct pts_fs_info *devpts_acquire(struct file *filp)
 {
 	struct pts_fs_info *result;
 	struct path path;
 	struct super_block *sb;
-	int err;
 
 	path = filp->f_path;
 	path_get(&path);
 
 	/* Has the devpts filesystem already been found? */
-	sb = path.mnt->mnt_sb;
-	if (sb->s_magic != DEVPTS_SUPER_MAGIC) {
-		/* Is a devpts filesystem at "pts" in the same directory? */
-		err = path_pts(&path);
+	if (path.mnt->mnt_sb->s_magic != DEVPTS_SUPER_MAGIC) {
+		int err;
+
+		err = devpts_ptmx_path(&path);
 		if (err) {
 			result = ERR_PTR(err);
 			goto out;
 		}
-
-		/* Is the path the root of a devpts filesystem? */
-		result = ERR_PTR(-ENODEV);
-		sb = path.mnt->mnt_sb;
-		if ((sb->s_magic != DEVPTS_SUPER_MAGIC) ||
-		    (path.mnt->mnt_root != sb->s_root))
-			goto out;
 	}
 
 	/*
 	 * pty code needs to hold extra references in case of last /dev/tty close
 	 */
+	sb = path.mnt->mnt_sb;
 	atomic_inc(&sb->s_active);
 	result = DEVPTS_SB(sb);
 
@@ -272,13 +328,8 @@ static int mknod_ptmx(struct super_block *sb)
 	struct dentry *root = sb->s_root;
 	struct pts_fs_info *fsi = DEVPTS_SB(sb);
 	struct pts_mount_opts *opts = &fsi->mount_opts;
-	kuid_t root_uid;
-	kgid_t root_gid;
-
-	root_uid = make_kuid(current_user_ns(), 0);
-	root_gid = make_kgid(current_user_ns(), 0);
-	if (!uid_valid(root_uid) || !gid_valid(root_gid))
-		return -EINVAL;
+	kuid_t ptmx_uid = current_fsuid();
+	kgid_t ptmx_gid = current_fsgid();
 
 	inode_lock(d_inode(root));
 
@@ -305,12 +356,12 @@ static int mknod_ptmx(struct super_block *sb)
 	}
 
 	inode->i_ino = 2;
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 
 	mode = S_IFCHR|opts->ptmxmode;
 	init_special_inode(inode, mode, MKDEV(TTYAUX_MAJOR, 2));
-	inode->i_uid = root_uid;
-	inode->i_gid = root_gid;
+	inode->i_uid = ptmx_uid;
+	inode->i_gid = ptmx_gid;
 
 	d_add(dentry, inode);
 
@@ -336,7 +387,6 @@ static int devpts_remount(struct super_block *sb, int *flags, char *data)
 	struct pts_fs_info *fsi = DEVPTS_SB(sb);
 	struct pts_mount_opts *opts = &fsi->mount_opts;
 
-	sync_filesystem(sb);
 	err = parse_mount_options(data, PARSE_REMOUNT, opts);
 
 	/*
@@ -395,35 +445,52 @@ static int
 devpts_fill_super(struct super_block *s, void *data, int silent)
 {
 	struct inode *inode;
+	int error;
 
+	s->s_iflags &= ~SB_I_NODEV;
 	s->s_blocksize = 1024;
 	s->s_blocksize_bits = 10;
 	s->s_magic = DEVPTS_SUPER_MAGIC;
 	s->s_op = &devpts_sops;
+	s->s_d_op = &simple_dentry_operations;
 	s->s_time_gran = 1;
 
+	error = -ENOMEM;
 	s->s_fs_info = new_pts_fs_info(s);
 	if (!s->s_fs_info)
 		goto fail;
 
+	error = parse_mount_options(data, PARSE_MOUNT, &DEVPTS_SB(s)->mount_opts);
+	if (error)
+		goto fail;
+
+	error = -ENOMEM;
 	inode = new_inode(s);
 	if (!inode)
 		goto fail;
 	inode->i_ino = 1;
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	inode->i_mode = S_IFDIR | S_IRUGO | S_IXUGO | S_IWUSR;
 	inode->i_op = &simple_dir_inode_operations;
 	inode->i_fop = &simple_dir_operations;
 	set_nlink(inode, 2);
 
 	s->s_root = d_make_root(inode);
-	if (s->s_root)
-		return 0;
+	if (!s->s_root) {
+		pr_err("get root dentry failed\n");
+		goto fail;
+	}
 
-	pr_err("get root dentry failed\n");
+	error = mknod_ptmx(s);
+	if (error)
+		goto fail_dput;
 
+	return 0;
+fail_dput:
+	dput(s->s_root);
+	s->s_root = NULL;
 fail:
-	return -ENOMEM;
+	return error;
 }
 
 /*
@@ -435,43 +502,15 @@ fail:
 static struct dentry *devpts_mount(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
 {
-	int error;
-	struct pts_mount_opts opts;
-	struct super_block *s;
-
-	error = parse_mount_options(data, PARSE_MOUNT, &opts);
-	if (error)
-		return ERR_PTR(error);
-
-	s = sget(fs_type, NULL, set_anon_super, flags, NULL);
-	if (IS_ERR(s))
-		return ERR_CAST(s);
-
-	if (!s->s_root) {
-		error = devpts_fill_super(s, data, flags & MS_SILENT ? 1 : 0);
-		if (error)
-			goto out_undo_sget;
-		s->s_flags |= MS_ACTIVE;
-	}
-
-	memcpy(&(DEVPTS_SB(s))->mount_opts, &opts, sizeof(opts));
-
-	error = mknod_ptmx(s);
-	if (error)
-		goto out_undo_sget;
-
-	return dget(s->s_root);
-
-out_undo_sget:
-	deactivate_locked_super(s);
-	return ERR_PTR(error);
+	return mount_nodev(fs_type, flags, data, devpts_fill_super);
 }
 
 static void devpts_kill_sb(struct super_block *sb)
 {
 	struct pts_fs_info *fsi = DEVPTS_SB(sb);
 
-	ida_destroy(&fsi->allocated_ptys);
+	if (fsi)
+		ida_destroy(&fsi->allocated_ptys);
 	kfree(fsi);
 	kill_litter_super(sb);
 }
@@ -480,7 +519,7 @@ static struct file_system_type devpts_fs_type = {
 	.name		= "devpts",
 	.mount		= devpts_mount,
 	.kill_sb	= devpts_kill_sb,
-	.fs_flags	= FS_USERNS_MOUNT | FS_USERNS_DEV_MOUNT,
+	.fs_flags	= FS_USERNS_MOUNT,
 };
 
 /*
@@ -490,44 +529,25 @@ static struct file_system_type devpts_fs_type = {
 
 int devpts_new_index(struct pts_fs_info *fsi)
 {
-	int index;
-	int ida_ret;
+	int index = -ENOSPC;
 
-retry:
-	if (!ida_pre_get(&fsi->allocated_ptys, GFP_KERNEL))
-		return -ENOMEM;
+	if (atomic_inc_return(&pty_count) >= (pty_limit -
+			  (fsi->mount_opts.reserve ? 0 : pty_reserve)))
+		goto out;
 
-	mutex_lock(&allocated_ptys_lock);
-	if (pty_count >= (pty_limit -
-			  (fsi->mount_opts.reserve ? 0 : pty_reserve))) {
-		mutex_unlock(&allocated_ptys_lock);
-		return -ENOSPC;
-	}
+	index = ida_alloc_max(&fsi->allocated_ptys, fsi->mount_opts.max - 1,
+			GFP_KERNEL);
 
-	ida_ret = ida_get_new(&fsi->allocated_ptys, &index);
-	if (ida_ret < 0) {
-		mutex_unlock(&allocated_ptys_lock);
-		if (ida_ret == -EAGAIN)
-			goto retry;
-		return -EIO;
-	}
-
-	if (index >= fsi->mount_opts.max) {
-		ida_remove(&fsi->allocated_ptys, index);
-		mutex_unlock(&allocated_ptys_lock);
-		return -ENOSPC;
-	}
-	pty_count++;
-	mutex_unlock(&allocated_ptys_lock);
+out:
+	if (index < 0)
+		atomic_dec(&pty_count);
 	return index;
 }
 
 void devpts_kill_index(struct pts_fs_info *fsi, int idx)
 {
-	mutex_lock(&allocated_ptys_lock);
-	ida_remove(&fsi->allocated_ptys, idx);
-	pty_count--;
-	mutex_unlock(&allocated_ptys_lock);
+	ida_free(&fsi->allocated_ptys, idx);
+	atomic_dec(&pty_count);
 }
 
 /**
@@ -558,7 +578,7 @@ struct dentry *devpts_pty_new(struct pts_fs_info *fsi, int index, void *priv)
 	inode->i_ino = index + 3;
 	inode->i_uid = opts->setuid ? opts->uid : current_fsuid();
 	inode->i_gid = opts->setgid ? opts->gid : current_fsgid();
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	init_special_inode(inode, S_IFCHR|opts->mode, MKDEV(UNIX98_PTY_SLAVE_MAJOR, index));
 
 	sprintf(s, "%d", index);
@@ -584,7 +604,8 @@ struct dentry *devpts_pty_new(struct pts_fs_info *fsi, int index, void *priv)
  */
 void *devpts_get_priv(struct dentry *dentry)
 {
-	WARN_ON_ONCE(dentry->d_sb->s_magic != DEVPTS_SUPER_MAGIC);
+	if (dentry->d_sb->s_magic != DEVPTS_SUPER_MAGIC)
+		return NULL;
 	return dentry->d_fsdata;
 }
 
@@ -600,7 +621,8 @@ void devpts_pty_kill(struct dentry *dentry)
 
 	dentry->d_fsdata = NULL;
 	drop_nlink(dentry->d_inode);
-	d_delete(dentry);
+	fsnotify_unlink(d_inode(dentry->d_parent), dentry);
+	d_drop(dentry);
 	dput(dentry);	/* d_alloc_name() in devpts_pty_new() */
 }
 

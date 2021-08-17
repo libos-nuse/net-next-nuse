@@ -10,7 +10,7 @@
 #include <linux/errno.h>
 #define __FRAME_OFFSETS
 #include <asm/ptrace.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/ptrace-abi.h>
 
 /*
@@ -52,14 +52,6 @@ static const int reg_offsets[] =
 
 int putreg(struct task_struct *child, int regno, unsigned long value)
 {
-#ifdef TIF_IA32
-	/*
-	 * Some code in the 64bit emulation may not be 64bit clean.
-	 * Don't take any chances.
-	 */
-	if (test_tsk_thread_flag(child, TIF_IA32))
-		value &= 0xffffffff;
-#endif
 	switch (regno) {
 	case R8:
 	case R9:
@@ -78,7 +70,11 @@ int putreg(struct task_struct *child, int regno, unsigned long value)
 	case RSI:
 	case RDI:
 	case RBP:
+		break;
+
 	case ORIG_RAX:
+		/* Update the syscall number. */
+		UPT_SYSCALL_NR(&child->thread.regs.regs) = value;
 		break;
 
 	case FS:
@@ -121,7 +117,7 @@ int poke_user(struct task_struct *child, long addr, long data)
 	else if ((addr >= offsetof(struct user, u_debugreg[0])) &&
 		(addr <= offsetof(struct user, u_debugreg[7]))) {
 		addr -= offsetof(struct user, u_debugreg[0]);
-		addr = addr >> 2;
+		addr = addr >> 3;
 		if ((addr == 4) || (addr == 5))
 			return -EIO;
 		child->thread.arch.debugregs[addr] = data;
@@ -133,10 +129,7 @@ int poke_user(struct task_struct *child, long addr, long data)
 unsigned long getreg(struct task_struct *child, int regno)
 {
 	unsigned long mask = ~0UL;
-#ifdef TIF_IA32
-	if (test_tsk_thread_flag(child, TIF_IA32))
-		mask = 0xffffffff;
-#endif
+
 	switch (regno) {
 	case R8:
 	case R9:
@@ -208,7 +201,8 @@ int is_syscall(unsigned long addr)
 		 * slow, but that doesn't matter, since it will be called only
 		 * in case of singlestepping, if copy_from_user failed.
 		 */
-		n = access_process_vm(current, addr, &instr, sizeof(instr), 0);
+		n = access_process_vm(current, addr, &instr, sizeof(instr),
+				FOLL_FORCE);
 		if (n != sizeof(instr)) {
 			printk("is_syscall : failed to read instruction from "
 			       "0x%lx\n", addr);

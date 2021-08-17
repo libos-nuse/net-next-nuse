@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2011 Zhang, Keguang <keguang.zhang@gmail.com>
- *
- * This program is free software; you can redistribute	it and/or modify it
- * under  the terms of	the GNU General	 Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/interrupt.h>
@@ -62,12 +58,58 @@ static void ls1x_irq_unmask(struct irq_data *d)
 			| (1 << bit), LS1X_INTC_INTIEN(n));
 }
 
+static int ls1x_irq_settype(struct irq_data *d, unsigned int type)
+{
+	unsigned int bit = (d->irq - LS1X_IRQ_BASE) & 0x1f;
+	unsigned int n = (d->irq - LS1X_IRQ_BASE) >> 5;
+
+	switch (type) {
+	case IRQ_TYPE_LEVEL_HIGH:
+		__raw_writel(__raw_readl(LS1X_INTC_INTPOL(n))
+			| (1 << bit), LS1X_INTC_INTPOL(n));
+		__raw_writel(__raw_readl(LS1X_INTC_INTEDGE(n))
+			& ~(1 << bit), LS1X_INTC_INTEDGE(n));
+		break;
+	case IRQ_TYPE_LEVEL_LOW:
+		__raw_writel(__raw_readl(LS1X_INTC_INTPOL(n))
+			& ~(1 << bit), LS1X_INTC_INTPOL(n));
+		__raw_writel(__raw_readl(LS1X_INTC_INTEDGE(n))
+			& ~(1 << bit), LS1X_INTC_INTEDGE(n));
+		break;
+	case IRQ_TYPE_EDGE_RISING:
+		__raw_writel(__raw_readl(LS1X_INTC_INTPOL(n))
+			| (1 << bit), LS1X_INTC_INTPOL(n));
+		__raw_writel(__raw_readl(LS1X_INTC_INTEDGE(n))
+			| (1 << bit), LS1X_INTC_INTEDGE(n));
+		break;
+	case IRQ_TYPE_EDGE_FALLING:
+		__raw_writel(__raw_readl(LS1X_INTC_INTPOL(n))
+			& ~(1 << bit), LS1X_INTC_INTPOL(n));
+		__raw_writel(__raw_readl(LS1X_INTC_INTEDGE(n))
+			| (1 << bit), LS1X_INTC_INTEDGE(n));
+		break;
+	case IRQ_TYPE_EDGE_BOTH:
+		__raw_writel(__raw_readl(LS1X_INTC_INTPOL(n))
+			& ~(1 << bit), LS1X_INTC_INTPOL(n));
+		__raw_writel(__raw_readl(LS1X_INTC_INTEDGE(n))
+			| (1 << bit), LS1X_INTC_INTEDGE(n));
+		break;
+	case IRQ_TYPE_NONE:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static struct irq_chip ls1x_irq_chip = {
 	.name		= "LS1X-INTC",
 	.irq_ack	= ls1x_irq_ack,
 	.irq_mask	= ls1x_irq_mask,
 	.irq_mask_ack	= ls1x_irq_mask_ack,
 	.irq_unmask	= ls1x_irq_unmask,
+	.irq_set_type   = ls1x_irq_settype,
 };
 
 static void ls1x_irq_dispatch(int n)
@@ -107,12 +149,6 @@ asmlinkage void plat_irq_dispatch(void)
 
 }
 
-struct irqaction cascade_irqaction = {
-	.handler = no_action,
-	.name = "cascade",
-	.flags = IRQF_NO_THREAD,
-};
-
 static void __init ls1x_irq_init(int base)
 {
 	int n;
@@ -120,7 +156,7 @@ static void __init ls1x_irq_init(int base)
 	/* Disable interrupts and clear pending,
 	 * setup all IRQs as high level triggered
 	 */
-	for (n = 0; n < 4; n++) {
+	for (n = 0; n < INTN; n++) {
 		__raw_writel(0x0, LS1X_INTC_INTIEN(n));
 		__raw_writel(0xffffffff, LS1X_INTC_INTCLR(n));
 		__raw_writel(0xffffffff, LS1X_INTC_INTPOL(n));
@@ -129,15 +165,23 @@ static void __init ls1x_irq_init(int base)
 	}
 
 
-	for (n = base; n < LS1X_IRQS; n++) {
+	for (n = base; n < NR_IRQS; n++) {
 		irq_set_chip_and_handler(n, &ls1x_irq_chip,
 					 handle_level_irq);
 	}
 
-	setup_irq(INT0_IRQ, &cascade_irqaction);
-	setup_irq(INT1_IRQ, &cascade_irqaction);
-	setup_irq(INT2_IRQ, &cascade_irqaction);
-	setup_irq(INT3_IRQ, &cascade_irqaction);
+	if (request_irq(INT0_IRQ, no_action, IRQF_NO_THREAD, "cascade", NULL))
+		pr_err("Failed to request irq %d (cascade)\n", INT0_IRQ);
+	if (request_irq(INT1_IRQ, no_action, IRQF_NO_THREAD, "cascade", NULL))
+		pr_err("Failed to request irq %d (cascade)\n", INT1_IRQ);
+	if (request_irq(INT2_IRQ, no_action, IRQF_NO_THREAD, "cascade", NULL))
+		pr_err("Failed to request irq %d (cascade)\n", INT2_IRQ);
+	if (request_irq(INT3_IRQ, no_action, IRQF_NO_THREAD, "cascade", NULL))
+		pr_err("Failed to request irq %d (cascade)\n", INT3_IRQ);
+#if defined(CONFIG_LOONGSON1_LS1C)
+	if (request_irq(INT4_IRQ, no_action, IRQF_NO_THREAD, "cascade", NULL))
+		pr_err("Failed to request irq %d (cascade)\n", INT4_IRQ);
+#endif
 }
 
 void __init arch_init_irq(void)

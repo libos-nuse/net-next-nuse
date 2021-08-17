@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * fake_mem.c
  *
@@ -8,21 +9,6 @@
  * By specifying this parameter, you can add arbitrary attribute to
  * specific memory range by updating original (firmware provided) EFI
  * memmap.
- *
- *  This program is free software; you can redistribute it and/or modify it
- *  under the terms and conditions of the GNU General Public License,
- *  version 2, as published by the Free Software Foundation.
- *
- *  This program is distributed in the hope it will be useful, but WITHOUT
- *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- *  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- *  more details.
- *
- *  You should have received a copy of the GNU General Public License along with
- *  this program; if not, see <http://www.gnu.org/licenses/>.
- *
- *  The full GNU General Public License is included in this distribution in
- *  the file called "COPYING".
  */
 
 #include <linux/kernel.h>
@@ -31,21 +17,15 @@
 #include <linux/memblock.h>
 #include <linux/types.h>
 #include <linux/sort.h>
-#include <asm/efi.h>
+#include "fake_mem.h"
 
-#define EFI_MAX_FAKEMEM CONFIG_EFI_MAX_FAKE_MEM
-
-struct fake_mem {
-	struct range range;
-	u64 attribute;
-};
-static struct fake_mem fake_mems[EFI_MAX_FAKEMEM];
-static int nr_fake_mem;
+struct efi_mem_range efi_fake_mems[EFI_MAX_FAKEMEM];
+int nr_fake_mem;
 
 static int __init cmp_fake_mem(const void *x1, const void *x2)
 {
-	const struct fake_mem *m1 = x1;
-	const struct fake_mem *m2 = x2;
+	const struct efi_mem_range *m1 = x1;
+	const struct efi_mem_range *m2 = x2;
 
 	if (m1->range.start < m2->range.start)
 		return -1;
@@ -54,138 +34,45 @@ static int __init cmp_fake_mem(const void *x1, const void *x2)
 	return 0;
 }
 
-void __init efi_fake_memmap(void)
+static void __init efi_fake_range(struct efi_mem_range *efi_range)
 {
-	u64 start, end, m_start, m_end, m_attr;
+	struct efi_memory_map_data data = { 0 };
 	int new_nr_map = efi.memmap.nr_map;
 	efi_memory_desc_t *md;
-	phys_addr_t new_memmap_phy;
 	void *new_memmap;
-	void *old, *new;
-	int i;
-
-	if (!nr_fake_mem || !efi_enabled(EFI_MEMMAP))
-		return;
 
 	/* count up the number of EFI memory descriptor */
-	for_each_efi_memory_desc(md) {
-		start = md->phys_addr;
-		end = start + (md->num_pages << EFI_PAGE_SHIFT) - 1;
-
-		for (i = 0; i < nr_fake_mem; i++) {
-			/* modifying range */
-			m_start = fake_mems[i].range.start;
-			m_end = fake_mems[i].range.end;
-
-			if (m_start <= start) {
-				/* split into 2 parts */
-				if (start < m_end && m_end < end)
-					new_nr_map++;
-			}
-			if (start < m_start && m_start < end) {
-				/* split into 3 parts */
-				if (m_end < end)
-					new_nr_map += 2;
-				/* split into 2 parts */
-				if (end <= m_end)
-					new_nr_map++;
-			}
-		}
-	}
+	for_each_efi_memory_desc(md)
+		new_nr_map += efi_memmap_split_count(md, &efi_range->range);
 
 	/* allocate memory for new EFI memmap */
-	new_memmap_phy = memblock_alloc(efi.memmap.desc_size * new_nr_map,
-					PAGE_SIZE);
-	if (!new_memmap_phy)
+	if (efi_memmap_alloc(new_nr_map, &data) != 0)
 		return;
 
 	/* create new EFI memmap */
-	new_memmap = early_memremap(new_memmap_phy,
-				    efi.memmap.desc_size * new_nr_map);
+	new_memmap = early_memremap(data.phys_map, data.size);
 	if (!new_memmap) {
-		memblock_free(new_memmap_phy, efi.memmap.desc_size * new_nr_map);
+		__efi_memmap_free(data.phys_map, data.size, data.flags);
 		return;
 	}
 
-	for (old = efi.memmap.map, new = new_memmap;
-	     old < efi.memmap.map_end;
-	     old += efi.memmap.desc_size, new += efi.memmap.desc_size) {
-
-		/* copy original EFI memory descriptor */
-		memcpy(new, old, efi.memmap.desc_size);
-		md = new;
-		start = md->phys_addr;
-		end = md->phys_addr + (md->num_pages << EFI_PAGE_SHIFT) - 1;
-
-		for (i = 0; i < nr_fake_mem; i++) {
-			/* modifying range */
-			m_start = fake_mems[i].range.start;
-			m_end = fake_mems[i].range.end;
-			m_attr = fake_mems[i].attribute;
-
-			if (m_start <= start && end <= m_end)
-				md->attribute |= m_attr;
-
-			if (m_start <= start &&
-			    (start < m_end && m_end < end)) {
-				/* first part */
-				md->attribute |= m_attr;
-				md->num_pages = (m_end - md->phys_addr + 1) >>
-					EFI_PAGE_SHIFT;
-				/* latter part */
-				new += efi.memmap.desc_size;
-				memcpy(new, old, efi.memmap.desc_size);
-				md = new;
-				md->phys_addr = m_end + 1;
-				md->num_pages = (end - md->phys_addr + 1) >>
-					EFI_PAGE_SHIFT;
-			}
-
-			if ((start < m_start && m_start < end) && m_end < end) {
-				/* first part */
-				md->num_pages = (m_start - md->phys_addr) >>
-					EFI_PAGE_SHIFT;
-				/* middle part */
-				new += efi.memmap.desc_size;
-				memcpy(new, old, efi.memmap.desc_size);
-				md = new;
-				md->attribute |= m_attr;
-				md->phys_addr = m_start;
-				md->num_pages = (m_end - m_start + 1) >>
-					EFI_PAGE_SHIFT;
-				/* last part */
-				new += efi.memmap.desc_size;
-				memcpy(new, old, efi.memmap.desc_size);
-				md = new;
-				md->phys_addr = m_end + 1;
-				md->num_pages = (end - m_end) >>
-					EFI_PAGE_SHIFT;
-			}
-
-			if ((start < m_start && m_start < end) &&
-			    (end <= m_end)) {
-				/* first part */
-				md->num_pages = (m_start - md->phys_addr) >>
-					EFI_PAGE_SHIFT;
-				/* latter part */
-				new += efi.memmap.desc_size;
-				memcpy(new, old, efi.memmap.desc_size);
-				md = new;
-				md->phys_addr = m_start;
-				md->num_pages = (end - md->phys_addr + 1) >>
-					EFI_PAGE_SHIFT;
-				md->attribute |= m_attr;
-			}
-		}
-	}
+	efi_memmap_insert(&efi.memmap, new_memmap, efi_range);
 
 	/* swap into new EFI memmap */
-	efi_unmap_memmap();
-	efi.memmap.map = new_memmap;
-	efi.memmap.phys_map = new_memmap_phy;
-	efi.memmap.nr_map = new_nr_map;
-	efi.memmap.map_end = efi.memmap.map + efi.memmap.nr_map * efi.memmap.desc_size;
-	set_bit(EFI_MEMMAP, &efi.flags);
+	early_memunmap(new_memmap, data.size);
+
+	efi_memmap_install(&data);
+}
+
+void __init efi_fake_memmap(void)
+{
+	int i;
+
+	if (!efi_enabled(EFI_MEMMAP) || !nr_fake_mem)
+		return;
+
+	for (i = 0; i < nr_fake_mem; i++)
+		efi_fake_range(&efi_fake_mems[i]);
 
 	/* print new EFI memmap */
 	efi_print_memmap();
@@ -214,22 +101,22 @@ static int __init setup_fake_mem(char *p)
 		if (nr_fake_mem >= EFI_MAX_FAKEMEM)
 			break;
 
-		fake_mems[nr_fake_mem].range.start = start;
-		fake_mems[nr_fake_mem].range.end = start + mem_size - 1;
-		fake_mems[nr_fake_mem].attribute = attribute;
+		efi_fake_mems[nr_fake_mem].range.start = start;
+		efi_fake_mems[nr_fake_mem].range.end = start + mem_size - 1;
+		efi_fake_mems[nr_fake_mem].attribute = attribute;
 		nr_fake_mem++;
 
 		if (*p == ',')
 			p++;
 	}
 
-	sort(fake_mems, nr_fake_mem, sizeof(struct fake_mem),
+	sort(efi_fake_mems, nr_fake_mem, sizeof(struct efi_mem_range),
 	     cmp_fake_mem, NULL);
 
 	for (i = 0; i < nr_fake_mem; i++)
 		pr_info("efi_fake_mem: add attr=0x%016llx to [mem 0x%016llx-0x%016llx]",
-			fake_mems[i].attribute, fake_mems[i].range.start,
-			fake_mems[i].range.end);
+			efi_fake_mems[i].attribute, efi_fake_mems[i].range.start,
+			efi_fake_mems[i].range.end);
 
 	return *p == '\0' ? 0 : -EINVAL;
 }

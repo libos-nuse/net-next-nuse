@@ -1,16 +1,6 @@
-/* Copyright (c) 2014 Broadcom Corporation
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+// SPDX-License-Identifier: ISC
+/*
+ * Copyright (c) 2014 Broadcom Corporation
  */
 
 
@@ -36,15 +26,17 @@
 #define BRCMF_FLOWRING_HASH_STA(fifo, ifidx) (fifo + ifidx * 16)
 
 static const u8 brcmf_flowring_prio2fifo[] = {
-	1,
-	0,
 	0,
 	1,
+	1,
+	0,
 	2,
 	2,
 	3,
 	3
 };
+
+static const u8 ALLFFMAC[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
 
 static bool
@@ -234,13 +226,20 @@ static void brcmf_flowring_block(struct brcmf_flowring *flow, u16 flowid,
 
 void brcmf_flowring_delete(struct brcmf_flowring *flow, u16 flowid)
 {
+	struct brcmf_bus *bus_if = dev_get_drvdata(flow->dev);
 	struct brcmf_flowring_ring *ring;
+	struct brcmf_if *ifp;
 	u16 hash_idx;
+	u8 ifidx;
 	struct sk_buff *skb;
 
 	ring = flow->rings[flowid];
 	if (!ring)
 		return;
+
+	ifidx = brcmf_flowring_ifidx_get(flow, flowid);
+	ifp = brcmf_get_ifp(bus_if->drvr, ifidx);
+
 	brcmf_flowring_block(flow, flowid, false);
 	hash_idx = ring->hash_id;
 	flow->hash[hash_idx].ifidx = BRCMF_FLOWRING_INVALID_IFIDX;
@@ -249,7 +248,7 @@ void brcmf_flowring_delete(struct brcmf_flowring *flow, u16 flowid)
 
 	skb = skb_dequeue(&ring->skblist);
 	while (skb) {
-		brcmu_pkt_buf_free_skb(skb);
+		brcmf_txfinalize(ifp, skb, false);
 		skb = skb_dequeue(&ring->skblist);
 	}
 
@@ -495,14 +494,18 @@ void brcmf_flowring_add_tdls_peer(struct brcmf_flowring *flow, int ifidx,
 	} else {
 		search = flow->tdls_entry;
 		if (memcmp(search->mac, peer, ETH_ALEN) == 0)
-			return;
+			goto free_entry;
 		while (search->next) {
 			search = search->next;
 			if (memcmp(search->mac, peer, ETH_ALEN) == 0)
-				return;
+				goto free_entry;
 		}
 		search->next = tdls_entry;
 	}
 
 	flow->tdls_active = true;
+	return;
+
+free_entry:
+	kfree(tdls_entry);
 }

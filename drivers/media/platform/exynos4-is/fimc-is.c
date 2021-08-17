@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Samsung EXYNOS4x12 FIMC-IS (Imaging Subsystem) driver
  *
@@ -5,17 +6,12 @@
  *
  * Authors: Sylwester Nawrocki <s.nawrocki@samsung.com>
  *          Younghwan Joo <yhwan.joo@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #define pr_fmt(fmt) "%s:%d " fmt, __func__, __LINE__
 
 #include <linux/device.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
-#include <linux/dma-contiguous.h>
 #include <linux/errno.h>
 #include <linux/firmware.h>
 #include <linux/interrupt.h>
@@ -52,6 +48,9 @@ static char *fimc_is_clocks[ISS_CLKS_MAX] = {
 	[ISS_CLK_DRC]			= "drc",
 	[ISS_CLK_FD]			= "fd",
 	[ISS_CLK_MCUISP]		= "mcuisp",
+	[ISS_CLK_GICISP]		= "gicisp",
+	[ISS_CLK_PWM_ISP]		= "pwm_isp",
+	[ISS_CLK_MCUCTL_ISP]		= "mcuctl_isp",
 	[ISS_CLK_UART]			= "uart",
 	[ISS_CLK_ISP_DIV0]		= "ispdiv0",
 	[ISS_CLK_ISP_DIV1]		= "ispdiv1",
@@ -165,32 +164,36 @@ static int fimc_is_parse_sensor_config(struct fimc_is *is, unsigned int index,
 						struct device_node *node)
 {
 	struct fimc_is_sensor *sensor = &is->sensor[index];
+	struct device_node *ep, *port;
 	u32 tmp = 0;
 	int ret;
 
 	sensor->drvdata = fimc_is_sensor_get_drvdata(node);
 	if (!sensor->drvdata) {
-		dev_err(&is->pdev->dev, "no driver data found for: %s\n",
-							 node->full_name);
+		dev_err(&is->pdev->dev, "no driver data found for: %pOF\n",
+							 node);
 		return -EINVAL;
 	}
 
-	node = of_graph_get_next_endpoint(node, NULL);
-	if (!node)
+	ep = of_graph_get_next_endpoint(node, NULL);
+	if (!ep)
 		return -ENXIO;
 
-	node = of_graph_get_remote_port(node);
-	if (!node)
+	port = of_graph_get_remote_port(ep);
+	of_node_put(ep);
+	if (!port)
 		return -ENXIO;
 
 	/* Use MIPI-CSIS channel id to determine the ISP I2C bus index. */
-	ret = of_property_read_u32(node, "reg", &tmp);
+	ret = of_property_read_u32(port, "reg", &tmp);
 	if (ret < 0) {
-		dev_err(&is->pdev->dev, "reg property not found at: %s\n",
-							 node->full_name);
+		dev_err(&is->pdev->dev, "reg property not found at: %pOF\n",
+							 port);
+		of_node_put(port);
 		return ret;
 	}
 
+	of_node_put(port);
 	sensor->i2c_bus = tmp - FIMC_INPUT_MIPI_CSI2_0;
 	return 0;
 }
@@ -203,9 +206,6 @@ static int fimc_is_register_subdevs(struct fimc_is *is)
 	ret = fimc_isp_subdev_create(&is->isp);
 	if (ret < 0)
 		return ret;
-
-	/* Initialize memory allocator context for the ISP DMA. */
-	is->isp.alloc_ctx = is->alloc_ctx;
 
 	for_each_compatible_node(i2c_bus, NULL, FIMC_IS_I2C_COMPATIBLE) {
 		for_each_available_child_of_node(i2c_bus, child) {
@@ -340,7 +340,6 @@ static int fimc_is_alloc_cpu_memory(struct fimc_is *is)
 		return -ENOMEM;
 
 	is->memory.size = FIMC_IS_CPU_MEM_SIZE;
-	memset(is->memory.vaddr, 0, is->memory.size);
 
 	dev_info(dev, "FIMC-IS CPU memory base: %#x\n", (u32)is->memory.paddr);
 
@@ -652,7 +651,7 @@ static int fimc_is_hw_open_sensor(struct fimc_is *is,
 
 int fimc_is_hw_initialize(struct fimc_is *is)
 {
-	const int config_ids[] = {
+	static const int config_ids[] = {
 		IS_SC_PREVIEW_STILL, IS_SC_PREVIEW_VIDEO,
 		IS_SC_CAPTURE_STILL, IS_SC_CAPTURE_VIDEO
 	};
@@ -734,7 +733,7 @@ int fimc_is_hw_initialize(struct fimc_is *is)
 	return 0;
 }
 
-static int fimc_is_log_show(struct seq_file *s, void *data)
+static int fimc_is_show(struct seq_file *s, void *data)
 {
 	struct fimc_is *is = s->private;
 	const u8 *buf = is->memory.vaddr + FIMC_IS_DEBUG_REGION_OFFSET;
@@ -748,17 +747,7 @@ static int fimc_is_log_show(struct seq_file *s, void *data)
 	return 0;
 }
 
-static int fimc_is_debugfs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, fimc_is_log_show, inode->i_private);
-}
-
-static const struct file_operations fimc_is_debugfs_fops = {
-	.open		= fimc_is_debugfs_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(fimc_is);
 
 static void fimc_is_debugfs_remove(struct fimc_is *is)
 {
@@ -766,18 +755,12 @@ static void fimc_is_debugfs_remove(struct fimc_is *is)
 	is->debugfs_entry = NULL;
 }
 
-static int fimc_is_debugfs_create(struct fimc_is *is)
+static void fimc_is_debugfs_create(struct fimc_is *is)
 {
-	struct dentry *dentry;
-
 	is->debugfs_entry = debugfs_create_dir("fimc_is", NULL);
 
-	dentry = debugfs_create_file("fw_log", S_IRUGO, is->debugfs_entry,
-				     is, &fimc_is_debugfs_fops);
-	if (!dentry)
-		fimc_is_debugfs_remove(is);
-
-	return is->debugfs_entry == NULL ? -EIO : 0;
+	debugfs_create_file("fw_log", S_IRUGO, is->debugfs_entry, is,
+			    &fimc_is_fops);
 }
 
 static int fimc_is_runtime_resume(struct device *dev);
@@ -815,18 +798,20 @@ static int fimc_is_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	is->pmu_regs = of_iomap(node, 0);
+	of_node_put(node);
 	if (!is->pmu_regs)
 		return -ENOMEM;
 
 	is->irq = irq_of_parse_and_map(dev->of_node, 0);
 	if (!is->irq) {
 		dev_err(dev, "no irq found\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto err_iounmap;
 	}
 
 	ret = fimc_is_get_clocks(is);
 	if (ret < 0)
-		return ret;
+		goto err_iounmap;
 
 	platform_set_drvdata(pdev, is);
 
@@ -847,22 +832,21 @@ static int fimc_is_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto err_pm;
 
-	is->alloc_ctx = vb2_dma_contig_init_ctx(dev);
-	if (IS_ERR(is->alloc_ctx)) {
-		ret = PTR_ERR(is->alloc_ctx);
+	vb2_dma_contig_set_max_seg_size(dev, DMA_BIT_MASK(32));
+
+	ret = devm_of_platform_populate(dev);
+	if (ret < 0)
 		goto err_pm;
-	}
+
 	/*
 	 * Register FIMC-IS V4L2 subdevs to this driver. The video nodes
 	 * will be created within the subdev's registered() callback.
 	 */
 	ret = fimc_is_register_subdevs(is);
 	if (ret < 0)
-		goto err_vb;
+		goto err_pm;
 
-	ret = fimc_is_debugfs_create(is);
-	if (ret < 0)
-		goto err_sd;
+	fimc_is_debugfs_create(is);
 
 	ret = fimc_is_request_firmware(is, FIMC_IS_FW_FILENAME);
 	if (ret < 0)
@@ -875,17 +859,17 @@ static int fimc_is_probe(struct platform_device *pdev)
 
 err_dfs:
 	fimc_is_debugfs_remove(is);
-err_sd:
 	fimc_is_unregister_subdevs(is);
-err_vb:
-	vb2_dma_contig_cleanup_ctx(is->alloc_ctx);
 err_pm:
+	pm_runtime_put_noidle(dev);
 	if (!pm_runtime_enabled(dev))
 		fimc_is_runtime_suspend(dev);
 err_irq:
 	free_irq(is->irq, is);
 err_clk:
 	fimc_is_put_clocks(is);
+err_iounmap:
+	iounmap(is->pmu_regs);
 	return ret;
 }
 
@@ -939,8 +923,9 @@ static int fimc_is_remove(struct platform_device *pdev)
 		fimc_is_runtime_suspend(dev);
 	free_irq(is->irq, is);
 	fimc_is_unregister_subdevs(is);
-	vb2_dma_contig_cleanup_ctx(is->alloc_ctx);
+	vb2_dma_contig_clear_max_seg_size(dev);
 	fimc_is_put_clocks(is);
+	iounmap(is->pmu_regs);
 	fimc_is_debugfs_remove(is);
 	release_firmware(is->fw.f_w);
 	fimc_is_free_cpu_memory(is);

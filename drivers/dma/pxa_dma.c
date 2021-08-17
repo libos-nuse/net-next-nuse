@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2015 Robert Jarzmik <robert.jarzmik@free.fr>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/err.h>
@@ -21,6 +18,7 @@
 #include <linux/of_device.h>
 #include <linux/of_dma.h>
 #include <linux/of.h>
+#include <linux/wait.h>
 #include <linux/dma/pxa-dma.h>
 
 #include "dmaengine.h"
@@ -118,6 +116,8 @@ struct pxad_chan {
 	struct pxad_phy		*phy;
 	struct dma_pool		*desc_pool;	/* Descriptors pool */
 	dma_cookie_t		bus_error;
+
+	wait_queue_head_t	wq_state;
 };
 
 struct pxad_device {
@@ -129,7 +129,6 @@ struct pxad_device {
 	spinlock_t			phy_lock;	/* Phy association */
 #ifdef CONFIG_DEBUG_FS
 	struct dentry			*dbgfs_root;
-	struct dentry			*dbgfs_state;
 	struct dentry			**dbgfs_chan;
 #endif
 };
@@ -176,6 +175,8 @@ static unsigned int pxad_drcmr(unsigned int line)
 	return 0x1000 + line * 4;
 }
 
+static bool pxad_filter_fn(struct dma_chan *chan, void *param);
+
 /*
  * Debug fs
  */
@@ -184,7 +185,7 @@ static unsigned int pxad_drcmr(unsigned int line)
 #include <linux/uaccess.h>
 #include <linux/seq_file.h>
 
-static int dbg_show_requester_chan(struct seq_file *s, void *p)
+static int requester_chan_show(struct seq_file *s, void *p)
 {
 	struct pxad_phy *phy = s->private;
 	int i;
@@ -215,7 +216,7 @@ static int is_phys_valid(unsigned long addr)
 #define PXA_DCSR_STR(flag) (dcsr & PXA_DCSR_##flag ? #flag" " : "")
 #define PXA_DCMD_STR(flag) (dcmd & PXA_DCMD_##flag ? #flag" " : "")
 
-static int dbg_show_descriptors(struct seq_file *s, void *p)
+static int descriptors_show(struct seq_file *s, void *p)
 {
 	struct pxad_phy *phy = s->private;
 	int i, max_show = 20, burst, width;
@@ -258,7 +259,7 @@ static int dbg_show_descriptors(struct seq_file *s, void *p)
 	return 0;
 }
 
-static int dbg_show_chan_state(struct seq_file *s, void *p)
+static int chan_state_show(struct seq_file *s, void *p)
 {
 	struct pxad_phy *phy = s->private;
 	u32 dcsr, dcmd;
@@ -301,7 +302,7 @@ static int dbg_show_chan_state(struct seq_file *s, void *p)
 	return 0;
 }
 
-static int dbg_show_state(struct seq_file *s, void *p)
+static int state_show(struct seq_file *s, void *p)
 {
 	struct pxad_device *pdev = s->private;
 
@@ -312,53 +313,27 @@ static int dbg_show_state(struct seq_file *s, void *p)
 	return 0;
 }
 
-#define DBGFS_FUNC_DECL(name) \
-static int dbg_open_##name(struct inode *inode, struct file *file) \
-{ \
-	return single_open(file, dbg_show_##name, inode->i_private); \
-} \
-static const struct file_operations dbg_fops_##name = { \
-	.owner		= THIS_MODULE, \
-	.open		= dbg_open_##name, \
-	.llseek		= seq_lseek, \
-	.read		= seq_read, \
-	.release	= single_release, \
-}
-
-DBGFS_FUNC_DECL(state);
-DBGFS_FUNC_DECL(chan_state);
-DBGFS_FUNC_DECL(descriptors);
-DBGFS_FUNC_DECL(requester_chan);
+DEFINE_SHOW_ATTRIBUTE(state);
+DEFINE_SHOW_ATTRIBUTE(chan_state);
+DEFINE_SHOW_ATTRIBUTE(descriptors);
+DEFINE_SHOW_ATTRIBUTE(requester_chan);
 
 static struct dentry *pxad_dbg_alloc_chan(struct pxad_device *pdev,
 					     int ch, struct dentry *chandir)
 {
 	char chan_name[11];
-	struct dentry *chan, *chan_state = NULL, *chan_descr = NULL;
-	struct dentry *chan_reqs = NULL;
+	struct dentry *chan;
 	void *dt;
 
 	scnprintf(chan_name, sizeof(chan_name), "%d", ch);
 	chan = debugfs_create_dir(chan_name, chandir);
 	dt = (void *)&pdev->phys[ch];
 
-	if (chan)
-		chan_state = debugfs_create_file("state", 0400, chan, dt,
-						 &dbg_fops_chan_state);
-	if (chan_state)
-		chan_descr = debugfs_create_file("descriptors", 0400, chan, dt,
-						 &dbg_fops_descriptors);
-	if (chan_descr)
-		chan_reqs = debugfs_create_file("requesters", 0400, chan, dt,
-						&dbg_fops_requester_chan);
-	if (!chan_reqs)
-		goto err_state;
+	debugfs_create_file("state", 0400, chan, dt, &chan_state_fops);
+	debugfs_create_file("descriptors", 0400, chan, dt, &descriptors_fops);
+	debugfs_create_file("requesters", 0400, chan, dt, &requester_chan_fops);
 
 	return chan;
-
-err_state:
-	debugfs_remove_recursive(chan);
-	return NULL;
 }
 
 static void pxad_init_debugfs(struct pxad_device *pdev)
@@ -366,40 +341,20 @@ static void pxad_init_debugfs(struct pxad_device *pdev)
 	int i;
 	struct dentry *chandir;
 
-	pdev->dbgfs_root = debugfs_create_dir(dev_name(pdev->slave.dev), NULL);
-	if (IS_ERR(pdev->dbgfs_root) || !pdev->dbgfs_root)
-		goto err_root;
-
-	pdev->dbgfs_state = debugfs_create_file("state", 0400, pdev->dbgfs_root,
-						pdev, &dbg_fops_state);
-	if (!pdev->dbgfs_state)
-		goto err_state;
-
 	pdev->dbgfs_chan =
-		kmalloc_array(pdev->nr_chans, sizeof(*pdev->dbgfs_state),
+		kmalloc_array(pdev->nr_chans, sizeof(struct dentry *),
 			      GFP_KERNEL);
 	if (!pdev->dbgfs_chan)
-		goto err_alloc;
+		return;
+
+	pdev->dbgfs_root = debugfs_create_dir(dev_name(pdev->slave.dev), NULL);
+
+	debugfs_create_file("state", 0400, pdev->dbgfs_root, pdev, &state_fops);
 
 	chandir = debugfs_create_dir("channels", pdev->dbgfs_root);
-	if (!chandir)
-		goto err_chandir;
 
-	for (i = 0; i < pdev->nr_chans; i++) {
+	for (i = 0; i < pdev->nr_chans; i++)
 		pdev->dbgfs_chan[i] = pxad_dbg_alloc_chan(pdev, i, chandir);
-		if (!pdev->dbgfs_chan[i])
-			goto err_chans;
-	}
-
-	return;
-err_chans:
-err_chandir:
-	kfree(pdev->dbgfs_chan);
-err_alloc:
-err_state:
-	debugfs_remove_recursive(pdev->dbgfs_root);
-err_root:
-	pr_err("pxad: debugfs is not available\n");
 }
 
 static void pxad_cleanup_debugfs(struct pxad_device *pdev)
@@ -410,15 +365,6 @@ static void pxad_cleanup_debugfs(struct pxad_device *pdev)
 static inline void pxad_init_debugfs(struct pxad_device *pdev) {}
 static inline void pxad_cleanup_debugfs(struct pxad_device *pdev) {}
 #endif
-
-/*
- * In the transition phase where legacy pxa handling is done at the same time as
- * mmp_dma, the DMA physical channel split between the 2 DMA providers is done
- * through legacy_reserved. Legacy code reserves DMA channels by settings
- * corresponding bits in legacy_reserved.
- */
-static u32 legacy_reserved;
-static u32 legacy_unavailable;
 
 static struct pxad_phy *lookup_phy(struct pxad_chan *pchan)
 {
@@ -440,14 +386,10 @@ static struct pxad_phy *lookup_phy(struct pxad_chan *pchan)
 		for (i = 0; i < pdev->nr_chans; i++) {
 			if (prio != (i & 0xf) >> 2)
 				continue;
-			if ((i < 32) && (legacy_reserved & BIT(i)))
-				continue;
 			phy = &pdev->phys[i];
 			if (!phy->vchan) {
 				phy->vchan = pchan;
 				found = phy;
-				if (i < 32)
-					legacy_unavailable |= BIT(i);
 				goto out_unlock;
 			}
 		}
@@ -467,7 +409,6 @@ static void pxad_free_phy(struct pxad_chan *chan)
 	struct pxad_device *pdev = to_pxad_dev(chan->vc.chan.device);
 	unsigned long flags;
 	u32 reg;
-	int i;
 
 	dev_dbg(&chan->vc.chan.dev->device,
 		"%s(): freeing\n", __func__);
@@ -481,9 +422,6 @@ static void pxad_free_phy(struct pxad_chan *chan)
 	}
 
 	spin_lock_irqsave(&pdev->phy_lock, flags);
-	for (i = 0; i < 32; i++)
-		if (chan->phy == &pdev->phys[i])
-			legacy_unavailable &= ~BIT(i);
 	chan->phy->vchan = NULL;
 	chan->phy = NULL;
 	spin_unlock_irqrestore(&pdev->phy_lock, flags);
@@ -572,6 +510,7 @@ static void pxad_launch_chan(struct pxad_chan *chan,
 	 */
 	phy_writel(chan->phy, desc->first, DDADR);
 	phy_enable(chan->phy, chan->misaligned);
+	wake_up(&chan->wq_state);
 }
 
 static void set_updater_desc(struct pxad_desc_sw *sw_desc,
@@ -635,7 +574,7 @@ static bool pxad_try_hotchain(struct virt_dma_chan *vc,
 		vd_last_issued = list_entry(vc->desc_issued.prev,
 					    struct virt_dma_desc, node);
 		pxad_desc_chain(vd_last_issued, vd);
-		if (is_chan_running(chan) || is_desc_completed(vd_last_issued))
+		if (is_chan_running(chan) || is_desc_completed(vd))
 			return true;
 	}
 
@@ -668,6 +607,7 @@ static irqreturn_t pxad_chan_handler(int irq, void *dev_id)
 	struct virt_dma_desc *vd, *tmp;
 	unsigned int dcsr;
 	unsigned long flags;
+	bool vd_completed;
 	dma_cookie_t last_started = 0;
 
 	BUG_ON(!chan);
@@ -678,15 +618,17 @@ static irqreturn_t pxad_chan_handler(int irq, void *dev_id)
 
 	spin_lock_irqsave(&chan->vc.lock, flags);
 	list_for_each_entry_safe(vd, tmp, &chan->vc.desc_issued, node) {
+		vd_completed = is_desc_completed(vd);
 		dev_dbg(&chan->vc.chan.dev->device,
-			"%s(): checking txd %p[%x]: completed=%d\n",
-			__func__, vd, vd->tx.cookie, is_desc_completed(vd));
+			"%s(): checking txd %p[%x]: completed=%d dcsr=0x%x\n",
+			__func__, vd, vd->tx.cookie, vd_completed,
+			dcsr);
 		last_started = vd->tx.cookie;
 		if (to_pxad_sw_desc(vd)->cyclic) {
 			vchan_cyclic_callback(vd);
 			break;
 		}
-		if (is_desc_completed(vd)) {
+		if (vd_completed) {
 			list_del(&vd->node);
 			vchan_cookie_complete(vd);
 		} else {
@@ -717,6 +659,7 @@ static irqreturn_t pxad_chan_handler(int irq, void *dev_id)
 		}
 	}
 	spin_unlock_irqrestore(&chan->vc.lock, flags);
+	wake_up(&chan->wq_state);
 
 	return IRQ_HANDLED;
 }
@@ -732,8 +675,6 @@ static irqreturn_t pxad_int_handler(int irq, void *dev_id)
 		i = __ffs(dint);
 		dint &= (dint - 1);
 		phy = &pdev->phys[i];
-		if ((i < 32) && (legacy_reserved & BIT(i)))
-			continue;
 		if (pxad_chan_handler(irq, phy) == IRQ_HANDLED)
 			ret = IRQ_HANDLED;
 	}
@@ -772,6 +713,8 @@ static void pxad_free_chan_resources(struct dma_chan *dchan)
 	dma_pool_destroy(chan->desc_pool);
 	chan->desc_pool = NULL;
 
+	chan->drcmr = U32_MAX;
+	chan->prio = PXAD_PRIO_LOWEST;
 }
 
 static void pxad_free_desc(struct virt_dma_desc *vd)
@@ -1268,6 +1211,14 @@ static enum dma_status pxad_tx_status(struct dma_chan *dchan,
 	return ret;
 }
 
+static void pxad_synchronize(struct dma_chan *dchan)
+{
+	struct pxad_chan *chan = to_pxad_chan(dchan);
+
+	wait_event(chan->wq_state, !is_chan_running(chan));
+	vchan_synchronize(&chan->vc);
+}
+
 static void pxad_free_channels(struct dma_device *dmadev)
 {
 	struct pxad_chan *c, *cn;
@@ -1285,7 +1236,6 @@ static int pxad_remove(struct platform_device *op)
 
 	pxad_cleanup_debugfs(pdev);
 	pxad_free_channels(&pdev->slave);
-	dma_async_device_unregister(&pdev->slave);
 	return 0;
 }
 
@@ -1372,6 +1322,7 @@ static int pxad_init_dmadev(struct platform_device *op,
 	pdev->slave.device_tx_status = pxad_tx_status;
 	pdev->slave.device_issue_pending = pxad_issue_pending;
 	pdev->slave.device_config = pxad_config;
+	pdev->slave.device_synchronize = pxad_synchronize;
 	pdev->slave.device_terminate_all = pxad_terminate_all;
 
 	if (op->dev.coherent_dma_mask)
@@ -1387,20 +1338,25 @@ static int pxad_init_dmadev(struct platform_device *op,
 		c = devm_kzalloc(&op->dev, sizeof(*c), GFP_KERNEL);
 		if (!c)
 			return -ENOMEM;
+
+		c->drcmr = U32_MAX;
+		c->prio = PXAD_PRIO_LOWEST;
 		c->vc.desc_free = pxad_free_desc;
 		vchan_init(&c->vc, &pdev->slave);
+		init_waitqueue_head(&c->wq_state);
 	}
 
-	return dma_async_device_register(&pdev->slave);
+	return dmaenginem_async_device_register(&pdev->slave);
 }
 
 static int pxad_probe(struct platform_device *op)
 {
 	struct pxad_device *pdev;
 	const struct of_device_id *of_id;
+	const struct dma_slave_map *slave_map = NULL;
 	struct mmp_dma_platdata *pdata = dev_get_platdata(&op->dev);
 	struct resource *iores;
-	int ret, dma_channels = 0, nb_requestors = 0;
+	int ret, dma_channels = 0, nb_requestors = 0, slave_map_cnt = 0;
 	const enum dma_slave_buswidth widths =
 		DMA_SLAVE_BUSWIDTH_1_BYTE   | DMA_SLAVE_BUSWIDTH_2_BYTES |
 		DMA_SLAVE_BUSWIDTH_4_BYTES;
@@ -1427,10 +1383,12 @@ static int pxad_probe(struct platform_device *op)
 				 "#dma-requests set to default 32 as missing in OF: %d",
 				 ret);
 			nb_requestors = 32;
-		};
+		}
 	} else if (pdata && pdata->dma_channels) {
 		dma_channels = pdata->dma_channels;
 		nb_requestors = pdata->nb_requestors;
+		slave_map = pdata->slave_map;
+		slave_map_cnt = pdata->slave_map_cnt;
 	} else {
 		dma_channels = 32;	/* default 32 channel */
 	}
@@ -1442,6 +1400,9 @@ static int pxad_probe(struct platform_device *op)
 	pdev->slave.device_prep_dma_memcpy = pxad_prep_memcpy;
 	pdev->slave.device_prep_slave_sg = pxad_prep_slave_sg;
 	pdev->slave.device_prep_dma_cyclic = pxad_prep_dma_cyclic;
+	pdev->slave.filter.map = slave_map;
+	pdev->slave.filter.mapcnt = slave_map_cnt;
+	pdev->slave.filter.fn = pxad_filter_fn;
 
 	pdev->slave.copy_align = PDMA_ALIGNMENT;
 	pdev->slave.src_addr_widths = widths;
@@ -1490,7 +1451,7 @@ static struct platform_driver pxad_driver = {
 	.remove		= pxad_remove,
 };
 
-bool pxad_filter_fn(struct dma_chan *chan, void *param)
+static bool pxad_filter_fn(struct dma_chan *chan, void *param)
 {
 	struct pxad_chan *c = to_pxad_chan(chan);
 	struct pxad_param *p = param;
@@ -1503,16 +1464,6 @@ bool pxad_filter_fn(struct dma_chan *chan, void *param)
 
 	return true;
 }
-EXPORT_SYMBOL_GPL(pxad_filter_fn);
-
-int pxad_toggle_reserved_channel(int legacy_channel)
-{
-	if (legacy_unavailable & (BIT(legacy_channel)))
-		return -EBUSY;
-	legacy_reserved ^= BIT(legacy_channel);
-	return 0;
-}
-EXPORT_SYMBOL_GPL(pxad_toggle_reserved_channel);
 
 module_platform_driver(pxad_driver);
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __PERF_STRBUF_H
 #define __PERF_STRBUF_H
 
@@ -40,6 +41,10 @@
 
 #include <assert.h>
 #include <stdarg.h>
+#include <stddef.h>
+#include <string.h>
+#include <linux/compiler.h>
+#include <sys/types.h>
 
 extern char strbuf_slopbuf[];
 struct strbuf {
@@ -63,9 +68,8 @@ static inline ssize_t strbuf_avail(const struct strbuf *sb) {
 int strbuf_grow(struct strbuf *buf, size_t);
 
 static inline int strbuf_setlen(struct strbuf *sb, size_t len) {
-	int ret;
 	if (!sb->alloc) {
-		ret = strbuf_grow(sb, 0);
+		int ret = strbuf_grow(sb, 0);
 		if (ret)
 			return ret;
 	}
@@ -83,8 +87,7 @@ static inline int strbuf_addstr(struct strbuf *sb, const char *s) {
 	return strbuf_add(sb, s, strlen(s));
 }
 
-__attribute__((format(printf,2,3)))
-int strbuf_addf(struct strbuf *sb, const char *fmt, ...);
+int strbuf_addf(struct strbuf *sb, const char *fmt, ...) __printf(2, 3);
 
 /* XXX: if read fails, any partial read is undone */
 ssize_t strbuf_read(struct strbuf *, int fd, ssize_t hint);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * gpiolib support for Wolfson WM835x PMICs
  *
@@ -5,17 +6,12 @@
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
  *
- *  This program is free software; you can redistribute  it and/or modify it
- *  under  the terms of  the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the  License, or (at your
- *  option) any later version.
- *
  */
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/mfd/core.h>
 #include <linux/platform_device.h>
 #include <linux/seq_file.h>
@@ -93,7 +89,7 @@ static int wm8350_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
 	return wm8350->irq_base + WM8350_IRQ_GPIO(offset);
 }
 
-static struct gpio_chip template_chip = {
+static const struct gpio_chip template_chip = {
 	.label			= "wm8350",
 	.owner			= THIS_MODULE,
 	.direction_input	= wm8350_gpio_direction_in,
@@ -139,7 +135,6 @@ static int wm8350_gpio_probe(struct platform_device *pdev)
 
 static struct platform_driver wm8350_gpio_driver = {
 	.driver.name	= "wm8350-gpio",
-	.driver.owner	= THIS_MODULE,
 	.probe		= wm8350_gpio_probe,
 };
 

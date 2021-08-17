@@ -1,45 +1,11 @@
+// SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0
 /******************************************************************************
  *
  * Module Name: dsmethod - Parser/Interpreter interface - control method parsing
  *
+ * Copyright (C) 2000 - 2020, Intel Corp.
+ *
  *****************************************************************************/
-
-/*
- * Copyright (C) 2000 - 2016, Intel Corp.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions, and the following disclaimer,
- *    without modification.
- * 2. Redistributions in binary form must reproduce at minimum a disclaimer
- *    substantially similar to the "NO WARRANTY" disclaimer below
- *    ("Disclaimer") and any redistribution must be conditioned upon
- *    including a substantially similar Disclaimer requirement for further
- *    binary redistribution.
- * 3. Neither the names of the above-listed copyright holders nor the names
- *    of any contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * Alternatively, this software may be distributed under the terms of the
- * GNU General Public License ("GPL") version 2 as published by the Free
- * Software Foundation.
- *
- * NO WARRANTY
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGES.
- */
 
 #include <acpi/acpi.h>
 #include "accommon.h"
@@ -212,6 +178,7 @@ acpi_status
 acpi_ds_method_error(acpi_status status, struct acpi_walk_state *walk_state)
 {
 	u32 aml_offset;
+	acpi_name name = 0;
 
 	ACPI_FUNCTION_ENTRY();
 
@@ -237,10 +204,13 @@ acpi_ds_method_error(acpi_status status, struct acpi_walk_state *walk_state)
 						walk_state->parser_state.
 						aml_start);
 
-		status = acpi_gbl_exception_handler(status,
-						    walk_state->method_node ?
-						    walk_state->method_node->
-						    name.integer : 0,
+		if (walk_state->method_node) {
+			name = walk_state->method_node->name.integer;
+		} else if (walk_state->deferred_node) {
+			name = walk_state->deferred_node->name.integer;
+		}
+
+		status = acpi_gbl_exception_handler(status, name,
 						    walk_state->opcode,
 						    aml_offset, NULL);
 		acpi_ex_enter_interpreter();
@@ -562,6 +532,9 @@ acpi_ds_call_control_method(struct acpi_thread_state *thread,
 		goto cleanup;
 	}
 
+	next_walk_state->method_nesting_depth =
+	    this_walk_state->method_nesting_depth + 1;
+
 	/*
 	 * Delete the operands on the previous walkstate operand stack
 	 * (they were copied to new objects)
@@ -578,6 +551,17 @@ acpi_ds_call_control_method(struct acpi_thread_state *thread,
 	ACPI_DEBUG_PRINT((ACPI_DB_DISPATCH,
 			  "**** Begin nested execution of [%4.4s] **** WalkState=%p\n",
 			  method_node->name.ascii, next_walk_state));
+
+	this_walk_state->method_pathname =
+	    acpi_ns_get_normalized_pathname(method_node, TRUE);
+	this_walk_state->method_is_nested = TRUE;
+
+	/* Optional object evaluation log */
+
+	ACPI_DEBUG_PRINT_RAW((ACPI_DB_EVALUATION,
+			      "%-26s:  %*s%s\n", "   Nested method call",
+			      next_walk_state->method_nesting_depth * 3, " ",
+			      &this_walk_state->method_pathname[1]));
 
 	/* Invoke an internal method if necessary */
 
@@ -725,6 +709,43 @@ acpi_ds_terminate_control_method(union acpi_operand_object *method_desc,
 		acpi_ds_method_data_delete_all(walk_state);
 
 		/*
+		 * Delete any namespace objects created anywhere within the
+		 * namespace by the execution of this method. Unless:
+		 * 1) This method is a module-level executable code method, in which
+		 *    case we want make the objects permanent.
+		 * 2) There are other threads executing the method, in which case we
+		 *    will wait until the last thread has completed.
+		 */
+		if (!(method_desc->method.info_flags & ACPI_METHOD_MODULE_LEVEL)
+		    && (method_desc->method.thread_count == 1)) {
+
+			/* Delete any direct children of (created by) this method */
+
+			(void)acpi_ex_exit_interpreter();
+			acpi_ns_delete_namespace_subtree(walk_state->
+							 method_node);
+			(void)acpi_ex_enter_interpreter();
+
+			/*
+			 * Delete any objects that were created by this method
+			 * elsewhere in the namespace (if any were created).
+			 * Use of the ACPI_METHOD_MODIFIED_NAMESPACE optimizes the
+			 * deletion such that we don't have to perform an entire
+			 * namespace walk for every control method execution.
+			 */
+			if (method_desc->method.
+			    info_flags & ACPI_METHOD_MODIFIED_NAMESPACE) {
+				(void)acpi_ex_exit_interpreter();
+				acpi_ns_delete_namespace_by_owner(method_desc->
+								  method.
+								  owner_id);
+				(void)acpi_ex_enter_interpreter();
+				method_desc->method.info_flags &=
+				    ~ACPI_METHOD_MODIFIED_NAMESPACE;
+			}
+		}
+
+		/*
 		 * If method is serialized, release the mutex and restore the
 		 * current sync level for this thread
 		 */
@@ -741,39 +762,6 @@ acpi_ds_terminate_control_method(union acpi_operand_object *method_desc,
 				acpi_os_release_mutex(method_desc->method.
 						      mutex->mutex.os_mutex);
 				method_desc->method.mutex->mutex.thread_id = 0;
-			}
-		}
-
-		/*
-		 * Delete any namespace objects created anywhere within the
-		 * namespace by the execution of this method. Unless:
-		 * 1) This method is a module-level executable code method, in which
-		 *    case we want make the objects permanent.
-		 * 2) There are other threads executing the method, in which case we
-		 *    will wait until the last thread has completed.
-		 */
-		if (!(method_desc->method.info_flags & ACPI_METHOD_MODULE_LEVEL)
-		    && (method_desc->method.thread_count == 1)) {
-
-			/* Delete any direct children of (created by) this method */
-
-			acpi_ns_delete_namespace_subtree(walk_state->
-							 method_node);
-
-			/*
-			 * Delete any objects that were created by this method
-			 * elsewhere in the namespace (if any were created).
-			 * Use of the ACPI_METHOD_MODIFIED_NAMESPACE optimizes the
-			 * deletion such that we don't have to perform an entire
-			 * namespace walk for every control method execution.
-			 */
-			if (method_desc->method.
-			    info_flags & ACPI_METHOD_MODIFIED_NAMESPACE) {
-				acpi_ns_delete_namespace_by_owner(method_desc->
-								  method.
-								  owner_id);
-				method_desc->method.info_flags &=
-				    ~ACPI_METHOD_MODIFIED_NAMESPACE;
 			}
 		}
 	}

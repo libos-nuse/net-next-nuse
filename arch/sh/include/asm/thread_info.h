@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_SH_THREAD_INFO_H
 #define __ASM_SH_THREAD_INFO_H
 
@@ -9,8 +10,6 @@
  *  Copyright (C) 2002  David Howells (dhowells@redhat.com)
  *  - Incorporating suggestions made by Linus Torvalds and Dave Miller
  */
-#ifdef __KERNEL__
-
 #include <asm/page.h>
 
 /*
@@ -62,9 +61,6 @@ struct thread_info {
 	.addr_limit	= KERNEL_DS,		\
 }
 
-#define init_thread_info	(init_thread_union.thread_info)
-#define init_stack		(init_thread_union.stack)
-
 /* how to get the current stack pointer from C */
 register unsigned long current_stack_pointer asm("r15") __used;
 
@@ -72,9 +68,7 @@ register unsigned long current_stack_pointer asm("r15") __used;
 static inline struct thread_info *current_thread_info(void)
 {
 	struct thread_info *ti;
-#if defined(CONFIG_SUPERH64)
-	__asm__ __volatile__ ("getcon	cr17, %0" : "=r" (ti));
-#elif defined(CONFIG_CPU_HAS_SR_RB)
+#if defined(CONFIG_CPU_HAS_SR_RB)
 	__asm__ __volatile__ ("stc	r7_bank, %0" : "=r" (ti));
 #else
 	unsigned long __dummy;
@@ -151,18 +145,9 @@ extern void init_thread_xstate(void);
  * ever touches our thread-synchronous status, so we don't
  * have to worry about atomic accesses.
  */
-#define TS_RESTORE_SIGMASK	0x0001	/* restore signal mask in do_signal() */
 #define TS_USEDFPU		0x0002	/* FPU used by this task this quantum */
 
 #ifndef __ASSEMBLY__
-
-#define HAVE_SET_RESTORE_SIGMASK	1
-static inline void set_restore_sigmask(void)
-{
-	struct thread_info *ti = current_thread_info();
-	ti->status |= TS_RESTORE_SIGMASK;
-	WARN_ON(!test_bit(TIF_SIGPENDING, (unsigned long *)&ti->flags));
-}
 
 #define TI_FLAG_FAULT_CODE_SHIFT	24
 
@@ -182,25 +167,5 @@ static inline unsigned int get_thread_fault_code(void)
 	return ti->flags >> TI_FLAG_FAULT_CODE_SHIFT;
 }
 
-static inline void clear_restore_sigmask(void)
-{
-	current_thread_info()->status &= ~TS_RESTORE_SIGMASK;
-}
-static inline bool test_restore_sigmask(void)
-{
-	return current_thread_info()->status & TS_RESTORE_SIGMASK;
-}
-static inline bool test_and_clear_restore_sigmask(void)
-{
-	struct thread_info *ti = current_thread_info();
-	if (!(ti->status & TS_RESTORE_SIGMASK))
-		return false;
-	ti->status &= ~TS_RESTORE_SIGMASK;
-	return true;
-}
-
 #endif	/* !__ASSEMBLY__ */
-
-#endif /* __KERNEL__ */
-
 #endif /* __ASM_SH_THREAD_INFO_H */

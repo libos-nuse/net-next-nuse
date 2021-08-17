@@ -1,17 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * SH generic board support, using device tree
  *
  * Copyright (C) 2015-2016 Smart Energy Instruments, Inc.
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file "COPYING" in the main directory of this archive
- * for more details.
  */
 
 #include <linux/of.h>
-#include <linux/of_platform.h>
 #include <linux/of_fdt.h>
-#include <linux/of_iommu.h>
 #include <linux/clocksource.h>
 #include <linux/irqchip.h>
 #include <linux/clk-provider.h>
@@ -54,19 +49,19 @@ static struct plat_smp_ops dummy_smp_ops = {
 
 extern const struct of_cpu_method __cpu_method_of_table[];
 const struct of_cpu_method __cpu_method_of_table_sentinel
-	__section(__cpu_method_of_table_end);
+	__section("__cpu_method_of_table_end");
 
 static void sh_of_smp_probe(void)
 {
-	struct device_node *np = 0;
-	const char *method = 0;
+	struct device_node *np;
+	const char *method = NULL;
 	const struct of_cpu_method *m = __cpu_method_of_table;
 
 	pr_info("SH generic board support: scanning for cpus\n");
 
 	init_cpu_possible(cpumask_of(0));
 
-	while ((np = of_find_node_by_type(np, "cpu"))) {
+	for_each_of_cpu_node(np) {
 		const __be32 *cell = of_get_property(np, "reg", NULL);
 		u64 id = -1;
 		if (cell) id = of_read_number(cell, of_n_addr_cells(np));
@@ -82,6 +77,7 @@ static void sh_of_smp_probe(void)
 	if (!method) {
 		np = of_find_node_by_name(NULL, "cpus");
 		of_property_read_string(np, "enable-method", &method);
+		of_node_put(np);
 	}
 
 	pr_info("CPU enable method: %s\n", method);
@@ -118,21 +114,16 @@ static void __init sh_of_mem_reserve(void)
 	early_init_fdt_scan_reserved_mem();
 }
 
-static void __init sh_of_time_init(void)
-{
-	pr_info("SH generic board support: scanning for clocksource devices\n");
-	clocksource_probe();
-}
-
 static void __init sh_of_setup(char **cmdline_p)
 {
-	unflatten_device_tree();
+	struct device_node *root;
 
-	board_time_init = sh_of_time_init;
-
-	sh_mv.mv_name = of_flat_dt_get_machine_name();
-	if (!sh_mv.mv_name)
-		sh_mv.mv_name = "Unknown SH model";
+	sh_mv.mv_name = "Unknown SH model";
+	root = of_find_node_by_path("/");
+	if (root) {
+		of_property_read_string(root, "model", &sh_mv.mv_name);
+		of_node_put(root);
+	}
 
 	sh_of_smp_probe();
 }
@@ -173,24 +164,10 @@ static struct sh_machine_vector __initmv sh_of_generic_mv = {
 
 struct sh_clk_ops;
 
-void __init arch_init_clk_ops(struct sh_clk_ops **ops, int idx)
+void __init __weak arch_init_clk_ops(struct sh_clk_ops **ops, int idx)
 {
 }
 
-void __init plat_irq_setup(void)
+void __init __weak plat_irq_setup(void)
 {
 }
-
-static int __init sh_of_device_init(void)
-{
-	pr_info("SH generic board support: populating platform devices\n");
-	if (of_have_populated_dt()) {
-		of_iommu_init();
-		of_platform_populate(NULL, of_default_bus_match_table,
-				     NULL, NULL);
-	} else {
-		pr_crit("Device tree not populated\n");
-	}
-	return 0;
-}
-arch_initcall_sync(sh_of_device_init);

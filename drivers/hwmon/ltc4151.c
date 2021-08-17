@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for Linear Technology LTC4151 High Voltage I2C Current
  * and Voltage Monitor
@@ -11,25 +12,11 @@
  *  Copyright (C) 2010 Ericsson AB.
  *
  * Datasheet: http://www.linear.com/docs/Datasheet/4151fc.pdf
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/init.h>
 #include <linux/err.h>
 #include <linux/slab.h>
@@ -52,6 +39,7 @@ struct ltc4151_data {
 	struct mutex update_lock;
 	bool valid;
 	unsigned long last_updated; /* in jiffies */
+	unsigned int shunt; /* in micro ohms */
 
 	/* Registers */
 	u8 regs[6];
@@ -111,9 +99,9 @@ static int ltc4151_get_value(struct ltc4151_data *data, u8 reg)
 	case LTC4151_SENSE_H:
 		/*
 		 * 20uV resolution. Convert to current as measured with
-		 * an 1 mOhm sense resistor, in mA.
+		 * a given sense resistor, in mA.
 		 */
-		val = val * 20;
+		val = val * 20 * 1000 / data->shunt;
 		break;
 	case LTC4151_VIN_H:
 		/* 25 mV per increment */
@@ -129,7 +117,7 @@ static int ltc4151_get_value(struct ltc4151_data *data, u8 reg)
 	return val;
 }
 
-static ssize_t ltc4151_show_value(struct device *dev,
+static ssize_t ltc4151_value_show(struct device *dev,
 				  struct device_attribute *da, char *buf)
 {
 	struct sensor_device_attribute *attr = to_sensor_dev_attr(da);
@@ -146,14 +134,11 @@ static ssize_t ltc4151_show_value(struct device *dev,
 /*
  * Input voltages.
  */
-static SENSOR_DEVICE_ATTR(in1_input, S_IRUGO, ltc4151_show_value, NULL,
-			  LTC4151_VIN_H);
-static SENSOR_DEVICE_ATTR(in2_input, S_IRUGO, ltc4151_show_value, NULL,
-			  LTC4151_ADIN_H);
+static SENSOR_DEVICE_ATTR_RO(in1_input, ltc4151_value, LTC4151_VIN_H);
+static SENSOR_DEVICE_ATTR_RO(in2_input, ltc4151_value, LTC4151_ADIN_H);
 
 /* Currents (via sense resistor) */
-static SENSOR_DEVICE_ATTR(curr1_input, S_IRUGO, ltc4151_show_value, NULL,
-			  LTC4151_SENSE_H);
+static SENSOR_DEVICE_ATTR_RO(curr1_input, ltc4151_value, LTC4151_SENSE_H);
 
 /*
  * Finally, construct an array of pointers to members of the above objects,
@@ -169,13 +154,13 @@ static struct attribute *ltc4151_attrs[] = {
 };
 ATTRIBUTE_GROUPS(ltc4151);
 
-static int ltc4151_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int ltc4151_probe(struct i2c_client *client)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct device *dev = &client->dev;
 	struct ltc4151_data *data;
 	struct device *hwmon_dev;
+	u32 shunt;
 
 	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return -ENODEV;
@@ -183,6 +168,15 @@ static int ltc4151_probe(struct i2c_client *client,
 	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
+
+	if (of_property_read_u32(client->dev.of_node,
+				 "shunt-resistor-micro-ohms", &shunt))
+		shunt = 1000; /* 1 mOhm if not set via DT */
+
+	if (shunt == 0)
+		return -EINVAL;
+
+	data->shunt = shunt;
 
 	data->client = client;
 	mutex_init(&data->update_lock);
@@ -199,12 +193,19 @@ static const struct i2c_device_id ltc4151_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, ltc4151_id);
 
+static const struct of_device_id __maybe_unused ltc4151_match[] = {
+	{ .compatible = "lltc,ltc4151" },
+	{},
+};
+MODULE_DEVICE_TABLE(of, ltc4151_match);
+
 /* This is the driver that will be inserted */
 static struct i2c_driver ltc4151_driver = {
 	.driver = {
 		.name	= "ltc4151",
+		.of_match_table = of_match_ptr(ltc4151_match),
 	},
-	.probe		= ltc4151_probe,
+	.probe_new	= ltc4151_probe,
 	.id_table	= ltc4151_id,
 };
 

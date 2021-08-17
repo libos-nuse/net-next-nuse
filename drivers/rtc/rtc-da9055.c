@@ -1,15 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Real time clock driver for DA9055
  *
  * Copyright(c) 2012 Dialog Semiconductor Ltd.
  *
  * Author: Dajun Dajun Chen <dajun.chen@diasemi.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
  */
 
 #include <linux/module.h>
@@ -74,6 +69,7 @@ static int da9055_read_alarm(struct da9055 *da9055, struct rtc_time *rtc_tm)
 	rtc_tm->tm_mday = v[2] & DA9055_RTC_ALM_DAY;
 	rtc_tm->tm_hour = v[1] & DA9055_RTC_ALM_HOUR;
 	rtc_tm->tm_min  = v[0] & DA9055_RTC_ALM_MIN;
+	rtc_tm->tm_sec = 0;
 
 	return rtc_valid_tm(rtc_tm);
 }
@@ -157,7 +153,7 @@ static int da9055_rtc_read_time(struct device *dev, struct rtc_time *rtc_tm)
 	rtc_tm->tm_min  = v[1] & DA9055_RTC_MIN;
 	rtc_tm->tm_sec  = v[0] & DA9055_RTC_SEC;
 
-	return rtc_valid_tm(rtc_tm);
+	return 0;
 }
 
 static int da9055_rtc_set_time(struct device *dev, struct rtc_time *tm)

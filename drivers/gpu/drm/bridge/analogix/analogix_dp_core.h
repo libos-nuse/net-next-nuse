@@ -1,13 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Header file for Analogix DP (Display Port) core interface driver.
  *
  * Copyright (C) 2012 Samsung Electronics Co., Ltd.
  * Author: Jingoo Han <jg1.han@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
  */
 
 #ifndef _ANALOGIX_DP_CORE_H
@@ -19,15 +15,11 @@
 #define DP_TIMEOUT_LOOP_COUNT 100
 #define MAX_CR_LOOP 5
 #define MAX_EQ_LOOP 5
+#define MAX_PLL_LOCK_LOOP 5
 
-/* I2C EDID Chip ID, Slave Address */
-#define I2C_EDID_DEVICE_ADDR			0x50
-#define I2C_E_EDID_DEVICE_ADDR			0x30
-
-#define EDID_BLOCK_LENGTH			0x80
-#define EDID_HEADER_PATTERN			0x00
-#define EDID_EXTENSION_FLAG			0x7e
-#define EDID_CHECKSUM				0x7f
+/* Training takes 22ms if AUX channel comm fails. Use this as retry interval */
+#define DP_TIMEOUT_TRAINING_US			22000
+#define DP_TIMEOUT_PSR_LOOP_MS			300
 
 /* DP_MAX_LANE_COUNT */
 #define DPCD_ENHANCED_FRAME_CAP(x)		(((x) >> 7) & 0x1)
@@ -41,6 +33,8 @@
 #define DPCD_PRE_EMPHASIS_GET(x)		(((x) >> 3) & 0x3)
 #define DPCD_VOLTAGE_SWING_SET(x)		(((x) & 0x3) << 0)
 #define DPCD_VOLTAGE_SWING_GET(x)		(((x) >> 0) & 0x3)
+
+struct gpio_desc;
 
 enum link_lane_count_type {
 	LANE_COUNT1 = 1,
@@ -127,10 +121,10 @@ enum analog_power_block {
 };
 
 enum dp_irq_type {
-	DP_IRQ_TYPE_HP_CABLE_IN,
-	DP_IRQ_TYPE_HP_CABLE_OUT,
-	DP_IRQ_TYPE_HP_CHANGE,
-	DP_IRQ_TYPE_UNKNOWN,
+	DP_IRQ_TYPE_HP_CABLE_IN  = BIT(0),
+	DP_IRQ_TYPE_HP_CABLE_OUT = BIT(1),
+	DP_IRQ_TYPE_HP_CHANGE    = BIT(2),
+	DP_IRQ_TYPE_UNKNOWN      = BIT(3),
 };
 
 struct video_info {
@@ -166,6 +160,7 @@ struct analogix_dp_device {
 	struct drm_device	*drm_dev;
 	struct drm_connector	connector;
 	struct drm_bridge	*bridge;
+	struct drm_dp_aux       aux;
 	struct clk		*clock;
 	unsigned int		irq;
 	void __iomem		*reg_base;
@@ -174,9 +169,13 @@ struct analogix_dp_device {
 	struct link_train	link_train;
 	struct phy		*phy;
 	int			dpms_mode;
-	int			hpd_gpio;
+	struct gpio_desc	*hpd_gpiod;
 	bool                    force_hpd;
-	unsigned char           edid[EDID_BLOCK_LENGTH * 2];
+	bool			fast_train_enable;
+	bool			psr_supported;
+
+	struct mutex		panel_lock;
+	bool			panel_is_modeset;
 
 	struct analogix_dp_plat_data *plat_data;
 };
@@ -197,7 +196,7 @@ void analogix_dp_set_pll_power_down(struct analogix_dp_device *dp, bool enable);
 void analogix_dp_set_analog_power_down(struct analogix_dp_device *dp,
 				       enum analog_power_block block,
 				       bool enable);
-void analogix_dp_init_analog_func(struct analogix_dp_device *dp);
+int analogix_dp_init_analog_func(struct analogix_dp_device *dp);
 void analogix_dp_init_hpd(struct analogix_dp_device *dp);
 void analogix_dp_force_hpd(struct analogix_dp_device *dp);
 enum dp_irq_type analogix_dp_get_irq_type(struct analogix_dp_device *dp);
@@ -206,33 +205,6 @@ void analogix_dp_reset_aux(struct analogix_dp_device *dp);
 void analogix_dp_init_aux(struct analogix_dp_device *dp);
 int analogix_dp_get_plug_in_status(struct analogix_dp_device *dp);
 void analogix_dp_enable_sw_function(struct analogix_dp_device *dp);
-int analogix_dp_start_aux_transaction(struct analogix_dp_device *dp);
-int analogix_dp_write_byte_to_dpcd(struct analogix_dp_device *dp,
-				   unsigned int reg_addr,
-				   unsigned char data);
-int analogix_dp_read_byte_from_dpcd(struct analogix_dp_device *dp,
-				    unsigned int reg_addr,
-				    unsigned char *data);
-int analogix_dp_write_bytes_to_dpcd(struct analogix_dp_device *dp,
-				    unsigned int reg_addr,
-				    unsigned int count,
-				    unsigned char data[]);
-int analogix_dp_read_bytes_from_dpcd(struct analogix_dp_device *dp,
-				     unsigned int reg_addr,
-				     unsigned int count,
-				     unsigned char data[]);
-int analogix_dp_select_i2c_device(struct analogix_dp_device *dp,
-				  unsigned int device_addr,
-				  unsigned int reg_addr);
-int analogix_dp_read_byte_from_i2c(struct analogix_dp_device *dp,
-				   unsigned int device_addr,
-				   unsigned int reg_addr,
-				   unsigned int *data);
-int analogix_dp_read_bytes_from_i2c(struct analogix_dp_device *dp,
-				    unsigned int device_addr,
-				    unsigned int reg_addr,
-				    unsigned int count,
-				    unsigned char edid[]);
 void analogix_dp_set_link_bandwidth(struct analogix_dp_device *dp, u32 bwtype);
 void analogix_dp_get_link_bandwidth(struct analogix_dp_device *dp, u32 *bwtype);
 void analogix_dp_set_lane_count(struct analogix_dp_device *dp, u32 count);
@@ -278,4 +250,10 @@ int analogix_dp_is_video_stream_on(struct analogix_dp_device *dp);
 void analogix_dp_config_video_slave_mode(struct analogix_dp_device *dp);
 void analogix_dp_enable_scrambling(struct analogix_dp_device *dp);
 void analogix_dp_disable_scrambling(struct analogix_dp_device *dp);
+void analogix_dp_enable_psr_crc(struct analogix_dp_device *dp);
+int analogix_dp_send_psr_spd(struct analogix_dp_device *dp,
+			     struct dp_sdp *vsc, bool blocking);
+ssize_t analogix_dp_transfer(struct analogix_dp_device *dp,
+			     struct drm_dp_aux_msg *msg);
+
 #endif /* _ANALOGIX_DP_CORE_H */

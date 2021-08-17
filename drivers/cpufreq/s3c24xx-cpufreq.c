@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2006-2008 Simtec Electronics
  *	http://armlinux.simtec.co.uk/
  *	Ben Dooks <ben@simtec.co.uk>
  *
  * S3C24XX CPU Frequency scaling
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
 */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -24,17 +21,13 @@
 #include <linux/device.h>
 #include <linux/sysfs.h>
 #include <linux/slab.h>
+#include <linux/soc/samsung/s3c-cpufreq-core.h>
+#include <linux/soc/samsung/s3c-pm.h>
 
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 
-#include <plat/cpu.h>
-#include <plat/cpu-freq-core.h>
-
-#include <mach/regs-clock.h>
-
 /* note, cpufreq support deals in kHz, no Hz */
-
 static struct cpufreq_driver s3c24xx_driver;
 static struct s3c_cpufreq_config cpu_cur;
 static struct s3c_iotimings s3c24xx_iotiming;
@@ -71,7 +64,7 @@ static void s3c_cpufreq_getcur(struct s3c_cpufreq_config *cfg)
 	cfg->freq.pclk = pclk = clk_get_rate(clk_pclk);
 	cfg->freq.armclk = armclk = clk_get_rate(clk_arm);
 
-	cfg->pll.driver_data = __raw_readl(S3C2410_MPLLCON);
+	cfg->pll.driver_data = s3c24xx_read_mpllcon();
 	cfg->pll.frequency = fclk;
 
 	cfg->freq.hclk_tns = 1000000000 / (cfg->freq.hclk / 10);
@@ -293,12 +286,8 @@ static int s3c_cpufreq_target(struct cpufreq_policy *policy,
 		     __func__, policy, target_freq, relation);
 
 	if (ftab) {
-		if (cpufreq_frequency_table_target(policy, ftab,
-						   target_freq, relation,
-						   &index)) {
-			s3c_freq_dbg("%s: table failed\n", __func__);
-			return -EINVAL;
-		}
+		index = cpufreq_frequency_table_target(policy, target_freq,
+						       relation);
 
 		s3c_freq_dbg("%s: adjust %d to entry %d (%u)\n", __func__,
 			     target_freq, index, ftab[index].frequency);
@@ -315,7 +304,6 @@ static int s3c_cpufreq_target(struct cpufreq_policy *policy,
 		pll = NULL;
 	} else {
 		struct cpufreq_policy tmp_policy;
-		int ret;
 
 		/* we keep the cpu pll table in Hz, to ensure we get an
 		 * accurate value for the PLL output. */
@@ -323,20 +311,14 @@ static int s3c_cpufreq_target(struct cpufreq_policy *policy,
 		tmp_policy.min = policy->min * 1000;
 		tmp_policy.max = policy->max * 1000;
 		tmp_policy.cpu = policy->cpu;
+		tmp_policy.freq_table = pll_reg;
 
-		/* cpufreq_frequency_table_target uses a pointer to 'index'
-		 * which is the number of the table entry, not the value of
+		/* cpufreq_frequency_table_target returns the index
+		 * of the table entry, not the value of
 		 * the table entry's index field. */
 
-		ret = cpufreq_frequency_table_target(&tmp_policy, pll_reg,
-						     target_freq, relation,
-						     &index);
-
-		if (ret < 0) {
-			pr_err("%s: no PLL available\n", __func__);
-			goto err_notpossible;
-		}
-
+		index = cpufreq_frequency_table_target(&tmp_policy, target_freq,
+						       relation);
 		pll = pll_reg + index;
 
 		s3c_freq_dbg("%s: target %u => %u\n",
@@ -346,10 +328,6 @@ static int s3c_cpufreq_target(struct cpufreq_policy *policy,
 	}
 
 	return s3c_cpufreq_settarget(policy, target_freq, pll);
-
- err_notpossible:
-	pr_err("no compatible settings for %d\n", target_freq);
-	return -EINVAL;
 }
 
 struct clk *s3c_cpufreq_clk_get(struct device *dev, const char *name)
@@ -366,7 +344,10 @@ struct clk *s3c_cpufreq_clk_get(struct device *dev, const char *name)
 static int s3c_cpufreq_init(struct cpufreq_policy *policy)
 {
 	policy->clk = clk_arm;
-	return cpufreq_generic_init(policy, ftab, cpu_cur.info->latency);
+	policy->cpuinfo.transition_latency = cpu_cur.info->latency;
+	policy->freq_table = ftab;
+
+	return 0;
 }
 
 static int __init s3c_cpufreq_initclks(void)
@@ -401,7 +382,7 @@ static unsigned int suspend_freq;
 static int s3c_cpufreq_suspend(struct cpufreq_policy *policy)
 {
 	suspend_pll.frequency = clk_get_rate(_clk_mpll);
-	suspend_pll.driver_data = __raw_readl(S3C2410_MPLLCON);
+	suspend_pll.driver_data = s3c24xx_read_mpllcon();
 	suspend_freq = clk_get_rate(clk_arm);
 
 	return 0;
@@ -488,10 +469,8 @@ int __init s3c_cpufreq_setboard(struct s3c_cpufreq_board *board)
 	 * initdata. */
 
 	ours = kzalloc(sizeof(*ours), GFP_KERNEL);
-	if (ours == NULL) {
-		pr_err("%s: no memory\n", __func__);
+	if (!ours)
 		return -ENOMEM;
-	}
 
 	*ours = *board;
 	cpu_cur.board = ours;
@@ -564,27 +543,21 @@ static void s3c_cpufreq_update_loctkime(void)
 	val |= calc_locktime(rate, cpu_cur.info->locktime_m);
 
 	pr_info("%s: new locktime is 0x%08x\n", __func__, val);
-	__raw_writel(val, S3C2410_LOCKTIME);
+	s3c24xx_write_locktime(val);
 }
 
 static int s3c_cpufreq_build_freq(void)
 {
 	int size, ret;
 
-	if (!cpu_cur.info->calc_freqtable)
-		return -EINVAL;
-
 	kfree(ftab);
-	ftab = NULL;
 
 	size = cpu_cur.info->calc_freqtable(&cpu_cur, NULL, 0);
 	size++;
 
-	ftab = kzalloc(sizeof(*ftab) * size, GFP_KERNEL);
-	if (!ftab) {
-		pr_err("%s: no memory for tables\n", __func__);
+	ftab = kcalloc(size, sizeof(*ftab), GFP_KERNEL);
+	if (!ftab)
 		return -ENOMEM;
-	}
 
 	ftab_size = size;
 

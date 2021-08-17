@@ -1,15 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2014 Free Electrons
  *
- * License Terms: GNU General Public License v2
  * Author: Boris BREZILLON <boris.brezillon@free-electrons.com>
  *
  * Allwinner A31 APB0 clock gates driver
- *
  */
 
 #include <linux/clk-provider.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
@@ -33,13 +32,11 @@ static const struct of_device_id sun6i_a31_apb0_gates_clk_dt_ids[] = {
 	{ .compatible = "allwinner,sun8i-a23-apb0-gates-clk", .data = &sun8i_a23_apb0_gates },
 	{ /* sentinel */ }
 };
-MODULE_DEVICE_TABLE(of, sun6i_a31_apb0_gates_clk_dt_ids);
 
 static int sun6i_a31_apb0_gates_clk_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	struct clk_onecell_data *clk_data;
-	const struct of_device_id *device;
 	const struct gates_data *data;
 	const char *clk_parent;
 	const char *clk_name;
@@ -52,10 +49,9 @@ static int sun6i_a31_apb0_gates_clk_probe(struct platform_device *pdev)
 	if (!np)
 		return -ENODEV;
 
-	device = of_match_device(sun6i_a31_apb0_gates_clk_dt_ids, &pdev->dev);
-	if (!device)
+	data = of_device_get_match_data(&pdev->dev);
+	if (!data)
 		return -ENODEV;
-	data = device->data;
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	reg = devm_ioremap_resource(&pdev->dev, r);
@@ -102,8 +98,4 @@ static struct platform_driver sun6i_a31_apb0_gates_clk_driver = {
 	},
 	.probe = sun6i_a31_apb0_gates_clk_probe,
 };
-module_platform_driver(sun6i_a31_apb0_gates_clk_driver);
-
-MODULE_AUTHOR("Boris BREZILLON <boris.brezillon@free-electrons.com>");
-MODULE_DESCRIPTION("Allwinner A31 APB0 gate clocks driver");
-MODULE_LICENSE("GPL v2");
+builtin_platform_driver(sun6i_a31_apb0_gates_clk_driver);

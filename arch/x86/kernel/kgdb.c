@@ -1,14 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2, or (at your option) any
- * later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
  */
 
 /*
@@ -50,6 +41,7 @@
 #include <asm/apicdef.h>
 #include <asm/apic.h>
 #include <asm/nmi.h>
+#include <asm/switch_to.h>
 
 struct dbg_reg_def_t dbg_reg_def[DBG_MAX_REG_NUM] =
 {
@@ -126,14 +118,6 @@ char *dbg_get_reg(int regno, void *mem, struct pt_regs *regs)
 
 #ifdef CONFIG_X86_32
 	switch (regno) {
-	case GDB_SS:
-		if (!user_mode(regs))
-			*(unsigned long *)mem = __KERNEL_DS;
-		break;
-	case GDB_SP:
-		if (!user_mode(regs))
-			*(unsigned long *)mem = kernel_stack_pointer(regs);
-		break;
 	case GDB_GS:
 	case GDB_FS:
 		*(unsigned long *)mem = 0xFFFF;
@@ -166,21 +150,19 @@ void sleeping_thread_to_gdb_regs(unsigned long *gdb_regs, struct task_struct *p)
 	gdb_regs[GDB_DX]	= 0;
 	gdb_regs[GDB_SI]	= 0;
 	gdb_regs[GDB_DI]	= 0;
-	gdb_regs[GDB_BP]	= *(unsigned long *)p->thread.sp;
+	gdb_regs[GDB_BP]	= ((struct inactive_task_frame *)p->thread.sp)->bp;
 #ifdef CONFIG_X86_32
 	gdb_regs[GDB_DS]	= __KERNEL_DS;
 	gdb_regs[GDB_ES]	= __KERNEL_DS;
 	gdb_regs[GDB_PS]	= 0;
 	gdb_regs[GDB_CS]	= __KERNEL_CS;
-	gdb_regs[GDB_PC]	= p->thread.ip;
 	gdb_regs[GDB_SS]	= __KERNEL_DS;
 	gdb_regs[GDB_FS]	= 0xFFFF;
 	gdb_regs[GDB_GS]	= 0xFFFF;
 #else
-	gdb_regs32[GDB_PS]	= *(unsigned long *)(p->thread.sp + 8);
+	gdb_regs32[GDB_PS]	= 0;
 	gdb_regs32[GDB_CS]	= __KERNEL_CS;
 	gdb_regs32[GDB_SS]	= __KERNEL_DS;
-	gdb_regs[GDB_PC]	= 0;
 	gdb_regs[GDB_R8]	= 0;
 	gdb_regs[GDB_R9]	= 0;
 	gdb_regs[GDB_R10]	= 0;
@@ -190,6 +172,7 @@ void sleeping_thread_to_gdb_regs(unsigned long *gdb_regs, struct task_struct *p)
 	gdb_regs[GDB_R14]	= 0;
 	gdb_regs[GDB_R15]	= 0;
 #endif
+	gdb_regs[GDB_PC]	= 0;
 	gdb_regs[GDB_SP]	= p->thread.sp;
 }
 
@@ -422,23 +405,18 @@ static void kgdb_disable_hw_debug(struct pt_regs *regs)
 #ifdef CONFIG_SMP
 /**
  *	kgdb_roundup_cpus - Get other CPUs into a holding pattern
- *	@flags: Current IRQ state
  *
  *	On SMP systems, we need to get the attention of the other CPUs
  *	and get them be in a known state.  This should do what is needed
  *	to get the other CPUs to call kgdb_wait(). Note that on some arches,
  *	the NMI approach is not used for rounding up all the CPUs. For example,
- *	in case of MIPS, smp_call_function() is used to roundup CPUs. In
- *	this case, we have to make sure that interrupts are enabled before
- *	calling smp_call_function(). The argument to this function is
- *	the flags that will be used when restoring the interrupts. There is
- *	local_irq_save() call before kgdb_roundup_cpus().
+ *	in case of MIPS, smp_call_function() is used to roundup CPUs.
  *
  *	On non-SMP systems, this is not called.
  */
-void kgdb_roundup_cpus(unsigned long flags)
+void kgdb_roundup_cpus(void)
 {
-	apic->send_IPI_allbutself(APIC_DM_NMI);
+	apic_send_IPI_allbutself(NMI_VECTOR);
 }
 #endif
 
@@ -472,6 +450,7 @@ int kgdb_arch_handle_exception(int e_vector, int signo, int err_code,
 		ptr = &remcomInBuffer[1];
 		if (kgdb_hex2long(&ptr, &addr))
 			linux_regs->ip = addr;
+		fallthrough;
 	case 'D':
 	case 'k':
 		/* clear the trace bit */
@@ -560,7 +539,7 @@ static int __kgdb_notify(struct die_args *args, unsigned long cmd)
 			 * a system call which should be ignored
 			 */
 			return NOTIFY_DONE;
-		/* fall through */
+		fallthrough;
 	default:
 		if (user_mode(regs))
 			return NOTIFY_DONE;
@@ -650,9 +629,10 @@ static void kgdb_hw_overflow_handler(struct perf_event *event,
 	struct task_struct *tsk = current;
 	int i;
 
-	for (i = 0; i < 4; i++)
+	for (i = 0; i < 4; i++) {
 		if (breakinfo[i].enabled)
-			tsk->thread.debugreg6 |= (DR_TRAP0 << i);
+			tsk->thread.virtual_dr6 |= (DR_TRAP0 << i);
+	}
 }
 
 void kgdb_arch_late(void)
@@ -751,60 +731,49 @@ void kgdb_arch_set_pc(struct pt_regs *regs, unsigned long ip)
 int kgdb_arch_set_breakpoint(struct kgdb_bkpt *bpt)
 {
 	int err;
-	char opc[BREAK_INSTR_SIZE];
 
 	bpt->type = BP_BREAKPOINT;
-	err = probe_kernel_read(bpt->saved_instr, (char *)bpt->bpt_addr,
+	err = copy_from_kernel_nofault(bpt->saved_instr, (char *)bpt->bpt_addr,
 				BREAK_INSTR_SIZE);
 	if (err)
 		return err;
-	err = probe_kernel_write((char *)bpt->bpt_addr,
+	err = copy_to_kernel_nofault((char *)bpt->bpt_addr,
 				 arch_kgdb_ops.gdb_bpt_instr, BREAK_INSTR_SIZE);
 	if (!err)
 		return err;
 	/*
-	 * It is safe to call text_poke() because normal kernel execution
+	 * It is safe to call text_poke_kgdb() because normal kernel execution
 	 * is stopped on all cores, so long as the text_mutex is not locked.
 	 */
 	if (mutex_is_locked(&text_mutex))
 		return -EBUSY;
-	text_poke((void *)bpt->bpt_addr, arch_kgdb_ops.gdb_bpt_instr,
-		  BREAK_INSTR_SIZE);
-	err = probe_kernel_read(opc, (char *)bpt->bpt_addr, BREAK_INSTR_SIZE);
-	if (err)
-		return err;
-	if (memcmp(opc, arch_kgdb_ops.gdb_bpt_instr, BREAK_INSTR_SIZE))
-		return -EINVAL;
+	text_poke_kgdb((void *)bpt->bpt_addr, arch_kgdb_ops.gdb_bpt_instr,
+		       BREAK_INSTR_SIZE);
 	bpt->type = BP_POKE_BREAKPOINT;
 
-	return err;
+	return 0;
 }
 
 int kgdb_arch_remove_breakpoint(struct kgdb_bkpt *bpt)
 {
-	int err;
-	char opc[BREAK_INSTR_SIZE];
-
 	if (bpt->type != BP_POKE_BREAKPOINT)
 		goto knl_write;
 	/*
-	 * It is safe to call text_poke() because normal kernel execution
+	 * It is safe to call text_poke_kgdb() because normal kernel execution
 	 * is stopped on all cores, so long as the text_mutex is not locked.
 	 */
 	if (mutex_is_locked(&text_mutex))
 		goto knl_write;
-	text_poke((void *)bpt->bpt_addr, bpt->saved_instr, BREAK_INSTR_SIZE);
-	err = probe_kernel_read(opc, (char *)bpt->bpt_addr, BREAK_INSTR_SIZE);
-	if (err || memcmp(opc, bpt->saved_instr, BREAK_INSTR_SIZE))
-		goto knl_write;
-	return err;
+	text_poke_kgdb((void *)bpt->bpt_addr, bpt->saved_instr,
+		       BREAK_INSTR_SIZE);
+	return 0;
 
 knl_write:
-	return probe_kernel_write((char *)bpt->bpt_addr,
+	return copy_to_kernel_nofault((char *)bpt->bpt_addr,
 				  (char *)bpt->saved_instr, BREAK_INSTR_SIZE);
 }
 
-struct kgdb_arch arch_kgdb_ops = {
+const struct kgdb_arch arch_kgdb_ops = {
 	/* Breakpoint instruction: */
 	.gdb_bpt_instr		= { 0xcc },
 	.flags			= KGDB_HW_BREAKPOINT,

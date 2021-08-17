@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * rtc-efi: RTC Class Driver for EFI-based systems
  *
@@ -5,12 +6,6 @@
  *
  * Author: dann frazier <dannf@dannf.org>
  * Based on efirtc.c by Stephane Eranian
- *
- *  This program is free software; you can redistribute  it and/or modify it
- *  under  the terms of  the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the  License, or (at your
- *  option) any later version.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -176,7 +171,7 @@ static int efi_read_time(struct device *dev, struct rtc_time *tm)
 	if (!convert_from_efi_time(&eft, tm))
 		return -EIO;
 
-	return rtc_valid_tm(tm);
+	return 0;
 }
 
 static int efi_set_time(struct device *dev, struct rtc_time *tm)
@@ -259,6 +254,12 @@ static const struct rtc_class_ops efi_rtc_ops = {
 static int __init efi_rtc_probe(struct platform_device *dev)
 {
 	struct rtc_device *rtc;
+	efi_time_t eft;
+	efi_time_cap_t cap;
+
+	/* First check if the RTC is usable */
+	if (efi.get_time(&eft, &cap) != EFI_SUCCESS)
+		return -ENODEV;
 
 	rtc = devm_rtc_device_register(&dev->dev, "rtc-efi", &efi_rtc_ops,
 					THIS_MODULE);

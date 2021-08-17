@@ -425,50 +425,6 @@
 /include/ "qoriq-clockgen2.dtsi"
 	global-utilities@e1000 {
 		compatible = "fsl,t1040-clockgen", "fsl,qoriq-clockgen-2.0";
-
-		mux0: mux0@0 {
-			#clock-cells = <0>;
-			reg = <0x0 4>;
-			compatible = "fsl,qoriq-core-mux-2.0";
-			clocks = <&pll0 0>, <&pll0 1>, <&pll0 2>,
-				 <&pll1 0>, <&pll1 1>, <&pll1 2>;
-			clock-names = "pll0", "pll0-div2", "pll1-div4",
-				"pll1", "pll1-div2", "pll1-div4";
-			clock-output-names = "cmux0";
-		};
-
-		mux1: mux1@20 {
-			#clock-cells = <0>;
-			reg = <0x20 4>;
-			compatible = "fsl,qoriq-core-mux-2.0";
-			clocks = <&pll0 0>, <&pll0 1>, <&pll0 2>,
-				 <&pll1 0>, <&pll1 1>, <&pll1 2>;
-			clock-names = "pll0", "pll0-div2", "pll1-div4",
-				"pll1", "pll1-div2", "pll1-div4";
-			clock-output-names = "cmux1";
-		};
-
-		mux2: mux2@40 {
-			#clock-cells = <0>;
-			reg = <0x40 4>;
-			compatible = "fsl,qoriq-core-mux-2.0";
-			clocks = <&pll0 0>, <&pll0 1>, <&pll0 2>,
-				 <&pll1 0>, <&pll1 1>, <&pll1 2>;
-			clock-names = "pll0", "pll0-div2", "pll1-div4",
-				"pll1", "pll1-div2", "pll1-div4";
-			clock-output-names = "cmux2";
-		};
-
-		mux3: mux3@60 {
-			#clock-cells = <0>;
-			reg = <0x60 4>;
-			compatible = "fsl,qoriq-core-mux-2.0";
-			clocks = <&pll0 0>, <&pll0 1>, <&pll0 2>,
-				 <&pll1 0>, <&pll1 1>, <&pll1 2>;
-			clock-names = "pll0_0", "pll0_1", "pll0_2",
-				"pll1_0", "pll1_1", "pll1_2";
-			clock-output-names = "cmux3";
-		};
 	};
 
 	rcpm: global-utilities@e2000 {
@@ -526,7 +482,7 @@
 
 				       0x00030000 0x00000012
 				       0x00030001 0x0000001d>;
-		#thermal-sensor-cells = <0>;
+		#thermal-sensor-cells = <1>;
 	};
 
 	thermal-zones {
@@ -534,7 +490,7 @@
 			polling-delay-passive = <1000>;
 			polling-delay = <5000>;
 
-			thermal-sensors = <&tmu>;
+			thermal-sensors = <&tmu 2>;
 
 			trips {
 				cpu_alert: cpu-alert {
@@ -607,7 +563,7 @@
 /include/ "qoriq-gpio-3.dtsi"
 /include/ "qoriq-usb2-mph-0.dtsi"
 		usb0: usb@210000 {
-			compatible = "fsl-usb2-mph-v2.4", "fsl-usb2-mph";
+			compatible = "fsl-usb2-mph-v2.5", "fsl-usb2-mph";
 			fsl,iommu-parent = <&pamu0>;
 			fsl,liodn-reg = <&guts 0x520>; /* USB1LIODNR */
 			phy_type = "utmi";
@@ -615,7 +571,7 @@
 		};
 /include/ "qoriq-usb2-dr-0.dtsi"
 		usb1: usb@211000 {
-			compatible = "fsl-usb2-dr-v2.4", "fsl-usb2-dr";
+			compatible = "fsl-usb2-dr-v2.5", "fsl-usb2-dr";
 			fsl,iommu-parent = <&pamu0>;
 			fsl,liodn-reg = <&guts 0x524>; /* USB2LIODNR */
 			dr_mode = "host";
@@ -670,6 +626,129 @@
 
 		mdio@fd000 {
 			status = "disabled";
+		};
+	};
+
+	seville_switch: ethernet-switch@800000 {
+		compatible = "mscc,vsc9953-switch";
+		reg = <0x800000 0x290000>;
+		interrupts = <26 2 0 0>;
+		interrupt-names = "xtr";
+		little-endian;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			seville_port0: port@0 {
+				reg = <0>;
+				status = "disabled";
+			};
+
+			seville_port1: port@1 {
+				reg = <1>;
+				status = "disabled";
+			};
+
+			seville_port2: port@2 {
+				reg = <2>;
+				status = "disabled";
+			};
+
+			seville_port3: port@3 {
+				reg = <3>;
+				status = "disabled";
+			};
+
+			seville_port4: port@4 {
+				reg = <4>;
+				status = "disabled";
+			};
+
+			seville_port5: port@5 {
+				reg = <5>;
+				status = "disabled";
+			};
+
+			seville_port6: port@6 {
+				reg = <6>;
+				status = "disabled";
+			};
+
+			seville_port7: port@7 {
+				reg = <7>;
+				status = "disabled";
+			};
+
+			seville_port8: port@8 {
+				reg = <8>;
+				phy-mode = "internal";
+				status = "disabled";
+
+				fixed-link {
+					speed = <2500>;
+					full-duplex;
+				};
+			};
+
+			seville_port9: port@9 {
+				reg = <9>;
+				phy-mode = "internal";
+				status = "disabled";
+
+				fixed-link {
+					speed = <2500>;
+					full-duplex;
+				};
+			};
+		};
+	};
+};
+
+&qe {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	device_type = "qe";
+	compatible = "fsl,qe";
+	fsl,qe-num-riscs = <1>;
+	fsl,qe-num-snums = <28>;
+
+	qeic: interrupt-controller@80 {
+		interrupt-controller;
+		compatible = "fsl,qe-ic";
+		#address-cells = <0>;
+		#interrupt-cells = <1>;
+		reg = <0x80 0x80>;
+		interrupts = <95 2 0 0  94 2 0 0>; //high:79 low:78
+	};
+
+	ucc@2000 {
+		cell-index = <1>;
+		reg = <0x2000 0x200>;
+		interrupts = <32>;
+		interrupt-parent = <&qeic>;
+	};
+
+	ucc@2200 {
+		cell-index = <3>;
+		reg = <0x2200 0x200>;
+		interrupts = <34>;
+		interrupt-parent = <&qeic>;
+	};
+
+	muram@10000 {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "fsl,qe-muram", "fsl,cpm-muram";
+		ranges = <0x0 0x10000 0x6000>;
+
+		data-only@0 {
+			compatible = "fsl,qe-muram-data",
+			"fsl,cpm-muram-data";
+			reg = <0x0 0x6000>;
 		};
 	};
 };

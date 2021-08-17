@@ -1,13 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef _ASM_POWERPC_PAGE_H
 #define _ASM_POWERPC_PAGE_H
 
 /*
  * Copyright (C) 2001,2005 IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #ifndef __ASSEMBLY__
@@ -16,32 +12,27 @@
 #else
 #include <asm/types.h>
 #endif
-#include <asm/asm-compat.h>
-#include <asm/kdump.h>
+#include <asm/asm-const.h>
 
 /*
  * On regular PPC32 page size is 4K (but we support 4K/16K/64K/256K pages
- * on PPC44x). For PPC64 we support either 4K or 64K software
+ * on PPC44x and 4K/16K on 8xx). For PPC64 we support either 4K or 64K software
  * page size. When using 64K pages however, whether we are really supporting
  * 64K pages in HW or not is irrelevant to those definitions.
  */
-#if defined(CONFIG_PPC_256K_PAGES)
-#define PAGE_SHIFT		18
-#elif defined(CONFIG_PPC_64K_PAGES)
-#define PAGE_SHIFT		16
-#elif defined(CONFIG_PPC_16K_PAGES)
-#define PAGE_SHIFT		14
-#else
-#define PAGE_SHIFT		12
-#endif
-
+#define PAGE_SHIFT		CONFIG_PPC_PAGE_SHIFT
 #define PAGE_SIZE		(ASM_CONST(1) << PAGE_SHIFT)
 
 #ifndef __ASSEMBLY__
-#ifdef CONFIG_HUGETLB_PAGE
-extern unsigned int HPAGE_SHIFT;
-#else
+#ifndef CONFIG_HUGETLB_PAGE
 #define HPAGE_SHIFT PAGE_SHIFT
+#elif defined(CONFIG_PPC_BOOK3S_64)
+extern unsigned int hpage_shift;
+#define HPAGE_SHIFT hpage_shift
+#elif defined(CONFIG_PPC_8xx)
+#define HPAGE_SHIFT		19	/* 512k pages */
+#elif defined(CONFIG_PPC_FSL_BOOK3E)
+#define HPAGE_SHIFT		22	/* 4M pages */
 #endif
 #define HPAGE_SIZE		((1UL) << HPAGE_SHIFT)
 #define HPAGE_MASK		(~(HPAGE_SIZE - 1))
@@ -96,7 +87,7 @@ extern unsigned int HPAGE_SHIFT;
 extern phys_addr_t memstart_addr;
 extern phys_addr_t kernstart_addr;
 
-#ifdef CONFIG_RELOCATABLE_PPC32
+#if defined(CONFIG_RELOCATABLE) && defined(CONFIG_PPC32)
 extern long long virt_phys_offset;
 #endif
 
@@ -126,12 +117,21 @@ extern long long virt_phys_offset;
 
 #ifdef CONFIG_FLATMEM
 #define ARCH_PFN_OFFSET		((unsigned long)(MEMORY_START >> PAGE_SHIFT))
-#define pfn_valid(pfn)		((pfn) >= ARCH_PFN_OFFSET && (pfn) < max_mapnr)
+#ifndef __ASSEMBLY__
+extern unsigned long max_mapnr;
+static inline bool pfn_valid(unsigned long pfn)
+{
+	unsigned long min_pfn = ARCH_PFN_OFFSET;
+
+	return pfn >= min_pfn && pfn < max_mapnr;
+}
+#endif
 #endif
 
 #define virt_to_pfn(kaddr)	(__pa(kaddr) >> PAGE_SHIFT)
 #define virt_to_page(kaddr)	pfn_to_page(virt_to_pfn(kaddr))
 #define pfn_to_kaddr(pfn)	__va((pfn) << PAGE_SHIFT)
+
 #define virt_addr_valid(kaddr)	pfn_valid(virt_to_pfn(kaddr))
 
 /*
@@ -139,9 +139,9 @@ extern long long virt_phys_offset;
  * determine MEMORY_START until then.  However we can determine PHYSICAL_START
  * from information at hand (program counter, TLB lookup).
  *
- * On BookE with RELOCATABLE (RELOCATABLE_PPC32)
+ * On BookE with RELOCATABLE && PPC32
  *
- *   With RELOCATABLE_PPC32,  we support loading the kernel at any physical 
+ *   With RELOCATABLE && PPC32,  we support loading the kernel at any physical
  *   address without any restriction on the page alignment.
  *
  *   We find the runtime address of _stext and relocate ourselves based on 
@@ -209,15 +209,25 @@ extern long long virt_phys_offset;
  */
 #if defined(CONFIG_PPC32) && defined(CONFIG_BOOKE)
 #define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) + VIRT_PHYS_OFFSET))
-#define __pa(x) ((unsigned long)(x) - VIRT_PHYS_OFFSET)
+#define __pa(x) ((phys_addr_t)(unsigned long)(x) - VIRT_PHYS_OFFSET)
 #else
 #ifdef CONFIG_PPC64
 /*
  * gcc miscompiles (unsigned long)(&static_var) - PAGE_OFFSET
  * with -mcmodel=medium, so we use & and | instead of - and + on 64-bit.
+ * This also results in better code generation.
  */
-#define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) | PAGE_OFFSET))
-#define __pa(x) ((unsigned long)(x) & 0x0fffffffffffffffUL)
+#define __va(x)								\
+({									\
+	VIRTUAL_BUG_ON((unsigned long)(x) >= PAGE_OFFSET);		\
+	(void *)(unsigned long)((phys_addr_t)(x) | PAGE_OFFSET);	\
+})
+
+#define __pa(x)								\
+({									\
+	VIRTUAL_BUG_ON((unsigned long)(x) < PAGE_OFFSET);		\
+	(unsigned long)(x) & 0x0fffffffffffffffUL;			\
+})
 
 #else /* 32-bit, non book E */
 #define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) + PAGE_OFFSET - MEMORY_START))
@@ -230,11 +240,8 @@ extern long long virt_phys_offset;
  * and needs to be executable.  This means the whole heap ends
  * up being executable.
  */
-#define VM_DATA_DEFAULT_FLAGS32	(VM_READ | VM_WRITE | VM_EXEC | \
-				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
-
-#define VM_DATA_DEFAULT_FLAGS64	(VM_READ | VM_WRITE | \
-				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
+#define VM_DATA_DEFAULT_FLAGS32	VM_DATA_FLAGS_TSK_EXEC
+#define VM_DATA_DEFAULT_FLAGS64	VM_DATA_FLAGS_NON_EXEC
 
 #ifdef __powerpc64__
 #include <asm/page_64.h>
@@ -242,21 +249,16 @@ extern long long virt_phys_offset;
 #include <asm/page_32.h>
 #endif
 
-/* align addr on a size boundary - adjust address up/down if needed */
-#define _ALIGN_UP(addr, size)   __ALIGN_KERNEL(addr, size)
-#define _ALIGN_DOWN(addr, size)	((addr)&(~((typeof(addr))(size)-1)))
-
-/* align addr on a size boundary - adjust address up if needed */
-#define _ALIGN(addr,size)     _ALIGN_UP(addr,size)
-
 /*
  * Don't compare things with KERNELBASE or PAGE_OFFSET to test for
  * "kernelness", use is_kernel_addr() - it should do what you want.
  */
 #ifdef CONFIG_PPC_BOOK3E_64
 #define is_kernel_addr(x)	((x) >= 0x8000000000000000ul)
-#else
+#elif defined(CONFIG_PPC_BOOK3S_64)
 #define is_kernel_addr(x)	((x) >= PAGE_OFFSET)
+#else
+#define is_kernel_addr(x)	((x) >= TASK_SIZE)
 #endif
 
 #ifndef CONFIG_PPC_BOOK3S_64
@@ -267,7 +269,7 @@ extern long long virt_phys_offset;
  * page tables at arbitrary addresses, this breaks and will have to change.
  */
 #ifdef CONFIG_PPC64
-#define PD_HUGE 0x8000000000000000
+#define PD_HUGE 0x8000000000000000UL
 #else
 #define PD_HUGE 0x80000000
 #endif
@@ -283,8 +285,13 @@ extern long long virt_phys_offset;
 /*
  * Some number of bits at the level of the page table that points to
  * a hugepte are used to encode the size.  This masks those bits.
+ * On 8xx, HW assistance requires 4k alignment for the hugepte.
  */
+#ifdef CONFIG_PPC_8xx
+#define HUGEPD_SHIFT_MASK     0xfff
+#else
 #define HUGEPD_SHIFT_MASK     0x3f
+#endif
 
 #ifndef __ASSEMBLY__
 
@@ -294,20 +301,16 @@ extern long long virt_phys_offset;
 #include <asm/pgtable-types.h>
 #endif
 
-typedef struct { signed long pd; } hugepd_t;
 
 #ifndef CONFIG_HUGETLB_PAGE
 #define is_hugepd(pdep)		(0)
 #define pgd_huge(pgd)		(0)
 #endif /* CONFIG_HUGETLB_PAGE */
 
-#define __hugepd(x) ((hugepd_t) { (x) })
-
 struct page;
 extern void clear_user_page(void *page, unsigned long vaddr, struct page *pg);
 extern void copy_user_page(void *to, void *from, unsigned long vaddr,
 		struct page *p);
-extern int page_is_ram(unsigned long pfn);
 extern int devmem_is_allowed(unsigned long pfn);
 
 #ifdef CONFIG_PPC_SMLPAR
@@ -316,22 +319,16 @@ void arch_free_page(struct page *page, int order);
 #endif
 
 struct vm_area_struct;
-#ifdef CONFIG_PPC_BOOK3S_64
-/*
- * For BOOK3s 64 with 4k and 64K linux page size
- * we want to use pointers, because the page table
- * actually store pfn
- */
-typedef pte_t *pgtable_t;
-#else
-#if defined(CONFIG_PPC_64K_PAGES) && defined(CONFIG_PPC64)
-typedef pte_t *pgtable_t;
-#else
-typedef struct page *pgtable_t;
-#endif
-#endif
+
+extern unsigned long kernstart_virt_addr;
+
+static inline unsigned long kaslr_offset(void)
+{
+	return kernstart_virt_addr - KERNELBASE;
+}
 
 #include <asm-generic/memory_model.h>
 #endif /* __ASSEMBLY__ */
+#include <asm/slice.h>
 
 #endif /* _ASM_POWERPC_PAGE_H */

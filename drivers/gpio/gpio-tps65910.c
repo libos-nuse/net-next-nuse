@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * TI TPS6591x GPIO driver
  *
@@ -5,18 +6,12 @@
  *
  * Author: Graeme Gregory <gg@slimlogic.co.uk>
  * Author: Jorge Eduardo Candelaria <jedu@slimlogic.co.uk>
- *
- *  This program is free software; you can redistribute it and/or modify it
- *  under  the terms of the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the License, or (at your
- *  option) any later version.
- *
  */
 
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/errno.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
 #include <linux/mfd/tps65910.h>
@@ -184,7 +179,6 @@ skip_init:
 
 static struct platform_driver tps65910_gpio_driver = {
 	.driver.name    = "tps65910-gpio",
-	.driver.owner   = THIS_MODULE,
 	.probe		= tps65910_gpio_probe,
 };
 

@@ -1,31 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OF helpers for IOMMU
  *
  * Copyright (c) 2012, NVIDIA CORPORATION.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <linux/export.h>
 #include <linux/iommu.h>
 #include <linux/limits.h>
+#include <linux/module.h>
+#include <linux/msi.h>
 #include <linux/of.h>
 #include <linux/of_iommu.h>
+#include <linux/of_pci.h>
+#include <linux/pci.h>
 #include <linux/slab.h>
+#include <linux/fsl/mc.h>
 
-static const struct of_device_id __iommu_of_table_sentinel
-	__used __section(__iommu_of_table_end);
+#define NO_IOMMU	1
 
 /**
  * of_get_dma_window - Parse *dma-window property and returns 0 if found.
@@ -95,95 +87,161 @@ int of_get_dma_window(struct device_node *dn, const char *prefix, int index,
 }
 EXPORT_SYMBOL_GPL(of_get_dma_window);
 
-struct of_iommu_node {
-	struct list_head list;
-	struct device_node *np;
-	const struct iommu_ops *ops;
-};
-static LIST_HEAD(of_iommu_list);
-static DEFINE_SPINLOCK(of_iommu_lock);
-
-void of_iommu_set_ops(struct device_node *np, const struct iommu_ops *ops)
+static int of_iommu_xlate(struct device *dev,
+			  struct of_phandle_args *iommu_spec)
 {
-	struct of_iommu_node *iommu = kzalloc(sizeof(*iommu), GFP_KERNEL);
+	const struct iommu_ops *ops;
+	struct fwnode_handle *fwnode = &iommu_spec->np->fwnode;
+	int ret;
 
-	if (WARN_ON(!iommu))
-		return;
+	ops = iommu_ops_from_fwnode(fwnode);
+	if ((ops && !ops->of_xlate) ||
+	    !of_device_is_available(iommu_spec->np))
+		return NO_IOMMU;
 
-	of_node_get(np);
-	INIT_LIST_HEAD(&iommu->list);
-	iommu->np = np;
-	iommu->ops = ops;
-	spin_lock(&of_iommu_lock);
-	list_add_tail(&iommu->list, &of_iommu_list);
-	spin_unlock(&of_iommu_lock);
+	ret = iommu_fwspec_init(dev, &iommu_spec->np->fwnode, ops);
+	if (ret)
+		return ret;
+	/*
+	 * The otherwise-empty fwspec handily serves to indicate the specific
+	 * IOMMU device we're waiting for, which will be useful if we ever get
+	 * a proper probe-ordering dependency mechanism in future.
+	 */
+	if (!ops)
+		return driver_deferred_probe_check_state(dev);
+
+	if (!try_module_get(ops->owner))
+		return -ENODEV;
+
+	ret = ops->of_xlate(dev, iommu_spec);
+	module_put(ops->owner);
+	return ret;
 }
 
-const struct iommu_ops *of_iommu_get_ops(struct device_node *np)
+static int of_iommu_configure_dev_id(struct device_node *master_np,
+				     struct device *dev,
+				     const u32 *id)
 {
-	struct of_iommu_node *node;
-	const struct iommu_ops *ops = NULL;
+	struct of_phandle_args iommu_spec = { .args_count = 1 };
+	int err;
 
-	spin_lock(&of_iommu_lock);
-	list_for_each_entry(node, &of_iommu_list, list)
-		if (node->np == np) {
-			ops = node->ops;
+	err = of_map_id(master_np, *id, "iommu-map",
+			 "iommu-map-mask", &iommu_spec.np,
+			 iommu_spec.args);
+	if (err)
+		return err == -ENODEV ? NO_IOMMU : err;
+
+	err = of_iommu_xlate(dev, &iommu_spec);
+	of_node_put(iommu_spec.np);
+	return err;
+}
+
+static int of_iommu_configure_dev(struct device_node *master_np,
+				  struct device *dev)
+{
+	struct of_phandle_args iommu_spec;
+	int err = NO_IOMMU, idx = 0;
+
+	while (!of_parse_phandle_with_args(master_np, "iommus",
+					   "#iommu-cells",
+					   idx, &iommu_spec)) {
+		err = of_iommu_xlate(dev, &iommu_spec);
+		of_node_put(iommu_spec.np);
+		idx++;
+		if (err)
 			break;
-		}
-	spin_unlock(&of_iommu_lock);
-	return ops;
+	}
+
+	return err;
+}
+
+struct of_pci_iommu_alias_info {
+	struct device *dev;
+	struct device_node *np;
+};
+
+static int of_pci_iommu_init(struct pci_dev *pdev, u16 alias, void *data)
+{
+	struct of_pci_iommu_alias_info *info = data;
+	u32 input_id = alias;
+
+	return of_iommu_configure_dev_id(info->np, info->dev, &input_id);
+}
+
+static int of_iommu_configure_device(struct device_node *master_np,
+				     struct device *dev, const u32 *id)
+{
+	return (id) ? of_iommu_configure_dev_id(master_np, dev, id) :
+		      of_iommu_configure_dev(master_np, dev);
 }
 
 const struct iommu_ops *of_iommu_configure(struct device *dev,
-					   struct device_node *master_np)
+					   struct device_node *master_np,
+					   const u32 *id)
 {
-	struct of_phandle_args iommu_spec;
-	struct device_node *np;
 	const struct iommu_ops *ops = NULL;
-	int idx = 0;
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	int err = NO_IOMMU;
 
-	/*
-	 * We can't do much for PCI devices without knowing how
-	 * device IDs are wired up from the PCI bus to the IOMMU.
-	 */
-	if (dev_is_pci(dev))
+	if (!master_np)
 		return NULL;
+
+	if (fwspec) {
+		if (fwspec->ops)
+			return fwspec->ops;
+
+		/* In the deferred case, start again from scratch */
+		iommu_fwspec_free(dev);
+	}
 
 	/*
 	 * We don't currently walk up the tree looking for a parent IOMMU.
 	 * See the `Notes:' section of
 	 * Documentation/devicetree/bindings/iommu/iommu.txt
 	 */
-	while (!of_parse_phandle_with_args(master_np, "iommus",
-					   "#iommu-cells", idx,
-					   &iommu_spec)) {
-		np = iommu_spec.np;
-		ops = of_iommu_get_ops(np);
+	if (dev_is_pci(dev)) {
+		struct of_pci_iommu_alias_info info = {
+			.dev = dev,
+			.np = master_np,
+		};
 
-		if (!ops || !ops->of_xlate || ops->of_xlate(dev, &iommu_spec))
-			goto err_put_node;
+		pci_request_acs();
+		err = pci_for_each_dma_alias(to_pci_dev(dev),
+					     of_pci_iommu_init, &info);
+	} else {
+		err = of_iommu_configure_device(master_np, dev, id);
 
-		of_node_put(np);
-		idx++;
+		fwspec = dev_iommu_fwspec_get(dev);
+		if (!err && fwspec)
+			of_property_read_u32(master_np, "pasid-num-bits",
+					     &fwspec->num_pasid_bits);
+	}
+
+	/*
+	 * Two success conditions can be represented by non-negative err here:
+	 * >0 : there is no IOMMU, or one was unavailable for non-fatal reasons
+	 *  0 : we found an IOMMU, and dev->fwspec is initialised appropriately
+	 * <0 : any actual error
+	 */
+	if (!err) {
+		/* The fwspec pointer changed, read it again */
+		fwspec = dev_iommu_fwspec_get(dev);
+		ops    = fwspec->ops;
+	}
+	/*
+	 * If we have reason to believe the IOMMU driver missed the initial
+	 * probe for dev, replay it to get things in order.
+	 */
+	if (!err && dev->bus && !device_iommu_mapped(dev))
+		err = iommu_probe_device(dev);
+
+	/* Ignore all other errors apart from EPROBE_DEFER */
+	if (err == -EPROBE_DEFER) {
+		ops = ERR_PTR(err);
+	} else if (err < 0) {
+		dev_dbg(dev, "Adding to IOMMU failed: %d\n", err);
+		ops = NULL;
 	}
 
 	return ops;
-
-err_put_node:
-	of_node_put(np);
-	return NULL;
-}
-
-void __init of_iommu_init(void)
-{
-	struct device_node *np;
-	const struct of_device_id *match, *matches = &__iommu_of_table;
-
-	for_each_matching_node_and_match(np, matches, &match) {
-		const of_iommu_init_fn init_fn = match->data;
-
-		if (init_fn(np))
-			pr_err("Failed to initialise IOMMU %s\n",
-				of_node_full_name(np));
-	}
 }

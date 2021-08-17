@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * linux/drivers/video/omap2/dss/dss.h
  *
@@ -6,18 +7,6 @@
  *
  * Some code and ideas taken from drivers/video/omap/ driver
  * by Imre Deak.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __OMAP2_DSS_H
@@ -73,6 +62,17 @@
 #define FLD_MOD(orig, val, start, end) \
 	(((orig) & ~FLD_MASK(start, end)) | FLD_VAL(val, start, end))
 
+enum omap_dss_clk_source {
+	OMAP_DSS_CLK_SRC_FCK = 0,		/* OMAP2/3: DSS1_ALWON_FCLK
+						 * OMAP4: DSS_FCLK */
+	OMAP_DSS_CLK_SRC_DSI_PLL_HSDIV_DISPC,	/* OMAP3: DSI1_PLL_FCLK
+						 * OMAP4: PLL1_CLK1 */
+	OMAP_DSS_CLK_SRC_DSI_PLL_HSDIV_DSI,	/* OMAP3: DSI2_PLL_FCLK
+						 * OMAP4: PLL1_CLK2 */
+	OMAP_DSS_CLK_SRC_DSI2_PLL_HSDIV_DISPC,	/* OMAP4: PLL2_CLK1 */
+	OMAP_DSS_CLK_SRC_DSI2_PLL_HSDIV_DSI,	/* OMAP4: PLL2_CLK2 */
+};
+
 enum dss_io_pad_mode {
 	DSS_IO_PAD_MODE_RESET,
 	DSS_IO_PAD_MODE_RFBI,
@@ -87,17 +87,6 @@ enum dss_hdmi_venc_clk_source_select {
 enum dss_dsi_content_type {
 	DSS_DSI_CONTENT_DCS,
 	DSS_DSI_CONTENT_GENERIC,
-};
-
-enum dss_writeback_channel {
-	DSS_WB_LCD1_MGR =	0,
-	DSS_WB_LCD2_MGR =	1,
-	DSS_WB_TV_MGR =		2,
-	DSS_WB_OVL0 =		3,
-	DSS_WB_OVL1 =		4,
-	DSS_WB_OVL2 =		5,
-	DSS_WB_OVL3 =		6,
-	DSS_WB_LCD3_MGR =	7,
 };
 
 enum dss_pll_id {
@@ -203,7 +192,7 @@ struct platform_device *dss_get_core_pdev(void);
 int dss_dsi_enable_pads(int dsi_id, unsigned lane_mask);
 void dss_dsi_disable_pads(int dsi_id, unsigned lane_mask);
 int dss_set_min_bus_tput(struct device *dev, unsigned long tput);
-int dss_debugfs_create_file(const char *name, void (*write)(struct seq_file *));
+void dss_debugfs_create_file(const char *name, void (*write)(struct seq_file *));
 
 /* display */
 int dss_suspend_all_devices(void);
@@ -403,15 +392,6 @@ int dispc_mgr_get_clock_div(enum omap_channel channel,
 		struct dispc_clock_info *cinfo);
 void dispc_set_tv_pclk(unsigned long pclk);
 
-u32 dispc_wb_get_framedone_irq(void);
-bool dispc_wb_go_busy(void);
-void dispc_wb_go(void);
-void dispc_wb_enable(bool enable);
-bool dispc_wb_is_enabled(void);
-void dispc_wb_set_channel_in(enum dss_writeback_channel channel);
-int dispc_wb_setup(const struct omap_dss_writeback_info *wi,
-		bool mem_to_mem, const struct omap_video_timings *timings);
-
 u32 dispc_read_irqstatus(void);
 void dispc_clear_irqstatus(u32 mask);
 u32 dispc_read_irqenable(void);
@@ -460,10 +440,6 @@ void hdmi4_uninit_platform_driver(void);
 
 int hdmi5_init_platform_driver(void) __init;
 void hdmi5_uninit_platform_driver(void);
-
-/* RFBI */
-int rfbi_init_platform_driver(void) __init;
-void rfbi_uninit_platform_driver(void);
 
 
 #ifdef CONFIG_FB_OMAP2_DSS_COLLECT_IRQ_STATS

@@ -1,11 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (C) 2013 Boris BREZILLON <b.brezillon@overkiz.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
  */
 
 #include <linux/clk-provider.h>
@@ -39,7 +34,7 @@ static inline bool clk_system_ready(struct regmap *regmap, int id)
 
 	regmap_read(regmap, AT91_PMC_SR, &status);
 
-	return status & (1 << id) ? 1 : 0;
+	return !!(status & (1 << id));
 }
 
 static int clk_system_prepare(struct clk_hw *hw)
@@ -79,7 +74,7 @@ static int clk_system_is_prepared(struct clk_hw *hw)
 
 	regmap_read(sys->regmap, AT91_PMC_SR, &status);
 
-	return status & (1 << sys->id) ? 1 : 0;
+	return !!(status & (1 << sys->id));
 }
 
 static const struct clk_ops system_ops = {
@@ -88,13 +83,14 @@ static const struct clk_ops system_ops = {
 	.is_prepared = clk_system_is_prepared,
 };
 
-static struct clk * __init
+struct clk_hw * __init
 at91_clk_register_system(struct regmap *regmap, const char *name,
 			 const char *parent_name, u8 id)
 {
 	struct clk_system *sys;
-	struct clk *clk = NULL;
+	struct clk_hw *hw;
 	struct clk_init_data init;
+	int ret;
 
 	if (!parent_name || id > SYSTEM_MAX_ID)
 		return ERR_PTR(-EINVAL);
@@ -113,46 +109,12 @@ at91_clk_register_system(struct regmap *regmap, const char *name,
 	sys->hw.init = &init;
 	sys->regmap = regmap;
 
-	clk = clk_register(NULL, &sys->hw);
-	if (IS_ERR(clk))
+	hw = &sys->hw;
+	ret = clk_hw_register(NULL, &sys->hw);
+	if (ret) {
 		kfree(sys);
-
-	return clk;
-}
-
-static void __init of_at91rm9200_clk_sys_setup(struct device_node *np)
-{
-	int num;
-	u32 id;
-	struct clk *clk;
-	const char *name;
-	struct device_node *sysclknp;
-	const char *parent_name;
-	struct regmap *regmap;
-
-	num = of_get_child_count(np);
-	if (num > (SYSTEM_MAX_ID + 1))
-		return;
-
-	regmap = syscon_node_to_regmap(of_get_parent(np));
-	if (IS_ERR(regmap))
-		return;
-
-	for_each_child_of_node(np, sysclknp) {
-		if (of_property_read_u32(sysclknp, "reg", &id))
-			continue;
-
-		if (of_property_read_string(np, "clock-output-names", &name))
-			name = sysclknp->name;
-
-		parent_name = of_clk_get_parent_name(sysclknp, 0);
-
-		clk = at91_clk_register_system(regmap, name, parent_name, id);
-		if (IS_ERR(clk))
-			continue;
-
-		of_clk_add_provider(sysclknp, of_clk_src_simple_get, clk);
+		hw = ERR_PTR(ret);
 	}
+
+	return hw;
 }
-CLK_OF_DECLARE(at91rm9200_clk_sys, "atmel,at91rm9200-clk-system",
-	       of_at91rm9200_clk_sys_setup);

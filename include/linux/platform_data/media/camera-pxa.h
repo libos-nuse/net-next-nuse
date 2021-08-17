@@ -1,22 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
     camera.h - PXA camera driver header file
 
     Copyright (C) 2003, Intel Corporation
     Copyright (C) 2008, Guennadi Liakhovetski <kernel@pengutronix.de>
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
 #ifndef __ASM_ARCH_CAMERA_H_
@@ -37,6 +25,8 @@
 struct pxacamera_platform_data {
 	unsigned long flags;
 	unsigned long mclk_10khz;
+	int sensor_i2c_adapter_id;
+	int sensor_i2c_address;
 };
 
 extern void pxa_set_camera_info(struct pxacamera_platform_data *);

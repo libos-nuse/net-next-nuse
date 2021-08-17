@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * pci_dn.c
  *
  * Copyright (C) 2001 Todd Inglett, IBM Corporation
  *
  * PCI manipulation via device_nodes.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *    
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- * 
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 #include <linux/kernel.h>
 #include <linux/pci.h>
@@ -31,6 +18,7 @@
 #include <asm/pci-bridge.h>
 #include <asm/ppc-pci.h>
 #include <asm/firmware.h>
+#include <asm/eeh.h>
 
 /*
  * The function is used to find the firmware data of one
@@ -136,10 +124,28 @@ struct pci_dn *pci_get_pdn(struct pci_dev *pdev)
 	return NULL;
 }
 
+#ifdef CONFIG_EEH
+static struct eeh_dev *eeh_dev_init(struct pci_dn *pdn)
+{
+	struct eeh_dev *edev;
+
+	/* Allocate EEH device */
+	edev = kzalloc(sizeof(*edev), GFP_KERNEL);
+	if (!edev)
+		return NULL;
+
+	/* Associate EEH device with OF node */
+	pdn->edev = edev;
+	edev->pdn = pdn;
+	edev->bdfn = (pdn->busno << 8) | pdn->devfn;
+	edev->controller = pdn->phb;
+
+	return edev;
+}
+#endif /* CONFIG_EEH */
+
 #ifdef CONFIG_PCI_IOV
-static struct pci_dn *add_one_dev_pci_data(struct pci_dn *parent,
-					   struct pci_dev *pdev,
-					   int vf_index,
+static struct pci_dn *add_one_sriov_vf_pdn(struct pci_dn *parent,
 					   int busno, int devfn)
 {
 	struct pci_dn *pdn;
@@ -149,44 +155,29 @@ static struct pci_dn *add_one_dev_pci_data(struct pci_dn *parent,
 		return NULL;
 
 	pdn = kzalloc(sizeof(*pdn), GFP_KERNEL);
-	if (!pdn) {
-		dev_warn(&pdev->dev, "%s: Out of memory!\n", __func__);
+	if (!pdn)
 		return NULL;
-	}
 
 	pdn->phb = parent->phb;
 	pdn->parent = parent;
 	pdn->busno = busno;
 	pdn->devfn = devfn;
-#ifdef CONFIG_PPC_POWERNV
-	pdn->vf_index = vf_index;
 	pdn->pe_number = IODA_INVALID_PE;
-#endif
 	INIT_LIST_HEAD(&pdn->child_list);
 	INIT_LIST_HEAD(&pdn->list);
 	list_add_tail(&pdn->list, &parent->child_list);
 
-	/*
-	 * If we already have PCI device instance, lets
-	 * bind them.
-	 */
-	if (pdev)
-		pdev->dev.archdata.pci_data = pdn;
-
 	return pdn;
 }
-#endif
 
-struct pci_dn *add_dev_pci_data(struct pci_dev *pdev)
+struct pci_dn *add_sriov_vf_pdns(struct pci_dev *pdev)
 {
-#ifdef CONFIG_PCI_IOV
 	struct pci_dn *parent, *pdn;
-	struct eeh_dev *edev;
 	int i;
 
 	/* Only support IOV for now */
-	if (!pdev->is_physfn)
-		return pci_get_pdn(pdev);
+	if (WARN_ON(!pdev->is_physfn))
+		return NULL;
 
 	/* Check if VFs have been populated */
 	pdn = pci_get_pdn(pdev);
@@ -199,7 +190,9 @@ struct pci_dn *add_dev_pci_data(struct pci_dev *pdev)
 		return NULL;
 
 	for (i = 0; i < pci_sriov_get_totalvfs(pdev); i++) {
-		pdn = add_one_dev_pci_data(parent, NULL, i,
+		struct eeh_dev *edev __maybe_unused;
+
+		pdn = add_one_sriov_vf_pdn(parent,
 					   pci_iov_virtfn_bus(pdev, i),
 					   pci_iov_virtfn_devfn(pdev, i));
 		if (!pdn) {
@@ -208,40 +201,27 @@ struct pci_dn *add_dev_pci_data(struct pci_dev *pdev)
 			return NULL;
 		}
 
+#ifdef CONFIG_EEH
 		/* Create the EEH device for the VF */
-		eeh_dev_init(pdn, pci_bus_to_host(pdev->bus));
-		edev = pdn_to_eeh_dev(pdn);
+		edev = eeh_dev_init(pdn);
 		BUG_ON(!edev);
-		edev->physfn = pdev;
-	}
-#endif /* CONFIG_PCI_IOV */
 
+		/* FIXME: these should probably be populated by the EEH probe */
+		edev->physfn = pdev;
+		edev->vf_index = i;
+#endif /* CONFIG_EEH */
+	}
 	return pci_get_pdn(pdev);
 }
 
-void remove_dev_pci_data(struct pci_dev *pdev)
+void remove_sriov_vf_pdns(struct pci_dev *pdev)
 {
-#ifdef CONFIG_PCI_IOV
 	struct pci_dn *parent;
 	struct pci_dn *pdn, *tmp;
-	struct eeh_dev *edev;
 	int i;
 
-	/*
-	 * VF and VF PE are created/released dynamically, so we need to
-	 * bind/unbind them.  Otherwise the VF and VF PE would be mismatched
-	 * when re-enabling SR-IOV.
-	 */
-	if (pdev->is_virtfn) {
-		pdn = pci_get_pdn(pdev);
-#ifdef CONFIG_PPC_POWERNV
-		pdn->pe_number = IODA_INVALID_PE;
-#endif
-		return;
-	}
-
 	/* Only support IOV PF for now */
-	if (!pdev->is_physfn)
+	if (WARN_ON(!pdev->is_physfn))
 		return;
 
 	/* Check if VFs have been populated */
@@ -260,18 +240,35 @@ void remove_dev_pci_data(struct pci_dev *pdev)
 	 * a batch mode.
 	 */
 	for (i = 0; i < pci_sriov_get_totalvfs(pdev); i++) {
+		struct eeh_dev *edev __maybe_unused;
+
 		list_for_each_entry_safe(pdn, tmp,
 			&parent->child_list, list) {
 			if (pdn->busno != pci_iov_virtfn_bus(pdev, i) ||
 			    pdn->devfn != pci_iov_virtfn_devfn(pdev, i))
 				continue;
 
-			/* Release EEH device for the VF */
+#ifdef CONFIG_EEH
+			/*
+			 * Release EEH state for this VF. The PCI core
+			 * has already torn down the pci_dev for this VF, but
+			 * we're responsible to removing the eeh_dev since it
+			 * has the same lifetime as the pci_dn that spawned it.
+			 */
 			edev = pdn_to_eeh_dev(pdn);
 			if (edev) {
+				/*
+				 * We allocate pci_dn's for the totalvfs count,
+				 * but only only the vfs that were activated
+				 * have a configured PE.
+				 */
+				if (edev->pe)
+					eeh_pe_tree_remove(edev);
+
 				pdn->edev = NULL;
 				kfree(edev);
 			}
+#endif /* CONFIG_EEH */
 
 			if (!list_empty(&pdn->list))
 				list_del(&pdn->list);
@@ -279,8 +276,8 @@ void remove_dev_pci_data(struct pci_dev *pdev)
 			kfree(pdn);
 		}
 	}
-#endif /* CONFIG_PCI_IOV */
 }
+#endif /* CONFIG_PCI_IOV */
 
 struct pci_dn *pci_add_device_node_info(struct pci_controller *hose,
 					struct device_node *dn)
@@ -289,16 +286,16 @@ struct pci_dn *pci_add_device_node_info(struct pci_controller *hose,
 	const __be32 *regs;
 	struct device_node *parent;
 	struct pci_dn *pdn;
+#ifdef CONFIG_EEH
+	struct eeh_dev *edev;
+#endif
 
-	pdn = zalloc_maybe_bootmem(sizeof(*pdn), GFP_KERNEL);
+	pdn = kzalloc(sizeof(*pdn), GFP_KERNEL);
 	if (pdn == NULL)
 		return NULL;
 	dn->data = pdn;
-	pdn->node = dn;
 	pdn->phb = hose;
-#ifdef CONFIG_PPC_POWERNV
 	pdn->pe_number = IODA_INVALID_PE;
-#endif
 	regs = of_get_property(dn, "reg", NULL);
 	if (regs) {
 		u32 addr = of_read_number(regs, 1);
@@ -319,6 +316,15 @@ struct pci_dn *pci_add_device_node_info(struct pci_controller *hose,
 	/* Extended config space */
 	pdn->pci_ext_config_space = (type && of_read_number(type, 1) == 1);
 
+	/* Create EEH device */
+#ifdef CONFIG_EEH
+	edev = eeh_dev_init(pdn);
+	if (!edev) {
+		kfree(pdn);
+		return NULL;
+	}
+#endif
+
 	/* Attach to parent node */
 	INIT_LIST_HEAD(&pdn->child_list);
 	INIT_LIST_HEAD(&pdn->list);
@@ -334,6 +340,8 @@ EXPORT_SYMBOL_GPL(pci_add_device_node_info);
 void pci_remove_device_node_info(struct device_node *dn)
 {
 	struct pci_dn *pdn = dn ? PCI_DN(dn) : NULL;
+	struct device_node *parent;
+	struct pci_dev *pdev;
 #ifdef CONFIG_EEH
 	struct eeh_dev *edev = pdn_to_eeh_dev(pdn);
 
@@ -346,11 +354,29 @@ void pci_remove_device_node_info(struct device_node *dn)
 
 	WARN_ON(!list_empty(&pdn->child_list));
 	list_del(&pdn->list);
-	if (pdn->parent)
-		of_node_put(pdn->parent->node);
 
-	dn->data = NULL;
-	kfree(pdn);
+	/* Drop the parent pci_dn's ref to our backing dt node */
+	parent = of_get_parent(dn);
+	if (parent)
+		of_node_put(parent);
+
+	/*
+	 * At this point we *might* still have a pci_dev that was
+	 * instantiated from this pci_dn. So defer free()ing it until
+	 * the pci_dev's release function is called.
+	 */
+	pdev = pci_get_domain_bus_and_slot(pdn->phb->global_number,
+			pdn->busno, pdn->devfn);
+	if (pdev) {
+		/* NB: pdev has a ref to dn */
+		pci_dbg(pdev, "marked pdn (from %pOF) as dead\n", dn);
+		pdn->flags |= PCI_DN_FLAG_DEAD;
+	} else {
+		dn->data = NULL;
+		kfree(pdn);
+	}
+
+	pci_dev_put(pdev);
 }
 EXPORT_SYMBOL_GPL(pci_remove_device_node_info);
 
@@ -504,14 +530,18 @@ void pci_devs_phb_init_dynamic(struct pci_controller *phb)
  * pci device found underneath.  This routine runs once,
  * early in the boot sequence.
  */
-void __init pci_devs_phb_init(void)
+static int __init pci_devs_phb_init(void)
 {
 	struct pci_controller *phb, *tmp;
 
 	/* This must be done first so the device nodes have valid pci info! */
 	list_for_each_entry_safe(phb, tmp, &hose_list, list_node)
 		pci_devs_phb_init_dynamic(phb);
+
+	return 0;
 }
+
+core_initcall(pci_devs_phb_init);
 
 static void pci_dev_pdn_setup(struct pci_dev *pdev)
 {

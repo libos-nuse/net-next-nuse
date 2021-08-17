@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Pinctrl based I2C DeMultiplexer
  *
  * Copyright (C) 2015-16 by Wolfram Sang, Sang Engineering <wsa@sang-engineering.com>
  * Copyright (C) 2015-16 by Renesas Electronics Corporation
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; version 2 of the License.
  *
  * See the bindings doc for DTS setup and the sysfs doc for usage information.
  * (look for filenames containing 'i2c-demux-pinctrl' in Documentation/)
@@ -18,6 +15,7 @@
 #include <linux/of.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
 
@@ -36,8 +34,6 @@ struct i2c_demux_pinctrl_priv {
 	struct i2c_algorithm algo;
 	struct i2c_demux_pinctrl_chan chan[];
 };
-
-static struct property status_okay = { .name = "status", .length = 3, .value = "ok" };
 
 static int i2c_demux_master_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 {
@@ -68,13 +64,31 @@ static int i2c_demux_activate_master(struct i2c_demux_pinctrl_priv *priv, u32 ne
 	adap = of_find_i2c_adapter_by_node(priv->chan[new_chan].parent_np);
 	if (!adap) {
 		ret = -ENODEV;
-		goto err;
+		goto err_with_revert;
 	}
 
-	p = devm_pinctrl_get_select(adap->dev.parent, priv->bus_name);
+	/*
+	 * Check if there are pinctrl states at all. Note: we cant' use
+	 * devm_pinctrl_get_select() because we need to distinguish between
+	 * the -ENODEV from devm_pinctrl_get() and pinctrl_lookup_state().
+	 */
+	p = devm_pinctrl_get(adap->dev.parent);
 	if (IS_ERR(p)) {
 		ret = PTR_ERR(p);
-		goto err_with_put;
+		/* continue if just no pinctrl states (e.g. i2c-gpio), otherwise exit */
+		if (ret != -ENODEV)
+			goto err_with_put;
+	} else {
+		/* there are states. check and use them */
+		struct pinctrl_state *s = pinctrl_lookup_state(p, priv->bus_name);
+
+		if (IS_ERR(s)) {
+			ret = PTR_ERR(s);
+			goto err_with_put;
+		}
+		ret = pinctrl_select_state(p, s);
+		if (ret < 0)
+			goto err_with_put;
 	}
 
 	priv->chan[new_chan].parent_adap = adap;
@@ -82,6 +96,8 @@ static int i2c_demux_activate_master(struct i2c_demux_pinctrl_priv *priv, u32 ne
 
 	/* Now fill out current adapter structure. cur_chan must be up to date */
 	priv->algo.master_xfer = i2c_demux_master_xfer;
+	if (adap->algo->master_xfer_atomic)
+		priv->algo.master_xfer_atomic = i2c_demux_master_xfer;
 	priv->algo.functionality = i2c_demux_functionality;
 
 	snprintf(priv->cur_adap.name, sizeof(priv->cur_adap.name),
@@ -89,7 +105,7 @@ static int i2c_demux_activate_master(struct i2c_demux_pinctrl_priv *priv, u32 ne
 	priv->cur_adap.owner = THIS_MODULE;
 	priv->cur_adap.algo = &priv->algo;
 	priv->cur_adap.algo_data = priv;
-	priv->cur_adap.dev.parent = priv->dev;
+	priv->cur_adap.dev.parent = &adap->dev;
 	priv->cur_adap.class = adap->class;
 	priv->cur_adap.retries = adap->retries;
 	priv->cur_adap.timeout = adap->timeout;
@@ -103,8 +119,11 @@ static int i2c_demux_activate_master(struct i2c_demux_pinctrl_priv *priv, u32 ne
 
  err_with_put:
 	i2c_put_adapter(adap);
+ err_with_revert:
+	of_changeset_revert(&priv->chan[new_chan].chgset);
  err:
 	dev_err(priv->dev, "failed to setup demux-adapter %d (%d)\n", new_chan, ret);
+	priv->cur_chan = -EINVAL;
 	return ret;
 }
 
@@ -148,8 +167,8 @@ static ssize_t available_masters_show(struct device *dev,
 	int count = 0, i;
 
 	for (i = 0; i < priv->num_chan && count < PAGE_SIZE; i++)
-		count += scnprintf(buf + count, PAGE_SIZE - count, "%d:%s%c",
-				   i, priv->chan[i].parent_np->full_name,
+		count += scnprintf(buf + count, PAGE_SIZE - count, "%d:%pOF%c",
+				   i, priv->chan[i].parent_np,
 				   i == priv->num_chan - 1 ? '\n' : ' ');
 
 	return count;
@@ -190,6 +209,7 @@ static int i2c_demux_pinctrl_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	struct i2c_demux_pinctrl_priv *priv;
+	struct property *props;
 	int num_chan, i, j, err;
 
 	num_chan = of_count_phandle_with_args(np, "i2c-parent", NULL);
@@ -198,9 +218,12 @@ static int i2c_demux_pinctrl_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv)
-			   + num_chan * sizeof(struct i2c_demux_pinctrl_chan), GFP_KERNEL);
-	if (!priv)
+	priv = devm_kzalloc(&pdev->dev, struct_size(priv, chan, num_chan),
+			    GFP_KERNEL);
+
+	props = devm_kcalloc(&pdev->dev, num_chan, sizeof(*props), GFP_KERNEL);
+
+	if (!priv || !props)
 		return -ENOMEM;
 
 	err = of_property_read_string(np, "i2c-bus-name", &priv->bus_name);
@@ -218,14 +241,20 @@ static int i2c_demux_pinctrl_probe(struct platform_device *pdev)
 		}
 		priv->chan[i].parent_np = adap_np;
 
+		props[i].name = devm_kstrdup(&pdev->dev, "status", GFP_KERNEL);
+		props[i].value = devm_kstrdup(&pdev->dev, "ok", GFP_KERNEL);
+		props[i].length = 3;
+
 		of_changeset_init(&priv->chan[i].chgset);
-		of_changeset_update_property(&priv->chan[i].chgset, adap_np, &status_okay);
+		of_changeset_update_property(&priv->chan[i].chgset, adap_np, &props[i]);
 	}
 
 	priv->num_chan = num_chan;
 	priv->dev = &pdev->dev;
 
 	platform_set_drvdata(pdev, priv);
+
+	pm_runtime_no_callbacks(&pdev->dev);
 
 	/* switch to first parent as active master */
 	i2c_demux_activate_master(priv, 0);
@@ -243,6 +272,7 @@ static int i2c_demux_pinctrl_probe(struct platform_device *pdev)
 err_rollback_available:
 	device_remove_file(&pdev->dev, &dev_attr_available_masters);
 err_rollback:
+	i2c_demux_deactivate_master(priv);
 	for (j = 0; j < i; j++) {
 		of_node_put(priv->chan[j].parent_np);
 		of_changeset_destroy(&priv->chan[j].chgset);

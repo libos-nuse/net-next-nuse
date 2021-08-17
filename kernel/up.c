@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Uniprocessor-only support functions.  The counterpart to kernel/smp.c
  */
@@ -6,13 +7,15 @@
 #include <linux/kernel.h>
 #include <linux/export.h>
 #include <linux/smp.h>
+#include <linux/hypervisor.h>
 
 int smp_call_function_single(int cpu, void (*func) (void *info), void *info,
 				int wait)
 {
 	unsigned long flags;
 
-	WARN_ON(cpu != 0);
+	if (cpu != 0)
+		return -ENXIO;
 
 	local_irq_save(flags);
 	func(info);
@@ -22,7 +25,7 @@ int smp_call_function_single(int cpu, void (*func) (void *info), void *info,
 }
 EXPORT_SYMBOL(smp_call_function_single);
 
-int smp_call_function_single_async(int cpu, struct call_single_data *csd)
+int smp_call_function_single_async(int cpu, struct __call_single_data *csd)
 {
 	unsigned long flags;
 
@@ -33,14 +36,13 @@ int smp_call_function_single_async(int cpu, struct call_single_data *csd)
 }
 EXPORT_SYMBOL(smp_call_function_single_async);
 
-int on_each_cpu(smp_call_func_t func, void *info, int wait)
+void on_each_cpu(smp_call_func_t func, void *info, int wait)
 {
 	unsigned long flags;
 
 	local_irq_save(flags);
 	func(info);
 	local_irq_restore(flags);
-	return 0;
 }
 EXPORT_SYMBOL(on_each_cpu);
 
@@ -67,9 +69,8 @@ EXPORT_SYMBOL(on_each_cpu_mask);
  * Preemption is disabled here to make sure the cond_func is called under the
  * same condtions in UP and SMP.
  */
-void on_each_cpu_cond(bool (*cond_func)(int cpu, void *info),
-		      smp_call_func_t func, void *info, bool wait,
-		      gfp_t gfp_flags)
+void on_each_cpu_cond_mask(smp_cond_func_t cond_func, smp_call_func_t func,
+			   void *info, bool wait, const struct cpumask *mask)
 {
 	unsigned long flags;
 
@@ -81,4 +82,28 @@ void on_each_cpu_cond(bool (*cond_func)(int cpu, void *info),
 	}
 	preempt_enable();
 }
+EXPORT_SYMBOL(on_each_cpu_cond_mask);
+
+void on_each_cpu_cond(smp_cond_func_t cond_func, smp_call_func_t func,
+		      void *info, bool wait)
+{
+	on_each_cpu_cond_mask(cond_func, func, info, wait, NULL);
+}
 EXPORT_SYMBOL(on_each_cpu_cond);
+
+int smp_call_on_cpu(unsigned int cpu, int (*func)(void *), void *par, bool phys)
+{
+	int ret;
+
+	if (cpu != 0)
+		return -ENXIO;
+
+	if (phys)
+		hypervisor_pin_vcpu(0);
+	ret = func(par);
+	if (phys)
+		hypervisor_pin_vcpu(-1);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(smp_call_on_cpu);

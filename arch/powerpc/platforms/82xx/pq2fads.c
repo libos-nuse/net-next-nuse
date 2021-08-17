@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * PQ2FADS board support
  *
@@ -6,10 +7,6 @@
  *
  * Loosely based on mp82xx ADS support by Vitaly Bordug <vbordug@ru.mvista.com>
  * Copyright (c) 2006 MontaVista Software, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  */
 
 #include <linux/init.h>
@@ -164,8 +161,7 @@ static void __init pq2fads_setup_arch(void)
  */
 static int __init pq2fads_probe(void)
 {
-	unsigned long root = of_get_flat_dt_root();
-	return of_flat_dt_is_compatible(root, "fsl,pq2fads");
+	return of_machine_is_compatible("fsl,pq2fads");
 }
 
 static const struct of_device_id of_bus_ids[] __initconst = {

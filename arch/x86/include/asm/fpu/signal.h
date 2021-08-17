@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * x86 FPU signal frame handling methods:
  */
@@ -21,7 +22,7 @@ int ia32_setup_frame(int sig, struct ksignal *ksig,
 
 extern void convert_from_fxsr(struct user_i387_ia32_struct *env,
 			      struct task_struct *tsk);
-extern void convert_to_fxsr(struct task_struct *tsk,
+extern void convert_to_fxsr(struct fxregs_state *fxsave,
 			    const struct user_i387_ia32_struct *env);
 
 unsigned long

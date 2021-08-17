@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Copyright (C) 2014 Linaro Ltd
  *
  * Author: Ulf Hansson <ulf.hansson@linaro.org>
- *
- * License terms: GNU General Public License (GPL) version 2
  *
  *  Simple MMC power sequence management
  */
@@ -16,6 +15,8 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
+#include <linux/delay.h>
+#include <linux/property.h>
 
 #include <linux/mmc/host.h>
 
@@ -24,6 +25,8 @@
 struct mmc_pwrseq_simple {
 	struct mmc_pwrseq pwrseq;
 	bool clk_enabled;
+	u32 post_power_on_delay_ms;
+	u32 power_off_delay_us;
 	struct clk *ext_clk;
 	struct gpio_descs *reset_gpios;
 };
@@ -36,14 +39,22 @@ static void mmc_pwrseq_simple_set_gpios_value(struct mmc_pwrseq_simple *pwrseq,
 	struct gpio_descs *reset_gpios = pwrseq->reset_gpios;
 
 	if (!IS_ERR(reset_gpios)) {
-		int i;
-		int values[reset_gpios->ndescs];
+		unsigned long *values;
+		int nvalues = reset_gpios->ndescs;
 
-		for (i = 0; i < reset_gpios->ndescs; i++)
-			values[i] = value;
+		values = bitmap_alloc(nvalues, GFP_KERNEL);
+		if (!values)
+			return;
 
-		gpiod_set_array_value_cansleep(
-			reset_gpios->ndescs, reset_gpios->desc, values);
+		if (value)
+			bitmap_fill(values, nvalues);
+		else
+			bitmap_zero(values, nvalues);
+
+		gpiod_set_array_value_cansleep(nvalues, reset_gpios->desc,
+					       reset_gpios->info, values);
+
+		kfree(values);
 	}
 }
 
@@ -64,6 +75,9 @@ static void mmc_pwrseq_simple_post_power_on(struct mmc_host *host)
 	struct mmc_pwrseq_simple *pwrseq = to_pwrseq_simple(host->pwrseq);
 
 	mmc_pwrseq_simple_set_gpios_value(pwrseq, 0);
+
+	if (pwrseq->post_power_on_delay_ms)
+		msleep(pwrseq->post_power_on_delay_ms);
 }
 
 static void mmc_pwrseq_simple_power_off(struct mmc_host *host)
@@ -71,6 +85,10 @@ static void mmc_pwrseq_simple_power_off(struct mmc_host *host)
 	struct mmc_pwrseq_simple *pwrseq = to_pwrseq_simple(host->pwrseq);
 
 	mmc_pwrseq_simple_set_gpios_value(pwrseq, 1);
+
+	if (pwrseq->power_off_delay_us)
+		usleep_range(pwrseq->power_off_delay_us,
+			2 * pwrseq->power_off_delay_us);
 
 	if (!IS_ERR(pwrseq->ext_clk) && pwrseq->clk_enabled) {
 		clk_disable_unprepare(pwrseq->ext_clk);
@@ -110,6 +128,11 @@ static int mmc_pwrseq_simple_probe(struct platform_device *pdev)
 	    PTR_ERR(pwrseq->reset_gpios) != -ENOSYS) {
 		return PTR_ERR(pwrseq->reset_gpios);
 	}
+
+	device_property_read_u32(dev, "post-power-on-delay-ms",
+				 &pwrseq->post_power_on_delay_ms);
+	device_property_read_u32(dev, "power-off-delay-us",
+				 &pwrseq->power_off_delay_us);
 
 	pwrseq->pwrseq.dev = dev;
 	pwrseq->pwrseq.ops = &mmc_pwrseq_simple_ops;

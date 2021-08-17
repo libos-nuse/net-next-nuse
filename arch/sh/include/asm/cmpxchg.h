@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_SH_CMPXCHG_H
 #define __ASM_SH_CMPXCHG_H
 
@@ -13,6 +14,8 @@
 #include <asm/cmpxchg-grb.h>
 #elif defined(CONFIG_CPU_SH4A)
 #include <asm/cmpxchg-llsc.h>
+#elif defined(CONFIG_CPU_J2) && defined(CONFIG_SMP)
+#include <asm/cmpxchg-cas.h>
 #else
 #include <asm/cmpxchg-irq.h>
 #endif

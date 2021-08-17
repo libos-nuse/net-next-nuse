@@ -1,12 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2002-2005, Instant802 Networks, Inc.
  * Copyright 2006-2007	Jiri Benc <jbenc@suse.cz>
  * Copyright 2013-2014  Intel Mobile Communications GmbH
- * Copyright (C) 2015 - 2016 Intel Deutschland GmbH
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * Copyright (C) 2015 - 2017 Intel Deutschland GmbH
+ * Copyright (C) 2018-2021 Intel Corporation
  */
 
 #include <linux/module.h>
@@ -20,6 +18,7 @@
 #include <linux/timer.h>
 #include <linux/rtnetlink.h>
 
+#include <net/codel.h>
 #include <net/mac80211.h>
 #include "ieee80211_i.h"
 #include "driver-ops.h"
@@ -67,12 +66,10 @@
 
 static const struct rhashtable_params sta_rht_params = {
 	.nelem_hint = 3, /* start small */
-	.insecure_elasticity = true, /* Disable chain-length checks. */
 	.automatic_shrinking = true,
 	.head_offset = offsetof(struct sta_info, hash_node),
 	.key_offset = offsetof(struct sta_info, addr),
 	.key_len = ETH_ALEN,
-	.hashfn = sta_addr_hash,
 	.max_size = CONFIG_MAC80211_STA_HASH_MAX_SIZE,
 };
 
@@ -80,8 +77,8 @@ static const struct rhashtable_params sta_rht_params = {
 static int sta_info_hash_del(struct ieee80211_local *local,
 			     struct sta_info *sta)
 {
-	return rhashtable_remove_fast(&local->sta_hash, &sta->hash_node,
-				      sta_rht_params);
+	return rhltable_remove(&local->sta_hash, &sta->hash_node,
+			       sta_rht_params);
 }
 
 static void __cleanup_single_sta(struct sta_info *sta)
@@ -90,7 +87,6 @@ static void __cleanup_single_sta(struct sta_info *sta)
 	struct tid_ampdu_tx *tid_tx;
 	struct ieee80211_sub_if_data *sdata = sta->sdata;
 	struct ieee80211_local *local = sdata->local;
-	struct fq *fq = &local->fq;
 	struct ps_data *ps;
 
 	if (test_sta_flag(sta, WLAN_STA_PS_STA) ||
@@ -113,11 +109,14 @@ static void __cleanup_single_sta(struct sta_info *sta)
 
 	if (sta->sta.txq[0]) {
 		for (i = 0; i < ARRAY_SIZE(sta->sta.txq); i++) {
-			struct txq_info *txqi = to_txq_info(sta->sta.txq[i]);
+			struct txq_info *txqi;
 
-			spin_lock_bh(&fq->lock);
+			if (!sta->sta.txq[i])
+				continue;
+
+			txqi = to_txq_info(sta->sta.txq[i]);
+
 			ieee80211_txq_purge(local, txqi);
-			spin_unlock_bh(&fq->lock);
 		}
 	}
 
@@ -157,19 +156,22 @@ static void cleanup_single_sta(struct sta_info *sta)
 	sta_info_free(local, sta);
 }
 
+struct rhlist_head *sta_info_hash_lookup(struct ieee80211_local *local,
+					 const u8 *addr)
+{
+	return rhltable_lookup(&local->sta_hash, addr, sta_rht_params);
+}
+
 /* protected by RCU */
 struct sta_info *sta_info_get(struct ieee80211_sub_if_data *sdata,
 			      const u8 *addr)
 {
 	struct ieee80211_local *local = sdata->local;
+	struct rhlist_head *tmp;
 	struct sta_info *sta;
-	struct rhash_head *tmp;
-	const struct bucket_table *tbl;
 
 	rcu_read_lock();
-	tbl = rht_dereference_rcu(local->sta_hash.tbl, &local->sta_hash);
-
-	for_each_sta_info(local, tbl, addr, sta, tmp) {
+	for_each_sta_info(local, addr, sta, tmp) {
 		if (sta->sdata == sdata) {
 			rcu_read_unlock();
 			/* this is safe as the caller must already hold
@@ -190,14 +192,11 @@ struct sta_info *sta_info_get_bss(struct ieee80211_sub_if_data *sdata,
 				  const u8 *addr)
 {
 	struct ieee80211_local *local = sdata->local;
+	struct rhlist_head *tmp;
 	struct sta_info *sta;
-	struct rhash_head *tmp;
-	const struct bucket_table *tbl;
 
 	rcu_read_lock();
-	tbl = rht_dereference_rcu(local->sta_hash.tbl, &local->sta_hash);
-
-	for_each_sta_info(local, tbl, addr, sta, tmp) {
+	for_each_sta_info(local, addr, sta, tmp) {
 		if (sta->sdata == sdata ||
 		    (sta->sdata->bss && sta->sdata->bss == sdata->bss)) {
 			rcu_read_unlock();
@@ -211,6 +210,20 @@ struct sta_info *sta_info_get_bss(struct ieee80211_sub_if_data *sdata,
 	return NULL;
 }
 
+struct sta_info *sta_info_get_by_addrs(struct ieee80211_local *local,
+				       const u8 *sta_addr, const u8 *vif_addr)
+{
+	struct rhlist_head *tmp;
+	struct sta_info *sta;
+
+	for_each_sta_info(local, sta_addr, sta, tmp) {
+		if (ether_addr_equal(vif_addr, sta->sdata->vif.addr))
+			return sta;
+	}
+
+	return NULL;
+}
+
 struct sta_info *sta_info_get_by_idx(struct ieee80211_sub_if_data *sdata,
 				     int idx)
 {
@@ -218,7 +231,8 @@ struct sta_info *sta_info_get_by_idx(struct ieee80211_sub_if_data *sdata,
 	struct sta_info *sta;
 	int i = 0;
 
-	list_for_each_entry_rcu(sta, &local->sta_list, list) {
+	list_for_each_entry_rcu(sta, &local->sta_list, list,
+				lockdep_is_held(&local->sta_mtx)) {
 		if (sdata != sta->sdata)
 			continue;
 		if (i < idx) {
@@ -244,6 +258,24 @@ struct sta_info *sta_info_get_by_idx(struct ieee80211_sub_if_data *sdata,
  */
 void sta_info_free(struct ieee80211_local *local, struct sta_info *sta)
 {
+	/*
+	 * If we had used sta_info_pre_move_state() then we might not
+	 * have gone through the state transitions down again, so do
+	 * it here now (and warn if it's inserted).
+	 *
+	 * This will clear state such as fast TX/RX that may have been
+	 * allocated during state transitions.
+	 */
+	while (sta->sta_state > IEEE80211_STA_NONE) {
+		int ret;
+
+		WARN_ON_ONCE(test_sta_flag(sta, WLAN_STA_INSERTED));
+
+		ret = sta_info_move_state(sta, sta->sta_state - 1);
+		if (WARN_ONCE(ret, "sta_info_move_state() returned %d\n", ret))
+			break;
+	}
+
 	if (sta->rate_ctrl)
 		rate_control_free_sta(sta);
 
@@ -263,8 +295,8 @@ void sta_info_free(struct ieee80211_local *local, struct sta_info *sta)
 static int sta_info_hash_add(struct ieee80211_local *local,
 			     struct sta_info *sta)
 {
-	return rhashtable_insert_fast(&local->sta_hash, &sta->hash_node,
-				      sta_rht_params);
+	return rhltable_insert(&local->sta_hash, &sta->hash_node,
+			       sta_rht_params);
 }
 
 static void sta_deliver_ps_frames(struct work_struct *wk)
@@ -315,7 +347,7 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 
 	if (ieee80211_hw_check(hw, USES_RSS)) {
 		sta->pcpu_rx_stats =
-			alloc_percpu(struct ieee80211_sta_rx_stats);
+			alloc_percpu_gfp(struct ieee80211_sta_rx_stats, gfp);
 		if (!sta->pcpu_rx_stats)
 			goto free;
 	}
@@ -330,21 +362,37 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 		sta->mesh = kzalloc(sizeof(*sta->mesh), gfp);
 		if (!sta->mesh)
 			goto free;
+		sta->mesh->plink_sta = sta;
 		spin_lock_init(&sta->mesh->plink_lock);
 		if (ieee80211_vif_is_mesh(&sdata->vif) &&
 		    !sdata->u.mesh.user_mpm)
-			init_timer(&sta->mesh->plink_timer);
+			timer_setup(&sta->mesh->plink_timer, mesh_plink_timer,
+				    0);
 		sta->mesh->nonpeer_pm = NL80211_MESH_POWER_ACTIVE;
 	}
 #endif
 
 	memcpy(sta->addr, addr, ETH_ALEN);
 	memcpy(sta->sta.addr, addr, ETH_ALEN);
+	sta->sta.max_rx_aggregation_subframes =
+		local->hw.max_rx_aggregation_subframes;
+
+	/* Extended Key ID needs to install keys for keyid 0 and 1 Rx-only.
+	 * The Tx path starts to use a key as soon as the key slot ptk_idx
+	 * references to is not NULL. To not use the initial Rx-only key
+	 * prematurely for Tx initialize ptk_idx to an impossible PTK keyid
+	 * which always will refer to a NULL key.
+	 */
+	BUILD_BUG_ON(ARRAY_SIZE(sta->ptk) <= INVALID_PTK_KEYIDX);
+	sta->ptk_idx = INVALID_PTK_KEYIDX;
+
 	sta->local = local;
 	sta->sdata = sdata;
 	sta->rx_stats.last_rx = jiffies;
 
 	u64_stats_init(&sta->rx_stats.syncp);
+
+	ieee80211_init_frag_cache(&sta->frags);
 
 	sta->sta_state = IEEE80211_STA_NONE;
 
@@ -353,6 +401,7 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 
 	sta->last_connected = ktime_get_seconds();
 	ewma_signal_init(&sta->rx_stats_avg.signal);
+	ewma_avg_signal_init(&sta->status_stats.avg_ack_signal);
 	for (i = 0; i < ARRAY_SIZE(sta->rx_stats_avg.chain_signal); i++)
 		ewma_signal_init(&sta->rx_stats_avg.chain_signal[i]);
 
@@ -368,6 +417,7 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 		for (i = 0; i < ARRAY_SIZE(sta->sta.txq); i++) {
 			struct txq_info *txq = txq_data + i * size;
 
+			/* might not do anything for the bufferable MMPDU TXQ */
 			ieee80211_txq_init(sdata, sta, txq, i);
 		}
 	}
@@ -375,29 +425,73 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 	if (sta_prepare_rate_control(local, sta, gfp))
 		goto free_txq;
 
-	for (i = 0; i < IEEE80211_NUM_TIDS; i++) {
-		/*
-		 * timer_to_tid must be initialized with identity mapping
-		 * to enable session_timer's data differentiation. See
-		 * sta_rx_agg_session_timer_expired for usage.
-		 */
-		sta->timer_to_tid[i] = i;
-	}
+	sta->airtime_weight = IEEE80211_DEFAULT_AIRTIME_WEIGHT;
+
 	for (i = 0; i < IEEE80211_NUM_ACS; i++) {
 		skb_queue_head_init(&sta->ps_tx_buf[i]);
 		skb_queue_head_init(&sta->tx_filtered[i]);
+		sta->airtime[i].deficit = sta->airtime_weight;
+		atomic_set(&sta->airtime[i].aql_tx_pending, 0);
+		sta->airtime[i].aql_limit_low = local->aql_txq_limit_low[i];
+		sta->airtime[i].aql_limit_high = local->aql_txq_limit_high[i];
 	}
 
 	for (i = 0; i < IEEE80211_NUM_TIDS; i++)
 		sta->last_seq_ctrl[i] = cpu_to_le16(USHRT_MAX);
 
+	for (i = 0; i < NUM_NL80211_BANDS; i++) {
+		u32 mandatory = 0;
+		int r;
+
+		if (!hw->wiphy->bands[i])
+			continue;
+
+		switch (i) {
+		case NL80211_BAND_2GHZ:
+			/*
+			 * We use both here, even if we cannot really know for
+			 * sure the station will support both, but the only use
+			 * for this is when we don't know anything yet and send
+			 * management frames, and then we'll pick the lowest
+			 * possible rate anyway.
+			 * If we don't include _G here, we cannot find a rate
+			 * in P2P, and thus trigger the WARN_ONCE() in rate.c
+			 */
+			mandatory = IEEE80211_RATE_MANDATORY_B |
+				    IEEE80211_RATE_MANDATORY_G;
+			break;
+		case NL80211_BAND_5GHZ:
+			mandatory = IEEE80211_RATE_MANDATORY_A;
+			break;
+		case NL80211_BAND_60GHZ:
+			WARN_ON(1);
+			mandatory = 0;
+			break;
+		}
+
+		for (r = 0; r < hw->wiphy->bands[i]->n_bitrates; r++) {
+			struct ieee80211_rate *rate;
+
+			rate = &hw->wiphy->bands[i]->bitrates[r];
+
+			if (!(rate->flags & mandatory))
+				continue;
+			sta->sta.supp_rates[i] |= BIT(r);
+		}
+	}
+
 	sta->sta.smps_mode = IEEE80211_SMPS_OFF;
 	if (sdata->vif.type == NL80211_IFTYPE_AP ||
 	    sdata->vif.type == NL80211_IFTYPE_AP_VLAN) {
-		struct ieee80211_supported_band *sband =
-			hw->wiphy->bands[ieee80211_get_sdata_band(sdata)];
-		u8 smps = (sband->ht_cap.cap & IEEE80211_HT_CAP_SM_PS) >>
-				IEEE80211_HT_CAP_SM_PS_SHIFT;
+		struct ieee80211_supported_band *sband;
+		u8 smps;
+
+		sband = ieee80211_get_sband(sdata);
+		if (!sband)
+			goto free_txq;
+
+		smps = (sband->ht_cap.cap & IEEE80211_HT_CAP_SM_PS) >>
+			IEEE80211_HT_CAP_SM_PS_SHIFT;
 		/*
 		 * Assume that hostapd advertises our caps in the beacon and
 		 * this is the known_smps_mode for a station that just assciated
@@ -419,6 +513,11 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 
 	sta->sta.max_rc_amsdu_len = IEEE80211_MAX_MPDU_LEN_HT_BA;
 
+	sta->cparams.ce_threshold = CODEL_DISABLED_THRESHOLD;
+	sta->cparams.target = MS2TIME(20);
+	sta->cparams.interval = MS2TIME(100);
+	sta->cparams.ecn = true;
+
 	sta_dbg(sdata, "Allocated STA %pM\n", sta->sta.addr);
 
 	return sta;
@@ -427,6 +526,7 @@ free_txq:
 	if (sta->sta.txq[0])
 		kfree(to_txq_info(sta->sta.txq[0]));
 free:
+	free_percpu(sta->pcpu_rx_stats);
 #ifdef CONFIG_MAC80211_MESH
 	kfree(sta->mesh);
 #endif
@@ -450,9 +550,9 @@ static int sta_info_insert_check(struct sta_info *sta)
 		    is_multicast_ether_addr(sta->sta.addr)))
 		return -EINVAL;
 
-	/* Strictly speaking this isn't necessary as we hold the mutex, but
-	 * the rhashtable code can't really deal with that distinction. We
-	 * do require the mutex for correctness though.
+	/* The RCU read lock is required by rhashtable due to
+	 * asynchronous resize/rehash.  We also require the mutex
+	 * for correctness.
 	 */
 	rcu_read_lock();
 	lockdep_assert_held(&sdata->local->sta_mtx);
@@ -503,6 +603,31 @@ static int sta_info_insert_drv_state(struct ieee80211_local *local,
 	return err;
 }
 
+static void
+ieee80211_recalc_p2p_go_ps_allowed(struct ieee80211_sub_if_data *sdata)
+{
+	struct ieee80211_local *local = sdata->local;
+	bool allow_p2p_go_ps = sdata->vif.p2p;
+	struct sta_info *sta;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(sta, &local->sta_list, list) {
+		if (sdata != sta->sdata ||
+		    !test_sta_flag(sta, WLAN_STA_ASSOC))
+			continue;
+		if (!sta->sta.support_p2p_ps) {
+			allow_p2p_go_ps = false;
+			break;
+		}
+	}
+	rcu_read_unlock();
+
+	if (allow_p2p_go_ps != sdata->vif.bss_conf.allow_p2p_go_ps) {
+		sdata->vif.bss_conf.allow_p2p_go_ps = allow_p2p_go_ps;
+		ieee80211_bss_info_change_notify(sdata, BSS_CHANGED_P2P_PS);
+	}
+}
+
 /*
  * should be called with sta_mtx locked
  * this function replaces the mutex lock
@@ -512,20 +637,20 @@ static int sta_info_insert_finish(struct sta_info *sta) __acquires(RCU)
 {
 	struct ieee80211_local *local = sta->local;
 	struct ieee80211_sub_if_data *sdata = sta->sdata;
-	struct station_info *sinfo;
+	struct station_info *sinfo = NULL;
 	int err = 0;
 
 	lockdep_assert_held(&local->sta_mtx);
 
-	sinfo = kzalloc(sizeof(struct station_info), GFP_KERNEL);
-	if (!sinfo) {
-		err = -ENOMEM;
-		goto out_err;
-	}
-
 	/* check if STA exists already */
 	if (sta_info_get_bss(sdata, sta->sta.addr)) {
 		err = -EEXIST;
+		goto out_err;
+	}
+
+	sinfo = kzalloc(sizeof(struct station_info), GFP_KERNEL);
+	if (!sinfo) {
+		err = -ENOMEM;
 		goto out_err;
 	}
 
@@ -549,6 +674,13 @@ static int sta_info_insert_finish(struct sta_info *sta) __acquires(RCU)
 		goto out_remove;
 
 	set_sta_flag(sta, WLAN_STA_INSERTED);
+
+	if (sta->sta_state >= IEEE80211_STA_ASSOC) {
+		ieee80211_recalc_min_chandef(sta->sdata);
+		if (!sta->sta.support_p2p_ps)
+			ieee80211_recalc_p2p_go_ps_allowed(sta->sdata);
+	}
+
 	/* accept BA sessions now */
 	clear_sta_flag(sta, WLAN_STA_BLOCK_BA);
 
@@ -575,7 +707,7 @@ static int sta_info_insert_finish(struct sta_info *sta) __acquires(RCU)
  out_drop_sta:
 	local->num_sta--;
 	synchronize_net();
-	__cleanup_single_sta(sta);
+	cleanup_single_sta(sta);
  out_err:
 	mutex_unlock(&local->sta_mtx);
 	kfree(sinfo);
@@ -594,19 +726,13 @@ int sta_info_insert_rcu(struct sta_info *sta) __acquires(RCU)
 
 	err = sta_info_insert_check(sta);
 	if (err) {
+		sta_info_free(local, sta);
 		mutex_unlock(&local->sta_mtx);
 		rcu_read_lock();
-		goto out_free;
+		return err;
 	}
 
-	err = sta_info_insert_finish(sta);
-	if (err)
-		goto out_free;
-
-	return 0;
- out_free:
-	sta_info_free(local, sta);
-	return err;
+	return sta_info_insert_finish(sta);
 }
 
 int sta_info_insert(struct sta_info *sta)
@@ -687,7 +813,7 @@ static void __sta_info_recalc_tim(struct sta_info *sta, bool ignore_pending)
 	}
 
 	/* No need to do anything if the driver does all */
-	if (ieee80211_hw_check(&local->hw, AP_LINK_PS))
+	if (ieee80211_hw_check(&local->hw, AP_LINK_PS) && !local->ops->set_tim)
 		return;
 
 	if (sta->dead)
@@ -708,7 +834,7 @@ static void __sta_info_recalc_tim(struct sta_info *sta, bool ignore_pending)
 	for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
 		unsigned long tids;
 
-		if (ignore_for_tim & BIT(ac))
+		if (ignore_for_tim & ieee80211_ac_to_qos_mask[ac])
 			continue;
 
 		indicate_tim |= !skb_queue_empty(&sta->tx_filtered[ac]) ||
@@ -938,6 +1064,11 @@ static void __sta_info_destroy_part2(struct sta_info *sta)
 	might_sleep();
 	lockdep_assert_held(&local->sta_mtx);
 
+	if (sta->sta_state == IEEE80211_STA_AUTHORIZED) {
+		ret = sta_info_move_state(sta, IEEE80211_STA_ASSOC);
+		WARN_ON_ONCE(ret);
+	}
+
 	/* now keys can no longer be reached */
 	ieee80211_free_sta_keys(local, sta);
 
@@ -967,12 +1098,13 @@ static void __sta_info_destroy_part2(struct sta_info *sta)
 
 	sinfo = kzalloc(sizeof(*sinfo), GFP_KERNEL);
 	if (sinfo)
-		sta_set_sinfo(sta, sinfo);
+		sta_set_sinfo(sta, sinfo, true);
 	cfg80211_del_sta_sinfo(sdata->dev, sta->sta.addr, sinfo, GFP_KERNEL);
 	kfree(sinfo);
 
-	rate_control_remove_sta_debugfs(sta);
 	ieee80211_sta_debugfs_remove(sta);
+
+	ieee80211_destroy_frag_cache(&sta->frags);
 
 	cleanup_single_sta(sta);
 }
@@ -1018,9 +1150,9 @@ int sta_info_destroy_addr_bss(struct ieee80211_sub_if_data *sdata,
 	return ret;
 }
 
-static void sta_info_cleanup(unsigned long data)
+static void sta_info_cleanup(struct timer_list *t)
 {
-	struct ieee80211_local *local = (struct ieee80211_local *) data;
+	struct ieee80211_local *local = from_timer(local, t, sta_cleanup);
 	struct sta_info *sta;
 	bool timer_needed = false;
 
@@ -1040,16 +1172,11 @@ static void sta_info_cleanup(unsigned long data)
 		  round_jiffies(jiffies + STA_INFO_CLEANUP_INTERVAL));
 }
 
-u32 sta_addr_hash(const void *key, u32 length, u32 seed)
-{
-	return jhash(key, ETH_ALEN, seed);
-}
-
 int sta_info_init(struct ieee80211_local *local)
 {
 	int err;
 
-	err = rhashtable_init(&local->sta_hash, &sta_rht_params);
+	err = rhltable_init(&local->sta_hash, &sta_rht_params);
 	if (err)
 		return err;
 
@@ -1057,15 +1184,14 @@ int sta_info_init(struct ieee80211_local *local)
 	mutex_init(&local->sta_mtx);
 	INIT_LIST_HEAD(&local->sta_list);
 
-	setup_timer(&local->sta_cleanup, sta_info_cleanup,
-		    (unsigned long)local);
+	timer_setup(&local->sta_cleanup, sta_info_cleanup, 0);
 	return 0;
 }
 
 void sta_info_stop(struct ieee80211_local *local)
 {
 	del_timer_sync(&local->sta_cleanup);
-	rhashtable_destroy(&local->sta_hash);
+	rhltable_destroy(&local->sta_hash);
 }
 
 
@@ -1135,17 +1261,14 @@ struct ieee80211_sta *ieee80211_find_sta_by_ifaddr(struct ieee80211_hw *hw,
 						   const u8 *localaddr)
 {
 	struct ieee80211_local *local = hw_to_local(hw);
+	struct rhlist_head *tmp;
 	struct sta_info *sta;
-	struct rhash_head *tmp;
-	const struct bucket_table *tbl;
-
-	tbl = rht_dereference_rcu(local->sta_hash.tbl, &local->sta_hash);
 
 	/*
 	 * Just return a random station if localaddr is NULL
 	 * ... first in list.
 	 */
-	for_each_sta_info(local, tbl, addr, sta, tmp) {
+	for_each_sta_info(local, addr, sta, tmp) {
 		if (localaddr &&
 		    !ether_addr_equal(sta->sdata->vif.addr, localaddr))
 			continue;
@@ -1207,15 +1330,11 @@ void ieee80211_sta_ps_deliver_wakeup(struct sta_info *sta)
 	if (!ieee80211_hw_check(&local->hw, AP_LINK_PS))
 		drv_sta_notify(local, sdata, STA_NOTIFY_AWAKE, &sta->sta);
 
-	if (sta->sta.txq[0]) {
-		for (i = 0; i < ARRAY_SIZE(sta->sta.txq); i++) {
-			struct txq_info *txqi = to_txq_info(sta->sta.txq[i]);
+	for (i = 0; i < ARRAY_SIZE(sta->sta.txq); i++) {
+		if (!sta->sta.txq[i] || !txq_has_queue(sta->sta.txq[i]))
+			continue;
 
-			if (!txqi->tin.backlog_packets)
-				continue;
-
-			drv_wake_tx_queue(local, txqi);
-		}
+		schedule_and_wake_txq(local, to_txq_info(sta->sta.txq[i]));
 	}
 
 	skb_queue_head_init(&pending);
@@ -1254,26 +1373,12 @@ void ieee80211_sta_ps_deliver_wakeup(struct sta_info *sta)
 
 	atomic_dec(&ps->num_sta_ps);
 
-	/* This station just woke up and isn't aware of our SMPS state */
-	if (!ieee80211_vif_is_mesh(&sdata->vif) &&
-	    !ieee80211_smps_is_restrictive(sta->known_smps_mode,
-					   sdata->smps_mode) &&
-	    sta->known_smps_mode != sdata->bss->req_smps &&
-	    sta_info_tx_streams(sta) != 1) {
-		ht_dbg(sdata,
-		       "%pM just woke up and MIMO capable - update SMPS\n",
-		       sta->sta.addr);
-		ieee80211_send_smps_action(sdata, sdata->bss->req_smps,
-					   sta->sta.addr,
-					   sdata->vif.bss_conf.bssid);
-	}
-
 	local->total_ps_buffered -= buffered;
 
 	sta_info_recalc_tim(sta);
 
 	ps_dbg(sdata,
-	       "STA %pM aid %d sending %d filtered/%d PS frames since STA not sleeping anymore\n",
+	       "STA %pM aid %d sending %d filtered/%d PS frames since STA woke up\n",
 	       sta->sta.addr, sta->sta.aid, filtered, buffered);
 
 	ieee80211_check_fast_xmit(sta);
@@ -1293,6 +1398,11 @@ static void ieee80211_send_null_response(struct sta_info *sta, int tid,
 	struct ieee80211_tx_info *info;
 	struct ieee80211_chanctx_conf *chanctx_conf;
 
+	/* Don't send NDPs when STA is connected HE */
+	if (sdata->vif.type == NL80211_IFTYPE_STATION &&
+	    !(sdata->u.mgd.flags & IEEE80211_STA_DISABLE_HE))
+		return;
+
 	if (qos) {
 		fc = cpu_to_le16(IEEE80211_FTYPE_DATA |
 				 IEEE80211_STYPE_QOS_NULLFUNC |
@@ -1310,7 +1420,7 @@ static void ieee80211_send_null_response(struct sta_info *sta, int tid,
 
 	skb_reserve(skb, local->hw.extra_tx_headroom);
 
-	nullfunc = (void *) skb_put(skb, size);
+	nullfunc = skb_put(skb, size);
 	nullfunc->frame_control = fc;
 	nullfunc->duration_id = 0;
 	memcpy(nullfunc->addr1, sta->sta.addr, ETH_ALEN);
@@ -1398,7 +1508,7 @@ ieee80211_sta_ps_more_data(struct sta_info *sta, u8 ignored_acs,
 		return true;
 
 	for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
-		if (ignored_acs & BIT(ac))
+		if (ignored_acs & ieee80211_ac_to_qos_mask[ac])
 			continue;
 
 		if (!skb_queue_empty(&sta->tx_filtered[ac]) ||
@@ -1423,7 +1533,7 @@ ieee80211_sta_ps_get_frames(struct sta_info *sta, int n_frames, u8 ignored_acs,
 	for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
 		unsigned long tids;
 
-		if (ignored_acs & BIT(ac))
+		if (ignored_acs & ieee80211_ac_to_qos_mask[ac])
 			continue;
 
 		tids = ieee80211_tids_for_ac(ac);
@@ -1491,7 +1601,7 @@ ieee80211_sta_ps_deliver_response(struct sta_info *sta,
 			BIT(find_highest_prio_tid(driver_release_tids));
 
 	if (skb_queue_empty(&frames) && !driver_release_tids) {
-		int tid;
+		int tid, ac;
 
 		/*
 		 * For PS-Poll, this can only happen due to a race condition
@@ -1509,7 +1619,10 @@ ieee80211_sta_ps_deliver_response(struct sta_info *sta,
 		 */
 
 		/* This will evaluate to 1, 3, 5 or 7. */
-		tid = 7 - ((ffs(~ignored_acs) - 1) << 1);
+		for (ac = IEEE80211_AC_VO; ac < IEEE80211_NUM_ACS; ac++)
+			if (!(ignored_acs & ieee80211_ac_to_qos_mask[ac]))
+				break;
+		tid = 7 - 2 * ac;
 
 		ieee80211_send_null_response(sta, tid, reason, true, false);
 	} else if (!driver_release_tids) {
@@ -1616,7 +1729,6 @@ ieee80211_sta_ps_deliver_response(struct sta_info *sta,
 
 		sta_info_recalc_tim(sta);
 	} else {
-		unsigned long tids = sta->txq_buffered_tids & driver_release_tids;
 		int tid;
 
 		/*
@@ -1646,9 +1758,9 @@ ieee80211_sta_ps_deliver_response(struct sta_info *sta,
 			return;
 
 		for (tid = 0; tid < ARRAY_SIZE(sta->sta.txq); tid++) {
-			struct txq_info *txqi = to_txq_info(sta->sta.txq[tid]);
-
-			if (!(tids & BIT(tid)) || txqi->tin.backlog_packets)
+			if (!sta->sta.txq[tid] ||
+			    !(driver_release_tids & BIT(tid)) ||
+			    txq_has_queue(sta->sta.txq[tid]))
 				continue;
 
 			sta_info_recalc_tim(sta);
@@ -1785,29 +1897,61 @@ void ieee80211_sta_set_buffered(struct ieee80211_sta *pubsta,
 }
 EXPORT_SYMBOL(ieee80211_sta_set_buffered);
 
-static void
-ieee80211_recalc_p2p_go_ps_allowed(struct ieee80211_sub_if_data *sdata)
+void ieee80211_sta_register_airtime(struct ieee80211_sta *pubsta, u8 tid,
+				    u32 tx_airtime, u32 rx_airtime)
 {
-	struct ieee80211_local *local = sdata->local;
-	bool allow_p2p_go_ps = sdata->vif.p2p;
-	struct sta_info *sta;
+	struct sta_info *sta = container_of(pubsta, struct sta_info, sta);
+	struct ieee80211_local *local = sta->sdata->local;
+	u8 ac = ieee80211_ac_from_tid(tid);
+	u32 airtime = 0;
 
-	rcu_read_lock();
-	list_for_each_entry_rcu(sta, &local->sta_list, list) {
-		if (sdata != sta->sdata ||
-		    !test_sta_flag(sta, WLAN_STA_ASSOC))
-			continue;
-		if (!sta->sta.support_p2p_ps) {
-			allow_p2p_go_ps = false;
-			break;
-		}
-	}
-	rcu_read_unlock();
+	if (sta->local->airtime_flags & AIRTIME_USE_TX)
+		airtime += tx_airtime;
+	if (sta->local->airtime_flags & AIRTIME_USE_RX)
+		airtime += rx_airtime;
 
-	if (allow_p2p_go_ps != sdata->vif.bss_conf.allow_p2p_go_ps) {
-		sdata->vif.bss_conf.allow_p2p_go_ps = allow_p2p_go_ps;
-		ieee80211_bss_info_change_notify(sdata, BSS_CHANGED_P2P_PS);
+	spin_lock_bh(&local->active_txq_lock[ac]);
+	sta->airtime[ac].tx_airtime += tx_airtime;
+	sta->airtime[ac].rx_airtime += rx_airtime;
+	sta->airtime[ac].deficit -= airtime;
+	spin_unlock_bh(&local->active_txq_lock[ac]);
+}
+EXPORT_SYMBOL(ieee80211_sta_register_airtime);
+
+void ieee80211_sta_update_pending_airtime(struct ieee80211_local *local,
+					  struct sta_info *sta, u8 ac,
+					  u16 tx_airtime, bool tx_completed)
+{
+	int tx_pending;
+
+	if (!wiphy_ext_feature_isset(local->hw.wiphy, NL80211_EXT_FEATURE_AQL))
+		return;
+
+	if (!tx_completed) {
+		if (sta)
+			atomic_add(tx_airtime,
+				   &sta->airtime[ac].aql_tx_pending);
+
+		atomic_add(tx_airtime, &local->aql_total_pending_airtime);
+		return;
 	}
+
+	if (sta) {
+		tx_pending = atomic_sub_return(tx_airtime,
+					       &sta->airtime[ac].aql_tx_pending);
+		if (tx_pending < 0)
+			atomic_cmpxchg(&sta->airtime[ac].aql_tx_pending,
+				       tx_pending, 0);
+	}
+
+	tx_pending = atomic_sub_return(tx_airtime,
+				       &local->aql_total_pending_airtime);
+	if (WARN_ONCE(tx_pending < 0,
+		      "Device %s AC %d pending airtime underflow: %u, %u",
+		      wiphy_name(local->hw.wiphy), ac, tx_pending,
+		      tx_airtime))
+		atomic_cmpxchg(&local->aql_total_pending_airtime,
+			       tx_pending, 0);
 }
 
 int sta_info_move_state(struct sta_info *sta,
@@ -1878,14 +2022,12 @@ int sta_info_move_state(struct sta_info *sta,
 	case IEEE80211_STA_ASSOC:
 		if (sta->sta_state == IEEE80211_STA_AUTH) {
 			set_bit(WLAN_STA_ASSOC, &sta->_flags);
+			sta->assoc_at = ktime_get_boottime_ns();
 			ieee80211_recalc_min_chandef(sta->sdata);
 			if (!sta->sta.support_p2p_ps)
 				ieee80211_recalc_p2p_go_ps_allowed(sta->sdata);
 		} else if (sta->sta_state == IEEE80211_STA_AUTHORIZED) {
-			if (sta->sdata->vif.type == NL80211_IFTYPE_AP ||
-			    (sta->sdata->vif.type == NL80211_IFTYPE_AP_VLAN &&
-			     !sta->sdata->u.vlan.sta))
-				atomic_dec(&sta->sdata->bss->num_mcast_sta);
+			ieee80211_vif_dec_num_mcast(sta->sdata);
 			clear_bit(WLAN_STA_AUTHORIZED, &sta->_flags);
 			ieee80211_clear_fast_xmit(sta);
 			ieee80211_clear_fast_rx(sta);
@@ -1893,14 +2035,15 @@ int sta_info_move_state(struct sta_info *sta,
 		break;
 	case IEEE80211_STA_AUTHORIZED:
 		if (sta->sta_state == IEEE80211_STA_ASSOC) {
-			if (sta->sdata->vif.type == NL80211_IFTYPE_AP ||
-			    (sta->sdata->vif.type == NL80211_IFTYPE_AP_VLAN &&
-			     !sta->sdata->u.vlan.sta))
-				atomic_inc(&sta->sdata->bss->num_mcast_sta);
+			ieee80211_vif_inc_num_mcast(sta->sdata);
 			set_bit(WLAN_STA_AUTHORIZED, &sta->_flags);
 			ieee80211_check_fast_xmit(sta);
 			ieee80211_check_fast_rx(sta);
 		}
+		if (sta->sdata->vif.type == NL80211_IFTYPE_AP_VLAN ||
+		    sta->sdata->vif.type == NL80211_IFTYPE_AP)
+			cfg80211_send_layer2_update(sta->sdata->dev,
+						    sta->sta.addr);
 		break;
 	default:
 		break;
@@ -1968,26 +2111,38 @@ sta_get_last_rx_stats(struct sta_info *sta)
 	return stats;
 }
 
-static void sta_stats_decode_rate(struct ieee80211_local *local, u16 rate,
+static void sta_stats_decode_rate(struct ieee80211_local *local, u32 rate,
 				  struct rate_info *rinfo)
 {
-	rinfo->bw = (rate & STA_STATS_RATE_BW_MASK) >>
-		STA_STATS_RATE_BW_SHIFT;
+	rinfo->bw = STA_STATS_GET(BW, rate);
 
-	if (rate & STA_STATS_RATE_VHT) {
+	switch (STA_STATS_GET(TYPE, rate)) {
+	case STA_STATS_RATE_TYPE_VHT:
 		rinfo->flags = RATE_INFO_FLAGS_VHT_MCS;
-		rinfo->mcs = rate & 0xf;
-		rinfo->nss = (rate & 0xf0) >> 4;
-	} else if (rate & STA_STATS_RATE_HT) {
+		rinfo->mcs = STA_STATS_GET(VHT_MCS, rate);
+		rinfo->nss = STA_STATS_GET(VHT_NSS, rate);
+		if (STA_STATS_GET(SGI, rate))
+			rinfo->flags |= RATE_INFO_FLAGS_SHORT_GI;
+		break;
+	case STA_STATS_RATE_TYPE_HT:
 		rinfo->flags = RATE_INFO_FLAGS_MCS;
-		rinfo->mcs = rate & 0xff;
-	} else if (rate & STA_STATS_RATE_LEGACY) {
+		rinfo->mcs = STA_STATS_GET(HT_MCS, rate);
+		if (STA_STATS_GET(SGI, rate))
+			rinfo->flags |= RATE_INFO_FLAGS_SHORT_GI;
+		break;
+	case STA_STATS_RATE_TYPE_LEGACY: {
 		struct ieee80211_supported_band *sband;
 		u16 brate;
 		unsigned int shift;
+		int band = STA_STATS_GET(LEGACY_BAND, rate);
+		int rate_idx = STA_STATS_GET(LEGACY_IDX, rate);
 
-		sband = local->hw.wiphy->bands[(rate >> 4) & 0xf];
-		brate = sband->bitrates[rate & 0xf].bitrate;
+		sband = local->hw.wiphy->bands[band];
+
+		if (WARN_ON_ONCE(!sband->bitrates))
+			break;
+
+		brate = sband->bitrates[rate_idx].bitrate;
 		if (rinfo->bw == RATE_INFO_BW_5)
 			shift = 2;
 		else if (rinfo->bw == RATE_INFO_BW_10)
@@ -1995,20 +2150,42 @@ static void sta_stats_decode_rate(struct ieee80211_local *local, u16 rate,
 		else
 			shift = 0;
 		rinfo->legacy = DIV_ROUND_UP(brate, 1 << shift);
+		break;
+		}
+	case STA_STATS_RATE_TYPE_HE:
+		rinfo->flags = RATE_INFO_FLAGS_HE_MCS;
+		rinfo->mcs = STA_STATS_GET(HE_MCS, rate);
+		rinfo->nss = STA_STATS_GET(HE_NSS, rate);
+		rinfo->he_gi = STA_STATS_GET(HE_GI, rate);
+		rinfo->he_ru_alloc = STA_STATS_GET(HE_RU, rate);
+		rinfo->he_dcm = STA_STATS_GET(HE_DCM, rate);
+		break;
 	}
-
-	if (rate & STA_STATS_RATE_SGI)
-		rinfo->flags |= RATE_INFO_FLAGS_SHORT_GI;
 }
 
-static void sta_set_rate_info_rx(struct sta_info *sta, struct rate_info *rinfo)
+static int sta_set_rate_info_rx(struct sta_info *sta, struct rate_info *rinfo)
 {
-	u16 rate = ACCESS_ONCE(sta_get_last_rx_stats(sta)->last_rate);
+	u16 rate = READ_ONCE(sta_get_last_rx_stats(sta)->last_rate);
 
 	if (rate == STA_STATS_RATE_INVALID)
-		rinfo->flags = 0;
-	else
-		sta_stats_decode_rate(sta->local, rate, rinfo);
+		return -EINVAL;
+
+	sta_stats_decode_rate(sta->local, rate, rinfo);
+	return 0;
+}
+
+static inline u64 sta_get_tidstats_msdu(struct ieee80211_sta_rx_stats *rxstats,
+					int tid)
+{
+	unsigned int start;
+	u64 value;
+
+	do {
+		start = u64_stats_fetch_begin(&rxstats->syncp);
+		value = rxstats->msdu[tid];
+	} while (u64_stats_fetch_retry(&rxstats->syncp, start));
+
+	return value;
 }
 
 static void sta_set_tidstats(struct sta_info *sta,
@@ -2016,14 +2193,22 @@ static void sta_set_tidstats(struct sta_info *sta,
 			     int tid)
 {
 	struct ieee80211_local *local = sta->local;
+	int cpu;
 
 	if (!(tidstats->filled & BIT(NL80211_TID_STATS_RX_MSDU))) {
-		unsigned int start;
+		if (!ieee80211_hw_check(&local->hw, USES_RSS))
+			tidstats->rx_msdu +=
+				sta_get_tidstats_msdu(&sta->rx_stats, tid);
 
-		do {
-			start = u64_stats_fetch_begin(&sta->rx_stats.syncp);
-			tidstats->rx_msdu = sta->rx_stats.msdu[tid];
-		} while (u64_stats_fetch_retry(&sta->rx_stats.syncp, start));
+		if (sta->pcpu_rx_stats) {
+			for_each_possible_cpu(cpu) {
+				struct ieee80211_sta_rx_stats *cpurxs;
+
+				cpurxs = per_cpu_ptr(sta->pcpu_rx_stats, cpu);
+				tidstats->rx_msdu +=
+					sta_get_tidstats_msdu(cpurxs, tid);
+			}
+		}
 
 		tidstats->filled |= BIT(NL80211_TID_STATS_RX_MSDU);
 	}
@@ -2044,6 +2229,18 @@ static void sta_set_tidstats(struct sta_info *sta,
 		tidstats->filled |= BIT(NL80211_TID_STATS_TX_MSDU_FAILED);
 		tidstats->tx_msdu_failed = sta->status_stats.msdu_failed[tid];
 	}
+
+	if (local->ops->wake_tx_queue && tid < IEEE80211_NUM_TIDS) {
+		spin_lock_bh(&local->fq.lock);
+		rcu_read_lock();
+
+		tidstats->filled |= BIT(NL80211_TID_STATS_TXQ_STATS);
+		ieee80211_fill_txq_stats(&tidstats->txq_stats,
+					 to_txq_info(sta->sta.txq[tid]));
+
+		rcu_read_unlock();
+		spin_unlock_bh(&local->fq.lock);
+	}
 }
 
 static inline u64 sta_get_stats_bytes(struct ieee80211_sta_rx_stats *rxstats)
@@ -2059,19 +2256,16 @@ static inline u64 sta_get_stats_bytes(struct ieee80211_sta_rx_stats *rxstats)
 	return value;
 }
 
-void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo)
+void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo,
+		   bool tidstats)
 {
 	struct ieee80211_sub_if_data *sdata = sta->sdata;
 	struct ieee80211_local *local = sdata->local;
-	struct rate_control_ref *ref = NULL;
 	u32 thr = 0;
 	int i, ac, cpu;
 	struct ieee80211_sta_rx_stats *last_rxstats;
 
 	last_rxstats = sta_get_last_rx_stats(sta);
-
-	if (test_sta_flag(sta, WLAN_STA_RATE_CONTROL))
-		ref = local->rate_ctrl;
 
 	sinfo->generation = sdata->local->sta_generation;
 
@@ -2084,39 +2278,42 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo)
 
 	drv_sta_statistics(local, sdata, &sta->sta, sinfo);
 
-	sinfo->filled |= BIT(NL80211_STA_INFO_INACTIVE_TIME) |
-			 BIT(NL80211_STA_INFO_STA_FLAGS) |
-			 BIT(NL80211_STA_INFO_BSS_PARAM) |
-			 BIT(NL80211_STA_INFO_CONNECTED_TIME) |
-			 BIT(NL80211_STA_INFO_RX_DROP_MISC);
+	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_INACTIVE_TIME) |
+			 BIT_ULL(NL80211_STA_INFO_STA_FLAGS) |
+			 BIT_ULL(NL80211_STA_INFO_BSS_PARAM) |
+			 BIT_ULL(NL80211_STA_INFO_CONNECTED_TIME) |
+			 BIT_ULL(NL80211_STA_INFO_ASSOC_AT_BOOTTIME) |
+			 BIT_ULL(NL80211_STA_INFO_RX_DROP_MISC);
 
 	if (sdata->vif.type == NL80211_IFTYPE_STATION) {
 		sinfo->beacon_loss_count = sdata->u.mgd.beacon_loss_count;
-		sinfo->filled |= BIT(NL80211_STA_INFO_BEACON_LOSS);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_BEACON_LOSS);
 	}
 
 	sinfo->connected_time = ktime_get_seconds() - sta->last_connected;
+	sinfo->assoc_at = sta->assoc_at;
 	sinfo->inactive_time =
 		jiffies_to_msecs(jiffies - ieee80211_sta_last_active(sta));
 
-	if (!(sinfo->filled & (BIT(NL80211_STA_INFO_TX_BYTES64) |
-			       BIT(NL80211_STA_INFO_TX_BYTES)))) {
+	if (!(sinfo->filled & (BIT_ULL(NL80211_STA_INFO_TX_BYTES64) |
+			       BIT_ULL(NL80211_STA_INFO_TX_BYTES)))) {
 		sinfo->tx_bytes = 0;
 		for (ac = 0; ac < IEEE80211_NUM_ACS; ac++)
 			sinfo->tx_bytes += sta->tx_stats.bytes[ac];
-		sinfo->filled |= BIT(NL80211_STA_INFO_TX_BYTES64);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BYTES64);
 	}
 
-	if (!(sinfo->filled & BIT(NL80211_STA_INFO_TX_PACKETS))) {
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_TX_PACKETS))) {
 		sinfo->tx_packets = 0;
 		for (ac = 0; ac < IEEE80211_NUM_ACS; ac++)
 			sinfo->tx_packets += sta->tx_stats.packets[ac];
-		sinfo->filled |= BIT(NL80211_STA_INFO_TX_PACKETS);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_PACKETS);
 	}
 
-	if (!(sinfo->filled & (BIT(NL80211_STA_INFO_RX_BYTES64) |
-			       BIT(NL80211_STA_INFO_RX_BYTES)))) {
-		sinfo->rx_bytes += sta_get_stats_bytes(&sta->rx_stats);
+	if (!(sinfo->filled & (BIT_ULL(NL80211_STA_INFO_RX_BYTES64) |
+			       BIT_ULL(NL80211_STA_INFO_RX_BYTES)))) {
+		if (!ieee80211_hw_check(&local->hw, USES_RSS))
+			sinfo->rx_bytes += sta_get_stats_bytes(&sta->rx_stats);
 
 		if (sta->pcpu_rx_stats) {
 			for_each_possible_cpu(cpu) {
@@ -2127,10 +2324,10 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo)
 			}
 		}
 
-		sinfo->filled |= BIT(NL80211_STA_INFO_RX_BYTES64);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_RX_BYTES64);
 	}
 
-	if (!(sinfo->filled & BIT(NL80211_STA_INFO_RX_PACKETS))) {
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_RX_PACKETS))) {
 		sinfo->rx_packets = sta->rx_stats.packets;
 		if (sta->pcpu_rx_stats) {
 			for_each_possible_cpu(cpu) {
@@ -2140,17 +2337,34 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo)
 				sinfo->rx_packets += cpurxs->packets;
 			}
 		}
-		sinfo->filled |= BIT(NL80211_STA_INFO_RX_PACKETS);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_RX_PACKETS);
 	}
 
-	if (!(sinfo->filled & BIT(NL80211_STA_INFO_TX_RETRIES))) {
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_TX_RETRIES))) {
 		sinfo->tx_retries = sta->status_stats.retry_count;
-		sinfo->filled |= BIT(NL80211_STA_INFO_TX_RETRIES);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_RETRIES);
 	}
 
-	if (!(sinfo->filled & BIT(NL80211_STA_INFO_TX_FAILED))) {
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_TX_FAILED))) {
 		sinfo->tx_failed = sta->status_stats.retry_failed;
-		sinfo->filled |= BIT(NL80211_STA_INFO_TX_FAILED);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_FAILED);
+	}
+
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_RX_DURATION))) {
+		for (ac = 0; ac < IEEE80211_NUM_ACS; ac++)
+			sinfo->rx_duration += sta->airtime[ac].rx_airtime;
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_RX_DURATION);
+	}
+
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_TX_DURATION))) {
+		for (ac = 0; ac < IEEE80211_NUM_ACS; ac++)
+			sinfo->tx_duration += sta->airtime[ac].tx_airtime;
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_DURATION);
+	}
+
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_AIRTIME_WEIGHT))) {
+		sinfo->airtime_weight = sta->airtime_weight;
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_AIRTIME_WEIGHT);
 	}
 
 	sinfo->rx_dropped_misc = sta->rx_stats.dropped;
@@ -2159,29 +2373,29 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo)
 			struct ieee80211_sta_rx_stats *cpurxs;
 
 			cpurxs = per_cpu_ptr(sta->pcpu_rx_stats, cpu);
-			sinfo->rx_packets += cpurxs->dropped;
+			sinfo->rx_dropped_misc += cpurxs->dropped;
 		}
 	}
 
 	if (sdata->vif.type == NL80211_IFTYPE_STATION &&
 	    !(sdata->vif.driver_flags & IEEE80211_VIF_BEACON_FILTER)) {
-		sinfo->filled |= BIT(NL80211_STA_INFO_BEACON_RX) |
-				 BIT(NL80211_STA_INFO_BEACON_SIGNAL_AVG);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_BEACON_RX) |
+				 BIT_ULL(NL80211_STA_INFO_BEACON_SIGNAL_AVG);
 		sinfo->rx_beacon_signal_avg = ieee80211_ave_rssi(&sdata->vif);
 	}
 
 	if (ieee80211_hw_check(&sta->local->hw, SIGNAL_DBM) ||
 	    ieee80211_hw_check(&sta->local->hw, SIGNAL_UNSPEC)) {
-		if (!(sinfo->filled & BIT(NL80211_STA_INFO_SIGNAL))) {
+		if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_SIGNAL))) {
 			sinfo->signal = (s8)last_rxstats->last_signal;
-			sinfo->filled |= BIT(NL80211_STA_INFO_SIGNAL);
+			sinfo->filled |= BIT_ULL(NL80211_STA_INFO_SIGNAL);
 		}
 
 		if (!sta->pcpu_rx_stats &&
-		    !(sinfo->filled & BIT(NL80211_STA_INFO_SIGNAL_AVG))) {
+		    !(sinfo->filled & BIT_ULL(NL80211_STA_INFO_SIGNAL_AVG))) {
 			sinfo->signal_avg =
 				-ewma_signal_read(&sta->rx_stats_avg.signal);
-			sinfo->filled |= BIT(NL80211_STA_INFO_SIGNAL_AVG);
+			sinfo->filled |= BIT_ULL(NL80211_STA_INFO_SIGNAL_AVG);
 		}
 	}
 
@@ -2190,11 +2404,11 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo)
 	 * pcpu statistics
 	 */
 	if (last_rxstats->chains &&
-	    !(sinfo->filled & (BIT(NL80211_STA_INFO_CHAIN_SIGNAL) |
-			       BIT(NL80211_STA_INFO_CHAIN_SIGNAL_AVG)))) {
-		sinfo->filled |= BIT(NL80211_STA_INFO_CHAIN_SIGNAL);
+	    !(sinfo->filled & (BIT_ULL(NL80211_STA_INFO_CHAIN_SIGNAL) |
+			       BIT_ULL(NL80211_STA_INFO_CHAIN_SIGNAL_AVG)))) {
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_CHAIN_SIGNAL);
 		if (!sta->pcpu_rx_stats)
-			sinfo->filled |= BIT(NL80211_STA_INFO_CHAIN_SIGNAL_AVG);
+			sinfo->filled |= BIT_ULL(NL80211_STA_INFO_CHAIN_SIGNAL_AVG);
 
 		sinfo->chains = last_rxstats->chains;
 
@@ -2206,43 +2420,45 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo)
 		}
 	}
 
-	if (!(sinfo->filled & BIT(NL80211_STA_INFO_TX_BITRATE))) {
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_TX_BITRATE))) {
 		sta_set_rate_info_tx(sta, &sta->tx_stats.last_rate,
 				     &sinfo->txrate);
-		sinfo->filled |= BIT(NL80211_STA_INFO_TX_BITRATE);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
 	}
 
-	if (!(sinfo->filled & BIT(NL80211_STA_INFO_RX_BITRATE))) {
-		sta_set_rate_info_rx(sta, &sinfo->rxrate);
-		sinfo->filled |= BIT(NL80211_STA_INFO_RX_BITRATE);
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_RX_BITRATE))) {
+		if (sta_set_rate_info_rx(sta, &sinfo->rxrate) == 0)
+			sinfo->filled |= BIT_ULL(NL80211_STA_INFO_RX_BITRATE);
 	}
 
-	sinfo->filled |= BIT(NL80211_STA_INFO_TID_STATS);
-	for (i = 0; i < IEEE80211_NUM_TIDS + 1; i++) {
-		struct cfg80211_tid_stats *tidstats = &sinfo->pertid[i];
-
-		sta_set_tidstats(sta, tidstats, i);
+	if (tidstats && !cfg80211_sinfo_alloc_tid_stats(sinfo, GFP_KERNEL)) {
+		for (i = 0; i < IEEE80211_NUM_TIDS + 1; i++)
+			sta_set_tidstats(sta, &sinfo->pertid[i], i);
 	}
 
 	if (ieee80211_vif_is_mesh(&sdata->vif)) {
 #ifdef CONFIG_MAC80211_MESH
-		sinfo->filled |= BIT(NL80211_STA_INFO_LLID) |
-				 BIT(NL80211_STA_INFO_PLID) |
-				 BIT(NL80211_STA_INFO_PLINK_STATE) |
-				 BIT(NL80211_STA_INFO_LOCAL_PM) |
-				 BIT(NL80211_STA_INFO_PEER_PM) |
-				 BIT(NL80211_STA_INFO_NONPEER_PM);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_LLID) |
+				 BIT_ULL(NL80211_STA_INFO_PLID) |
+				 BIT_ULL(NL80211_STA_INFO_PLINK_STATE) |
+				 BIT_ULL(NL80211_STA_INFO_LOCAL_PM) |
+				 BIT_ULL(NL80211_STA_INFO_PEER_PM) |
+				 BIT_ULL(NL80211_STA_INFO_NONPEER_PM) |
+				 BIT_ULL(NL80211_STA_INFO_CONNECTED_TO_GATE) |
+				 BIT_ULL(NL80211_STA_INFO_CONNECTED_TO_AS);
 
 		sinfo->llid = sta->mesh->llid;
 		sinfo->plid = sta->mesh->plid;
 		sinfo->plink_state = sta->mesh->plink_state;
 		if (test_sta_flag(sta, WLAN_STA_TOFFSET_KNOWN)) {
-			sinfo->filled |= BIT(NL80211_STA_INFO_T_OFFSET);
+			sinfo->filled |= BIT_ULL(NL80211_STA_INFO_T_OFFSET);
 			sinfo->t_offset = sta->mesh->t_offset;
 		}
 		sinfo->local_pm = sta->mesh->local_pm;
 		sinfo->peer_pm = sta->mesh->peer_pm;
 		sinfo->nonpeer_pm = sta->mesh->nonpeer_pm;
+		sinfo->connected_to_gate = sta->mesh->connected_to_gate;
+		sinfo->connected_to_as = sta->mesh->connected_to_as;
 #endif
 	}
 
@@ -2279,23 +2495,84 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo)
 	if (test_sta_flag(sta, WLAN_STA_TDLS_PEER))
 		sinfo->sta_flags.set |= BIT(NL80211_STA_FLAG_TDLS_PEER);
 
+	thr = sta_get_expected_throughput(sta);
+
+	if (thr != 0) {
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_EXPECTED_THROUGHPUT);
+		sinfo->expected_throughput = thr;
+	}
+
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_ACK_SIGNAL)) &&
+	    sta->status_stats.ack_signal_filled) {
+		sinfo->ack_signal = sta->status_stats.last_ack_signal;
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_ACK_SIGNAL);
+	}
+
+	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_ACK_SIGNAL_AVG)) &&
+	    sta->status_stats.ack_signal_filled) {
+		sinfo->avg_ack_signal =
+			-(s8)ewma_avg_signal_read(
+				&sta->status_stats.avg_ack_signal);
+		sinfo->filled |=
+			BIT_ULL(NL80211_STA_INFO_ACK_SIGNAL_AVG);
+	}
+
+	if (ieee80211_vif_is_mesh(&sdata->vif)) {
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_AIRTIME_LINK_METRIC);
+		sinfo->airtime_link_metric =
+			airtime_link_metric_get(local, sta);
+	}
+}
+
+u32 sta_get_expected_throughput(struct sta_info *sta)
+{
+	struct ieee80211_sub_if_data *sdata = sta->sdata;
+	struct ieee80211_local *local = sdata->local;
+	struct rate_control_ref *ref = NULL;
+	u32 thr = 0;
+
+	if (test_sta_flag(sta, WLAN_STA_RATE_CONTROL))
+		ref = local->rate_ctrl;
+
 	/* check if the driver has a SW RC implementation */
 	if (ref && ref->ops->get_expected_throughput)
 		thr = ref->ops->get_expected_throughput(sta->rate_ctrl_priv);
 	else
-		thr = drv_get_expected_throughput(local, &sta->sta);
+		thr = drv_get_expected_throughput(local, sta);
 
-	if (thr != 0) {
-		sinfo->filled |= BIT(NL80211_STA_INFO_EXPECTED_THROUGHPUT);
-		sinfo->expected_throughput = thr;
-	}
+	return thr;
 }
 
 unsigned long ieee80211_sta_last_active(struct sta_info *sta)
 {
 	struct ieee80211_sta_rx_stats *stats = sta_get_last_rx_stats(sta);
 
-	if (time_after(stats->last_rx, sta->status_stats.last_ack))
+	if (!sta->status_stats.last_ack ||
+	    time_after(stats->last_rx, sta->status_stats.last_ack))
 		return stats->last_rx;
 	return sta->status_stats.last_ack;
+}
+
+static void sta_update_codel_params(struct sta_info *sta, u32 thr)
+{
+	if (!sta->sdata->local->ops->wake_tx_queue)
+		return;
+
+	if (thr && thr < STA_SLOW_THRESHOLD * sta->local->num_sta) {
+		sta->cparams.target = MS2TIME(50);
+		sta->cparams.interval = MS2TIME(300);
+		sta->cparams.ecn = false;
+	} else {
+		sta->cparams.target = MS2TIME(20);
+		sta->cparams.interval = MS2TIME(100);
+		sta->cparams.ecn = true;
+	}
+}
+
+void ieee80211_sta_set_expected_throughput(struct ieee80211_sta *pubsta,
+					   u32 thr)
+{
+	struct sta_info *sta = container_of(pubsta, struct sta_info, sta);
+
+	sta_update_codel_params(sta, thr);
 }

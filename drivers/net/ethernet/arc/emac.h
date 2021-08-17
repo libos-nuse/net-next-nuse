@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (C) 2004-2013 Synopsys, Inc. (www.synopsys.com)
  *
@@ -129,12 +130,10 @@ struct arc_emac_mdio_bus_data {
  */
 struct arc_emac_priv {
 	const char *drv_name;
-	const char *drv_version;
 	void (*set_mac_speed)(void *priv, unsigned int speed);
 
 	/* Devices */
 	struct device *dev;
-	struct phy_device *phy_dev;
 	struct mii_bus *bus;
 	struct arc_emac_mdio_bus_data bus_data;
 
@@ -159,6 +158,8 @@ struct arc_emac_priv {
 	unsigned int link;
 	unsigned int duplex;
 	unsigned int speed;
+
+	unsigned int rx_missed_errors;
 };
 
 /**

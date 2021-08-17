@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * (C) 2001 Clemson University and The University of Chicago
  *
@@ -8,7 +9,6 @@
 #include "orangefs-kernel.h"
 #include "orangefs-bufmap.h"
 #include <linux/posix_acl_xattr.h>
-#include <linux/fs_struct.h>
 
 struct posix_acl *orangefs_get_acl(struct inode *inode, int type)
 {
@@ -18,10 +18,10 @@ struct posix_acl *orangefs_get_acl(struct inode *inode, int type)
 
 	switch (type) {
 	case ACL_TYPE_ACCESS:
-		key = ORANGEFS_XATTR_NAME_ACL_ACCESS;
+		key = XATTR_NAME_POSIX_ACL_ACCESS;
 		break;
 	case ACL_TYPE_DEFAULT:
-		key = ORANGEFS_XATTR_NAME_ACL_DEFAULT;
+		key = XATTR_NAME_POSIX_ACL_DEFAULT;
 		break;
 	default:
 		gossip_err("orangefs_get_acl: bogus value of type %d\n", type);
@@ -35,7 +35,7 @@ struct posix_acl *orangefs_get_acl(struct inode *inode, int type)
 	 * I don't do that for now.
 	 */
 	value = kmalloc(ORANGEFS_MAX_XATTR_VALUELEN, GFP_KERNEL);
-	if (value == NULL)
+	if (!value)
 		return ERR_PTR(-ENOMEM);
 
 	gossip_debug(GOSSIP_ACL_DEBUG,
@@ -43,11 +43,8 @@ struct posix_acl *orangefs_get_acl(struct inode *inode, int type)
 		     get_khandle_from_ino(inode),
 		     key,
 		     type);
-	ret = orangefs_inode_getxattr(inode,
-				   "",
-				   key,
-				   value,
-				   ORANGEFS_MAX_XATTR_VALUELEN);
+	ret = orangefs_inode_getxattr(inode, key, value,
+				      ORANGEFS_MAX_XATTR_VALUELEN);
 	/* if the key exists, convert it to an in-memory rep */
 	if (ret > 0) {
 		acl = posix_acl_from_xattr(&init_user_ns, value, ret);
@@ -64,9 +61,9 @@ struct posix_acl *orangefs_get_acl(struct inode *inode, int type)
 	return acl;
 }
 
-int orangefs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
+static int __orangefs_set_acl(struct inode *inode, struct posix_acl *acl,
+			      int type)
 {
-	struct orangefs_inode_s *orangefs_inode = ORANGEFS_I(inode);
 	int error = 0;
 	void *value = NULL;
 	size_t size = 0;
@@ -74,31 +71,10 @@ int orangefs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 
 	switch (type) {
 	case ACL_TYPE_ACCESS:
-		name = ORANGEFS_XATTR_NAME_ACL_ACCESS;
-		if (acl) {
-			umode_t mode = inode->i_mode;
-			/*
-			 * can we represent this with the traditional file
-			 * mode permission bits?
-			 */
-			error = posix_acl_equiv_mode(acl, &mode);
-			if (error < 0) {
-				gossip_err("%s: posix_acl_equiv_mode err: %d\n",
-					   __func__,
-					   error);
-				return error;
-			}
-
-			if (inode->i_mode != mode)
-				SetModeFlag(orangefs_inode);
-			inode->i_mode = mode;
-			mark_inode_dirty_sync(inode);
-			if (error == 0)
-				acl = NULL;
-		}
+		name = XATTR_NAME_POSIX_ACL_ACCESS;
 		break;
 	case ACL_TYPE_DEFAULT:
-		name = ORANGEFS_XATTR_NAME_ACL_DEFAULT;
+		name = XATTR_NAME_POSIX_ACL_DEFAULT;
 		break;
 	default:
 		gossip_err("%s: invalid type %d!\n", __func__, type);
@@ -131,7 +107,7 @@ int orangefs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	 * will xlate to a removexattr. However, we don't want removexattr
 	 * complain if attributes does not exist.
 	 */
-	error = orangefs_inode_setxattr(inode, "", name, value, size, 0);
+	error = orangefs_inode_setxattr(inode, name, value, size, 0);
 
 out:
 	kfree(value);
@@ -140,35 +116,77 @@ out:
 	return error;
 }
 
+int orangefs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
+{
+	int error;
+	struct iattr iattr;
+	int rc;
+
+	memset(&iattr, 0, sizeof iattr);
+
+	if (type == ACL_TYPE_ACCESS && acl) {
+		/*
+		 * posix_acl_update_mode checks to see if the permissions
+		 * described by the ACL can be encoded into the
+		 * object's mode. If so, it sets "acl" to NULL
+		 * and "mode" to the new desired value. It is up to
+		 * us to propagate the new mode back to the server...
+		 */
+		error = posix_acl_update_mode(inode, &iattr.ia_mode, &acl);
+		if (error) {
+			gossip_err("%s: posix_acl_update_mode err: %d\n",
+				   __func__,
+				   error);
+			return error;
+		}
+
+		if (inode->i_mode != iattr.ia_mode)
+			iattr.ia_valid = ATTR_MODE;
+
+	}
+
+	rc = __orangefs_set_acl(inode, acl, type);
+
+	if (!rc && (iattr.ia_valid == ATTR_MODE))
+		rc = __orangefs_setattr(inode, &iattr);
+
+	return rc;
+}
+
 int orangefs_init_acl(struct inode *inode, struct inode *dir)
 {
-	struct orangefs_inode_s *orangefs_inode = ORANGEFS_I(inode);
 	struct posix_acl *default_acl, *acl;
 	umode_t mode = inode->i_mode;
+	struct iattr iattr;
 	int error = 0;
-
-	ClearModeFlag(orangefs_inode);
 
 	error = posix_acl_create(dir, &mode, &default_acl, &acl);
 	if (error)
 		return error;
 
 	if (default_acl) {
-		error = orangefs_set_acl(inode, default_acl, ACL_TYPE_DEFAULT);
+		error = __orangefs_set_acl(inode, default_acl,
+					   ACL_TYPE_DEFAULT);
 		posix_acl_release(default_acl);
+	} else {
+		inode->i_default_acl = NULL;
 	}
 
 	if (acl) {
 		if (!error)
-			error = orangefs_set_acl(inode, acl, ACL_TYPE_ACCESS);
+			error = __orangefs_set_acl(inode, acl, ACL_TYPE_ACCESS);
 		posix_acl_release(acl);
+	} else {
+		inode->i_acl = NULL;
 	}
 
 	/* If mode of the inode was changed, then do a forcible ->setattr */
 	if (mode != inode->i_mode) {
-		SetModeFlag(orangefs_inode);
+		memset(&iattr, 0, sizeof iattr);
 		inode->i_mode = mode;
-		orangefs_flush_inode(inode);
+		iattr.ia_mode = mode;
+		iattr.ia_valid |= ATTR_MODE;
+		__orangefs_setattr(inode, &iattr);
 	}
 
 	return error;

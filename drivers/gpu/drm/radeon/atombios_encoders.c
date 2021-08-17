@@ -23,13 +23,19 @@
  * Authors: Dave Airlie
  *          Alex Deucher
  */
-#include <drm/drmP.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/radeon_drm.h>
-#include "radeon.h"
-#include "radeon_audio.h"
-#include "atom.h"
+
 #include <linux/backlight.h>
+#include <linux/dmi.h>
+#include <linux/pci.h>
+
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_file.h>
+#include <drm/radeon_drm.h>
+
+#include "atom.h"
+#include "radeon.h"
+#include "radeon_asic.h"
+#include "radeon_audio.h"
 
 extern int atom_debug;
 
@@ -120,6 +126,7 @@ atombios_set_backlight_level(struct radeon_encoder *radeon_encoder, u8 level)
 		case ENCODER_OBJECT_ID_INTERNAL_KLDSCP_LVTMA:
 		case ENCODER_OBJECT_ID_INTERNAL_UNIPHY1:
 		case ENCODER_OBJECT_ID_INTERNAL_UNIPHY2:
+		case ENCODER_OBJECT_ID_INTERNAL_UNIPHY3:
 			if (dig->backlight_level == 0)
 				atombios_dig_transmitter_setup(encoder, ATOM_TRANSMITTER_ACTION_LCD_BLOFF, 0, 0);
 			else {
@@ -1878,11 +1885,10 @@ atombios_set_encoder_crtc_source(struct drm_encoder *encoder)
 			if (ASIC_IS_AVIVO(rdev))
 				args.v1.ucCRTC = radeon_crtc->crtc_id;
 			else {
-				if (radeon_encoder->encoder_id == ENCODER_OBJECT_ID_INTERNAL_DAC1) {
+				if (radeon_encoder->encoder_id == ENCODER_OBJECT_ID_INTERNAL_DAC1)
 					args.v1.ucCRTC = radeon_crtc->crtc_id;
-				} else {
+				else
 					args.v1.ucCRTC = radeon_crtc->crtc_id << 2;
-				}
 			}
 			switch (radeon_encoder->encoder_id) {
 			case ENCODER_OBJECT_ID_INTERNAL_TMDS1:
@@ -2182,9 +2188,17 @@ int radeon_atom_pick_dig_encoder(struct drm_encoder *encoder, int fe_idx)
 		goto assigned;
 	}
 
-	/* on DCE32 and encoder can driver any block so just crtc id */
+	/*
+	 * On DCE32 any encoder can drive any block so usually just use crtc id,
+	 * but Apple thinks different at least on iMac10,1, so there use linkb,
+	 * otherwise the internal eDP panel will stay dark.
+	 */
 	if (ASIC_IS_DCE32(rdev)) {
-		enc_idx = radeon_crtc->crtc_id;
+		if (dmi_match(DMI_PRODUCT_NAME, "iMac10,1"))
+			enc_idx = (dig->linkb) ? 1 : 0;
+		else
+			enc_idx = radeon_crtc->crtc_id;
+
 		goto assigned;
 	}
 
@@ -2219,9 +2233,9 @@ assigned:
 		DRM_ERROR("Got encoder index incorrect - returning 0\n");
 		return 0;
 	}
-	if (rdev->mode_info.active_encoders & (1 << enc_idx)) {
+	if (rdev->mode_info.active_encoders & (1 << enc_idx))
 		DRM_ERROR("chosen encoder in use %d\n", enc_idx);
-	}
+
 	rdev->mode_info.active_encoders |= (1 << enc_idx);
 	return enc_idx;
 }

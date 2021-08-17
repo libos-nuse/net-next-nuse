@@ -1,6 +1,6 @@
 /* Sign a module file using the given key.
  *
- * Copyright © 2014-2015 Red Hat, Inc. All Rights Reserved.
+ * Copyright © 2014-2016 Red Hat, Inc. All Rights Reserved.
  * Copyright © 2015      Intel Corporation.
  * Copyright © 2016      Hewlett Packard Enterprise Development LP
  *
@@ -41,7 +41,9 @@
  * signing with anything other than SHA1 - so we're stuck with that if such is
  * the case.
  */
-#if OPENSSL_VERSION_NUMBER < 0x10000000L || defined(OPENSSL_NO_CMS)
+#if defined(LIBRESSL_VERSION_NUMBER) || \
+	OPENSSL_VERSION_NUMBER < 0x10000000L || \
+	defined(OPENSSL_NO_CMS)
 #define USE_PKCS7
 #endif
 #ifndef USE_PKCS7
@@ -167,19 +169,37 @@ static EVP_PKEY *read_private_key(const char *private_key_name)
 
 static X509 *read_x509(const char *x509_name)
 {
+	unsigned char buf[2];
 	X509 *x509;
 	BIO *b;
+	int n;
 
 	b = BIO_new_file(x509_name, "rb");
 	ERR(!b, "%s", x509_name);
-	x509 = d2i_X509_bio(b, NULL); /* Binary encoded X.509 */
-	if (!x509) {
-		ERR(BIO_reset(b) != 1, "%s", x509_name);
-		x509 = PEM_read_bio_X509(b, NULL, NULL,
-					 NULL); /* PEM encoded X.509 */
-		if (x509)
-			drain_openssl_errors();
+
+	/* Look at the first two bytes of the file to determine the encoding */
+	n = BIO_read(b, buf, 2);
+	if (n != 2) {
+		if (BIO_should_retry(b)) {
+			fprintf(stderr, "%s: Read wanted retry\n", x509_name);
+			exit(1);
+		}
+		if (n >= 0) {
+			fprintf(stderr, "%s: Short read\n", x509_name);
+			exit(1);
+		}
+		ERR(1, "%s", x509_name);
 	}
+
+	ERR(BIO_reset(b) != 0, "%s", x509_name);
+
+	if (buf[0] == 0x30 && buf[1] >= 0x81 && buf[1] <= 0x84)
+		/* Assume raw DER encoded X.509 */
+		x509 = d2i_X509_bio(b, NULL);
+	else
+		/* Assume PEM encoded X.509 */
+		x509 = PEM_read_bio_X509(b, NULL, NULL, NULL);
+
 	BIO_free(b);
 	ERR(!x509, "%s", x509_name);
 
@@ -249,7 +269,7 @@ int main(int argc, char **argv)
 	}
 	x509_name = argv[2];
 	module_name = argv[3];
-	if (argc == 5) {
+	if (argc == 5 && strcmp(argv[3], argv[4]) != 0) {
 		dest_name = argv[4];
 		replace_orig = false;
 	} else {

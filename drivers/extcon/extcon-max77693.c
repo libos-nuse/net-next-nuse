@@ -1,19 +1,9 @@
-/*
- * extcon-max77693.c - MAX77693 extcon driver to support MAX77693 MUIC
- *
- * Copyright (C) 2012 Samsung Electrnoics
- * Chanwoo Choi <cw00.choi@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// extcon-max77693.c - MAX77693 extcon driver to support MAX77693 MUIC
+//
+// Copyright (C) 2012 Samsung Electrnoics
+// Chanwoo Choi <cw00.choi@samsung.com>
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -26,7 +16,7 @@
 #include <linux/mfd/max77693.h>
 #include <linux/mfd/max77693-common.h>
 #include <linux/mfd/max77693-private.h>
-#include <linux/extcon.h>
+#include <linux/extcon-provider.h>
 #include <linux/regmap.h>
 #include <linux/irqdomain.h>
 
@@ -188,8 +178,10 @@ enum max77693_muic_acc_type {
 	MAX77693_MUIC_ADC_AUDIO_MODE_REMOTE,
 	MAX77693_MUIC_ADC_OPEN,
 
-	/* The below accessories have same ADC value so ADCLow and
-	   ADC1K bit is used to separate specific accessory */
+	/*
+	 * The below accessories have same ADC value so ADCLow and
+	 * ADC1K bit is used to separate specific accessory.
+	 */
 						/* ADC|VBVolot|ADCLow|ADC1K| */
 	MAX77693_MUIC_GND_USB_HOST = 0x100,	/* 0x0|      0|     0|    0| */
 	MAX77693_MUIC_GND_USB_HOST_VB = 0x104,	/* 0x0|      1|     0|    0| */
@@ -264,7 +256,7 @@ static int max77693_muic_set_debounce_time(struct max77693_muic_info *info,
 static int max77693_muic_set_path(struct max77693_muic_info *info,
 		u8 val, bool attached)
 {
-	int ret = 0;
+	int ret;
 	unsigned int ctrl1, ctrl2 = 0;
 
 	if (attached)
@@ -505,8 +497,8 @@ static int max77693_muic_dock_handler(struct max77693_muic_info *info,
 		if (ret < 0)
 			return ret;
 
-		extcon_set_cable_state_(info->edev, EXTCON_DOCK, attached);
-		extcon_set_cable_state_(info->edev, EXTCON_DISP_MHL, attached);
+		extcon_set_state_sync(info->edev, EXTCON_DOCK, attached);
+		extcon_set_state_sync(info->edev, EXTCON_DISP_MHL, attached);
 		goto out;
 	case MAX77693_MUIC_ADC_AUDIO_MODE_REMOTE:	/* Dock-Desk */
 		dock_id = EXTCON_DOCK;
@@ -514,8 +506,8 @@ static int max77693_muic_dock_handler(struct max77693_muic_info *info,
 	case MAX77693_MUIC_ADC_AV_CABLE_NOLOAD:		/* Dock-Audio */
 		dock_id = EXTCON_DOCK;
 		if (!attached) {
-			extcon_set_cable_state_(info->edev, EXTCON_USB, false);
-			extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_SDP,
+			extcon_set_state_sync(info->edev, EXTCON_USB, false);
+			extcon_set_state_sync(info->edev, EXTCON_CHG_USB_SDP,
 						false);
 		}
 		break;
@@ -530,7 +522,7 @@ static int max77693_muic_dock_handler(struct max77693_muic_info *info,
 					attached);
 	if (ret < 0)
 		return ret;
-	extcon_set_cable_state_(info->edev, dock_id, attached);
+	extcon_set_state_sync(info->edev, dock_id, attached);
 
 out:
 	return 0;
@@ -596,7 +588,7 @@ static int max77693_muic_adc_ground_handler(struct max77693_muic_info *info)
 						attached);
 		if (ret < 0)
 			return ret;
-		extcon_set_cable_state_(info->edev, EXTCON_USB_HOST, attached);
+		extcon_set_state_sync(info->edev, EXTCON_USB_HOST, attached);
 		break;
 	case MAX77693_MUIC_GND_AV_CABLE_LOAD:
 		/* Audio Video Cable with load, PATH:AUDIO */
@@ -604,14 +596,14 @@ static int max77693_muic_adc_ground_handler(struct max77693_muic_info *info)
 						attached);
 		if (ret < 0)
 			return ret;
-		extcon_set_cable_state_(info->edev, EXTCON_USB, attached);
-		extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_SDP,
+		extcon_set_state_sync(info->edev, EXTCON_USB, attached);
+		extcon_set_state_sync(info->edev, EXTCON_CHG_USB_SDP,
 					attached);
 		break;
 	case MAX77693_MUIC_GND_MHL:
 	case MAX77693_MUIC_GND_MHL_VB:
 		/* MHL or MHL with USB/TA cable */
-		extcon_set_cable_state_(info->edev, EXTCON_DISP_MHL, attached);
+		extcon_set_state_sync(info->edev, EXTCON_DISP_MHL, attached);
 		break;
 	default:
 		dev_err(info->dev, "failed to detect %s cable of gnd type\n",
@@ -653,7 +645,7 @@ static int max77693_muic_jig_handler(struct max77693_muic_info *info,
 	if (ret < 0)
 		return ret;
 
-	extcon_set_cable_state_(info->edev, EXTCON_JIG, attached);
+	extcon_set_state_sync(info->edev, EXTCON_JIG, attached);
 
 	return 0;
 }
@@ -807,11 +799,10 @@ static int max77693_muic_chg_handler(struct max77693_muic_info *info)
 			 * - Support charging through micro-usb port without
 			 *   data connection
 			 */
-			extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_DCP,
+			extcon_set_state_sync(info->edev, EXTCON_CHG_USB_DCP,
 						attached);
-			if (!cable_attached)
-				extcon_set_cable_state_(info->edev,
-					EXTCON_DISP_MHL, cable_attached);
+			extcon_set_state_sync(info->edev, EXTCON_DISP_MHL,
+						cable_attached);
 			break;
 		}
 
@@ -834,13 +825,13 @@ static int max77693_muic_chg_handler(struct max77693_muic_info *info)
 			 * - Support charging through micro-usb port without
 			 *   data connection.
 			 */
-			extcon_set_cable_state_(info->edev, EXTCON_USB,
+			extcon_set_state_sync(info->edev, EXTCON_USB,
 						attached);
-			extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_SDP,
+			extcon_set_state_sync(info->edev, EXTCON_CHG_USB_SDP,
 						attached);
 
 			if (!cable_attached)
-				extcon_set_cable_state_(info->edev, EXTCON_DOCK,
+				extcon_set_state_sync(info->edev, EXTCON_DOCK,
 							cable_attached);
 			break;
 		case MAX77693_MUIC_ADC_RESERVED_ACC_3:		/* Dock-Smart */
@@ -869,9 +860,9 @@ static int max77693_muic_chg_handler(struct max77693_muic_info *info)
 			if (ret < 0)
 				return ret;
 
-			extcon_set_cable_state_(info->edev, EXTCON_DOCK,
+			extcon_set_state_sync(info->edev, EXTCON_DOCK,
 						attached);
-			extcon_set_cable_state_(info->edev, EXTCON_DISP_MHL,
+			extcon_set_state_sync(info->edev, EXTCON_DISP_MHL,
 						attached);
 			break;
 		}
@@ -905,28 +896,28 @@ static int max77693_muic_chg_handler(struct max77693_muic_info *info)
 			if (ret < 0)
 				return ret;
 
-			extcon_set_cable_state_(info->edev, EXTCON_USB,
+			extcon_set_state_sync(info->edev, EXTCON_USB,
 						attached);
-			extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_SDP,
+			extcon_set_state_sync(info->edev, EXTCON_CHG_USB_SDP,
 						attached);
 			break;
 		case MAX77693_CHARGER_TYPE_DEDICATED_CHG:
 			/* Only TA cable */
-			extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_DCP,
+			extcon_set_state_sync(info->edev, EXTCON_CHG_USB_DCP,
 						attached);
 			break;
 		}
 		break;
 	case MAX77693_CHARGER_TYPE_DOWNSTREAM_PORT:
-		extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_CDP,
+		extcon_set_state_sync(info->edev, EXTCON_CHG_USB_CDP,
 					attached);
 		break;
 	case MAX77693_CHARGER_TYPE_APPLE_500MA:
-		extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_SLOW,
+		extcon_set_state_sync(info->edev, EXTCON_CHG_USB_SLOW,
 					attached);
 		break;
 	case MAX77693_CHARGER_TYPE_APPLE_1A_2A:
-		extcon_set_cable_state_(info->edev, EXTCON_CHG_USB_FAST,
+		extcon_set_state_sync(info->edev, EXTCON_CHG_USB_FAST,
 					attached);
 		break;
 	case MAX77693_CHARGER_TYPE_DEAD_BATTERY:
@@ -970,8 +961,10 @@ static void max77693_muic_irq_work(struct work_struct *work)
 	case MAX77693_MUIC_IRQ_INT1_ADC_LOW:
 	case MAX77693_MUIC_IRQ_INT1_ADC_ERR:
 	case MAX77693_MUIC_IRQ_INT1_ADC1K:
-		/* Handle all of accessory except for
-		   type of charger accessory */
+		/*
+		 * Handle all of accessory except for
+		 * type of charger accessory.
+		 */
 		ret = max77693_muic_adc_handler(info);
 		break;
 	case MAX77693_MUIC_IRQ_INT2_CHGTYP:
@@ -1079,6 +1072,8 @@ static int max77693_muic_probe(struct platform_device *pdev)
 	struct max77693_reg_data *init_data;
 	int num_init_data;
 	int delay_jiffies;
+	int cable_type;
+	bool attached;
 	int ret;
 	int i;
 	unsigned int id;
@@ -1162,7 +1157,7 @@ static int max77693_muic_probe(struct platform_device *pdev)
 					      max77693_extcon_cable);
 	if (IS_ERR(info->edev)) {
 		dev_err(&pdev->dev, "failed to allocate memory for extcon\n");
-		return -ENOMEM;
+		return PTR_ERR(info->edev);
 	}
 
 	ret = devm_extcon_dev_register(&pdev->dev, info->edev);
@@ -1219,8 +1214,18 @@ static int max77693_muic_probe(struct platform_device *pdev)
 		delay_jiffies = msecs_to_jiffies(DELAY_MS_DEFAULT);
 	}
 
-	/* Set initial path for UART */
-	 max77693_muic_set_path(info, info->path_uart, true);
+	/* Set initial path for UART when JIG is connected to get serial logs */
+	ret = regmap_bulk_read(info->max77693->regmap_muic,
+			MAX77693_MUIC_REG_STATUS1, info->status, 2);
+	if (ret) {
+		dev_err(info->dev, "failed to read MUIC register\n");
+		return ret;
+	}
+	cable_type = max77693_muic_get_cable_type(info,
+					   MAX77693_CABLE_GROUP_ADC, &attached);
+	if (attached && (cable_type == MAX77693_MUIC_ADC_FACTORY_MODE_UART_ON ||
+			 cable_type == MAX77693_MUIC_ADC_FACTORY_MODE_UART_OFF))
+		max77693_muic_set_path(info, info->path_uart, true);
 
 	/* Check revision number of MUIC device*/
 	ret = regmap_read(info->max77693->regmap_muic,
@@ -1272,4 +1277,4 @@ module_platform_driver(max77693_muic_driver);
 MODULE_DESCRIPTION("Maxim MAX77693 Extcon driver");
 MODULE_AUTHOR("Chanwoo Choi <cw00.choi@samsung.com>");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:extcon-max77693");
+MODULE_ALIAS("platform:max77693-muic");

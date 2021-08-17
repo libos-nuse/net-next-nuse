@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Core driver for the generic pin config portions of the pin control subsystem
  *
@@ -5,8 +6,6 @@
  * Written on behalf of Linaro for ST-Ericsson
  *
  * Author: Linus Walleij <linus.walleij@linaro.org>
- *
- * License terms: GNU General Public License (GPL) version 2
  */
 
 #define pr_fmt(fmt) "generic pinconfig core: " fmt
@@ -39,21 +38,25 @@ static const struct pin_config_item conf_items[] = {
 	PCONFDUMP(PIN_CONFIG_DRIVE_OPEN_SOURCE, "output drive open source", NULL, false),
 	PCONFDUMP(PIN_CONFIG_DRIVE_PUSH_PULL, "output drive push pull", NULL, false),
 	PCONFDUMP(PIN_CONFIG_DRIVE_STRENGTH, "output drive strength", "mA", true),
+	PCONFDUMP(PIN_CONFIG_DRIVE_STRENGTH_UA, "output drive strength", "uA", true),
 	PCONFDUMP(PIN_CONFIG_INPUT_DEBOUNCE, "input debounce", "usec", true),
 	PCONFDUMP(PIN_CONFIG_INPUT_ENABLE, "input enabled", NULL, false),
 	PCONFDUMP(PIN_CONFIG_INPUT_SCHMITT, "input schmitt trigger", NULL, false),
 	PCONFDUMP(PIN_CONFIG_INPUT_SCHMITT_ENABLE, "input schmitt enabled", NULL, false),
 	PCONFDUMP(PIN_CONFIG_LOW_POWER_MODE, "pin low power", "mode", true),
+	PCONFDUMP(PIN_CONFIG_OUTPUT_ENABLE, "output enabled", NULL, false),
 	PCONFDUMP(PIN_CONFIG_OUTPUT, "pin output", "level", true),
 	PCONFDUMP(PIN_CONFIG_POWER_SOURCE, "pin power source", "selector", true),
+	PCONFDUMP(PIN_CONFIG_SLEEP_HARDWARE_STATE, "sleep hardware state", NULL, false),
 	PCONFDUMP(PIN_CONFIG_SLEW_RATE, "slew rate", NULL, true),
+	PCONFDUMP(PIN_CONFIG_SKEW_DELAY, "skew delay", NULL, true),
 };
 
 static void pinconf_generic_dump_one(struct pinctrl_dev *pctldev,
 				     struct seq_file *s, const char *gname,
 				     unsigned pin,
 				     const struct pin_config_item *items,
-				     int nitems)
+				     int nitems, int *print_sep)
 {
 	int i;
 
@@ -75,8 +78,10 @@ static void pinconf_generic_dump_one(struct pinctrl_dev *pctldev,
 			seq_printf(s, "ERROR READING CONFIG SETTING %d ", i);
 			continue;
 		}
-		/* Space between multiple configs */
-		seq_puts(s, " ");
+		/* comma between multiple configs */
+		if (*print_sep)
+			seq_puts(s, ", ");
+		*print_sep = 1;
 		seq_puts(s, items[i].display);
 		/* Print unit if available */
 		if (items[i].has_arg) {
@@ -105,19 +110,21 @@ void pinconf_generic_dump_pins(struct pinctrl_dev *pctldev, struct seq_file *s,
 			       const char *gname, unsigned pin)
 {
 	const struct pinconf_ops *ops = pctldev->desc->confops;
+	int print_sep = 0;
 
 	if (!ops->is_generic)
 		return;
 
 	/* generic parameters */
 	pinconf_generic_dump_one(pctldev, s, gname, pin, conf_items,
-				 ARRAY_SIZE(conf_items));
+				 ARRAY_SIZE(conf_items), &print_sep);
 	/* driver-specific parameters */
 	if (pctldev->desc->num_custom_params &&
 	    pctldev->desc->custom_conf_items)
 		pinconf_generic_dump_one(pctldev, s, gname, pin,
 					 pctldev->desc->custom_conf_items,
-					 pctldev->desc->num_custom_params);
+					 pctldev->desc->num_custom_params,
+					 &print_sep);
 }
 
 void pinconf_generic_dump_config(struct pinctrl_dev *pctldev,
@@ -160,6 +167,7 @@ static const struct pinconf_generic_params dt_params[] = {
 	{ "drive-open-source", PIN_CONFIG_DRIVE_OPEN_SOURCE, 0 },
 	{ "drive-push-pull", PIN_CONFIG_DRIVE_PUSH_PULL, 0 },
 	{ "drive-strength", PIN_CONFIG_DRIVE_STRENGTH, 0 },
+	{ "drive-strength-microamp", PIN_CONFIG_DRIVE_STRENGTH_UA, 0 },
 	{ "input-debounce", PIN_CONFIG_INPUT_DEBOUNCE, 0 },
 	{ "input-disable", PIN_CONFIG_INPUT_ENABLE, 0 },
 	{ "input-enable", PIN_CONFIG_INPUT_ENABLE, 1 },
@@ -168,10 +176,14 @@ static const struct pinconf_generic_params dt_params[] = {
 	{ "input-schmitt-enable", PIN_CONFIG_INPUT_SCHMITT_ENABLE, 1 },
 	{ "low-power-disable", PIN_CONFIG_LOW_POWER_MODE, 0 },
 	{ "low-power-enable", PIN_CONFIG_LOW_POWER_MODE, 1 },
+	{ "output-disable", PIN_CONFIG_OUTPUT_ENABLE, 0 },
+	{ "output-enable", PIN_CONFIG_OUTPUT_ENABLE, 1 },
 	{ "output-high", PIN_CONFIG_OUTPUT, 1, },
 	{ "output-low", PIN_CONFIG_OUTPUT, 0, },
 	{ "power-source", PIN_CONFIG_POWER_SOURCE, 0 },
+	{ "sleep-hardware-state", PIN_CONFIG_SLEEP_HARDWARE_STATE, 0 },
 	{ "slew-rate", PIN_CONFIG_SLEW_RATE, 0 },
+	{ "skew-delay", PIN_CONFIG_SKEW_DELAY, 0 },
 };
 
 /**
@@ -183,7 +195,7 @@ static const struct pinconf_generic_params dt_params[] = {
  * @ncfg:	Number of entries in @cfg
  *
  * Parse the config options described in @params from @np and puts the result
- * in @cfg. @cfg does not need to be empty, entries are added beggining at
+ * in @cfg. @cfg does not need to be empty, entries are added beginning at
  * @ncfg. @ncfg is updated to reflect the number of entries after parsing. @cfg
  * needs to have enough memory allocated to hold all possible entries.
  */
@@ -219,9 +231,10 @@ static void parse_dt_cfg(struct device_node *np,
  * pinconf_generic_parse_dt_config()
  * parse the config properties into generic pinconfig values.
  * @np: node containing the pinconfig properties
+ * @pctldev: pincontrol device
  * @configs: array with nconfigs entries containing the generic pinconf values
  *           must be freed when no longer necessary.
- * @nconfigs: umber of configurations
+ * @nconfigs: number of configurations
  */
 int pinconf_generic_parse_dt_config(struct device_node *np,
 				    struct pinctrl_dev *pctldev,
@@ -274,6 +287,7 @@ out:
 	kfree(cfg);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(pinconf_generic_parse_dt_config);
 
 int pinconf_generic_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 		struct device_node *np, struct pinctrl_map **map,
@@ -309,16 +323,15 @@ int pinconf_generic_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 	if (ret < 0) {
 		/* EINVAL=missing, which is fine since it's optional */
 		if (ret != -EINVAL)
-			dev_err(dev, "%s: could not parse property function\n",
-				of_node_full_name(np));
+			dev_err(dev, "%pOF: could not parse property function\n",
+				np);
 		function = NULL;
 	}
 
 	ret = pinconf_generic_parse_dt_config(np, pctldev, &configs,
 					      &num_configs);
 	if (ret < 0) {
-		dev_err(dev, "%s: could not parse node property\n",
-			of_node_full_name(np));
+		dev_err(dev, "%pOF: could not parse node property\n", np);
 		return ret;
 	}
 
@@ -377,7 +390,7 @@ int pinconf_generic_dt_node_to_map(struct pinctrl_dev *pctldev,
 	if (ret < 0)
 		goto exit;
 
-	for_each_child_of_node(np_config, np) {
+	for_each_available_child_of_node(np_config, np) {
 		ret = pinconf_generic_dt_subnode_to_map(pctldev, np, map,
 					&reserved_maps, num_maps, type);
 		if (ret < 0)
@@ -390,5 +403,13 @@ exit:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(pinconf_generic_dt_node_to_map);
+
+void pinconf_generic_dt_free_map(struct pinctrl_dev *pctldev,
+				 struct pinctrl_map *map,
+				 unsigned num_maps)
+{
+	pinctrl_utils_free_map(pctldev, map, num_maps);
+}
+EXPORT_SYMBOL_GPL(pinconf_generic_dt_free_map);
 
 #endif

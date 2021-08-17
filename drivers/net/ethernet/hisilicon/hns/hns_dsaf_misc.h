@@ -1,10 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (c) 2014-2015 Hisilicon Limited.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef _HNS_DSAF_MISC_H
@@ -34,5 +30,6 @@
 #define DSAF_LED_ANCHOR_B 5
 
 struct dsaf_misc_op *hns_misc_op_get(struct dsaf_device *dsaf_dev);
-
+struct
+platform_device *hns_dsaf_find_platform_device(struct fwnode_handle *fwnode);
 #endif

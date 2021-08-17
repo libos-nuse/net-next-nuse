@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /* head.S: Initial boot code for the Sparc64 port of Linux.
  *
  * Copyright (C) 1996, 1997, 2007 David S. Miller (davem@davemloft.net)
@@ -11,13 +12,13 @@
 #include <linux/threads.h>
 #include <linux/init.h>
 #include <linux/linkage.h>
+#include <linux/pgtable.h>
 #include <asm/thread_info.h>
 #include <asm/asi.h>
 #include <asm/pstate.h>
 #include <asm/ptrace.h>
 #include <asm/spitfire.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
 #include <asm/errno.h>
 #include <asm/signal.h>
 #include <asm/processor.h>
@@ -32,7 +33,8 @@
 #include <asm/estate.h>
 #include <asm/sfafsr.h>
 #include <asm/unistd.h>
-	
+#include <asm/export.h>
+
 /* This section from from _start to sparc64_boot_end should fit into
  * 0x0000000000404000 to 0x0000000000408000.
  */
@@ -95,6 +97,7 @@ sparc64_boot:
 	andn	%g1, PSTATE_AM, %g1
 	wrpr	%g1, 0x0, %pstate
 	ba,a,pt	%xcc, 1f
+	 nop
 
 	.globl	prom_finddev_name, prom_chosen_path, prom_root_node
 	.globl	prom_getprop_name, prom_mmu_name, prom_peer_name
@@ -143,6 +146,7 @@ prom_cpu_compatible:
 	.skip	64
 prom_root_node:
 	.word	0
+EXPORT_SYMBOL(prom_root_node)
 prom_mmu_ihandle_cache:
 	.word	0
 prom_boot_mapped_pc:
@@ -158,6 +162,7 @@ is_sun4v:
 	.word	0
 sun4v_chip_type:
 	.word	SUN4V_CHIP_INVALID
+EXPORT_SYMBOL(sun4v_chip_type)
 1:
 	rd	%pc, %l0
 
@@ -420,22 +425,25 @@ sun4v_chip_type:
 	 nop
 
 70:	ldub	[%g1 + 7], %g2
-	cmp	%g2, '3'
+	cmp	%g2, CPU_ID_NIAGARA3
 	be,pt	%xcc, 5f
 	 mov	SUN4V_CHIP_NIAGARA3, %g4
-	cmp	%g2, '4'
+	cmp	%g2, CPU_ID_NIAGARA4
 	be,pt	%xcc, 5f
 	 mov	SUN4V_CHIP_NIAGARA4, %g4
-	cmp	%g2, '5'
+	cmp	%g2, CPU_ID_NIAGARA5
 	be,pt	%xcc, 5f
 	 mov	SUN4V_CHIP_NIAGARA5, %g4
-	cmp	%g2, '6'
+	cmp	%g2, CPU_ID_M6
 	be,pt	%xcc, 5f
 	 mov	SUN4V_CHIP_SPARC_M6, %g4
-	cmp	%g2, '7'
+	cmp	%g2, CPU_ID_M7
 	be,pt	%xcc, 5f
 	 mov	SUN4V_CHIP_SPARC_M7, %g4
-	cmp	%g2, 'N'
+	cmp	%g2, CPU_ID_M8
+	be,pt	%xcc, 5f
+	 mov	SUN4V_CHIP_SPARC_M8, %g4
+	cmp	%g2, CPU_ID_SONOMA1
 	be,pt	%xcc, 5f
 	 mov	SUN4V_CHIP_SPARC_SN, %g4
 	ba,pt	%xcc, 49f
@@ -444,10 +452,10 @@ sun4v_chip_type:
 91:	sethi	%hi(prom_cpu_compatible), %g1
 	or	%g1, %lo(prom_cpu_compatible), %g1
 	ldub	[%g1 + 17], %g2
-	cmp	%g2, '1'
+	cmp	%g2, CPU_ID_NIAGARA1
 	be,pt	%xcc, 5f
 	 mov	SUN4V_CHIP_NIAGARA1, %g4
-	cmp	%g2, '2'
+	cmp	%g2, CPU_ID_NIAGARA2
 	be,pt	%xcc, 5f
 	 mov	SUN4V_CHIP_NIAGARA2, %g4
 	
@@ -596,7 +604,10 @@ niagara_tlb_fixup:
 	be,pt	%xcc, niagara4_patch
 	 nop
 	cmp	%g1, SUN4V_CHIP_SPARC_M7
-	be,pt	%xcc, niagara4_patch
+	be,pt	%xcc, sparc_m7_patch
+	 nop
+	cmp	%g1, SUN4V_CHIP_SPARC_M8
+	be,pt	%xcc, sparc_m7_patch
 	 nop
 	cmp	%g1, SUN4V_CHIP_SPARC_SN
 	be,pt	%xcc, niagara4_patch
@@ -610,6 +621,19 @@ niagara_tlb_fixup:
 	 nop
 
 	ba,a,pt	%xcc, 80f
+	 nop
+
+sparc_m7_patch:
+	call	m7_patch_copyops
+	 nop
+	call	m7_patch_bzero
+	 nop
+	call	m7_patch_pageops
+	 nop
+
+	ba,a,pt	%xcc, 80f
+	 nop
+
 niagara4_patch:
 	call	niagara4_patch_copyops
 	 nop
@@ -617,8 +641,11 @@ niagara4_patch:
 	 nop
 	call	niagara4_patch_pageops
 	 nop
+	call	niagara4_patch_fls
+	 nop
 
 	ba,a,pt	%xcc, 80f
+	 nop
 
 niagara2_patch:
 	call	niagara2_patch_copyops
@@ -629,6 +656,7 @@ niagara2_patch:
 	 nop
 
 	ba,a,pt	%xcc, 80f
+	 nop
 
 niagara_patch:
 	call	niagara_patch_copyops
@@ -868,8 +896,8 @@ sparc64_boot_end:
 #include "misctrap.S"
 #include "syscalls.S"
 #include "helpers.S"
-#include "hvcalls.S"
 #include "sun4v_tlb_miss.S"
+#include "sun4v_mcd.S"
 #include "sun4v_ivec.S"
 #include "ktlb.S"
 #include "tsb.S"
@@ -913,6 +941,7 @@ swapper_4m_tsb:
 
 ! 0x0000000000428000
 
+#include "hvcalls.S"
 #include "systbls_64.S"
 
 	.data
@@ -920,50 +949,21 @@ swapper_4m_tsb:
 	.globl	prom_tba, tlb_type
 prom_tba:	.xword	0
 tlb_type:	.word	0	/* Must NOT end up in BSS */
+EXPORT_SYMBOL(tlb_type)
 	.section	".fixup",#alloc,#execinstr
-
-	.globl	__ret_efault, __retl_efault, __ret_one, __retl_one
-ENTRY(__ret_efault)
-	ret
-	 restore %g0, -EFAULT, %o0
-ENDPROC(__ret_efault)
 
 ENTRY(__retl_efault)
 	retl
 	 mov	-EFAULT, %o0
 ENDPROC(__retl_efault)
 
-ENTRY(__retl_one)
-	retl
-	 mov	1, %o0
-ENDPROC(__retl_one)
-
-ENTRY(__retl_one_fp)
-	VISExitHalf
-	retl
-	 mov	1, %o0
-ENDPROC(__retl_one_fp)
-
-ENTRY(__ret_one_asi)
-	wr	%g0, ASI_AIUS, %asi
-	ret
-	 restore %g0, 1, %o0
-ENDPROC(__ret_one_asi)
-
-ENTRY(__retl_one_asi)
-	wr	%g0, ASI_AIUS, %asi
-	retl
-	 mov	1, %o0
-ENDPROC(__retl_one_asi)
-
-ENTRY(__retl_one_asi_fp)
-	wr	%g0, ASI_AIUS, %asi
-	VISExitHalf
-	retl
-	 mov	1, %o0
-ENDPROC(__retl_one_asi_fp)
-
 ENTRY(__retl_o1)
 	retl
 	 mov	%o1, %o0
 ENDPROC(__retl_o1)
+
+ENTRY(__retl_o1_asi)
+	wr      %o5, 0x0, %asi
+	retl
+	 mov    %o1, %o0
+ENDPROC(__retl_o1_asi)

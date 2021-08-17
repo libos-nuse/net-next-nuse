@@ -4,7 +4,9 @@
  * modify it under the terms of version 2 of the GNU General Public
  * License as published by the Free Software Foundation.
  */
+#define KBUILD_MODNAME "foo"
 #include <linux/if_ether.h>
+#include <linux/if_vlan.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/in.h>
@@ -12,7 +14,7 @@
 #include <linux/udp.h>
 #include <uapi/linux/bpf.h>
 #include <net/ip.h>
-#include "bpf_helpers.h"
+#include <bpf/bpf_helpers.h>
 
 #define DEFAULT_PKTGEN_UDP_PORT 9
 #define DEBUG 0
@@ -106,11 +108,6 @@ static int parse_ipv6(void *data, uint64_t nh_off, void *data_end)
 		return udp(data, nh_off + ihl_len, data_end);
 	return 0;
 }
-
-struct vlan_hdr {
-	uint16_t h_vlan_TCI;
-	uint16_t h_vlan_encapsulated_proto;
-};
 
 SEC("varlen")
 int handle_ingress(struct __sk_buff *skb)

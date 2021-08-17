@@ -1,11 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /* -*- linux-c -*- ------------------------------------------------------- *
  *
  *   Copyright (C) 1991, 1992 Linus Torvalds
  *   Copyright 2007 rPath, Inc. - All Rights Reserved
  *   Copyright 2009 Intel Corporation; author H. Peter Anvin
- *
- *   This file is part of the Linux kernel, and is made available under
- *   the terms of the GNU General Public License version 2.
  *
  * ----------------------------------------------------------------------- */
 
@@ -16,7 +14,7 @@
 #ifndef BOOT_BOOT_H
 #define BOOT_BOOT_H
 
-#define STACK_SIZE	512	/* Minimum number of bytes for stack */
+#define STACK_SIZE	1024	/* Minimum number of bytes for stack */
 
 #ifndef __ASSEMBLY__
 
@@ -24,13 +22,12 @@
 #include <linux/types.h>
 #include <linux/edd.h>
 #include <asm/setup.h>
+#include <asm/asm.h>
 #include "bitops.h"
 #include "ctype.h"
 #include "cpuflags.h"
 
 /* Useful macros */
-#define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
-
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(*(x)))
 
 extern struct setup_header hdr;
@@ -176,18 +173,18 @@ static inline void wrgs32(u32 v, addr_t addr)
 }
 
 /* Note: these only return true/false, not a signed return value! */
-static inline int memcmp_fs(const void *s1, addr_t s2, size_t len)
+static inline bool memcmp_fs(const void *s1, addr_t s2, size_t len)
 {
-	u8 diff;
-	asm volatile("fs; repe; cmpsb; setnz %0"
-		     : "=qm" (diff), "+D" (s1), "+S" (s2), "+c" (len));
+	bool diff;
+	asm volatile("fs; repe; cmpsb" CC_SET(nz)
+		     : CC_OUT(nz) (diff), "+D" (s1), "+S" (s2), "+c" (len));
 	return diff;
 }
-static inline int memcmp_gs(const void *s1, addr_t s2, size_t len)
+static inline bool memcmp_gs(const void *s1, addr_t s2, size_t len)
 {
-	u8 diff;
-	asm volatile("gs; repe; cmpsb; setnz %0"
-		     : "=qm" (diff), "+D" (s1), "+S" (s2), "+c" (len));
+	bool diff;
+	asm volatile("gs; repe; cmpsb" CC_SET(nz)
+		     : CC_OUT(nz) (diff), "+D" (s1), "+S" (s2), "+c" (len));
 	return diff;
 }
 
@@ -294,6 +291,7 @@ static inline int cmdline_find_option_bool(const char *option)
 
 /* cpu.c, cpucheck.c */
 int check_cpu(int *cpu_level_ptr, int *req_level_ptr, u32 **err_flags_ptr);
+int check_knl_erratum(void);
 int validate_cpu(void);
 
 /* early_serial_console.c */
@@ -307,7 +305,7 @@ void query_edd(void);
 void __attribute__((noreturn)) die(void);
 
 /* memory.c */
-int detect_memory(void);
+void detect_memory(void);
 
 /* pm.c */
 void __attribute__((noreturn)) go_to_protected_mode(void);
@@ -331,6 +329,7 @@ size_t strnlen(const char *s, size_t maxlen);
 unsigned int atou(const char *s);
 unsigned long long simple_strtoull(const char *cp, char **endp, unsigned int base);
 size_t strlen(const char *s);
+char *strchr(const char *s, int c);
 
 /* tty.c */
 void puts(const char *);

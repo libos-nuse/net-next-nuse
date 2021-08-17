@@ -1,24 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TI Palma series PMIC's GPIO driver.
  *
  * Copyright (c) 2012, NVIDIA CORPORATION.  All rights reserved.
  *
  * Author: Laxman Dewangan <ldewangan@nvidia.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/mfd/palmas.h>
@@ -152,7 +141,6 @@ static const struct of_device_id of_palmas_gpio_match[] = {
 	{ .compatible = "ti,tps80036-gpio", .data = &tps80036_dev_data,},
 	{ },
 };
-MODULE_DEVICE_TABLE(of, of_palmas_gpio_match);
 
 static int palmas_gpio_probe(struct platform_device *pdev)
 {
@@ -160,13 +148,9 @@ static int palmas_gpio_probe(struct platform_device *pdev)
 	struct palmas_platform_data *palmas_pdata;
 	struct palmas_gpio *palmas_gpio;
 	int ret;
-	const struct of_device_id *match;
 	const struct palmas_device_data *dev_data;
 
-	match = of_match_device(of_palmas_gpio_match, &pdev->dev);
-	if (!match)
-		return -ENODEV;
-	dev_data = match->data;
+	dev_data = of_device_get_match_data(&pdev->dev);
 	if (!dev_data)
 		dev_data = &palmas_dev_data;
 
@@ -208,7 +192,6 @@ static int palmas_gpio_probe(struct platform_device *pdev)
 
 static struct platform_driver palmas_gpio_driver = {
 	.driver.name	= "palmas-gpio",
-	.driver.owner	= THIS_MODULE,
 	.driver.of_match_table = of_palmas_gpio_match,
 	.probe		= palmas_gpio_probe,
 };

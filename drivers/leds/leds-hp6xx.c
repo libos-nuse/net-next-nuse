@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * LED Triggers Core
  * For the HP Jornada 620/660/680/690 handhelds
  *
  * Copyright 2008 Kristoffer Ericson <kristoffer.ericson@gmail.com>
  *     this driver is based on leds-spitz.c by Richard Purdie.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -50,7 +47,7 @@ static struct led_classdev hp6xx_red_led = {
 
 static struct led_classdev hp6xx_green_led = {
 	.name			= "hp6xx:green",
-	.default_trigger	= "ide-disk",
+	.default_trigger	= "disk-activity",
 	.brightness_set		= hp6xxled_green_set,
 	.flags			= LED_CORE_SUSPENDRESUME,
 };

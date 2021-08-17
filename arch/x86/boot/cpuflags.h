@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef BOOT_CPUFLAGS_H
 #define BOOT_CPUFLAGS_H
 
@@ -6,6 +7,7 @@
 
 struct cpu_features {
 	int level;		/* Family, or 64 for x86-64 */
+	int family;		/* Family, always */
 	int model;
 	u32 flags[NCAPINTS];
 };

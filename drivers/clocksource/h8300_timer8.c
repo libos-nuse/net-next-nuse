@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/arch/h8300/kernel/cpu/timer/timer8.c
  *
@@ -101,15 +102,7 @@ static inline struct timer8_priv *ced_to_priv(struct clock_event_device *ced)
 
 static void timer8_clock_event_start(struct timer8_priv *p, unsigned long delta)
 {
-	struct clock_event_device *ced = &p->ced;
-
 	timer8_start(p);
-
-	ced->shift = 32;
-	ced->mult = div_sc(p->rate, NSEC_PER_SEC, ced->shift);
-	ced->max_delta_ns = clockevent_delta2ns(0xffff, ced);
-	ced->min_delta_ns = clockevent_delta2ns(0x0001, ced);
-
 	timer8_set_next(p, delta);
 }
 
@@ -164,24 +157,26 @@ static struct timer8_priv timer8_priv = {
 	},
 };
 
-static void __init h8300_8timer_init(struct device_node *node)
+static int __init h8300_8timer_init(struct device_node *node)
 {
 	void __iomem *base;
-	int irq;
+	int irq, ret;
 	struct clk *clk;
 
 	clk = of_clk_get(node, 0);
 	if (IS_ERR(clk)) {
 		pr_err("failed to get clock for clockevent\n");
-		return;
+		return PTR_ERR(clk);
 	}
 
+	ret = -ENXIO;
 	base = of_iomap(node, 0);
 	if (!base) {
 		pr_err("failed to map registers for clockevent\n");
 		goto free_clk;
 	}
 
+	ret = -EINVAL;
 	irq = irq_of_parse_and_map(node, 0);
 	if (!irq) {
 		pr_err("failed to get irq for clockevent\n");
@@ -205,11 +200,12 @@ static void __init h8300_8timer_init(struct device_node *node)
 	clockevents_config_and_register(&timer8_priv.ced,
 					timer8_priv.rate, 1, 0x0000ffff);
 
-	return;
+	return 0;
 unmap_reg:
 	iounmap(base);
 free_clk:
 	clk_put(clk);
+	return ret;
 }
 
-CLOCKSOURCE_OF_DECLARE(h8300_8bit, "renesas,8bit-timer", h8300_8timer_init);
+TIMER_OF_DECLARE(h8300_8bit, "renesas,8bit-timer", h8300_8timer_init);

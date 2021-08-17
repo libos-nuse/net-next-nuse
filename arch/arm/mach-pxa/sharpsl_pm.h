@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * SharpSL Battery/PM Driver
  *
  * Copyright (c) 2004-2005 Richard Purdie
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 #ifndef _MACH_SHARPSL_PM
 #define _MACH_SHARPSL_PM
@@ -34,7 +30,7 @@ struct sharpsl_charger_machinfo {
 #define SHARPSL_STATUS_LOCK     5
 #define SHARPSL_STATUS_CHRGFULL 6
 #define SHARPSL_STATUS_FATAL    7
-	unsigned long (*charger_wakeup)(void);
+	bool (*charger_wakeup)(void);
 	int (*should_wakeup)(unsigned int resume_on_alarm);
 	void (*backlight_limit)(int);
 	int (*backlight_get_status) (void);

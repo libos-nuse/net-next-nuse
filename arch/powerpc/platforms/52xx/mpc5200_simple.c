@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Support for 'mpc5200-simple-platform' compatible boards.
  *
  * Written by Marian Balakowicz <m8@semihalf.com>
  * Copyright (C) 2007 Semihalf
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  *
  * Description:
  * This code implements support for a simple MPC52xx based boards which
@@ -70,7 +66,7 @@ static const char *board[] __initdata = {
  */
 static int __init mpc5200_simple_probe(void)
 {
-	return of_flat_dt_match(of_get_flat_dt_root(), board);
+	return of_device_compatible_match(of_root, board);
 }
 
 define_machine(mpc5200_simple_platform) {

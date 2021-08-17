@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
  *	Generic internet FLOW.
@@ -11,6 +12,7 @@
 #include <linux/in6.h>
 #include <linux/atomic.h>
 #include <net/flow_dissector.h>
+#include <linux/uidgid.h>
 
 /*
  * ifindex generation is per-net namespace, and loopback is
@@ -34,10 +36,11 @@ struct flowi_common {
 	__u8	flowic_flags;
 #define FLOWI_FLAG_ANYSRC		0x01
 #define FLOWI_FLAG_KNOWN_NH		0x02
-#define FLOWI_FLAG_L3MDEV_SRC		0x04
-#define FLOWI_FLAG_SKIP_NH_OIF		0x08
+#define FLOWI_FLAG_SKIP_NH_OIF		0x04
 	__u32	flowic_secid;
+	kuid_t  flowic_uid;
 	struct flowi_tunnel flowic_tun_key;
+	__u32		flowic_multipath_hash;
 };
 
 union flowi_uli {
@@ -75,6 +78,8 @@ struct flowi4 {
 #define flowi4_flags		__fl_common.flowic_flags
 #define flowi4_secid		__fl_common.flowic_secid
 #define flowi4_tun_key		__fl_common.flowic_tun_key
+#define flowi4_uid		__fl_common.flowic_uid
+#define flowi4_multipath_hash	__fl_common.flowic_multipath_hash
 
 	/* (saddr,daddr) must be grouped, same order as in IP header */
 	__be32			saddr;
@@ -94,7 +99,8 @@ static inline void flowi4_init_output(struct flowi4 *fl4, int oif,
 				      __u32 mark, __u8 tos, __u8 scope,
 				      __u8 proto, __u8 flags,
 				      __be32 daddr, __be32 saddr,
-				      __be16 dport, __be16 sport)
+				      __be16 dport, __be16 sport,
+				      kuid_t uid)
 {
 	fl4->flowi4_oif = oif;
 	fl4->flowi4_iif = LOOPBACK_IFINDEX;
@@ -105,10 +111,12 @@ static inline void flowi4_init_output(struct flowi4 *fl4, int oif,
 	fl4->flowi4_flags = flags;
 	fl4->flowi4_secid = 0;
 	fl4->flowi4_tun_key.tun_id = 0;
+	fl4->flowi4_uid = uid;
 	fl4->daddr = daddr;
 	fl4->saddr = saddr;
 	fl4->fl4_dport = dport;
 	fl4->fl4_sport = sport;
+	fl4->flowi4_multipath_hash = 0;
 }
 
 /* Reset some input parameters after previous lookup */
@@ -120,7 +128,7 @@ static inline void flowi4_update_output(struct flowi4 *fl4, int oif, __u8 tos,
 	fl4->daddr = daddr;
 	fl4->saddr = saddr;
 }
-				      
+
 
 struct flowi6 {
 	struct flowi_common	__fl_common;
@@ -132,6 +140,7 @@ struct flowi6 {
 #define flowi6_flags		__fl_common.flowic_flags
 #define flowi6_secid		__fl_common.flowic_secid
 #define flowi6_tun_key		__fl_common.flowic_tun_key
+#define flowi6_uid		__fl_common.flowic_uid
 	struct in6_addr		daddr;
 	struct in6_addr		saddr;
 	/* Note: flowi6_tos is encoded in flowlabel, too. */
@@ -144,6 +153,7 @@ struct flowi6 {
 #define fl6_ipsec_spi		uli.spi
 #define fl6_mh_type		uli.mht.type
 #define fl6_gre_key		uli.gre_key
+	__u32			mp_hash;
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 struct flowidn {
@@ -177,6 +187,7 @@ struct flowi {
 #define flowi_flags	u.__fl_common.flowic_flags
 #define flowi_secid	u.__fl_common.flowic_secid
 #define flowi_tun_key	u.__fl_common.flowic_tun_key
+#define flowi_uid	u.__fl_common.flowic_uid
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 static inline struct flowi *flowi4_to_flowi(struct flowi4 *fl4)
@@ -194,73 +205,6 @@ static inline struct flowi *flowidn_to_flowi(struct flowidn *fldn)
 	return container_of(fldn, struct flowi, u.dn);
 }
 
-typedef unsigned long flow_compare_t;
-
-static inline size_t flow_key_size(u16 family)
-{
-	switch (family) {
-	case AF_INET:
-		BUILD_BUG_ON(sizeof(struct flowi4) % sizeof(flow_compare_t));
-		return sizeof(struct flowi4) / sizeof(flow_compare_t);
-	case AF_INET6:
-		BUILD_BUG_ON(sizeof(struct flowi6) % sizeof(flow_compare_t));
-		return sizeof(struct flowi6) / sizeof(flow_compare_t);
-	case AF_DECnet:
-		BUILD_BUG_ON(sizeof(struct flowidn) % sizeof(flow_compare_t));
-		return sizeof(struct flowidn) / sizeof(flow_compare_t);
-	}
-	return 0;
-}
-
-#define FLOW_DIR_IN	0
-#define FLOW_DIR_OUT	1
-#define FLOW_DIR_FWD	2
-
-struct net;
-struct sock;
-struct flow_cache_ops;
-
-struct flow_cache_object {
-	const struct flow_cache_ops *ops;
-};
-
-struct flow_cache_ops {
-	struct flow_cache_object *(*get)(struct flow_cache_object *);
-	int (*check)(struct flow_cache_object *);
-	void (*delete)(struct flow_cache_object *);
-};
-
-typedef struct flow_cache_object *(*flow_resolve_t)(
-		struct net *net, const struct flowi *key, u16 family,
-		u8 dir, struct flow_cache_object *oldobj, void *ctx);
-
-struct flow_cache_object *flow_cache_lookup(struct net *net,
-					    const struct flowi *key, u16 family,
-					    u8 dir, flow_resolve_t resolver,
-					    void *ctx);
-int flow_cache_init(struct net *net);
-void flow_cache_fini(struct net *net);
-
-void flow_cache_flush(struct net *net);
-void flow_cache_flush_deferred(struct net *net);
-extern atomic_t flow_cache_genid;
-
 __u32 __get_hash_from_flowi6(const struct flowi6 *fl6, struct flow_keys *keys);
-
-static inline __u32 get_hash_from_flowi6(const struct flowi6 *fl6)
-{
-	struct flow_keys keys;
-
-	return __get_hash_from_flowi6(fl6, &keys);
-}
-
-__u32 __get_hash_from_flowi4(const struct flowi4 *fl4, struct flow_keys *keys);
-
-static inline __u32 get_hash_from_flowi4(const struct flowi4 *fl4)
-{
-	struct flow_keys keys;
-
-	return __get_hash_from_flowi4(fl4, &keys);
-}
 
 #endif

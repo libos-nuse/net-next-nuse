@@ -531,7 +531,7 @@ static void ns2_pin_dbg_show(struct pinctrl_dev *pctrl_dev,
 	seq_printf(s, " %s", dev_name(pctrl_dev->dev));
 }
 
-static struct pinctrl_ops ns2_pinctrl_ops = {
+static const struct pinctrl_ops ns2_pinctrl_ops = {
 	.get_groups_count = ns2_get_groups_count,
 	.get_group_name = ns2_get_group_name,
 	.get_group_pins = ns2_get_group_pins,
@@ -640,8 +640,8 @@ static int ns2_pinmux_enable(struct pinctrl_dev *pctrl_dev,
 	const struct ns2_pin_function *func;
 	const struct ns2_pin_group *grp;
 
-	if (grp_select > pinctrl->num_groups ||
-		func_select > pinctrl->num_functions)
+	if (grp_select >= pinctrl->num_groups ||
+		func_select >= pinctrl->num_functions)
 		return -EINVAL;
 
 	func = &pinctrl->functions[func_select];
@@ -703,7 +703,7 @@ static int ns2_pin_get_enable(struct pinctrl_dev *pctrldev, unsigned int pin)
 }
 
 static int ns2_pin_set_slew(struct pinctrl_dev *pctrldev, unsigned int pin,
-			    u16 slew)
+			    u32 slew)
 {
 	struct ns2_pinctrl *pinctrl = pinctrl_dev_get_drvdata(pctrldev);
 	struct ns2_pin *pin_data = pctrldev->desc->pins[pin].drv_data;
@@ -793,7 +793,7 @@ static void ns2_pin_get_pull(struct pinctrl_dev *pctrldev,
 }
 
 static int ns2_pin_set_strength(struct pinctrl_dev *pctrldev, unsigned int pin,
-				u16 strength)
+				u32 strength)
 {
 	struct ns2_pinctrl *pinctrl = pinctrl_dev_get_drvdata(pctrldev);
 	struct ns2_pin *pin_data = pctrldev->desc->pins[pin].drv_data;
@@ -904,7 +904,7 @@ static int ns2_pin_config_set(struct pinctrl_dev *pctrldev, unsigned int pin,
 	struct ns2_pin *pin_data = pctrldev->desc->pins[pin].drv_data;
 	enum pin_config_param param;
 	unsigned int i;
-	u16 arg;
+	u32 arg;
 	int ret = -ENOTSUPP;
 
 	if (pin_data->pin_conf.base == -1)
@@ -959,7 +959,7 @@ static int ns2_pin_config_set(struct pinctrl_dev *pctrldev, unsigned int pin,
 out:
 	return ret;
 }
-static struct pinmux_ops ns2_pinmux_ops = {
+static const struct pinmux_ops ns2_pinmux_ops = {
 	.get_functions_count = ns2_get_functions_count,
 	.get_function_name = ns2_get_function_name,
 	.get_function_groups = ns2_get_function_groups,
@@ -1042,27 +1042,23 @@ static int ns2_pinmux_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, pinctrl);
 	spin_lock_init(&pinctrl->lock);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	pinctrl->base0 = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(pinctrl->base0)) {
-		dev_err(&pdev->dev, "unable to map I/O space\n");
+	pinctrl->base0 = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(pinctrl->base0))
 		return PTR_ERR(pinctrl->base0);
-	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	pinctrl->base1 = devm_ioremap_nocache(&pdev->dev, res->start,
+	if (!res)
+		return -EINVAL;
+	pinctrl->base1 = devm_ioremap(&pdev->dev, res->start,
 					resource_size(res));
 	if (!pinctrl->base1) {
 		dev_err(&pdev->dev, "unable to map I/O space\n");
 		return -ENOMEM;
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 2);
-	pinctrl->pinconf_base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(pinctrl->pinconf_base)) {
-		dev_err(&pdev->dev, "unable to map I/O space\n");
+	pinctrl->pinconf_base = devm_platform_ioremap_resource(pdev, 2);
+	if (IS_ERR(pinctrl->pinconf_base))
 		return PTR_ERR(pinctrl->pinconf_base);
-	}
 
 	ret = ns2_mux_log_init(pinctrl);
 	if (ret) {
@@ -1089,9 +1085,9 @@ static int ns2_pinmux_probe(struct platform_device *pdev)
 
 	pinctrl->pctl = pinctrl_register(&ns2_pinctrl_desc, &pdev->dev,
 			pinctrl);
-	if (!pinctrl->pctl) {
+	if (IS_ERR(pinctrl->pctl)) {
 		dev_err(&pdev->dev, "unable to register IOMUX pinctrl\n");
-		return -EINVAL;
+		return PTR_ERR(pinctrl->pctl);
 	}
 
 	return 0;

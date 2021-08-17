@@ -4,13 +4,15 @@
  * modify it under the terms of version 2 of the GNU General Public
  * License as published by the Free Software Foundation.
  */
+#define KBUILD_MODNAME "foo"
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/in.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <uapi/linux/bpf.h>
-#include "bpf_helpers.h"
+#include <bpf/bpf_helpers.h>
+#include "bpf_legacy.h"
 
 #define DEFAULT_PKTGEN_UDP_PORT	9
 #define IP_MF			0x2000

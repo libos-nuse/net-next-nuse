@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Dmaengine driver base library for DMA controllers, found on SH-based SoCs
  *
@@ -7,10 +8,6 @@
  * Copyright (C) 2009 Nobuhiro Iwamatsu <iwamatsu.nobuhiro@renesas.com>
  * Copyright (C) 2009 Renesas Solutions, Inc. All rights reserved.
  * Copyright (C) 2007 Freescale Semiconductor, Inc. All rights reserved.
- *
- * This is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -330,10 +327,11 @@ static dma_async_tx_callback __ld_cleanup(struct shdma_chan *schan, bool all)
 	bool head_acked = false;
 	dma_cookie_t cookie = 0;
 	dma_async_tx_callback callback = NULL;
-	void *param = NULL;
+	struct dmaengine_desc_callback cb;
 	unsigned long flags;
 	LIST_HEAD(cyclic_list);
 
+	memset(&cb, 0, sizeof(cb));
 	spin_lock_irqsave(&schan->chan_lock, flags);
 	list_for_each_entry_safe(desc, _desc, &schan->ld_queue, node) {
 		struct dma_async_tx_descriptor *tx = &desc->async_tx;
@@ -367,8 +365,8 @@ static dma_async_tx_callback __ld_cleanup(struct shdma_chan *schan, bool all)
 		/* Call callback on the last chunk */
 		if (desc->mark == DESC_COMPLETED && tx->callback) {
 			desc->mark = DESC_WAITING;
+			dmaengine_desc_get_callback(tx, &cb);
 			callback = tx->callback;
-			param = tx->callback_param;
 			dev_dbg(schan->dev, "descriptor #%d@%p on %d callback\n",
 				tx->cookie, tx, schan->id);
 			BUG_ON(desc->chunks != 1);
@@ -385,7 +383,7 @@ static dma_async_tx_callback __ld_cleanup(struct shdma_chan *schan, bool all)
 			switch (desc->mark) {
 			case DESC_COMPLETED:
 				desc->mark = DESC_WAITING;
-				/* Fall through */
+				fallthrough;
 			case DESC_WAITING:
 				if (head_acked)
 					async_tx_ack(&desc->async_tx);
@@ -430,8 +428,7 @@ static dma_async_tx_callback __ld_cleanup(struct shdma_chan *schan, bool all)
 
 	spin_unlock_irqrestore(&schan->chan_lock, flags);
 
-	if (callback)
-		callback(param);
+	dmaengine_desc_callback_invoke(&cb, NULL);
 
 	return callback;
 }
@@ -712,7 +709,7 @@ static struct dma_async_tx_descriptor *shdma_prep_dma_cyclic(
 	BUG_ON(!schan->desc_num);
 
 	if (sg_len > SHDMA_MAX_SG_LEN) {
-		dev_err(schan->dev, "sg length %d exceds limit %d",
+		dev_err(schan->dev, "sg length %d exceeds limit %d",
 				sg_len, SHDMA_MAX_SG_LEN);
 		return NULL;
 	}
@@ -731,7 +728,7 @@ static struct dma_async_tx_descriptor *shdma_prep_dma_cyclic(
 	 * Allocate the sg list dynamically as it would consumer too much stack
 	 * space.
 	 */
-	sgl = kcalloc(sg_len, sizeof(*sgl), GFP_KERNEL);
+	sgl = kmalloc_array(sg_len, sizeof(*sgl), GFP_KERNEL);
 	if (!sgl)
 		return NULL;
 
@@ -885,9 +882,9 @@ bool shdma_reset(struct shdma_dev *sdev)
 		/* Complete all  */
 		list_for_each_entry(sdesc, &dl, node) {
 			struct dma_async_tx_descriptor *tx = &sdesc->async_tx;
+
 			sdesc->mark = DESC_IDLE;
-			if (tx->callback)
-				tx->callback(tx->callback_param);
+			dmaengine_desc_get_callback_invoke(tx, NULL);
 		}
 
 		spin_lock(&schan->chan_lock);
@@ -1045,8 +1042,9 @@ EXPORT_SYMBOL(shdma_cleanup);
 
 static int __init shdma_enter(void)
 {
-	shdma_slave_used = kzalloc(DIV_ROUND_UP(slave_num, BITS_PER_LONG) *
-				    sizeof(long), GFP_KERNEL);
+	shdma_slave_used = kcalloc(DIV_ROUND_UP(slave_num, BITS_PER_LONG),
+				   sizeof(long),
+				   GFP_KERNEL);
 	if (!shdma_slave_used)
 		return -ENOMEM;
 	return 0;

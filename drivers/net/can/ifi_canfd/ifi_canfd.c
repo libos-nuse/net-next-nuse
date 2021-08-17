@@ -30,6 +30,7 @@
 #define IFI_CANFD_STCMD_ERROR_ACTIVE		BIT(2)
 #define IFI_CANFD_STCMD_ERROR_PASSIVE		BIT(3)
 #define IFI_CANFD_STCMD_BUSOFF			BIT(4)
+#define IFI_CANFD_STCMD_ERROR_WARNING		BIT(5)
 #define IFI_CANFD_STCMD_BUSMONITOR		BIT(16)
 #define IFI_CANFD_STCMD_LOOPBACK		BIT(18)
 #define IFI_CANFD_STCMD_DISABLE_CANFD		BIT(24)
@@ -52,7 +53,10 @@
 #define IFI_CANFD_TXSTCMD_OVERFLOW		BIT(13)
 
 #define IFI_CANFD_INTERRUPT			0xc
+#define IFI_CANFD_INTERRUPT_ERROR_BUSOFF	BIT(0)
 #define IFI_CANFD_INTERRUPT_ERROR_WARNING	BIT(1)
+#define IFI_CANFD_INTERRUPT_ERROR_STATE_CHG	BIT(2)
+#define IFI_CANFD_INTERRUPT_ERROR_REC_TEC_INC	BIT(3)
 #define IFI_CANFD_INTERRUPT_ERROR_COUNTER	BIT(10)
 #define IFI_CANFD_INTERRUPT_TXFIFO_EMPTY	BIT(16)
 #define IFI_CANFD_INTERRUPT_TXFIFO_REMOVE	BIT(22)
@@ -61,6 +65,10 @@
 #define IFI_CANFD_INTERRUPT_SET_IRQ		((u32)BIT(31))
 
 #define IFI_CANFD_IRQMASK			0x10
+#define IFI_CANFD_IRQMASK_ERROR_BUSOFF		BIT(0)
+#define IFI_CANFD_IRQMASK_ERROR_WARNING		BIT(1)
+#define IFI_CANFD_IRQMASK_ERROR_STATE_CHG	BIT(2)
+#define IFI_CANFD_IRQMASK_ERROR_REC_TEC_INC	BIT(3)
 #define IFI_CANFD_IRQMASK_SET_ERR		BIT(7)
 #define IFI_CANFD_IRQMASK_SET_TS		BIT(15)
 #define IFI_CANFD_IRQMASK_TXFIFO_EMPTY		BIT(16)
@@ -81,6 +89,10 @@
 #define IFI_CANFD_TIME_SET_TIMEA_4_12_6_6	BIT(15)
 
 #define IFI_CANFD_TDELAY			0x1c
+#define IFI_CANFD_TDELAY_DEFAULT		0xb
+#define IFI_CANFD_TDELAY_MASK			0x3fff
+#define IFI_CANFD_TDELAY_ABS			BIT(14)
+#define IFI_CANFD_TDELAY_EN			BIT(15)
 
 #define IFI_CANFD_ERROR				0x20
 #define IFI_CANFD_ERROR_TX_OFFSET		0
@@ -132,6 +144,8 @@
 #define IFI_CANFD_SYSCLOCK			0x50
 
 #define IFI_CANFD_VER				0x54
+#define IFI_CANFD_VER_REV_MASK			0xff
+#define IFI_CANFD_VER_REV_MIN_SUPPORTED		0x15
 
 #define IFI_CANFD_IP_ID				0x58
 #define IFI_CANFD_IP_ID_VALUE			0xD073CAFD
@@ -216,7 +230,10 @@ static void ifi_canfd_irq_enable(struct net_device *ndev, bool enable)
 
 	if (enable) {
 		enirq = IFI_CANFD_IRQMASK_TXFIFO_EMPTY |
-			IFI_CANFD_IRQMASK_RXFIFO_NEMPTY;
+			IFI_CANFD_IRQMASK_RXFIFO_NEMPTY |
+			IFI_CANFD_IRQMASK_ERROR_STATE_CHG |
+			IFI_CANFD_IRQMASK_ERROR_WARNING |
+			IFI_CANFD_IRQMASK_ERROR_BUSOFF;
 		if (priv->can.ctrlmode & CAN_CTRLMODE_BERR_REPORTING)
 			enirq |= IFI_CANFD_INTERRUPT_ERROR_COUNTER;
 	}
@@ -357,12 +374,13 @@ static int ifi_canfd_handle_lost_msg(struct net_device *ndev)
 	return 1;
 }
 
-static int ifi_canfd_handle_lec_err(struct net_device *ndev, const u32 errctr)
+static int ifi_canfd_handle_lec_err(struct net_device *ndev)
 {
 	struct ifi_canfd_priv *priv = netdev_priv(ndev);
 	struct net_device_stats *stats = &ndev->stats;
 	struct can_frame *cf;
 	struct sk_buff *skb;
+	u32 errctr = readl(priv->base + IFI_CANFD_ERROR_CTR);
 	const u32 errmask = IFI_CANFD_ERROR_CTR_OVERLOAD_FIRST |
 			    IFI_CANFD_ERROR_CTR_ACK_ERROR_FIRST |
 			    IFI_CANFD_ERROR_CTR_BIT0_ERROR_FIRST |
@@ -445,6 +463,11 @@ static int ifi_canfd_handle_state_change(struct net_device *ndev,
 
 	switch (new_state) {
 	case CAN_STATE_ERROR_ACTIVE:
+		/* error active state */
+		priv->can.can_stats.error_warning++;
+		priv->can.state = CAN_STATE_ERROR_ACTIVE;
+		break;
+	case CAN_STATE_ERROR_WARNING:
 		/* error warning state */
 		priv->can.can_stats.error_warning++;
 		priv->can.state = CAN_STATE_ERROR_WARNING;
@@ -473,7 +496,7 @@ static int ifi_canfd_handle_state_change(struct net_device *ndev,
 	ifi_canfd_get_berr_counter(ndev, &bec);
 
 	switch (new_state) {
-	case CAN_STATE_ERROR_ACTIVE:
+	case CAN_STATE_ERROR_WARNING:
 		/* error warning state */
 		cf->can_id |= CAN_ERR_CRTL;
 		cf->data[1] = (bec.txerr > bec.rxerr) ?
@@ -506,22 +529,21 @@ static int ifi_canfd_handle_state_change(struct net_device *ndev,
 	return 1;
 }
 
-static int ifi_canfd_handle_state_errors(struct net_device *ndev, u32 stcmd)
+static int ifi_canfd_handle_state_errors(struct net_device *ndev)
 {
 	struct ifi_canfd_priv *priv = netdev_priv(ndev);
+	u32 stcmd = readl(priv->base + IFI_CANFD_STCMD);
 	int work_done = 0;
-	u32 isr;
 
-	/*
-	 * The ErrWarn condition is a little special, since the bit is
-	 * located in the INTERRUPT register instead of STCMD register.
-	 */
-	isr = readl(priv->base + IFI_CANFD_INTERRUPT);
-	if ((isr & IFI_CANFD_INTERRUPT_ERROR_WARNING) &&
+	if ((stcmd & IFI_CANFD_STCMD_ERROR_ACTIVE) &&
+	    (priv->can.state != CAN_STATE_ERROR_ACTIVE)) {
+		netdev_dbg(ndev, "Error, entered active state\n");
+		work_done += ifi_canfd_handle_state_change(ndev,
+						CAN_STATE_ERROR_ACTIVE);
+	}
+
+	if ((stcmd & IFI_CANFD_STCMD_ERROR_WARNING) &&
 	    (priv->can.state != CAN_STATE_ERROR_WARNING)) {
-		/* Clear the interrupt */
-		writel(IFI_CANFD_INTERRUPT_ERROR_WARNING,
-		       priv->base + IFI_CANFD_INTERRUPT);
 		netdev_dbg(ndev, "Error, entered warning state\n");
 		work_done += ifi_canfd_handle_state_change(ndev,
 						CAN_STATE_ERROR_WARNING);
@@ -548,18 +570,11 @@ static int ifi_canfd_poll(struct napi_struct *napi, int quota)
 {
 	struct net_device *ndev = napi->dev;
 	struct ifi_canfd_priv *priv = netdev_priv(ndev);
-	const u32 stcmd_state_mask = IFI_CANFD_STCMD_ERROR_PASSIVE |
-				     IFI_CANFD_STCMD_BUSOFF;
+	u32 rxstcmd = readl(priv->base + IFI_CANFD_RXSTCMD);
 	int work_done = 0;
 
-	u32 stcmd = readl(priv->base + IFI_CANFD_STCMD);
-	u32 rxstcmd = readl(priv->base + IFI_CANFD_STCMD);
-	u32 errctr = readl(priv->base + IFI_CANFD_ERROR_CTR);
-
 	/* Handle bus state changes */
-	if ((stcmd & stcmd_state_mask) ||
-	    ((stcmd & IFI_CANFD_STCMD_ERROR_ACTIVE) == 0))
-		work_done += ifi_canfd_handle_state_errors(ndev, stcmd);
+	work_done += ifi_canfd_handle_state_errors(ndev);
 
 	/* Handle lost messages on RX */
 	if (rxstcmd & IFI_CANFD_RXSTCMD_OVERFLOW)
@@ -567,14 +582,14 @@ static int ifi_canfd_poll(struct napi_struct *napi, int quota)
 
 	/* Handle lec errors on the bus */
 	if (priv->can.ctrlmode & CAN_CTRLMODE_BERR_REPORTING)
-		work_done += ifi_canfd_handle_lec_err(ndev, errctr);
+		work_done += ifi_canfd_handle_lec_err(ndev);
 
 	/* Handle normal messages on RX */
 	if (!(rxstcmd & IFI_CANFD_RXSTCMD_EMPTY))
 		work_done += ifi_canfd_do_rx_poll(ndev, quota - work_done);
 
 	if (work_done < quota) {
-		napi_complete(napi);
+		napi_complete_done(napi, work_done);
 		ifi_canfd_irq_enable(ndev, 1);
 	}
 
@@ -588,12 +603,13 @@ static irqreturn_t ifi_canfd_isr(int irq, void *dev_id)
 	struct net_device_stats *stats = &ndev->stats;
 	const u32 rx_irq_mask = IFI_CANFD_INTERRUPT_RXFIFO_NEMPTY |
 				IFI_CANFD_INTERRUPT_RXFIFO_NEMPTY_PER |
+				IFI_CANFD_INTERRUPT_ERROR_COUNTER |
+				IFI_CANFD_INTERRUPT_ERROR_STATE_CHG |
 				IFI_CANFD_INTERRUPT_ERROR_WARNING |
-				IFI_CANFD_INTERRUPT_ERROR_COUNTER;
+				IFI_CANFD_INTERRUPT_ERROR_BUSOFF;
 	const u32 tx_irq_mask = IFI_CANFD_INTERRUPT_TXFIFO_EMPTY |
 				IFI_CANFD_INTERRUPT_TXFIFO_REMOVE;
-	const u32 clr_irq_mask = ~((u32)(IFI_CANFD_INTERRUPT_SET_IRQ |
-					 IFI_CANFD_INTERRUPT_ERROR_WARNING));
+	const u32 clr_irq_mask = ~((u32)IFI_CANFD_INTERRUPT_SET_IRQ);
 	u32 isr;
 
 	isr = readl(priv->base + IFI_CANFD_INTERRUPT);
@@ -641,7 +657,7 @@ static void ifi_canfd_set_bittiming(struct net_device *ndev)
 	struct ifi_canfd_priv *priv = netdev_priv(ndev);
 	const struct can_bittiming *bt = &priv->can.bittiming;
 	const struct can_bittiming *dbt = &priv->can.data_bittiming;
-	u16 brp, sjw, tseg1, tseg2;
+	u16 brp, sjw, tseg1, tseg2, tdc;
 
 	/* Configure bit timing */
 	brp = bt->brp - 2;
@@ -664,6 +680,11 @@ static void ifi_canfd_set_bittiming(struct net_device *ndev)
 	       (brp << IFI_CANFD_TIME_PRESCALE_OFF) |
 	       (sjw << IFI_CANFD_TIME_SJW_OFF_7_9_8_8),
 	       priv->base + IFI_CANFD_FTIME);
+
+	/* Configure transmitter delay */
+	tdc = dbt->brp * (dbt->prop_seg + dbt->phase_seg1);
+	tdc &= IFI_CANFD_TDELAY_MASK;
+	writel(IFI_CANFD_TDELAY_EN | tdc, priv->base + IFI_CANFD_TDELAY);
 }
 
 static void ifi_canfd_set_filter(struct net_device *ndev, const u32 id,
@@ -921,20 +942,28 @@ static int ifi_canfd_plat_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct net_device *ndev;
 	struct ifi_canfd_priv *priv;
-	struct resource *res;
 	void __iomem *addr;
 	int irq, ret;
-	u32 id;
+	u32 id, rev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	addr = devm_ioremap_resource(dev, res);
+	addr = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(addr))
+		return PTR_ERR(addr);
+
 	irq = platform_get_irq(pdev, 0);
-	if (IS_ERR(addr) || irq < 0)
+	if (irq < 0)
 		return -EINVAL;
 
 	id = readl(addr + IFI_CANFD_IP_ID);
 	if (id != IFI_CANFD_IP_ID_VALUE) {
 		dev_err(dev, "This block is not IFI CANFD, id=%08x\n", id);
+		return -EINVAL;
+	}
+
+	rev = readl(addr + IFI_CANFD_VER) & IFI_CANFD_VER_REV_MASK;
+	if (rev < IFI_CANFD_VER_REV_MIN_SUPPORTED) {
+		dev_err(dev, "This block is too old (rev %i), minimum supported is rev %i\n",
+			rev, IFI_CANFD_VER_REV_MIN_SUPPORTED);
 		return -EINVAL;
 	}
 

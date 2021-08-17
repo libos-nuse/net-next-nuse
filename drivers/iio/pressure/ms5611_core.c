@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * MS5611 pressure and temperature sensor driver
  *
  * Copyright (c) Tomasz Duszynski <tduszyns@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Data sheet:
  *  http://www.meas-spec.com/downloads/MS5611-01BA03.pdf
@@ -215,16 +212,22 @@ static irqreturn_t ms5611_trigger_handler(int irq, void *p)
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct ms5611_state *st = iio_priv(indio_dev);
-	s32 buf[4]; /* s32 (pressure) + s32 (temp) + 2 * s32 (timestamp) */
+	/* Ensure buffer elements are naturally aligned */
+	struct {
+		s32 channels[2];
+		s64 ts __aligned(8);
+	} scan;
 	int ret;
 
 	mutex_lock(&st->lock);
-	ret = ms5611_read_temp_and_pressure(indio_dev, &buf[1], &buf[0]);
+	ret = ms5611_read_temp_and_pressure(indio_dev, &scan.channels[1],
+					    &scan.channels[0]);
 	mutex_unlock(&st->lock);
 	if (ret < 0)
 		goto err;
 
-	iio_push_to_buffers_with_timestamp(indio_dev, buf, iio_get_time_ns());
+	iio_push_to_buffers_with_timestamp(indio_dev, &scan,
+					   iio_get_time_ns(indio_dev));
 
 err:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -307,6 +310,7 @@ static int ms5611_write_raw(struct iio_dev *indio_dev,
 {
 	struct ms5611_state *st = iio_priv(indio_dev);
 	const struct ms5611_osr *osr = NULL;
+	int ret;
 
 	if (mask != IIO_CHAN_INFO_OVERSAMPLING_RATIO)
 		return -EINVAL;
@@ -320,12 +324,11 @@ static int ms5611_write_raw(struct iio_dev *indio_dev,
 	if (!osr)
 		return -EINVAL;
 
-	mutex_lock(&st->lock);
+	ret = iio_device_claim_direct_mode(indio_dev);
+	if (ret)
+		return ret;
 
-	if (iio_buffer_enabled(indio_dev)) {
-		mutex_unlock(&st->lock);
-		return -EBUSY;
-	}
+	mutex_lock(&st->lock);
 
 	if (chan->type == IIO_TEMP)
 		st->temp_osr = osr;
@@ -333,6 +336,8 @@ static int ms5611_write_raw(struct iio_dev *indio_dev,
 		st->pressure_osr = osr;
 
 	mutex_unlock(&st->lock);
+	iio_device_release_direct_mode(indio_dev);
+
 	return 0;
 }
 
@@ -381,7 +386,6 @@ static const struct iio_info ms5611_info = {
 	.read_raw = &ms5611_read_raw,
 	.write_raw = &ms5611_write_raw,
 	.attrs = &ms5611_attribute_group,
-	.driver_module = THIS_MODULE,
 };
 
 static int ms5611_init(struct iio_dev *indio_dev)
@@ -391,17 +395,14 @@ static int ms5611_init(struct iio_dev *indio_dev)
 
 	/* Enable attached regulator if any. */
 	st->vdd = devm_regulator_get(indio_dev->dev.parent, "vdd");
-	if (!IS_ERR(st->vdd)) {
-		ret = regulator_enable(st->vdd);
-		if (ret) {
-			dev_err(indio_dev->dev.parent,
-				"failed to enable Vdd supply: %d\n", ret);
-			return ret;
-		}
-	} else {
-		ret = PTR_ERR(st->vdd);
-		if (ret != -ENODEV)
-			return ret;
+	if (IS_ERR(st->vdd))
+		return PTR_ERR(st->vdd);
+
+	ret = regulator_enable(st->vdd);
+	if (ret) {
+		dev_err(indio_dev->dev.parent,
+			"failed to enable Vdd supply: %d\n", ret);
+		return ret;
 	}
 
 	ret = ms5611_reset(indio_dev);
@@ -415,8 +416,7 @@ static int ms5611_init(struct iio_dev *indio_dev)
 	return 0;
 
 err_regulator_disable:
-	if (!IS_ERR_OR_NULL(st->vdd))
-		regulator_disable(st->vdd);
+	regulator_disable(st->vdd);
 	return ret;
 }
 
@@ -424,8 +424,7 @@ static void ms5611_fini(const struct iio_dev *indio_dev)
 {
 	const struct ms5611_state *st = iio_priv(indio_dev);
 
-	if (!IS_ERR_OR_NULL(st->vdd))
-		regulator_disable(st->vdd);
+	regulator_disable(st->vdd);
 }
 
 int ms5611_probe(struct iio_dev *indio_dev, struct device *dev,
@@ -441,7 +440,6 @@ int ms5611_probe(struct iio_dev *indio_dev, struct device *dev,
 	st->pressure_osr =
 		&ms5611_avail_pressure_osr[ARRAY_SIZE(ms5611_avail_pressure_osr)
 					   - 1];
-	indio_dev->dev.parent = dev;
 	indio_dev->name = name;
 	indio_dev->info = &ms5611_info;
 	indio_dev->channels = ms5611_channels;

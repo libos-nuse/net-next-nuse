@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Driver for USB Mass Storage compliant devices
  *
@@ -27,23 +28,6 @@
  *
  * Also, for certain devices, the interrupt endpoint is used to convey
  * status of a command.
- *
- * Please see http://www.one-eyed-alien.net/~mdharm/linux-usb for more
- * information about this driver.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2, or (at your option) any
- * later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #ifdef CONFIG_USB_STORAGE_DEBUG
@@ -52,7 +36,6 @@
 
 #include <linux/sched.h>
 #include <linux/errno.h>
-#include <linux/freezer.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/kthread.h>
@@ -138,12 +121,12 @@ MODULE_PARM_DESC(quirks, "supplemental list of device IDs and their quirks");
 	.initFunction = init_function,	\
 }
 
-static struct us_unusual_dev us_unusual_dev_list[] = {
+static const struct us_unusual_dev us_unusual_dev_list[] = {
 #	include "unusual_devs.h"
 	{ }		/* Terminating entry */
 };
 
-static struct us_unusual_dev for_dynamic_ids =
+static const struct us_unusual_dev for_dynamic_ids =
 		USUAL_DEV(USB_SC_SCSI, USB_PR_BULK);
 
 #undef UNUSUAL_DEV
@@ -225,8 +208,8 @@ int usb_stor_reset_resume(struct usb_interface *iface)
 	usb_stor_report_bus_reset(us);
 
 	/*
-	 * FIXME: Notify the subdrivers that they need to reinitialize
-	 * the device
+	 * If any of the subdrivers implemented a reinitialization scheme,
+	 * this is where the callback would be invoked.
 	 */
 	return 0;
 }
@@ -257,8 +240,8 @@ int usb_stor_post_reset(struct usb_interface *iface)
 	usb_stor_report_bus_reset(us);
 
 	/*
-	 * FIXME: Notify the subdrivers that they need to reinitialize
-	 * the device
+	 * If any of the subdrivers implemented a reinitialization scheme,
+	 * this is where the callback would be invoked.
 	 */
 
 	mutex_unlock(&us->dev_mutex);
@@ -316,6 +299,7 @@ static int usb_stor_control_thread(void * __us)
 {
 	struct us_data *us = (struct us_data *)__us;
 	struct Scsi_Host *host = us_to_host(us);
+	struct scsi_cmnd *srb;
 
 	for (;;) {
 		usb_stor_dbg(us, "*** thread sleeping\n");
@@ -331,7 +315,8 @@ static int usb_stor_control_thread(void * __us)
 		scsi_lock(host);
 
 		/* When we are called with no command pending, we're done */
-		if (us->srb == NULL) {
+		srb = us->srb;
+		if (srb == NULL) {
 			scsi_unlock(host);
 			mutex_unlock(&us->dev_mutex);
 			usb_stor_dbg(us, "-- exiting\n");
@@ -340,7 +325,7 @@ static int usb_stor_control_thread(void * __us)
 
 		/* has the command timed out *already* ? */
 		if (test_bit(US_FLIDX_TIMED_OUT, &us->dflags)) {
-			us->srb->result = DID_ABORT << 16;
+			srb->result = DID_ABORT << 16;
 			goto SkipForAbort;
 		}
 
@@ -350,35 +335,35 @@ static int usb_stor_control_thread(void * __us)
 		 * reject the command if the direction indicator
 		 * is UNKNOWN
 		 */
-		if (us->srb->sc_data_direction == DMA_BIDIRECTIONAL) {
+		if (srb->sc_data_direction == DMA_BIDIRECTIONAL) {
 			usb_stor_dbg(us, "UNKNOWN data direction\n");
-			us->srb->result = DID_ERROR << 16;
+			srb->result = DID_ERROR << 16;
 		}
 
 		/*
 		 * reject if target != 0 or if LUN is higher than
 		 * the maximum known LUN
 		 */
-		else if (us->srb->device->id &&
+		else if (srb->device->id &&
 				!(us->fflags & US_FL_SCM_MULT_TARG)) {
 			usb_stor_dbg(us, "Bad target number (%d:%llu)\n",
-				     us->srb->device->id,
-				     us->srb->device->lun);
-			us->srb->result = DID_BAD_TARGET << 16;
+				     srb->device->id,
+				     srb->device->lun);
+			srb->result = DID_BAD_TARGET << 16;
 		}
 
-		else if (us->srb->device->lun > us->max_lun) {
+		else if (srb->device->lun > us->max_lun) {
 			usb_stor_dbg(us, "Bad LUN (%d:%llu)\n",
-				     us->srb->device->id,
-				     us->srb->device->lun);
-			us->srb->result = DID_BAD_TARGET << 16;
+				     srb->device->id,
+				     srb->device->lun);
+			srb->result = DID_BAD_TARGET << 16;
 		}
 
 		/*
 		 * Handle those devices which need us to fake
 		 * their inquiry data
 		 */
-		else if ((us->srb->cmnd[0] == INQUIRY) &&
+		else if ((srb->cmnd[0] == INQUIRY) &&
 			    (us->fflags & US_FL_FIX_INQUIRY)) {
 			unsigned char data_ptr[36] = {
 			    0x00, 0x80, 0x02, 0x02,
@@ -386,27 +371,24 @@ static int usb_stor_control_thread(void * __us)
 
 			usb_stor_dbg(us, "Faking INQUIRY command\n");
 			fill_inquiry_response(us, data_ptr, 36);
-			us->srb->result = SAM_STAT_GOOD;
+			srb->result = SAM_STAT_GOOD;
 		}
 
 		/* we've got a command, let's do it! */
 		else {
-			US_DEBUG(usb_stor_show_command(us, us->srb));
-			us->proto_handler(us->srb, us);
+			US_DEBUG(usb_stor_show_command(us, srb));
+			us->proto_handler(srb, us);
 			usb_mark_last_busy(us->pusb_dev);
 		}
 
 		/* lock access to the state */
 		scsi_lock(host);
 
-		/* indicate that the command is done */
-		if (us->srb->result != DID_ABORT << 16) {
-			usb_stor_dbg(us, "scsi cmd done, result=0x%x\n",
-				     us->srb->result);
-			us->srb->scsi_done(us->srb);
-		} else {
+		/* was the command aborted? */
+		if (srb->result == DID_ABORT << 16) {
 SkipForAbort:
 			usb_stor_dbg(us, "scsi command aborted\n");
+			srb = NULL;	/* Don't call srb->scsi_done() */
 		}
 
 		/*
@@ -430,6 +412,13 @@ SkipForAbort:
 
 		/* unlock the device pointers */
 		mutex_unlock(&us->dev_mutex);
+
+		/* now that the locks are released, notify the SCSI core */
+		if (srb) {
+			usb_stor_dbg(us, "scsi cmd done, result=0x%x\n",
+					srb->result);
+			srb->scsi_done(srb);
+		}
 	} /* for (;;) */
 
 	/* Wait until we are told to stop */
@@ -498,7 +487,8 @@ void usb_stor_adjust_quirks(struct usb_device *udev, unsigned long *fflags)
 			US_FL_NO_READ_DISC_INFO | US_FL_NO_READ_CAPACITY_16 |
 			US_FL_INITIAL_READ10 | US_FL_WRITE_CACHE |
 			US_FL_NO_ATA_1X | US_FL_NO_REPORT_OPCODES |
-			US_FL_MAX_SECTORS_240 | US_FL_NO_REPORT_LUNS);
+			US_FL_MAX_SECTORS_240 | US_FL_NO_REPORT_LUNS |
+			US_FL_ALWAYS_SYNC);
 
 	p = quirks;
 	while (*p) {
@@ -551,6 +541,9 @@ void usb_stor_adjust_quirks(struct usb_device *udev, unsigned long *fflags)
 		case 'j':
 			f |= US_FL_NO_REPORT_LUNS;
 			break;
+		case 'k':
+			f |= US_FL_NO_SAME;
+			break;
 		case 'l':
 			f |= US_FL_NOT_LOCKABLE;
 			break;
@@ -581,6 +574,9 @@ void usb_stor_adjust_quirks(struct usb_device *udev, unsigned long *fflags)
 		case 'w':
 			f |= US_FL_NO_WP_DETECT;
 			break;
+		case 'y':
+			f |= US_FL_ALWAYS_SYNC;
+			break;
 		/* Ignore unrecognized flag characters */
 		}
 	}
@@ -590,7 +586,7 @@ EXPORT_SYMBOL_GPL(usb_stor_adjust_quirks);
 
 /* Get the unusual_devs entries and the string descriptors */
 static int get_device_info(struct us_data *us, const struct usb_device_id *id,
-		struct us_unusual_dev *unusual_dev)
+		const struct us_unusual_dev *unusual_dev)
 {
 	struct usb_device *dev = us->pusb_dev;
 	struct usb_interface_descriptor *idesc =
@@ -734,13 +730,11 @@ static void get_protocol(struct us_data *us)
 /* Get the pipe settings */
 static int get_pipes(struct us_data *us)
 {
-	struct usb_host_interface *altsetting =
-		us->pusb_intf->cur_altsetting;
-	int i;
-	struct usb_endpoint_descriptor *ep;
-	struct usb_endpoint_descriptor *ep_in = NULL;
-	struct usb_endpoint_descriptor *ep_out = NULL;
-	struct usb_endpoint_descriptor *ep_int = NULL;
+	struct usb_host_interface *alt = us->pusb_intf->cur_altsetting;
+	struct usb_endpoint_descriptor *ep_in;
+	struct usb_endpoint_descriptor *ep_out;
+	struct usb_endpoint_descriptor *ep_int;
+	int res;
 
 	/*
 	 * Find the first endpoint of each type we need.
@@ -748,28 +742,16 @@ static int get_pipes(struct us_data *us)
 	 * An optional interrupt-in is OK (necessary for CBI protocol).
 	 * We will ignore any others.
 	 */
-	for (i = 0; i < altsetting->desc.bNumEndpoints; i++) {
-		ep = &altsetting->endpoint[i].desc;
-
-		if (usb_endpoint_xfer_bulk(ep)) {
-			if (usb_endpoint_dir_in(ep)) {
-				if (!ep_in)
-					ep_in = ep;
-			} else {
-				if (!ep_out)
-					ep_out = ep;
-			}
-		}
-
-		else if (usb_endpoint_is_int_in(ep)) {
-			if (!ep_int)
-				ep_int = ep;
-		}
+	res = usb_find_common_endpoints(alt, &ep_in, &ep_out, NULL, NULL);
+	if (res) {
+		usb_stor_dbg(us, "bulk endpoints not found\n");
+		return res;
 	}
 
-	if (!ep_in || !ep_out || (us->protocol == USB_PR_CBI && !ep_int)) {
-		usb_stor_dbg(us, "Endpoint sanity check failed! Rejecting dev.\n");
-		return -EIO;
+	res = usb_find_int_in_endpoint(alt, &ep_int);
+	if (res && us->protocol == USB_PR_CBI) {
+		usb_stor_dbg(us, "interrupt endpoint not found\n");
+		return res;
 	}
 
 	/* Calculate and store the pipe values */
@@ -794,10 +776,8 @@ static int usb_stor_acquire_resources(struct us_data *us)
 	struct task_struct *th;
 
 	us->current_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!us->current_urb) {
-		usb_stor_dbg(us, "URB allocation failed\n");
+	if (!us->current_urb)
 		return -ENOMEM;
-	}
 
 	/*
 	 * Just before we start our control thread, initialize
@@ -956,7 +936,7 @@ static unsigned int usb_stor_sg_tablesize(struct usb_interface *intf)
 int usb_stor_probe1(struct us_data **pus,
 		struct usb_interface *intf,
 		const struct usb_device_id *id,
-		struct us_unusual_dev *unusual_dev,
+		const struct us_unusual_dev *unusual_dev,
 		struct scsi_host_template *sht)
 {
 	struct Scsi_Host *host;
@@ -1070,17 +1050,17 @@ int usb_stor_probe2(struct us_data *us)
 	result = usb_stor_acquire_resources(us);
 	if (result)
 		goto BadDevice;
+	usb_autopm_get_interface_no_resume(us->pusb_intf);
 	snprintf(us->scsi_name, sizeof(us->scsi_name), "usb-storage %s",
 					dev_name(&us->pusb_intf->dev));
 	result = scsi_add_host(us_to_host(us), dev);
 	if (result) {
 		dev_warn(dev,
 				"Unable to add the scsi host\n");
-		goto BadDevice;
+		goto HostAddErr;
 	}
 
 	/* Submit the delayed_work for SCSI-device scanning */
-	usb_autopm_get_interface_no_resume(us->pusb_intf);
 	set_bit(US_FLIDX_SCAN_PENDING, &us->dflags);
 
 	if (delay_use > 0)
@@ -1090,6 +1070,8 @@ int usb_stor_probe2(struct us_data *us)
 	return 0;
 
 	/* We come here if there are any problems */
+HostAddErr:
+	usb_autopm_put_interface_no_suspend(us->pusb_intf);
 BadDevice:
 	usb_stor_dbg(us, "storage_probe() failed\n");
 	release_everything(us);
@@ -1113,7 +1095,7 @@ static struct scsi_host_template usb_stor_host_template;
 static int storage_probe(struct usb_interface *intf,
 			 const struct usb_device_id *id)
 {
-	struct us_unusual_dev *unusual_dev;
+	const struct us_unusual_dev *unusual_dev;
 	struct us_data *us;
 	int result;
 	int size;

@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * test/set flag bits stored in conntrack extension area.
  *
  * (C) 2013 Astaro GmbH & Co KG
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/export.h>
@@ -14,24 +11,7 @@
 #include <net/netfilter/nf_conntrack_ecache.h>
 #include <net/netfilter/nf_conntrack_labels.h>
 
-static spinlock_t nf_connlabels_lock;
-
-int nf_connlabel_set(struct nf_conn *ct, u16 bit)
-{
-	struct nf_conn_labels *labels = nf_ct_labels_find(ct);
-
-	if (!labels || BIT_WORD(bit) >= labels->words)
-		return -ENOSPC;
-
-	if (test_bit(bit, labels->bits))
-		return 0;
-
-	if (!test_and_set_bit(bit, labels->bits))
-		nf_conntrack_event_cache(IPCT_LABEL, ct);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(nf_connlabel_set);
+static DEFINE_SPINLOCK(nf_connlabels_lock);
 
 static int replace_u32(u32 *address, u32 mask, u32 new)
 {
@@ -60,7 +40,7 @@ int nf_connlabels_replace(struct nf_conn *ct,
 	if (!labels)
 		return -ENOSPC;
 
-	size = labels->words * sizeof(long);
+	size = sizeof(labels->bits);
 	if (size < (words32 * sizeof(u32)))
 		words32 = size / sizeof(u32);
 
@@ -80,16 +60,11 @@ EXPORT_SYMBOL_GPL(nf_connlabels_replace);
 
 int nf_connlabels_get(struct net *net, unsigned int bits)
 {
-	size_t words;
-
-	words = BIT_WORD(bits) + 1;
-	if (words > NF_CT_LABELS_MAX_SIZE / sizeof(long))
+	if (BIT_WORD(bits) >= NF_CT_LABELS_MAX_SIZE / sizeof(long))
 		return -ERANGE;
 
 	spin_lock(&nf_connlabels_lock);
 	net->ct.labels_used++;
-	if (words > net->ct.label_words)
-		net->ct.label_words = words;
 	spin_unlock(&nf_connlabels_lock);
 
 	return 0;
@@ -100,13 +75,11 @@ void nf_connlabels_put(struct net *net)
 {
 	spin_lock(&nf_connlabels_lock);
 	net->ct.labels_used--;
-	if (net->ct.labels_used == 0)
-		net->ct.label_words = 0;
 	spin_unlock(&nf_connlabels_lock);
 }
 EXPORT_SYMBOL_GPL(nf_connlabels_put);
 
-static struct nf_ct_ext_type labels_extend __read_mostly = {
+static const struct nf_ct_ext_type labels_extend = {
 	.len    = sizeof(struct nf_conn_labels),
 	.align  = __alignof__(struct nf_conn_labels),
 	.id     = NF_CT_EXT_LABELS,
@@ -116,7 +89,6 @@ int nf_conntrack_labels_init(void)
 {
 	BUILD_BUG_ON(NF_CT_LABELS_MAX_SIZE / sizeof(long) >= U8_MAX);
 
-	spin_lock_init(&nf_connlabels_lock);
 	return nf_ct_extend_register(&labels_extend);
 }
 

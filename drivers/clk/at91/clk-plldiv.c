@@ -1,11 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (C) 2013 Boris BREZILLON <b.brezillon@overkiz.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
  */
 
 #include <linux/clk-provider.h>
@@ -75,13 +70,14 @@ static const struct clk_ops plldiv_ops = {
 	.set_rate = clk_plldiv_set_rate,
 };
 
-static struct clk * __init
+struct clk_hw * __init
 at91_clk_register_plldiv(struct regmap *regmap, const char *name,
 			 const char *parent_name)
 {
 	struct clk_plldiv *plldiv;
-	struct clk *clk = NULL;
+	struct clk_hw *hw;
 	struct clk_init_data init;
+	int ret;
 
 	plldiv = kzalloc(sizeof(*plldiv), GFP_KERNEL);
 	if (!plldiv)
@@ -96,36 +92,12 @@ at91_clk_register_plldiv(struct regmap *regmap, const char *name,
 	plldiv->hw.init = &init;
 	plldiv->regmap = regmap;
 
-	clk = clk_register(NULL, &plldiv->hw);
-
-	if (IS_ERR(clk))
+	hw = &plldiv->hw;
+	ret = clk_hw_register(NULL, &plldiv->hw);
+	if (ret) {
 		kfree(plldiv);
+		hw = ERR_PTR(ret);
+	}
 
-	return clk;
+	return hw;
 }
-
-static void __init
-of_at91sam9x5_clk_plldiv_setup(struct device_node *np)
-{
-	struct clk *clk;
-	const char *parent_name;
-	const char *name = np->name;
-	struct regmap *regmap;
-
-	parent_name = of_clk_get_parent_name(np, 0);
-
-	of_property_read_string(np, "clock-output-names", &name);
-
-	regmap = syscon_node_to_regmap(of_get_parent(np));
-	if (IS_ERR(regmap))
-		return;
-
-	clk = at91_clk_register_plldiv(regmap, name, parent_name);
-	if (IS_ERR(clk))
-		return;
-
-	of_clk_add_provider(np, of_clk_src_simple_get, clk);
-	return;
-}
-CLK_OF_DECLARE(at91sam9x5_clk_plldiv, "atmel,at91sam9x5-clk-plldiv",
-	       of_at91sam9x5_clk_plldiv_setup);

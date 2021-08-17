@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-omap1/board-innovator.c
  *
@@ -10,10 +11,6 @@
  *
  * Separated FPGA interrupts from innovator1510.c and cleaned up for 2.6
  * Copyright (C) 2004 Nokia Corporation by Tony Lindrgen <tony@atomide.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/gpio.h>
 #include <linux/kernel.h>
@@ -302,7 +299,7 @@ static struct omap_usb_config innovator1510_usb_config __initdata = {
 	.pins[0]	= 2,
 };
 
-static struct omap_lcd_config innovator1510_lcd_config __initdata = {
+static const struct omap_lcd_config innovator1510_lcd_config __initconst = {
 	.ctrl_name	= "internal",
 };
 #endif
@@ -315,7 +312,7 @@ static struct omap_usb_config h2_usb_config __initdata = {
 #if IS_ENABLED(CONFIG_USB_OMAP)
 	.hmc_mode	= 19,	/* 0:host(off) 1:dev|otg 2:disabled */
 	/* .hmc_mode	= 21,*/	/* 0:host(off) 1:dev(loopback) 2:host(loopback) */
-#elif	defined(CONFIG_USB_OHCI_HCD) || defined(CONFIG_USB_OHCI_HCD_MODULE)
+#elif	IS_ENABLED(CONFIG_USB_OHCI_HCD)
 	/* NONSTANDARD CABLE NEEDED (B-to-Mini-B) */
 	.hmc_mode	= 20,	/* 1:dev|otg(off) 1:host 2:disabled */
 #endif
@@ -323,12 +320,12 @@ static struct omap_usb_config h2_usb_config __initdata = {
 	.pins[1]	= 3,
 };
 
-static struct omap_lcd_config innovator1610_lcd_config __initdata = {
+static const struct omap_lcd_config innovator1610_lcd_config __initconst = {
 	.ctrl_name	= "internal",
 };
 #endif
 
-#if defined(CONFIG_MMC_OMAP) || defined(CONFIG_MMC_OMAP_MODULE)
+#if IS_ENABLED(CONFIG_MMC_OMAP)
 
 static int mmc_set_power(struct device *dev, int slot, int power_on,
 				int vdd)

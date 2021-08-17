@@ -1,27 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  dock.c - ACPI dock station driver
  *
  *  Copyright (C) 2006, 2014, Intel Corp.
  *  Author: Kristen Carlson Accardi <kristen.c.accardi@intel.com>
  *          Rafael J. Wysocki <rafael.j.wysocki@intel.com>
- *
- * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or (at
- *  your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful, but
- *  WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  General Public License for more details.
- *
- * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
 #include <linux/kernel.h>
-#include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/types.h>
@@ -32,13 +19,6 @@
 #include <linux/acpi.h>
 
 #include "internal.h"
-
-#define ACPI_DOCK_DRIVER_DESCRIPTION "ACPI Dock Station Driver"
-
-ACPI_MODULE_NAME("dock");
-MODULE_AUTHOR("Kristen Carlson Accardi");
-MODULE_DESCRIPTION(ACPI_DOCK_DRIVER_DESCRIPTION);
-MODULE_LICENSE("GPL");
 
 static bool immediate_undock = 1;
 module_param(immediate_undock, bool, 0644);
@@ -251,7 +231,8 @@ static void hot_remove_dock_devices(struct dock_station *ds)
 	 * between them).
 	 */
 	list_for_each_entry_reverse(dd, &ds->dependent_devices, list)
-		dock_hotplug_event(dd, ACPI_NOTIFY_EJECT_REQUEST, false);
+		dock_hotplug_event(dd, ACPI_NOTIFY_EJECT_REQUEST,
+				   DOCK_CALL_HANDLER);
 
 	list_for_each_entry_reverse(dd, &ds->dependent_devices, list)
 		acpi_bus_trim(dd->adev);
@@ -487,6 +468,7 @@ int dock_notify(struct acpi_device *adev, u32 event)
 		surprise_removal = 1;
 		event = ACPI_NOTIFY_EJECT_REQUEST;
 		/* Fall back */
+		fallthrough;
 	case ACPI_NOTIFY_EJECT_REQUEST:
 		begin_undock(ds);
 		if ((immediate_undock && !(ds->flags & DOCK_IS_ATA))
@@ -590,7 +572,7 @@ static struct attribute *dock_attributes[] = {
 	NULL
 };
 
-static struct attribute_group dock_attribute_group = {
+static const struct attribute_group dock_attribute_group = {
 	.attrs = dock_attributes
 };
 

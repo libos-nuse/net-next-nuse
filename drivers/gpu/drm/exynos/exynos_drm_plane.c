@@ -1,22 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2011 Samsung Electronics Co.Ltd
  * Authors: Joonyoung Shim <jy0922.shim@samsung.com>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
- *
  */
 
-#include <drm/drmP.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_plane_helper.h>
 #include <drm/exynos_drm.h>
-#include "exynos_drm_drv.h"
+
 #include "exynos_drm_crtc.h"
+#include "exynos_drm_drv.h"
 #include "exynos_drm_fb.h"
 #include "exynos_drm_gem.h"
 #include "exynos_drm_plane.h"
@@ -119,9 +114,10 @@ static void exynos_plane_mode_set(struct exynos_drm_plane_state *exynos_state)
 	exynos_state->crtc.w = actual_w;
 	exynos_state->crtc.h = actual_h;
 
-	DRM_DEBUG_KMS("plane : offset_x/y(%d,%d), width/height(%d,%d)",
-			exynos_state->crtc.x, exynos_state->crtc.y,
-			exynos_state->crtc.w, exynos_state->crtc.h);
+	DRM_DEV_DEBUG_KMS(crtc->dev->dev,
+			  "plane : offset_x/y(%d,%d), width/height(%d,%d)",
+			  exynos_state->crtc.x, exynos_state->crtc.y,
+			  exynos_state->crtc.w, exynos_state->crtc.h);
 }
 
 static void exynos_drm_plane_reset(struct drm_plane *plane)
@@ -131,17 +127,15 @@ static void exynos_drm_plane_reset(struct drm_plane *plane)
 
 	if (plane->state) {
 		exynos_state = to_exynos_plane_state(plane->state);
-		if (exynos_state->base.fb)
-			drm_framebuffer_unreference(exynos_state->base.fb);
+		__drm_atomic_helper_plane_destroy_state(plane->state);
 		kfree(exynos_state);
 		plane->state = NULL;
 	}
 
 	exynos_state = kzalloc(sizeof(*exynos_state), GFP_KERNEL);
 	if (exynos_state) {
-		exynos_state->zpos = exynos_plane->config->zpos;
-		plane->state = &exynos_state->base;
-		plane->state->plane = plane;
+		__drm_atomic_helper_plane_reset(plane, &exynos_state->base);
+		plane->state->zpos = exynos_plane->config->zpos;
 	}
 }
 
@@ -157,7 +151,6 @@ exynos_drm_plane_duplicate_state(struct drm_plane *plane)
 		return NULL;
 
 	__drm_atomic_helper_plane_duplicate_state(plane, &copy->base);
-	copy->zpos = exynos_state->zpos;
 	return &copy->base;
 }
 
@@ -170,59 +163,44 @@ static void exynos_drm_plane_destroy_state(struct drm_plane *plane,
 	kfree(old_exynos_state);
 }
 
-static int exynos_drm_plane_atomic_set_property(struct drm_plane *plane,
-						struct drm_plane_state *state,
-						struct drm_property *property,
-						uint64_t val)
-{
-	struct exynos_drm_plane *exynos_plane = to_exynos_plane(plane);
-	struct exynos_drm_plane_state *exynos_state =
-					to_exynos_plane_state(state);
-	struct exynos_drm_private *dev_priv = plane->dev->dev_private;
-	const struct exynos_drm_plane_config *config = exynos_plane->config;
-
-	if (property == dev_priv->plane_zpos_property &&
-	    (config->capabilities & EXYNOS_DRM_PLANE_CAP_ZPOS))
-		exynos_state->zpos = val;
-	else
-		return -EINVAL;
-
-	return 0;
-}
-
-static int exynos_drm_plane_atomic_get_property(struct drm_plane *plane,
-					  const struct drm_plane_state *state,
-					  struct drm_property *property,
-					  uint64_t *val)
-{
-	const struct exynos_drm_plane_state *exynos_state =
-		container_of(state, const struct exynos_drm_plane_state, base);
-	struct exynos_drm_private *dev_priv = plane->dev->dev_private;
-
-	if (property == dev_priv->plane_zpos_property)
-		*val = exynos_state->zpos;
-	else
-		return -EINVAL;
-
-	return 0;
-}
-
 static struct drm_plane_funcs exynos_plane_funcs = {
 	.update_plane	= drm_atomic_helper_update_plane,
 	.disable_plane	= drm_atomic_helper_disable_plane,
 	.destroy	= drm_plane_cleanup,
-	.set_property	= drm_atomic_helper_plane_set_property,
 	.reset		= exynos_drm_plane_reset,
 	.atomic_duplicate_state = exynos_drm_plane_duplicate_state,
 	.atomic_destroy_state = exynos_drm_plane_destroy_state,
-	.atomic_set_property = exynos_drm_plane_atomic_set_property,
-	.atomic_get_property = exynos_drm_plane_atomic_get_property,
 };
+
+static int
+exynos_drm_plane_check_format(const struct exynos_drm_plane_config *config,
+			      struct exynos_drm_plane_state *state)
+{
+	struct drm_framebuffer *fb = state->base.fb;
+	struct drm_device *dev = fb->dev;
+
+	switch (fb->modifier) {
+	case DRM_FORMAT_MOD_SAMSUNG_64_32_TILE:
+		if (!(config->capabilities & EXYNOS_DRM_PLANE_CAP_TILE))
+			return -ENOTSUPP;
+		break;
+
+	case DRM_FORMAT_MOD_LINEAR:
+		break;
+
+	default:
+		DRM_DEV_ERROR(dev->dev, "unsupported pixel format modifier");
+		return -ENOTSUPP;
+	}
+
+	return 0;
+}
 
 static int
 exynos_drm_plane_check_size(const struct exynos_drm_plane_config *config,
 			    struct exynos_drm_plane_state *state)
 {
+	struct drm_crtc *crtc = state->base.crtc;
 	bool width_ok = false, height_ok = false;
 
 	if (config->capabilities & EXYNOS_DRM_PLANE_CAP_SCALE)
@@ -245,7 +223,7 @@ exynos_drm_plane_check_size(const struct exynos_drm_plane_config *config,
 	if (width_ok && height_ok)
 		return 0;
 
-	DRM_DEBUG_KMS("scaling mode is not supported");
+	DRM_DEV_DEBUG_KMS(crtc->dev->dev, "scaling mode is not supported");
 	return -ENOTSUPP;
 }
 
@@ -263,6 +241,10 @@ static int exynos_plane_atomic_check(struct drm_plane *plane,
 	/* translate state into exynos_state */
 	exynos_plane_mode_set(exynos_state);
 
+	ret = exynos_drm_plane_check_format(exynos_plane->config, exynos_state);
+	if (ret)
+		return ret;
+
 	ret = exynos_drm_plane_check_size(exynos_plane->config, exynos_state);
 	return ret;
 }
@@ -276,9 +258,6 @@ static void exynos_plane_atomic_update(struct drm_plane *plane,
 
 	if (!state->crtc)
 		return;
-
-	plane->crtc = state->crtc;
-	exynos_plane->pending_fb = state->fb;
 
 	if (exynos_crtc->ops->update_plane)
 		exynos_crtc->ops->update_plane(exynos_crtc, exynos_plane);
@@ -304,40 +283,32 @@ static const struct drm_plane_helper_funcs plane_helper_funcs = {
 };
 
 static void exynos_plane_attach_zpos_property(struct drm_plane *plane,
-					      unsigned int zpos)
+					      int zpos, bool immutable)
 {
-	struct drm_device *dev = plane->dev;
-	struct exynos_drm_private *dev_priv = dev->dev_private;
-	struct drm_property *prop;
-
-	prop = dev_priv->plane_zpos_property;
-	if (!prop) {
-		prop = drm_property_create_range(dev, 0, "zpos",
-						 0, MAX_PLANE - 1);
-		if (!prop)
-			return;
-
-		dev_priv->plane_zpos_property = prop;
-	}
-
-	drm_object_attach_property(&plane->base, prop, zpos);
+	if (immutable)
+		drm_plane_create_zpos_immutable_property(plane, zpos);
+	else
+		drm_plane_create_zpos_property(plane, zpos, 0, MAX_PLANE - 1);
 }
 
 int exynos_plane_init(struct drm_device *dev,
-		      struct exynos_drm_plane *exynos_plane,
-		      unsigned int index, unsigned long possible_crtcs,
+		      struct exynos_drm_plane *exynos_plane, unsigned int index,
 		      const struct exynos_drm_plane_config *config)
 {
 	int err;
+	unsigned int supported_modes = BIT(DRM_MODE_BLEND_PIXEL_NONE) |
+				       BIT(DRM_MODE_BLEND_PREMULTI) |
+				       BIT(DRM_MODE_BLEND_COVERAGE);
+	struct drm_plane *plane = &exynos_plane->base;
 
 	err = drm_universal_plane_init(dev, &exynos_plane->base,
-				       possible_crtcs,
+				       1 << dev->mode_config.num_crtc,
 				       &exynos_plane_funcs,
 				       config->pixel_formats,
 				       config->num_pixel_formats,
-				       config->type, NULL);
+				       NULL, config->type, NULL);
 	if (err) {
-		DRM_ERROR("failed to initialize plane\n");
+		DRM_DEV_ERROR(dev->dev, "failed to initialize plane\n");
 		return err;
 	}
 
@@ -346,7 +317,14 @@ int exynos_plane_init(struct drm_device *dev,
 	exynos_plane->index = index;
 	exynos_plane->config = config;
 
-	exynos_plane_attach_zpos_property(&exynos_plane->base, config->zpos);
+	exynos_plane_attach_zpos_property(&exynos_plane->base, config->zpos,
+			   !(config->capabilities & EXYNOS_DRM_PLANE_CAP_ZPOS));
+
+	if (config->capabilities & EXYNOS_DRM_PLANE_CAP_PIX_BLEND)
+		drm_plane_create_blend_mode_property(plane, supported_modes);
+
+	if (config->capabilities & EXYNOS_DRM_PLANE_CAP_WIN_BLEND)
+		drm_plane_create_alpha_property(plane);
 
 	return 0;
 }

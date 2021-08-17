@@ -1,13 +1,15 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <asm/ppc_asm.h>
+#include <asm/asm-compat.h>
 
 /* unsigned long xmon_mfspr(sprn, default_value) */
 _GLOBAL(xmon_mfspr)
-	ld	r5, .Lmfspr_table@got(r2)
+	PPC_LL	r5, .Lmfspr_table@got(r2)
 	b	xmon_mxspr
 
 /* void xmon_mtspr(sprn, new_value) */
 _GLOBAL(xmon_mtspr)
-	ld	r5, .Lmtspr_table@got(r2)
+	PPC_LL	r5, .Lmtspr_table@got(r2)
 	b	xmon_mxspr
 
 /*

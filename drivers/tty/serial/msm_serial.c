@@ -1,51 +1,153 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Driver for msm7k serial device and console
  *
  * Copyright (C) 2007 Google, Inc.
  * Author: Robert Love <rlove@google.com>
  * Copyright (c) 2011, Code Aurora Forum. All rights reserved.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
-#if defined(CONFIG_SERIAL_MSM_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
-# define SUPPORT_SYSRQ
-#endif
-
+#include <linux/kernel.h>
 #include <linux/atomic.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
-#include <linux/hrtimer.h>
 #include <linux/module.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
-#include <linux/irq.h>
+#include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/console.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/serial_core.h>
-#include <linux/serial.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/platform_device.h>
 #include <linux/delay.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/wait.h>
 
-#include "msm_serial.h"
+#define UART_MR1			0x0000
 
-#define UARTDM_BURST_SIZE	16   /* in bytes */
-#define UARTDM_TX_AIGN(x)	((x) & ~0x3) /* valid for > 1p3 */
-#define UARTDM_TX_MAX		256   /* in bytes, valid for <= 1p3 */
-#define UARTDM_RX_SIZE		(UART_XMIT_SIZE / 4)
+#define UART_MR1_AUTO_RFR_LEVEL0	0x3F
+#define UART_MR1_AUTO_RFR_LEVEL1	0x3FF00
+#define UART_DM_MR1_AUTO_RFR_LEVEL1	0xFFFFFF00
+#define UART_MR1_RX_RDY_CTL		BIT(7)
+#define UART_MR1_CTS_CTL		BIT(6)
+
+#define UART_MR2			0x0004
+#define UART_MR2_ERROR_MODE		BIT(6)
+#define UART_MR2_BITS_PER_CHAR		0x30
+#define UART_MR2_BITS_PER_CHAR_5	(0x0 << 4)
+#define UART_MR2_BITS_PER_CHAR_6	(0x1 << 4)
+#define UART_MR2_BITS_PER_CHAR_7	(0x2 << 4)
+#define UART_MR2_BITS_PER_CHAR_8	(0x3 << 4)
+#define UART_MR2_STOP_BIT_LEN_ONE	(0x1 << 2)
+#define UART_MR2_STOP_BIT_LEN_TWO	(0x3 << 2)
+#define UART_MR2_PARITY_MODE_NONE	0x0
+#define UART_MR2_PARITY_MODE_ODD	0x1
+#define UART_MR2_PARITY_MODE_EVEN	0x2
+#define UART_MR2_PARITY_MODE_SPACE	0x3
+#define UART_MR2_PARITY_MODE		0x3
+
+#define UART_CSR			0x0008
+
+#define UART_TF				0x000C
+#define UARTDM_TF			0x0070
+
+#define UART_CR				0x0010
+#define UART_CR_CMD_NULL		(0 << 4)
+#define UART_CR_CMD_RESET_RX		(1 << 4)
+#define UART_CR_CMD_RESET_TX		(2 << 4)
+#define UART_CR_CMD_RESET_ERR		(3 << 4)
+#define UART_CR_CMD_RESET_BREAK_INT	(4 << 4)
+#define UART_CR_CMD_START_BREAK		(5 << 4)
+#define UART_CR_CMD_STOP_BREAK		(6 << 4)
+#define UART_CR_CMD_RESET_CTS		(7 << 4)
+#define UART_CR_CMD_RESET_STALE_INT	(8 << 4)
+#define UART_CR_CMD_PACKET_MODE		(9 << 4)
+#define UART_CR_CMD_MODE_RESET		(12 << 4)
+#define UART_CR_CMD_SET_RFR		(13 << 4)
+#define UART_CR_CMD_RESET_RFR		(14 << 4)
+#define UART_CR_CMD_PROTECTION_EN	(16 << 4)
+#define UART_CR_CMD_STALE_EVENT_DISABLE	(6 << 8)
+#define UART_CR_CMD_STALE_EVENT_ENABLE	(80 << 4)
+#define UART_CR_CMD_FORCE_STALE		(4 << 8)
+#define UART_CR_CMD_RESET_TX_READY	(3 << 8)
+#define UART_CR_TX_DISABLE		BIT(3)
+#define UART_CR_TX_ENABLE		BIT(2)
+#define UART_CR_RX_DISABLE		BIT(1)
+#define UART_CR_RX_ENABLE		BIT(0)
+#define UART_CR_CMD_RESET_RXBREAK_START	((1 << 11) | (2 << 4))
+
+#define UART_IMR			0x0014
+#define UART_IMR_TXLEV			BIT(0)
+#define UART_IMR_RXSTALE		BIT(3)
+#define UART_IMR_RXLEV			BIT(4)
+#define UART_IMR_DELTA_CTS		BIT(5)
+#define UART_IMR_CURRENT_CTS		BIT(6)
+#define UART_IMR_RXBREAK_START		BIT(10)
+
+#define UART_IPR_RXSTALE_LAST		0x20
+#define UART_IPR_STALE_LSB		0x1F
+#define UART_IPR_STALE_TIMEOUT_MSB	0x3FF80
+#define UART_DM_IPR_STALE_TIMEOUT_MSB	0xFFFFFF80
+
+#define UART_IPR			0x0018
+#define UART_TFWR			0x001C
+#define UART_RFWR			0x0020
+#define UART_HCR			0x0024
+
+#define UART_MREG			0x0028
+#define UART_NREG			0x002C
+#define UART_DREG			0x0030
+#define UART_MNDREG			0x0034
+#define UART_IRDA			0x0038
+#define UART_MISR_MODE			0x0040
+#define UART_MISR_RESET			0x0044
+#define UART_MISR_EXPORT		0x0048
+#define UART_MISR_VAL			0x004C
+#define UART_TEST_CTRL			0x0050
+
+#define UART_SR				0x0008
+#define UART_SR_HUNT_CHAR		BIT(7)
+#define UART_SR_RX_BREAK		BIT(6)
+#define UART_SR_PAR_FRAME_ERR		BIT(5)
+#define UART_SR_OVERRUN			BIT(4)
+#define UART_SR_TX_EMPTY		BIT(3)
+#define UART_SR_TX_READY		BIT(2)
+#define UART_SR_RX_FULL			BIT(1)
+#define UART_SR_RX_READY		BIT(0)
+
+#define UART_RF				0x000C
+#define UARTDM_RF			0x0070
+#define UART_MISR			0x0010
+#define UART_ISR			0x0014
+#define UART_ISR_TX_READY		BIT(7)
+
+#define UARTDM_RXFS			0x50
+#define UARTDM_RXFS_BUF_SHIFT		0x7
+#define UARTDM_RXFS_BUF_MASK		0x7
+
+#define UARTDM_DMEN			0x3C
+#define UARTDM_DMEN_RX_SC_ENABLE	BIT(5)
+#define UARTDM_DMEN_TX_SC_ENABLE	BIT(4)
+
+#define UARTDM_DMEN_TX_BAM_ENABLE	BIT(2)	/* UARTDM_1P4 */
+#define UARTDM_DMEN_TX_DM_ENABLE	BIT(0)	/* < UARTDM_1P4 */
+
+#define UARTDM_DMEN_RX_BAM_ENABLE	BIT(3)	/* UARTDM_1P4 */
+#define UARTDM_DMEN_RX_DM_ENABLE	BIT(1)	/* < UARTDM_1P4 */
+
+#define UARTDM_DMRX			0x34
+#define UARTDM_NCF_TX			0x40
+#define UARTDM_RX_TOTAL_SNAP		0x38
+
+#define UARTDM_BURST_SIZE		16   /* in bytes */
+#define UARTDM_TX_AIGN(x)		((x) & ~0x3) /* valid for > 1p3 */
+#define UARTDM_TX_MAX			256   /* in bytes, valid for <= 1p3 */
+#define UARTDM_RX_SIZE			(UART_XMIT_SIZE / 4)
 
 enum {
 	UARTDM_1P1 = 1,
@@ -78,10 +180,65 @@ struct msm_port {
 	struct msm_dma		rx_dma;
 };
 
+#define UART_TO_MSM(uart_port)	container_of(uart_port, struct msm_port, uart)
+
+static
+void msm_write(struct uart_port *port, unsigned int val, unsigned int off)
+{
+	writel_relaxed(val, port->membase + off);
+}
+
+static
+unsigned int msm_read(struct uart_port *port, unsigned int off)
+{
+	return readl_relaxed(port->membase + off);
+}
+
+/*
+ * Setup the MND registers to use the TCXO clock.
+ */
+static void msm_serial_set_mnd_regs_tcxo(struct uart_port *port)
+{
+	msm_write(port, 0x06, UART_MREG);
+	msm_write(port, 0xF1, UART_NREG);
+	msm_write(port, 0x0F, UART_DREG);
+	msm_write(port, 0x1A, UART_MNDREG);
+	port->uartclk = 1843200;
+}
+
+/*
+ * Setup the MND registers to use the TCXO clock divided by 4.
+ */
+static void msm_serial_set_mnd_regs_tcxoby4(struct uart_port *port)
+{
+	msm_write(port, 0x18, UART_MREG);
+	msm_write(port, 0xF6, UART_NREG);
+	msm_write(port, 0x0F, UART_DREG);
+	msm_write(port, 0x0A, UART_MNDREG);
+	port->uartclk = 1843200;
+}
+
+static void msm_serial_set_mnd_regs(struct uart_port *port)
+{
+	struct msm_port *msm_port = UART_TO_MSM(port);
+
+	/*
+	 * These registers don't exist so we change the clk input rate
+	 * on uartdm hardware instead
+	 */
+	if (msm_port->is_uartdm)
+		return;
+
+	if (port->uartclk == 19200000)
+		msm_serial_set_mnd_regs_tcxo(port);
+	else if (port->uartclk == 4800000)
+		msm_serial_set_mnd_regs_tcxoby4(port);
+}
+
 static void msm_handle_tx(struct uart_port *port);
 static void msm_start_rx_dma(struct msm_port *msm_port);
 
-void msm_stop_dma(struct uart_port *port, struct msm_dma *dma)
+static void msm_stop_dma(struct uart_port *port, struct msm_dma *dma)
 {
 	struct device *dev = port->dev;
 	unsigned int mapped;
@@ -140,7 +297,7 @@ static void msm_request_tx_dma(struct msm_port *msm_port, resource_size_t base)
 	dma = &msm_port->tx_dma;
 
 	/* allocate DMA resources, if available */
-	dma->chan = dma_request_slave_channel_reason(dev, "tx");
+	dma->chan = dma_request_chan(dev, "tx");
 	if (IS_ERR(dma->chan))
 		goto no_tx;
 
@@ -183,7 +340,7 @@ static void msm_request_rx_dma(struct msm_port *msm_port, resource_size_t base)
 	dma = &msm_port->rx_dma;
 
 	/* allocate DMA resources, if available */
-	dma->chan = dma_request_slave_channel_reason(dev, "rx");
+	dma->chan = dma_request_chan(dev, "rx");
 	if (IS_ERR(dma->chan))
 		goto no_rx;
 
@@ -222,10 +379,14 @@ no_rx:
 
 static inline void msm_wait_for_xmitr(struct uart_port *port)
 {
+	unsigned int timeout = 500000;
+
 	while (!(msm_read(port, UART_SR) & UART_SR_TX_EMPTY)) {
 		if (msm_read(port, UART_ISR) & UART_ISR_TX_READY)
 			break;
 		udelay(1);
+		if (!timeout--)
+			break;
 	}
 	msm_write(port, UART_CR_CMD_RESET_TX_READY, UART_CR);
 }
@@ -388,10 +549,6 @@ static void msm_complete_rx_dma(void *args)
 	val &= ~dma->enable_bit;
 	msm_write(port, val, UARTDM_DMEN);
 
-	/* Restore interrupts */
-	msm_port->imr |= UART_IMR_RXLEV | UART_IMR_RXSTALE;
-	msm_write(port, msm_port->imr, UART_IMR);
-
 	if (msm_read(port, UART_SR) & UART_SR_OVERRUN) {
 		port->icount.overrun++;
 		tty_insert_flip_char(tport, 0, TTY_OVERRUN);
@@ -449,7 +606,7 @@ static void msm_start_rx_dma(struct msm_port *msm_port)
 				   UARTDM_RX_SIZE, dma->dir);
 	ret = dma_mapping_error(uart->dev, dma->phys);
 	if (ret)
-		return;
+		goto sw_mode;
 
 	dma->desc = dmaengine_prep_slave_single(dma->chan, dma->phys,
 						UARTDM_RX_SIZE, DMA_DEV_TO_MEM,
@@ -500,6 +657,22 @@ static void msm_start_rx_dma(struct msm_port *msm_port)
 	return;
 unmap:
 	dma_unmap_single(uart->dev, dma->phys, UARTDM_RX_SIZE, dma->dir);
+
+sw_mode:
+	/*
+	 * Switch from DMA to SW/FIFO mode. After clearing Rx BAM (UARTDM_DMEN),
+	 * receiver must be reset.
+	 */
+	msm_write(uart, UART_CR_CMD_RESET_RX, UART_CR);
+	msm_write(uart, UART_CR_RX_ENABLE, UART_CR);
+
+	msm_write(uart, UART_CR_CMD_RESET_STALE_INT, UART_CR);
+	msm_write(uart, 0xFFFFFF, UARTDM_DMRX);
+	msm_write(uart, UART_CR_CMD_STALE_EVENT_ENABLE, UART_CR);
+
+	/* Re-enable RX interrupts */
+	msm_port->imr |= (UART_IMR_RXLEV | UART_IMR_RXSTALE);
+	msm_write(uart, msm_port->imr, UART_IMR);
 }
 
 static void msm_stop_rx(struct uart_port *port)
@@ -523,6 +696,7 @@ static void msm_enable_ms(struct uart_port *port)
 }
 
 static void msm_handle_rx_dm(struct uart_port *port, unsigned int misr)
+	__must_hold(&port->lock)
 {
 	struct tty_port *tport = &port->state->port;
 	unsigned int sr;
@@ -598,6 +772,7 @@ static void msm_handle_rx_dm(struct uart_port *port, unsigned int misr)
 }
 
 static void msm_handle_rx(struct uart_port *port)
+	__must_hold(&port->lock)
 {
 	struct tty_port *tport = &port->state->port;
 	unsigned int sr;
@@ -703,6 +878,7 @@ static void msm_handle_tx(struct uart_port *port)
 	struct circ_buf *xmit = &msm_port->uart.state->xmit;
 	struct msm_dma *dma = &msm_port->tx_dma;
 	unsigned int pio_count, dma_count, dma_min;
+	char buf[4] = { 0 };
 	void __iomem *tf;
 	int err = 0;
 
@@ -712,10 +888,12 @@ static void msm_handle_tx(struct uart_port *port)
 		else
 			tf = port->membase + UART_TF;
 
+		buf[0] = port->x_char;
+
 		if (msm_port->is_uartdm)
 			msm_reset_dm_count(port, 1);
 
-		iowrite8_rep(tf, &port->x_char, 1);
+		iowrite32_rep(tf, buf, 1);
 		port->icount.tx++;
 		port->x_char = 0;
 		return;
@@ -726,7 +904,7 @@ static void msm_handle_tx(struct uart_port *port)
 		return;
 	}
 
-	pio_count = CIRC_CNT(xmit->head, xmit->tail, UART_XMIT_SIZE);
+	pio_count = CIRC_CNT_TO_END(xmit->head, xmit->tail, UART_XMIT_SIZE);
 	dma_count = CIRC_CNT_TO_END(xmit->head, xmit->tail, UART_XMIT_SIZE);
 
 	dma_min = 1;	/* Always DMA */
@@ -816,6 +994,7 @@ static unsigned int msm_get_mctrl(struct uart_port *port)
 static void msm_reset(struct uart_port *port)
 {
 	struct msm_port *msm_port = UART_TO_MSM(port);
+	unsigned int mr;
 
 	/* reset everything */
 	msm_write(port, UART_CR_CMD_RESET_RX, UART_CR);
@@ -823,7 +1002,10 @@ static void msm_reset(struct uart_port *port)
 	msm_write(port, UART_CR_CMD_RESET_ERR, UART_CR);
 	msm_write(port, UART_CR_CMD_RESET_BREAK_INT, UART_CR);
 	msm_write(port, UART_CR_CMD_RESET_CTS, UART_CR);
-	msm_write(port, UART_CR_CMD_SET_RFR, UART_CR);
+	msm_write(port, UART_CR_CMD_RESET_RFR, UART_CR);
+	mr = msm_read(port, UART_MR1);
+	mr &= ~UART_MR1_RX_RDY_CTL;
+	msm_write(port, mr, UART_MR1);
 
 	/* Disable DM modes */
 	if (msm_port->is_uartdm)
@@ -1010,11 +1192,6 @@ static int msm_startup(struct uart_port *port)
 	snprintf(msm_port->name, sizeof(msm_port->name),
 		 "msm_serial%d", port->line);
 
-	ret = request_irq(port->irq, msm_uart_irq, IRQF_TRIGGER_HIGH,
-			  msm_port->name, port);
-	if (unlikely(ret))
-		return ret;
-
 	msm_init_clock(port);
 
 	if (likely(port->fifosize > 12))
@@ -1041,7 +1218,21 @@ static int msm_startup(struct uart_port *port)
 		msm_request_rx_dma(msm_port, msm_port->uart.mapbase);
 	}
 
+	ret = request_irq(port->irq, msm_uart_irq, IRQF_TRIGGER_HIGH,
+			  msm_port->name, port);
+	if (unlikely(ret))
+		goto err_irq;
+
 	return 0;
+
+err_irq:
+	if (msm_port->is_uartdm)
+		msm_release_dma(msm_port);
+
+	clk_disable_unprepare(msm_port->pclk);
+	clk_disable_unprepare(msm_port->clk);
+
+	return ret;
 }
 
 static void msm_shutdown(struct uart_port *port)
@@ -1403,6 +1594,7 @@ static void __msm_console_write(struct uart_port *port, const char *s,
 	int num_newlines = 0;
 	bool replaced = false;
 	void __iomem *tf;
+	int locked = 1;
 
 	if (is_uartdm)
 		tf = port->membase + UARTDM_TF;
@@ -1415,7 +1607,13 @@ static void __msm_console_write(struct uart_port *port, const char *s,
 			num_newlines++;
 	count += num_newlines;
 
-	spin_lock(&port->lock);
+	if (port->sysrq)
+		locked = 0;
+	else if (oops_in_progress)
+		locked = spin_trylock(&port->lock);
+	else
+		spin_lock(&port->lock);
+
 	if (is_uartdm)
 		msm_reset_dm_count(port, count);
 
@@ -1451,7 +1649,9 @@ static void __msm_console_write(struct uart_port *port, const char *s,
 		iowrite32_rep(tf, buf, 1);
 		i += num_chars;
 	}
-	spin_unlock(&port->lock);
+
+	if (locked)
+		spin_unlock(&port->lock);
 }
 
 static void msm_console_write(struct console *co, const char *s,
@@ -1468,7 +1668,7 @@ static void msm_console_write(struct console *co, const char *s,
 	__msm_console_write(port, s, count, msm_port->is_uartdm);
 }
 
-static int __init msm_console_setup(struct console *co, char *options)
+static int msm_console_setup(struct console *co, char *options)
 {
 	struct uart_port *port;
 	int baud = 115200;
@@ -1624,6 +1824,7 @@ static int msm_serial_probe(struct platform_device *pdev)
 	if (unlikely(irq < 0))
 		return -ENXIO;
 	port->irq = irq;
+	port->has_sysrq = IS_ENABLED(CONFIG_SERIAL_MSM_CONSOLE);
 
 	platform_set_drvdata(pdev, port);
 
@@ -1644,12 +1845,36 @@ static const struct of_device_id msm_match_table[] = {
 	{ .compatible = "qcom,msm-uartdm" },
 	{}
 };
+MODULE_DEVICE_TABLE(of, msm_match_table);
+
+static int __maybe_unused msm_serial_suspend(struct device *dev)
+{
+	struct msm_port *port = dev_get_drvdata(dev);
+
+	uart_suspend_port(&msm_uart_driver, &port->uart);
+
+	return 0;
+}
+
+static int __maybe_unused msm_serial_resume(struct device *dev)
+{
+	struct msm_port *port = dev_get_drvdata(dev);
+
+	uart_resume_port(&msm_uart_driver, &port->uart);
+
+	return 0;
+}
+
+static const struct dev_pm_ops msm_serial_dev_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(msm_serial_suspend, msm_serial_resume)
+};
 
 static struct platform_driver msm_platform_driver = {
 	.remove = msm_serial_remove,
 	.probe = msm_serial_probe,
 	.driver = {
 		.name = "msm_serial",
+		.pm = &msm_serial_dev_pm_ops,
 		.of_match_table = msm_match_table,
 	},
 };

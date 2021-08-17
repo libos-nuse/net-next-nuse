@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (C) 2015 Google, Inc.
  *
  * Author: Sami Tolvanen <samitolvanen@google.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
  */
 
 #ifndef DM_VERITY_FEC_H
@@ -27,6 +23,9 @@
 #define DM_VERITY_FEC_BUF_MAX \
 	(1 << (PAGE_SHIFT - DM_VERITY_FEC_BUF_RS_BITS))
 
+/* maximum recursion level for verity_fec_decode */
+#define DM_VERITY_FEC_MAX_RECURSION	4
+
 #define DM_VERITY_OPT_FEC_DEV		"use_fec_from_device"
 #define DM_VERITY_OPT_FEC_BLOCKS	"fec_blocks"
 #define DM_VERITY_OPT_FEC_START		"fec_start"
@@ -37,16 +36,17 @@ struct dm_verity_fec {
 	struct dm_dev *dev;	/* parity data device */
 	struct dm_bufio_client *data_bufio;	/* for data dev access */
 	struct dm_bufio_client *bufio;		/* for parity data access */
+	size_t io_size;		/* IO size for roots */
 	sector_t start;		/* parity data start in blocks */
 	sector_t blocks;	/* number of blocks covered */
 	sector_t rounds;	/* number of interleaving rounds */
 	sector_t hash_blocks;	/* blocks covered after v->hash_start */
 	unsigned char roots;	/* number of parity bytes, M-N of RS(M, N) */
 	unsigned char rsn;	/* N of RS(M, N) */
-	mempool_t *rs_pool;	/* mempool for fio->rs */
-	mempool_t *prealloc_pool;	/* mempool for preallocated buffers */
-	mempool_t *extra_pool;	/* mempool for extra buffers */
-	mempool_t *output_pool;	/* mempool for output */
+	mempool_t rs_pool;	/* mempool for fio->rs */
+	mempool_t prealloc_pool;	/* mempool for preallocated buffers */
+	mempool_t extra_pool;	/* mempool for extra buffers */
+	mempool_t output_pool;	/* mempool for output */
 	struct kmem_cache *cache;	/* cache for buffers */
 };
 
@@ -58,6 +58,7 @@ struct dm_verity_fec_io {
 	unsigned nbufs;		/* number of buffers allocated */
 	u8 *output;		/* buffer for corrected output */
 	size_t output_pos;
+	unsigned level;		/* recursion level */
 };
 
 #ifdef CONFIG_DM_VERITY_FEC

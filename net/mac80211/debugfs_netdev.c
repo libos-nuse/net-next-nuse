@@ -1,10 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2006	Jiri Benc <jbenc@suse.cz>
  * Copyright 2007	Johannes Berg <johannes@sipsolutions.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * Copyright (C) 2020 Intel Corporation
  */
 
 #include <linux/kernel.h>
@@ -30,7 +28,7 @@ static ssize_t ieee80211_if_read(
 	size_t count, loff_t *ppos,
 	ssize_t (*format)(const struct ieee80211_sub_if_data *, char *, int))
 {
-	char buf[70];
+	char buf[200];
 	ssize_t ret = -EINVAL;
 
 	read_lock(&dev_base_lock);
@@ -238,7 +236,7 @@ IEEE80211_IF_FILE_R(hw_queues);
 
 /* STA attributes */
 IEEE80211_IF_FILE(bssid, u.mgd.bssid, MAC);
-IEEE80211_IF_FILE(aid, u.mgd.aid, DEC);
+IEEE80211_IF_FILE(aid, vif.bss_conf.aid, DEC);
 IEEE80211_IF_FILE(beacon_timeout, u.mgd.beacon_timeout, JIFFIES_TO_MS);
 
 static int ieee80211_set_smps(struct ieee80211_sub_if_data *sdata,
@@ -257,15 +255,11 @@ static int ieee80211_set_smps(struct ieee80211_sub_if_data *sdata,
 	     smps_mode == IEEE80211_SMPS_AUTOMATIC))
 		return -EINVAL;
 
-	if (sdata->vif.type != NL80211_IFTYPE_STATION &&
-	    sdata->vif.type != NL80211_IFTYPE_AP)
+	if (sdata->vif.type != NL80211_IFTYPE_STATION)
 		return -EOPNOTSUPP;
 
 	sdata_lock(sdata);
-	if (sdata->vif.type == NL80211_IFTYPE_STATION)
-		err = __ieee80211_request_smps_mgd(sdata, smps_mode);
-	else
-		err = __ieee80211_request_smps_ap(sdata, smps_mode);
+	err = __ieee80211_request_smps_mgd(sdata, smps_mode);
 	sdata_unlock(sdata);
 
 	return err;
@@ -284,10 +278,6 @@ static ssize_t ieee80211_if_fmt_smps(const struct ieee80211_sub_if_data *sdata,
 	if (sdata->vif.type == NL80211_IFTYPE_STATION)
 		return snprintf(buf, buflen, "request: %s\nused: %s\n",
 				smps_modes[sdata->u.mgd.req_smps],
-				smps_modes[sdata->smps_mode]);
-	if (sdata->vif.type == NL80211_IFTYPE_AP)
-		return snprintf(buf, buflen, "request: %s\nused: %s\n",
-				smps_modes[sdata->u.ap.req_smps],
 				smps_modes[sdata->smps_mode]);
 	return -EINVAL;
 }
@@ -330,8 +320,7 @@ static ssize_t ieee80211_if_parse_tkip_mic_test(
 		return -ENOMEM;
 	skb_reserve(skb, local->hw.extra_tx_headroom);
 
-	hdr = (struct ieee80211_hdr *) skb_put(skb, 24);
-	memset(hdr, 0, 24);
+	hdr = skb_put_zero(skb, 24);
 	fc = cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_STYPE_DATA);
 
 	switch (sdata->vif.type) {
@@ -367,7 +356,7 @@ static ssize_t ieee80211_if_parse_tkip_mic_test(
 	 * The exact contents does not matter since the recipient is required
 	 * to drop this because of the Michael MIC failure.
 	 */
-	memset(skb_put(skb, 50), 0, 50);
+	skb_put_zero(skb, 50);
 
 	IEEE80211_SKB_CB(skb)->flags |= IEEE80211_TX_INTFL_TKIP_MIC_FAILURE;
 
@@ -477,6 +466,7 @@ IEEE80211_IF_FILE_RW(tdls_wider_bw);
 IEEE80211_IF_FILE(num_mcast_sta, u.ap.num_mcast_sta, ATOMIC);
 IEEE80211_IF_FILE(num_sta_ps, u.ap.ps.num_sta_ps, ATOMIC);
 IEEE80211_IF_FILE(dtim_count, u.ap.ps.dtim_count, DEC);
+IEEE80211_IF_FILE(num_mcast_sta_vlan, u.vlan.num_mcast_sta, ATOMIC);
 
 static ssize_t ieee80211_if_fmt_num_buffered_multicast(
 	const struct ieee80211_sub_if_data *sdata, char *buf, int buflen)
@@ -485,6 +475,45 @@ static ssize_t ieee80211_if_fmt_num_buffered_multicast(
 			 skb_queue_len(&sdata->u.ap.ps.bc_buf));
 }
 IEEE80211_IF_FILE_R(num_buffered_multicast);
+
+static ssize_t ieee80211_if_fmt_aqm(
+	const struct ieee80211_sub_if_data *sdata, char *buf, int buflen)
+{
+	struct ieee80211_local *local = sdata->local;
+	struct txq_info *txqi;
+	int len;
+
+	if (!sdata->vif.txq)
+		return 0;
+
+	txqi = to_txq_info(sdata->vif.txq);
+
+	spin_lock_bh(&local->fq.lock);
+	rcu_read_lock();
+
+	len = scnprintf(buf,
+			buflen,
+			"ac backlog-bytes backlog-packets new-flows drops marks overlimit collisions tx-bytes tx-packets\n"
+			"%u %u %u %u %u %u %u %u %u %u\n",
+			txqi->txq.ac,
+			txqi->tin.backlog_bytes,
+			txqi->tin.backlog_packets,
+			txqi->tin.flows,
+			txqi->cstats.drop_count,
+			txqi->cstats.ecn_mark,
+			txqi->tin.overlimit,
+			txqi->tin.collisions,
+			txqi->tin.tx_bytes,
+			txqi->tin.tx_packets);
+
+	rcu_read_unlock();
+	spin_unlock_bh(&local->fq.lock);
+
+	return len;
+}
+IEEE80211_IF_FILE_R(aqm);
+
+IEEE80211_IF_FILE(multicast_to_unicast, u.ap.multicast_to_unicast, HEX);
 
 /* IBSS attributes */
 static ssize_t ieee80211_if_fmt_tsf(
@@ -524,9 +553,15 @@ static ssize_t ieee80211_if_parse_tsf(
 		ret = kstrtoull(buf, 10, &tsf);
 		if (ret < 0)
 			return ret;
-		if (tsf_is_delta)
-			tsf = drv_get_tsf(local, sdata) + tsf_is_delta * tsf;
-		if (local->ops->set_tsf) {
+		if (tsf_is_delta && local->ops->offset_tsf) {
+			drv_offset_tsf(local, sdata, tsf_is_delta * tsf);
+			wiphy_info(local->hw.wiphy,
+				   "debugfs offset TSF by %018lld\n",
+				   tsf_is_delta * tsf);
+		} else if (local->ops->set_tsf) {
+			if (tsf_is_delta)
+				tsf = drv_get_tsf(local, sdata) +
+				      tsf_is_delta * tsf;
 			drv_set_tsf(local, sdata, tsf);
 			wiphy_info(local->hw.wiphy,
 				   "debugfs set TSF to %#018llx\n", tsf);
@@ -601,6 +636,11 @@ IEEE80211_IF_FILE(dot11MeshHWMPconfirmationInterval,
 IEEE80211_IF_FILE(power_mode, u.mesh.mshcfg.power_mode, DEC);
 IEEE80211_IF_FILE(dot11MeshAwakeWindowDuration,
 		  u.mesh.mshcfg.dot11MeshAwakeWindowDuration, DEC);
+IEEE80211_IF_FILE(dot11MeshConnectedToMeshGate,
+		  u.mesh.mshcfg.dot11MeshConnectedToMeshGate, DEC);
+IEEE80211_IF_FILE(dot11MeshNolearn, u.mesh.mshcfg.dot11MeshNolearn, DEC);
+IEEE80211_IF_FILE(dot11MeshConnectedToAuthServer,
+		  u.mesh.mshcfg.dot11MeshConnectedToAuthServer, DEC);
 #endif
 
 #define DEBUGFS_ADD_MODE(name, mode) \
@@ -618,6 +658,11 @@ static void add_common_files(struct ieee80211_sub_if_data *sdata)
 	DEBUGFS_ADD(rc_rateidx_vht_mcs_mask_2ghz);
 	DEBUGFS_ADD(rc_rateidx_vht_mcs_mask_5ghz);
 	DEBUGFS_ADD(hw_queues);
+
+	if (sdata->local->ops->wake_tx_queue &&
+	    sdata->vif.type != NL80211_IFTYPE_P2P_DEVICE &&
+	    sdata->vif.type != NL80211_IFTYPE_NAN)
+		DEBUGFS_ADD(aqm);
 }
 
 static void add_sta_files(struct ieee80211_sub_if_data *sdata)
@@ -641,6 +686,14 @@ static void add_ap_files(struct ieee80211_sub_if_data *sdata)
 	DEBUGFS_ADD(dtim_count);
 	DEBUGFS_ADD(num_buffered_multicast);
 	DEBUGFS_ADD_MODE(tkip_mic_test, 0200);
+	DEBUGFS_ADD_MODE(multicast_to_unicast, 0600);
+}
+
+static void add_vlan_files(struct ieee80211_sub_if_data *sdata)
+{
+	/* add num_mcast_sta_vlan using name num_mcast_sta */
+	debugfs_create_file("num_mcast_sta", 0400, sdata->vif.debugfs_dir,
+			    sdata, &num_mcast_sta_vlan_ops);
 }
 
 static void add_ibss_files(struct ieee80211_sub_if_data *sdata)
@@ -711,6 +764,9 @@ static void add_mesh_config(struct ieee80211_sub_if_data *sdata)
 	MESHPARAMS_ADD(dot11MeshHWMPconfirmationInterval);
 	MESHPARAMS_ADD(power_mode);
 	MESHPARAMS_ADD(dot11MeshAwakeWindowDuration);
+	MESHPARAMS_ADD(dot11MeshConnectedToMeshGate);
+	MESHPARAMS_ADD(dot11MeshNolearn);
+	MESHPARAMS_ADD(dot11MeshConnectedToAuthServer);
 #undef MESHPARAMS_ADD
 }
 #endif
@@ -746,6 +802,9 @@ static void add_files(struct ieee80211_sub_if_data *sdata)
 	case NL80211_IFTYPE_AP:
 		add_ap_files(sdata);
 		break;
+	case NL80211_IFTYPE_AP_VLAN:
+		add_vlan_files(sdata);
+		break;
 	case NL80211_IFTYPE_WDS:
 		add_wds_files(sdata);
 		break;
@@ -761,9 +820,8 @@ void ieee80211_debugfs_add_netdev(struct ieee80211_sub_if_data *sdata)
 	sprintf(buf, "netdev:%s", sdata->name);
 	sdata->vif.debugfs_dir = debugfs_create_dir(buf,
 		sdata->local->hw.wiphy->debugfsdir);
-	if (sdata->vif.debugfs_dir)
-		sdata->debugfs.subdir_stations = debugfs_create_dir("stations",
-			sdata->vif.debugfs_dir);
+	sdata->debugfs.subdir_stations = debugfs_create_dir("stations",
+							sdata->vif.debugfs_dir);
 	add_files(sdata);
 }
 
@@ -784,12 +842,9 @@ void ieee80211_debugfs_rename_netdev(struct ieee80211_sub_if_data *sdata)
 
 	dir = sdata->vif.debugfs_dir;
 
-	if (!dir)
+	if (IS_ERR_OR_NULL(dir))
 		return;
 
 	sprintf(buf, "netdev:%s", sdata->name);
-	if (!debugfs_rename(dir->d_parent, dir, dir->d_parent, buf))
-		sdata_err(sdata,
-			  "debugfs: failed to rename debugfs dir to %s\n",
-			  buf);
+	debugfs_rename(dir->d_parent, dir, dir->d_parent, buf);
 }

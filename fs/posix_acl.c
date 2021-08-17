@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2002,2003 by Andreas Gruenbacher <a.gruenbacher@computer.org>
  *
@@ -15,6 +16,7 @@
 #include <linux/atomic.h>
 #include <linux/fs.h>
 #include <linux/sched.h>
+#include <linux/cred.h>
 #include <linux/posix_acl.h>
 #include <linux/posix_acl_xattr.h>
 #include <linux/xattr.h>
@@ -42,7 +44,7 @@ struct posix_acl *get_cached_acl(struct inode *inode, int type)
 		rcu_read_lock();
 		acl = rcu_dereference(*p);
 		if (!acl || is_uncached_acl(acl) ||
-		    atomic_inc_not_zero(&acl->a_refcount))
+		    refcount_inc_not_zero(&acl->a_refcount))
 			break;
 		rcu_read_unlock();
 		cpu_relax();
@@ -163,7 +165,7 @@ EXPORT_SYMBOL(get_acl);
 void
 posix_acl_init(struct posix_acl *acl, int count)
 {
-	atomic_set(&acl->a_refcount, 1);
+	refcount_set(&acl->a_refcount, 1);
 	acl->a_count = count;
 }
 EXPORT_SYMBOL(posix_acl_init);
@@ -196,7 +198,7 @@ posix_acl_clone(const struct posix_acl *acl, gfp_t flags)
 		           sizeof(struct posix_acl_entry);
 		clone = kmemdup(acl, size, flags);
 		if (clone)
-			atomic_set(&clone->a_refcount, 1);
+			refcount_set(&clone->a_refcount, 1);
 	}
 	return clone;
 }
@@ -205,7 +207,7 @@ posix_acl_clone(const struct posix_acl *acl, gfp_t flags)
  * Check if an acl is valid. Returns 0 if it is, or -E... otherwise.
  */
 int
-posix_acl_valid(const struct posix_acl *acl)
+posix_acl_valid(struct user_namespace *user_ns, const struct posix_acl *acl)
 {
 	const struct posix_acl_entry *pa, *pe;
 	int state = ACL_USER_OBJ;
@@ -225,7 +227,7 @@ posix_acl_valid(const struct posix_acl *acl)
 			case ACL_USER:
 				if (state != ACL_USER)
 					return -EINVAL;
-				if (!uid_valid(pa->e_uid))
+				if (!kuid_has_mapping(user_ns, pa->e_uid))
 					return -EINVAL;
 				needs_mask = 1;
 				break;
@@ -240,7 +242,7 @@ posix_acl_valid(const struct posix_acl *acl)
 			case ACL_GROUP:
 				if (state != ACL_GROUP)
 					return -EINVAL;
-				if (!gid_valid(pa->e_gid))
+				if (!kgid_has_mapping(user_ns, pa->e_gid))
 					return -EINVAL;
 				needs_mask = 1;
 				break;
@@ -348,7 +350,7 @@ posix_acl_permission(struct inode *inode, const struct posix_acl *acl, int want)
 	const struct posix_acl_entry *pa, *pe, *mask_obj;
 	int found = 0;
 
-	want &= MAY_READ | MAY_WRITE | MAY_EXEC | MAY_NOT_BLOCK;
+	want &= MAY_READ | MAY_WRITE | MAY_EXEC;
 
 	FOREACH_ACL_ENTRY(pa, acl, pe) {
                 switch(pa->e_tag) {
@@ -598,13 +600,14 @@ posix_acl_create(struct inode *dir, umode_t *mode,
 	if (IS_ERR(p))
 		return PTR_ERR(p);
 
+	ret = -ENOMEM;
 	clone = posix_acl_clone(p, GFP_NOFS);
 	if (!clone)
-		goto no_mem;
+		goto err_release;
 
 	ret = posix_acl_create_masq(clone, mode);
 	if (ret < 0)
-		goto no_mem_clone;
+		goto err_release_clone;
 
 	if (ret == 0)
 		posix_acl_release(clone);
@@ -618,13 +621,47 @@ posix_acl_create(struct inode *dir, umode_t *mode,
 
 	return 0;
 
-no_mem_clone:
+err_release_clone:
 	posix_acl_release(clone);
-no_mem:
+err_release:
 	posix_acl_release(p);
-	return -ENOMEM;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(posix_acl_create);
+
+/**
+ * posix_acl_update_mode  -  update mode in set_acl
+ * @inode: target inode
+ * @mode_p: mode (pointer) for update
+ * @acl: acl pointer
+ *
+ * Update the file mode when setting an ACL: compute the new file permission
+ * bits based on the ACL.  In addition, if the ACL is equivalent to the new
+ * file mode, set *@acl to NULL to indicate that no ACL should be set.
+ *
+ * As with chmod, clear the setgid bit if the caller is not in the owning group
+ * or capable of CAP_FSETID (see inode_change_ok).
+ *
+ * Called from set_acl inode operations.
+ */
+int posix_acl_update_mode(struct inode *inode, umode_t *mode_p,
+			  struct posix_acl **acl)
+{
+	umode_t mode = inode->i_mode;
+	int error;
+
+	error = posix_acl_equiv_mode(*acl, &mode);
+	if (error < 0)
+		return error;
+	if (error == 0)
+		*acl = NULL;
+	if (!in_group_p(inode->i_gid) &&
+	    !capable_wrt_inode_uidgid(inode, CAP_FSETID))
+		mode &= ~S_ISGID;
+	*mode_p = mode;
+	return 0;
+}
+EXPORT_SYMBOL(posix_acl_update_mode);
 
 /*
  * Fix up the uids and gids in posix acl extended attributes in place.
@@ -633,15 +670,15 @@ static void posix_acl_fix_xattr_userns(
 	struct user_namespace *to, struct user_namespace *from,
 	void *value, size_t size)
 {
-	posix_acl_xattr_header *header = (posix_acl_xattr_header *)value;
-	posix_acl_xattr_entry *entry = (posix_acl_xattr_entry *)(header+1), *end;
+	struct posix_acl_xattr_header *header = value;
+	struct posix_acl_xattr_entry *entry = (void *)(header + 1), *end;
 	int count;
 	kuid_t uid;
 	kgid_t gid;
 
 	if (!value)
 		return;
-	if (size < sizeof(posix_acl_xattr_header))
+	if (size < sizeof(struct posix_acl_xattr_header))
 		return;
 	if (header->a_version != cpu_to_le32(POSIX_ACL_XATTR_VERSION))
 		return;
@@ -691,15 +728,15 @@ struct posix_acl *
 posix_acl_from_xattr(struct user_namespace *user_ns,
 		     const void *value, size_t size)
 {
-	posix_acl_xattr_header *header = (posix_acl_xattr_header *)value;
-	posix_acl_xattr_entry *entry = (posix_acl_xattr_entry *)(header+1), *end;
+	const struct posix_acl_xattr_header *header = value;
+	const struct posix_acl_xattr_entry *entry = (const void *)(header + 1), *end;
 	int count;
 	struct posix_acl *acl;
 	struct posix_acl_entry *acl_e;
 
 	if (!value)
 		return NULL;
-	if (size < sizeof(posix_acl_xattr_header))
+	if (size < sizeof(struct posix_acl_xattr_header))
 		 return ERR_PTR(-EINVAL);
 	if (header->a_version != cpu_to_le32(POSIX_ACL_XATTR_VERSION))
 		return ERR_PTR(-EOPNOTSUPP);
@@ -760,8 +797,8 @@ int
 posix_acl_to_xattr(struct user_namespace *user_ns, const struct posix_acl *acl,
 		   void *buffer, size_t size)
 {
-	posix_acl_xattr_header *ext_acl = (posix_acl_xattr_header *)buffer;
-	posix_acl_xattr_entry *ext_entry;
+	struct posix_acl_xattr_header *ext_acl = buffer;
+	struct posix_acl_xattr_entry *ext_entry;
 	int real_size, n;
 
 	real_size = posix_acl_xattr_size(acl->a_count);
@@ -770,7 +807,7 @@ posix_acl_to_xattr(struct user_namespace *user_ns, const struct posix_acl *acl,
 	if (real_size > size)
 		return -ERANGE;
 
-	ext_entry = ext_acl->a_entries;
+	ext_entry = (void *)(ext_acl + 1);
 	ext_acl->a_version = cpu_to_le32(POSIX_ACL_XATTR_VERSION);
 
 	for (n=0; n < acl->a_count; n++, ext_entry++) {
@@ -834,7 +871,7 @@ set_posix_acl(struct inode *inode, int type, struct posix_acl *acl)
 		return -EPERM;
 
 	if (acl) {
-		int ret = posix_acl_valid(acl);
+		int ret = posix_acl_valid(inode->i_sb->s_user_ns, acl);
 		if (ret)
 			return ret;
 	}
@@ -890,14 +927,13 @@ int simple_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	int error;
 
 	if (type == ACL_TYPE_ACCESS) {
-		error = posix_acl_equiv_mode(acl, &inode->i_mode);
-		if (error < 0)
-			return 0;
-		if (error == 0)
-			acl = NULL;
+		error = posix_acl_update_mode(inode,
+				&inode->i_mode, &acl);
+		if (error)
+			return error;
 	}
 
-	inode->i_ctime = CURRENT_TIME;
+	inode->i_ctime = current_time(inode);
 	set_cached_acl(inode, type, acl);
 	return 0;
 }

@@ -1,12 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
+ * Ralink RT2880 timer
+ * Author: John Crispin
  *
  * Copyright (C) 2013 John Crispin <john@phrozen.org>
 */
 
-#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
 #include <linux/timer.h>
@@ -69,11 +68,6 @@ static int rt_timer_request(struct rt_timer *rt)
 	return err;
 }
 
-static void rt_timer_free(struct rt_timer *rt)
-{
-	free_irq(rt->irq, rt);
-}
-
 static int rt_timer_config(struct rt_timer *rt, unsigned long divisor)
 {
 	if (rt->timer_freq < divisor)
@@ -99,15 +93,6 @@ static int rt_timer_enable(struct rt_timer *rt)
 	return 0;
 }
 
-static void rt_timer_disable(struct rt_timer *rt)
-{
-	u32 t;
-
-	t = rt_timer_r32(rt, TIMER_REG_TMR0CTL);
-	t &= ~TMR0CTL_ENABLE;
-	rt_timer_w32(rt, TIMER_REG_TMR0CTL, t);
-}
-
 static int rt_timer_probe(struct platform_device *pdev)
 {
 	struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -121,10 +106,8 @@ static int rt_timer_probe(struct platform_device *pdev)
 	}
 
 	rt->irq = platform_get_irq(pdev, 0);
-	if (!rt->irq) {
-		dev_err(&pdev->dev, "failed to load irq\n");
-		return -ENOENT;
-	}
+	if (rt->irq < 0)
+		return rt->irq;
 
 	rt->membase = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(rt->membase))
@@ -152,33 +135,17 @@ static int rt_timer_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int rt_timer_remove(struct platform_device *pdev)
-{
-	struct rt_timer *rt = platform_get_drvdata(pdev);
-
-	rt_timer_disable(rt);
-	rt_timer_free(rt);
-
-	return 0;
-}
-
 static const struct of_device_id rt_timer_match[] = {
 	{ .compatible = "ralink,rt2880-timer" },
 	{},
 };
-MODULE_DEVICE_TABLE(of, rt_timer_match);
 
 static struct platform_driver rt_timer_driver = {
 	.probe = rt_timer_probe,
-	.remove = rt_timer_remove,
 	.driver = {
-		.name		= "rt-timer",
-		.of_match_table	= rt_timer_match
+		.name			= "rt-timer",
+		.of_match_table		= rt_timer_match,
+		.suppress_bind_attrs	= true,
 	},
 };
-
-module_platform_driver(rt_timer_driver);
-
-MODULE_DESCRIPTION("Ralink RT2880 timer");
-MODULE_AUTHOR("John Crispin <john@phrozen.org");
-MODULE_LICENSE("GPL");
+builtin_platform_driver(rt_timer_driver);

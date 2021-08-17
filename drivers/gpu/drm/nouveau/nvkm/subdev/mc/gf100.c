@@ -27,6 +27,7 @@ static const struct nvkm_mc_map
 gf100_mc_reset[] = {
 	{ 0x00020000, NVKM_ENGINE_MSPDEC },
 	{ 0x00008000, NVKM_ENGINE_MSVLD },
+	{ 0x00002000, NVKM_SUBDEV_PMU, true },
 	{ 0x00001000, NVKM_ENGINE_GR },
 	{ 0x00000100, NVKM_ENGINE_FIFO },
 	{ 0x00000080, NVKM_ENGINE_CE1 },
@@ -76,12 +77,20 @@ gf100_mc_intr_rearm(struct nvkm_mc *mc)
 }
 
 u32
-gf100_mc_intr_mask(struct nvkm_mc *mc)
+gf100_mc_intr_stat(struct nvkm_mc *mc)
 {
 	struct nvkm_device *device = mc->subdev.device;
 	u32 intr0 = nvkm_rd32(device, 0x000100);
 	u32 intr1 = nvkm_rd32(device, 0x000104);
 	return intr0 | intr1;
+}
+
+void
+gf100_mc_intr_mask(struct nvkm_mc *mc, u32 mask, u32 stat)
+{
+	struct nvkm_device *device = mc->subdev.device;
+	nvkm_mask(device, 0x000640, mask, stat);
+	nvkm_mask(device, 0x000644, mask, stat);
 }
 
 void
@@ -97,6 +106,7 @@ gf100_mc = {
 	.intr_unarm = gf100_mc_intr_unarm,
 	.intr_rearm = gf100_mc_intr_rearm,
 	.intr_mask = gf100_mc_intr_mask,
+	.intr_stat = gf100_mc_intr_stat,
 	.reset = gf100_mc_reset,
 	.unk260 = gf100_mc_unk260,
 };

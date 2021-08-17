@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2013 Texas Instruments Incorporated - http://www.ti.com/
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * Copyright (C) 2013 Texas Instruments Incorporated - https://www.ti.com/
  */
 #include "omap5.dtsi"
 #include <dt-bindings/interrupt-controller/irq.h>
@@ -12,6 +9,10 @@
 / {
 	aliases {
 		display0 = &hdmi0;
+	};
+
+	chosen {
+		stdout-path = &uart3;
 	};
 
 	vmain: fixedregulator-vmain {
@@ -69,25 +70,17 @@
 		clocks = <&auxclk1_ck>;
 		clock-names = "main_clk";
 		clock-frequency = <19200000>;
+		#phy-cells = <0>;
 	};
 
 	/* HS USB Host PHY on PORT 3 */
 	hsusb3_phy: hsusb3_phy {
 		compatible = "usb-nop-xceiv";
 		reset-gpios = <&gpio3 15 GPIO_ACTIVE_LOW>; /* gpio3_79 ETH_NRESET */
+		#phy-cells = <0>;
 	};
 
-	leds {
-		compatible = "gpio-leds";
-		led@1 {
-			label = "omap5:blue:usr1";
-			gpios = <&gpio5 25 GPIO_ACTIVE_HIGH>; /* gpio5_153 D1 LED */
-			linux,default-trigger = "heartbeat";
-			default-state = "off";
-		};
-	};
-
-	tpd12s015: encoder@0 {
+	tpd12s015: encoder {
 		compatible = "ti,tpd12s015";
 
 		pinctrl-names = "default";
@@ -102,7 +95,7 @@
 			port@0 {
 				reg = <0>;
 
-				tpd12s015_in: endpoint@0 {
+				tpd12s015_in: endpoint {
 					remote-endpoint = <&hdmi_out>;
 				};
 			};
@@ -110,14 +103,14 @@
 			port@1 {
 				reg = <1>;
 
-				tpd12s015_out: endpoint@0 {
+				tpd12s015_out: endpoint {
 					remote-endpoint = <&hdmi_connector_in>;
 				};
 			};
 		};
 	};
 
-	hdmi0: connector@0 {
+	hdmi0: connector {
 		compatible = "hdmi-connector";
 		label = "hdmi";
 
@@ -134,6 +127,7 @@
 		compatible = "ti,abe-twl6040";
 		ti,model = "omap5-uevm";
 
+		ti,jack-detection;
 		ti,mclk-freq = <19200000>;
 
 		ti,mcpdm = <&mcpdm>;
@@ -299,7 +293,7 @@
 
 	dss_hdmi_pins: pinmux_dss_hdmi_pins {
 		pinctrl-single,pins = <
-			OMAP5_IOPAD(0x13c, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_cec.hdmi_cec */
+			OMAP5_IOPAD(0x13c, PIN_INPUT | MUX_MODE0)	/* hdmi_cec.hdmi_cec */
 			OMAP5_IOPAD(0x140, PIN_INPUT | MUX_MODE0)	/* hdmi_ddc_scl.hdmi_ddc_scl */
 			OMAP5_IOPAD(0x142, PIN_INPUT | MUX_MODE0)	/* hdmi_ddc_sda.hdmi_ddc_sda */
 		>;
@@ -320,7 +314,8 @@
 
 	palmas_sys_nirq_pins: pinmux_palmas_sys_nirq_pins {
 		pinctrl-single,pins = <
-			OMAP5_IOPAD(0x068, PIN_INPUT_PULLUP | MUX_MODE0) /* sys_nirq1 */
+			/* sys_nirq1 is pulled down as the SoC is inverting it for GIC */
+			OMAP5_IOPAD(0x068, PIN_INPUT_PULLUP | MUX_MODE0)
 		>;
 	};
 
@@ -332,7 +327,7 @@
 
 	wlcore_irq_pin: pinmux_wlcore_irq_pin {
 		pinctrl-single,pins = <
-			OMAP5_IOPAD(0x40, PIN_INPUT_PULLUP | MUX_MODE6)	/* llia_wakereqin.gpio1_wk14 */
+			OMAP5_IOPAD(0x40, PIN_INPUT | MUX_MODE6)	/* llia_wakereqin.gpio1_wk14 */
 		>;
 	};
 };
@@ -355,15 +350,17 @@
 	non-removable;
 	cap-power-off-card;
 	pinctrl-names = "default";
-	pinctrl-0 = <&mmc3_pins &wlcore_irq_pin>;
-	interrupts-extended = <&gic GIC_SPI 94 IRQ_TYPE_LEVEL_HIGH
-			       &omap5_pmx_core 0x168>;
+	pinctrl-0 = <&mmc3_pins>;
+	interrupts-extended = <&wakeupgen GIC_SPI 94 IRQ_TYPE_LEVEL_HIGH
+			       &omap5_pmx_core 0x16a>;
 
 	#address-cells = <1>;
 	#size-cells = <0>;
 	wlcore: wlcore@2 {
 		compatible = "ti,wl1271";
 		reg = <2>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&wlcore_irq_pin>;
 		interrupt-parent = <&gpio1>;
 		interrupts = <14 IRQ_TYPE_LEVEL_HIGH>;	/* gpio 14 */
 		ref-clock-frequency = <26000000>;
@@ -386,19 +383,29 @@
 
 	palmas: palmas@48 {
 		compatible = "ti,palmas";
-		interrupts = <GIC_SPI 7 IRQ_TYPE_NONE>; /* IRQ_SYS_1N */
+		/* sys_nirq/ext_sys_irq pins get inverted at mpuss wakeupgen */
+		interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_LOW>;
 		reg = <0x48>;
 		interrupt-controller;
 		#interrupt-cells = <2>;
 		ti,system-power-controller;
+		ti,mux-pad1 = <0xa1>;
+		ti,mux-pad2 = <0x1b>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&palmas_sys_nirq_pins &palmas_msecure_pins>;
+
+		palmas_gpio: gpio {
+			compatible = "ti,palmas-gpio";
+			gpio-controller;
+			#gpio-cells = <2>;
+		};
 
 		extcon_usb3: palmas_usb {
 			compatible = "ti,palmas-usb-vid";
 			ti,enable-vbus-detection;
 			ti,enable-id-detection;
 			ti,wakeup;
+			id-gpios = <&palmas_gpio 0 GPIO_ACTIVE_HIGH>;
 		};
 
 		clk32kgaudio: palmas_clk32k@1 {
@@ -414,7 +421,7 @@
 			ti,backup-battery-charge-high-current;
 		};
 
-		gpadc {
+		gpadc: gpadc {
 			compatible = "ti,palmas-gpadc";
 			interrupts = <18 0
 				      16 0
@@ -474,8 +481,8 @@
 				smps6_reg: smps6 {
 					/* VDD_DDR3 - over VDD_SMPS6 */
 					regulator-name = "smps6";
-					regulator-min-microvolt = <1200000>;
-					regulator-max-microvolt = <1200000>;
+					regulator-min-microvolt = <1350000>;
+					regulator-max-microvolt = <1350000>;
 					regulator-always-on;
 					regulator-boot-on;
 				};
@@ -637,12 +644,14 @@
 
 	twl6040: twl@4b {
 		compatible = "ti,twl6040";
+		#clock-cells = <0>;
 		reg = <0x4b>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&twl6040_pins>;
 
-		interrupts = <GIC_SPI 119 IRQ_TYPE_NONE>; /* IRQ_SYS_2N cascaded to gic */
+		/* sys_nirq/ext_sys_irq pins get inverted at mpuss wakeupgen */
+		interrupts = <GIC_SPI 119 IRQ_TYPE_LEVEL_LOW>;
 
 		/* audpwron gpio defined in the board specific dts */
 
@@ -650,15 +659,21 @@
 		v2v1-supply = <&smps9_reg>;
 		enable-active-high;
 
-		clocks = <&clk32kgaudio>;
-		clock-names = "clk32k";
+		clocks = <&clk32kgaudio>, <&fref_xtal_ck>;
+		clock-names = "clk32k", "mclk";
 	};
 };
 
-&mcpdm {
+&mcpdm_module {
+	/* Module on the SoC needs external clock from the PMIC */
 	pinctrl-names = "default";
 	pinctrl-0 = <&mcpdm_pins>;
 	status = "okay";
+};
+
+&mcpdm {
+	clocks = <&twl6040>;
+	clock-names = "pdmclk";
 };
 
 &mcbsp1 {
@@ -685,6 +700,11 @@
 &usb3 {
 	extcon = <&extcon_usb3>;
 	vbus-supply = <&smps10_out1_reg>;
+};
+
+&dwc3 {
+	extcon = <&extcon_usb3>;
+	dr_mode = "otg";
 };
 
 &mcspi1 {
@@ -723,11 +743,11 @@
 };
 
 &dss {
-	status = "ok";
+	status = "okay";
 };
 
 &hdmi {
-	status = "ok";
+	status = "okay";
 
 	/* vdda-supply populated in board specific dts file */
 

@@ -27,8 +27,6 @@
 #ifndef __ASM_ARCH_PSC_H
 #define __ASM_ARCH_PSC_H
 
-#define	DAVINCI_PWR_SLEEP_CNTRL_BASE	0x01C41000
-
 /* Power and Sleep Controller (PSC) Domains */
 #define DAVINCI_GPSC_ARMDOMAIN		0
 #define DAVINCI_GPSC_DSPDOMAIN		1
@@ -171,6 +169,8 @@
 #define DA8XX_LPSC1_I2C			11
 #define DA8XX_LPSC1_UART1		12
 #define DA8XX_LPSC1_UART2		13
+#define DA850_LPSC1_McBSP0		14
+#define DA850_LPSC1_McBSP1		15
 #define DA8XX_LPSC1_LCDC		16
 #define DA8XX_LPSC1_PWM			17
 #define DA850_LPSC1_MMC_SD1		18
@@ -203,15 +203,5 @@
 #define MDCTL_FORCE		BIT(31)
 #define PDCTL_NEXT		BIT(0)
 #define PDCTL_EPCGOOD		BIT(8)
-
-#ifndef __ASSEMBLER__
-
-extern int davinci_psc_is_clk_active(unsigned int ctlr, unsigned int id);
-extern void davinci_psc_reset(unsigned int ctlr, unsigned int id,
-		bool reset);
-extern void davinci_psc_config(unsigned int domain, unsigned int ctlr,
-		unsigned int id, bool enable, u32 flags);
-
-#endif
 
 #endif /* __ASM_ARCH_PSC_H */

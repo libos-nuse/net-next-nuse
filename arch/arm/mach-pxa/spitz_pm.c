@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Battery and Power Management code for the Sharp SL-Cxx00
  *
  * Copyright (c) 2005 Richard Purdie
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/module.h>
@@ -165,13 +161,10 @@ static int spitz_should_wakeup(unsigned int resume_on_alarm)
 	return is_resume;
 }
 
-static unsigned long spitz_charger_wakeup(void)
+static bool spitz_charger_wakeup(void)
 {
-	unsigned long ret;
-	ret = ((!gpio_get_value(SPITZ_GPIO_KEY_INT)
-		<< GPIO_bit(SPITZ_GPIO_KEY_INT))
-		| gpio_get_value(SPITZ_GPIO_SYNC));
-	return ret;
+	return !gpio_get_value(SPITZ_GPIO_KEY_INT) ||
+		gpio_get_value(SPITZ_GPIO_SYNC);
 }
 
 unsigned long spitzpm_read_devdata(int type)

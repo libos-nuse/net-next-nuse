@@ -1,22 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * This file is part of wl18xx
  *
  * Copyright (C) 2011 Texas Instruments. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #ifndef __WL18XX_ACX_H__
@@ -37,6 +23,7 @@ enum {
 	ACX_RX_BA_FILTER		 = 0x0058,
 	ACX_AP_SLEEP_CFG                 = 0x0059,
 	ACX_DYNAMIC_TRACES_CFG		 = 0x005A,
+	ACX_TIME_SYNC_CFG		 = 0x005B,
 };
 
 /* numbers of bits the length field takes (add 1 for the actual number) */
@@ -388,6 +375,17 @@ struct acx_dynamic_fw_traces_cfg {
 	__le32 dynamic_fw_traces;
 } __packed;
 
+/*
+ * ACX_TIME_SYNC_CFG
+ * configure the time sync parameters
+ */
+struct acx_time_sync_cfg {
+	struct acx_header header;
+	u8 sync_mode;
+	u8 zone_mac_addr[ETH_ALEN];
+	u8 padding[1];
+} __packed;
+
 int wl18xx_acx_host_if_cfg_bitmap(struct wl1271 *wl, u32 host_cfg_bitmap,
 				  u32 sdio_blk_size, u32 extra_mem_blks,
 				  u32 len_field_size);
@@ -402,5 +400,6 @@ int wl18xx_acx_interrupt_notify_config(struct wl1271 *wl, bool action);
 int wl18xx_acx_rx_ba_filter(struct wl1271 *wl, bool action);
 int wl18xx_acx_ap_sleep(struct wl1271 *wl);
 int wl18xx_acx_dynamic_fw_traces(struct wl1271 *wl);
+int wl18xx_acx_time_sync_cfg(struct wl1271 *wl);
 
 #endif /* __WL18XX_ACX_H__ */

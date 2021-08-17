@@ -1,7 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _H8300_IO_H
 #define _H8300_IO_H
 
 #ifdef __KERNEL__
+
+#include <linux/types.h>
 
 /* H8/300 internal I/O functions */
 

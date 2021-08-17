@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * hfcmulti.c  low level driver for hfc-4s/hfc-8s/hfc-e1 based cards
  *
@@ -9,21 +10,6 @@
  * Copyright 1999  by Werner Cornelius (werner@isdn-development.de)
  * Copyright 2008  by Karsten Keil (kkeil@suse.de)
  * Copyright 2008  by Andreas Eversberg (jolly@eversberg.eu)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  *
  * Thanks to Cologne Chip AG for this great controller!
  */
@@ -564,19 +550,19 @@ disable_hwirq(struct hfc_multi *hc)
 #define	MAX_TDM_CHAN 32
 
 
-inline void
+static inline void
 enablepcibridge(struct hfc_multi *c)
 {
 	HFC_outb(c, R_BRG_PCM_CFG, (0x0 << 6) | 0x3); /* was _io before */
 }
 
-inline void
+static inline void
 disablepcibridge(struct hfc_multi *c)
 {
 	HFC_outb(c, R_BRG_PCM_CFG, (0x0 << 6) | 0x2); /* was _io before */
 }
 
-inline unsigned char
+static inline unsigned char
 readpcibridge(struct hfc_multi *hc, unsigned char address)
 {
 	unsigned short cipv;
@@ -604,7 +590,7 @@ readpcibridge(struct hfc_multi *hc, unsigned char address)
 	return data;
 }
 
-inline void
+static inline void
 writepcibridge(struct hfc_multi *hc, unsigned char address, unsigned char data)
 {
 	unsigned short cipv;
@@ -634,14 +620,14 @@ writepcibridge(struct hfc_multi *hc, unsigned char address, unsigned char data)
 	outl(datav, hc->pci_iobase);
 }
 
-inline void
+static inline void
 cpld_set_reg(struct hfc_multi *hc, unsigned char reg)
 {
 	/* Do data pin read low byte */
 	HFC_outb(hc, R_GPIO_OUT1, reg);
 }
 
-inline void
+static inline void
 cpld_write_reg(struct hfc_multi *hc, unsigned char reg, unsigned char val)
 {
 	cpld_set_reg(hc, reg);
@@ -653,7 +639,7 @@ cpld_write_reg(struct hfc_multi *hc, unsigned char reg, unsigned char val)
 	return;
 }
 
-inline unsigned char
+static inline unsigned char
 cpld_read_reg(struct hfc_multi *hc, unsigned char reg)
 {
 	unsigned char bytein;
@@ -670,14 +656,14 @@ cpld_read_reg(struct hfc_multi *hc, unsigned char reg)
 	return bytein;
 }
 
-inline void
+static inline void
 vpm_write_address(struct hfc_multi *hc, unsigned short addr)
 {
 	cpld_write_reg(hc, 0, 0xff & addr);
 	cpld_write_reg(hc, 1, 0x01 & (addr >> 8));
 }
 
-inline unsigned short
+static inline unsigned short
 vpm_read_address(struct hfc_multi *c)
 {
 	unsigned short addr;
@@ -691,7 +677,7 @@ vpm_read_address(struct hfc_multi *c)
 	return addr & 0x1ff;
 }
 
-inline unsigned char
+static inline unsigned char
 vpm_in(struct hfc_multi *c, int which, unsigned short addr)
 {
 	unsigned char res;
@@ -712,7 +698,7 @@ vpm_in(struct hfc_multi *c, int which, unsigned short addr)
 	return res;
 }
 
-inline void
+static inline void
 vpm_out(struct hfc_multi *c, int which, unsigned short addr,
 	unsigned char data)
 {
@@ -1024,7 +1010,7 @@ hfcmulti_resync(struct hfc_multi *locked, struct hfc_multi *newmaster, int rm)
 }
 
 /* This must be called AND hc must be locked irqsave!!! */
-inline void
+static inline void
 plxsd_checksync(struct hfc_multi *hc, int rm)
 {
 	if (hc->syncronized) {
@@ -1926,7 +1912,7 @@ hfcmulti_dtmf(struct hfc_multi *hc)
 			hh = mISDN_HEAD_P(skb);
 			hh->prim = PH_CONTROL_IND;
 			hh->id = DTMF_HFC_COEF;
-			memcpy(skb_put(skb, 512), hc->chan[ch].coeff, 512);
+			skb_put_data(skb, hc->chan[ch].coeff, 512);
 			recv_Bchannel_skb(bch, skb);
 		}
 	}
@@ -2262,8 +2248,8 @@ next_frame:
 	if (bch) {
 		maxlen = bchannel_get_rxbuf(bch, Zsize);
 		if (maxlen < 0) {
-			pr_warning("card%d.B%d: No bufferspace for %d bytes\n",
-				   hc->id + 1, bch->nr, Zsize);
+			pr_warn("card%d.B%d: No bufferspace for %d bytes\n",
+				hc->id + 1, bch->nr, Zsize);
 			return;
 		}
 		sp = &bch->rx_skb;
@@ -2274,8 +2260,8 @@ next_frame:
 		if (*sp == NULL) {
 			*sp = mI_alloc_skb(maxlen, GFP_ATOMIC);
 			if (*sp == NULL) {
-				pr_warning("card%d: No mem for dch rx_skb\n",
-					   hc->id + 1);
+				pr_warn("card%d: No mem for dch rx_skb\n",
+					hc->id + 1);
 				return;
 			}
 		}
@@ -2332,8 +2318,7 @@ next_frame:
 				skb = *sp;
 				*sp = mI_alloc_skb(skb->len, GFP_ATOMIC);
 				if (*sp) {
-					memcpy(skb_put(*sp, skb->len),
-					       skb->data, skb->len);
+					skb_put_data(*sp, skb->data, skb->len);
 					skb_trim(skb, 0);
 				} else {
 					printk(KERN_DEBUG "%s: No mem\n",
@@ -2856,7 +2841,7 @@ irq_notforus:
  */
 
 static void
-hfcmulti_dbusy_timer(struct hfc_multi *hc)
+hfcmulti_dbusy_timer(struct timer_list *t)
 {
 }
 
@@ -3878,9 +3863,7 @@ hfcmulti_initmode(struct dchannel *dch)
 		if (hc->dnum[pt]) {
 			mode_hfcmulti(hc, dch->slot, dch->dev.D.protocol,
 				      -1, 0, -1, 0);
-			dch->timer.function = (void *) hfcmulti_dbusy_timer;
-			dch->timer.data = (long) dch;
-			init_timer(&dch->timer);
+			timer_setup(&dch->timer, hfcmulti_dbusy_timer, 0);
 		}
 		for (i = 1; i <= 31; i++) {
 			if (!((1 << i) & hc->bmask[pt])) /* skip unused chan */
@@ -3986,9 +3969,7 @@ hfcmulti_initmode(struct dchannel *dch)
 		hc->chan[i].slot_rx = -1;
 		hc->chan[i].conf = -1;
 		mode_hfcmulti(hc, i, dch->dev.D.protocol, -1, 0, -1, 0);
-		dch->timer.function = (void *) hfcmulti_dbusy_timer;
-		dch->timer.data = (long) dch;
-		init_timer(&dch->timer);
+		timer_setup(&dch->timer, hfcmulti_dbusy_timer, 0);
 		hc->chan[i - 2].slot_tx = -1;
 		hc->chan[i - 2].slot_rx = -1;
 		hc->chan[i - 2].conf = -1;
@@ -4370,7 +4351,8 @@ setup_pci(struct hfc_multi *hc, struct pci_dev *pdev,
 	if (m->clock2)
 		test_and_set_bit(HFC_CHIP_CLOCK2, &hc->chip);
 
-	if (ent->device == 0xB410) {
+	if (ent->vendor == PCI_VENDOR_ID_DIGIUM &&
+	    ent->device == PCI_DEVICE_ID_DIGIUM_HFC4S) {
 		test_and_set_bit(HFC_CHIP_B410P, &hc->chip);
 		test_and_set_bit(HFC_CHIP_PCM_MASTER, &hc->chip);
 		test_and_clear_bit(HFC_CHIP_PCM_SLAVE, &hc->chip);
@@ -5351,7 +5333,7 @@ static const struct hm_map hfcm_map[] = {
 
 #undef H
 #define H(x)	((unsigned long)&hfcm_map[x])
-static struct pci_device_id hfmultipci_ids[] = {
+static const struct pci_device_id hfmultipci_ids[] = {
 
 	/* Cards with HFC-4S Chip */
 	{ PCI_VENDOR_ID_CCD, PCI_DEVICE_ID_CCD_HFC4S, PCI_VENDOR_ID_CCD,

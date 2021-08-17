@@ -33,33 +33,33 @@ static int __ath_regd_init(struct ath_regulatory *reg);
  */
 
 /* Only these channels all allow active scan on all world regulatory domains */
-#define ATH9K_2GHZ_CH01_11	REG_RULE(2412-10, 2462+10, 40, 0, 20, 0)
+#define ATH_2GHZ_CH01_11	REG_RULE(2412-10, 2462+10, 40, 0, 20, 0)
 
 /* We enable active scan on these a case by case basis by regulatory domain */
-#define ATH9K_2GHZ_CH12_13	REG_RULE(2467-10, 2472+10, 40, 0, 20,\
+#define ATH_2GHZ_CH12_13	REG_RULE(2467-10, 2472+10, 40, 0, 20,\
 					 NL80211_RRF_NO_IR)
-#define ATH9K_2GHZ_CH14		REG_RULE(2484-10, 2484+10, 40, 0, 20,\
+#define ATH_2GHZ_CH14		REG_RULE(2484-10, 2484+10, 40, 0, 20,\
 					 NL80211_RRF_NO_IR | \
 					 NL80211_RRF_NO_OFDM)
 
 /* We allow IBSS on these on a case by case basis by regulatory domain */
-#define ATH9K_5GHZ_5150_5350	REG_RULE(5150-10, 5350+10, 80, 0, 30,\
+#define ATH_5GHZ_5150_5350	REG_RULE(5150-10, 5350+10, 80, 0, 30,\
 					 NL80211_RRF_NO_IR)
-#define ATH9K_5GHZ_5470_5850	REG_RULE(5470-10, 5850+10, 80, 0, 30,\
+#define ATH_5GHZ_5470_5850	REG_RULE(5470-10, 5850+10, 80, 0, 30,\
 					 NL80211_RRF_NO_IR)
-#define ATH9K_5GHZ_5725_5850	REG_RULE(5725-10, 5850+10, 80, 0, 30,\
+#define ATH_5GHZ_5725_5850	REG_RULE(5725-10, 5850+10, 80, 0, 30,\
 					 NL80211_RRF_NO_IR)
 
-#define ATH9K_2GHZ_ALL		ATH9K_2GHZ_CH01_11, \
-				ATH9K_2GHZ_CH12_13, \
-				ATH9K_2GHZ_CH14
+#define ATH_2GHZ_ALL		ATH_2GHZ_CH01_11, \
+				ATH_2GHZ_CH12_13, \
+				ATH_2GHZ_CH14
 
-#define ATH9K_5GHZ_ALL		ATH9K_5GHZ_5150_5350, \
-				ATH9K_5GHZ_5470_5850
+#define ATH_5GHZ_ALL		ATH_5GHZ_5150_5350, \
+				ATH_5GHZ_5470_5850
 
 /* This one skips what we call "mid band" */
-#define ATH9K_5GHZ_NO_MIDBAND	ATH9K_5GHZ_5150_5350, \
-				ATH9K_5GHZ_5725_5850
+#define ATH_5GHZ_NO_MIDBAND	ATH_5GHZ_5150_5350, \
+				ATH_5GHZ_5725_5850
 
 /* Can be used for:
  * 0x60, 0x61, 0x62 */
@@ -67,8 +67,8 @@ static const struct ieee80211_regdomain ath_world_regdom_60_61_62 = {
 	.n_reg_rules = 5,
 	.alpha2 =  "99",
 	.reg_rules = {
-		ATH9K_2GHZ_ALL,
-		ATH9K_5GHZ_ALL,
+		ATH_2GHZ_ALL,
+		ATH_5GHZ_ALL,
 	}
 };
 
@@ -77,9 +77,9 @@ static const struct ieee80211_regdomain ath_world_regdom_63_65 = {
 	.n_reg_rules = 4,
 	.alpha2 =  "99",
 	.reg_rules = {
-		ATH9K_2GHZ_CH01_11,
-		ATH9K_2GHZ_CH12_13,
-		ATH9K_5GHZ_NO_MIDBAND,
+		ATH_2GHZ_CH01_11,
+		ATH_2GHZ_CH12_13,
+		ATH_5GHZ_NO_MIDBAND,
 	}
 };
 
@@ -88,8 +88,8 @@ static const struct ieee80211_regdomain ath_world_regdom_64 = {
 	.n_reg_rules = 3,
 	.alpha2 =  "99",
 	.reg_rules = {
-		ATH9K_2GHZ_CH01_11,
-		ATH9K_5GHZ_NO_MIDBAND,
+		ATH_2GHZ_CH01_11,
+		ATH_5GHZ_NO_MIDBAND,
 	}
 };
 
@@ -98,8 +98,8 @@ static const struct ieee80211_regdomain ath_world_regdom_66_69 = {
 	.n_reg_rules = 3,
 	.alpha2 =  "99",
 	.reg_rules = {
-		ATH9K_2GHZ_CH01_11,
-		ATH9K_5GHZ_ALL,
+		ATH_2GHZ_CH01_11,
+		ATH_5GHZ_ALL,
 	}
 };
 
@@ -108,15 +108,15 @@ static const struct ieee80211_regdomain ath_world_regdom_67_68_6A_6C = {
 	.n_reg_rules = 4,
 	.alpha2 =  "99",
 	.reg_rules = {
-		ATH9K_2GHZ_CH01_11,
-		ATH9K_2GHZ_CH12_13,
-		ATH9K_5GHZ_ALL,
+		ATH_2GHZ_CH01_11,
+		ATH_2GHZ_CH12_13,
+		ATH_5GHZ_ALL,
 	}
 };
 
 static bool dynamic_country_user_possible(struct ath_regulatory *reg)
 {
-	if (config_enabled(CONFIG_ATH_REG_DYNAMIC_USER_CERT_TESTING))
+	if (IS_ENABLED(CONFIG_ATH_REG_DYNAMIC_USER_CERT_TESTING))
 		return true;
 
 	switch (reg->country_code) {
@@ -188,7 +188,7 @@ static bool dynamic_country_user_possible(struct ath_regulatory *reg)
 
 static bool ath_reg_dyn_country_user_allow(struct ath_regulatory *reg)
 {
-	if (!config_enabled(CONFIG_ATH_REG_DYNAMIC_USER_REG_HINTS))
+	if (!IS_ENABLED(CONFIG_ATH_REG_DYNAMIC_USER_REG_HINTS))
 		return false;
 	if (!dynamic_country_user_possible(reg))
 		return false;
@@ -254,8 +254,12 @@ bool ath_is_49ghz_allowed(u16 regdomain)
 EXPORT_SYMBOL(ath_is_49ghz_allowed);
 
 /* Frequency is one where radar detection is required */
-static bool ath_is_radar_freq(u16 center_freq)
+static bool ath_is_radar_freq(u16 center_freq,
+			      struct ath_regulatory *reg)
+
 {
+	if (reg->country_code == CTRY_INDIA)
+		return (center_freq >= 5500 && center_freq <= 5700);
 	return (center_freq >= 5260 && center_freq <= 5700);
 }
 
@@ -306,7 +310,7 @@ __ath_reg_apply_beaconing_flags(struct wiphy *wiphy,
 				enum nl80211_reg_initiator initiator,
 				struct ieee80211_channel *ch)
 {
-	if (ath_is_radar_freq(ch->center_freq) ||
+	if (ath_is_radar_freq(ch->center_freq, reg) ||
 	    (ch->flags & IEEE80211_CHAN_RADAR))
 		return;
 
@@ -395,8 +399,9 @@ ath_reg_apply_ir_flags(struct wiphy *wiphy,
 	}
 }
 
-/* Always apply Radar/DFS rules on freq range 5260 MHz - 5700 MHz */
-static void ath_reg_apply_radar_flags(struct wiphy *wiphy)
+/* Always apply Radar/DFS rules on freq range 5500 MHz - 5700 MHz */
+static void ath_reg_apply_radar_flags(struct wiphy *wiphy,
+				      struct ath_regulatory *reg)
 {
 	struct ieee80211_supported_band *sband;
 	struct ieee80211_channel *ch;
@@ -409,7 +414,7 @@ static void ath_reg_apply_radar_flags(struct wiphy *wiphy)
 
 	for (i = 0; i < sband->n_channels; i++) {
 		ch = &sband->channels[i];
-		if (!ath_is_radar_freq(ch->center_freq))
+		if (!ath_is_radar_freq(ch->center_freq, reg))
 			continue;
 		/* We always enable radar detection/DFS on this
 		 * frequency range. Additionally we also apply on
@@ -449,7 +454,7 @@ static void ath_reg_apply_world_flags(struct wiphy *wiphy,
 	}
 }
 
-static u16 ath_regd_find_country_by_name(char *alpha2)
+u16 ath_regd_find_country_by_name(char *alpha2)
 {
 	unsigned int i;
 
@@ -460,6 +465,7 @@ static u16 ath_regd_find_country_by_name(char *alpha2)
 
 	return -1;
 }
+EXPORT_SYMBOL(ath_regd_find_country_by_name);
 
 static int __ath_reg_dyn_country(struct wiphy *wiphy,
 				 struct ath_regulatory *reg,
@@ -505,7 +511,7 @@ void ath_reg_notifier_apply(struct wiphy *wiphy,
 	struct ath_common *common = container_of(reg, struct ath_common,
 						 regulatory);
 	/* We always apply this */
-	ath_reg_apply_radar_flags(wiphy);
+	ath_reg_apply_radar_flags(wiphy, reg);
 
 	/*
 	 * This would happen when we have sent a custom regulatory request
@@ -653,21 +659,21 @@ ath_regd_init_wiphy(struct ath_regulatory *reg,
 	}
 
 	wiphy_apply_custom_regulatory(wiphy, regd);
-	ath_reg_apply_radar_flags(wiphy);
+	ath_reg_apply_radar_flags(wiphy, reg);
 	ath_reg_apply_world_flags(wiphy, NL80211_REGDOM_SET_BY_DRIVER, reg);
 	return 0;
 }
 
 /*
  * Some users have reported their EEPROM programmed with
- * 0x8000 set, this is not a supported regulatory domain
- * but since we have more than one user with it we need
- * a solution for them. We default to 0x64, which is the
- * default Atheros world regulatory domain.
+ * 0x8000 or 0x0 set, this is not a supported regulatory
+ * domain but since we have more than one user with it we
+ * need a solution for them. We default to 0x64, which is
+ * the default Atheros world regulatory domain.
  */
 static void ath_regd_sanitize(struct ath_regulatory *reg)
 {
-	if (reg->current_rd != COUNTRY_ERD_FLAG)
+	if (reg->current_rd != COUNTRY_ERD_FLAG && reg->current_rd != 0)
 		return;
 	printk(KERN_DEBUG "ath: EEPROM regdomain sanitized\n");
 	reg->current_rd = 0x64;

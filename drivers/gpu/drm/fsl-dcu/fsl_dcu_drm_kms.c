@@ -1,18 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2015 Freescale Semiconductor, Inc.
  *
  * Freescale DCU drm device driver
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
-#include <drm/drmP.h>
 #include <drm/drm_atomic_helper.h>
-#include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_cma_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_probe_helper.h>
 
 #include "fsl_dcu_drm_crtc.h"
 #include "fsl_dcu_drm_drv.h"
@@ -20,7 +16,7 @@
 static const struct drm_mode_config_funcs fsl_dcu_drm_mode_config_funcs = {
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
-	.fb_create = drm_fb_cma_create,
+	.fb_create = drm_gem_fb_create,
 };
 
 int fsl_dcu_drm_modeset_init(struct fsl_dcu_drm_device *fsl_dev)
@@ -37,23 +33,22 @@ int fsl_dcu_drm_modeset_init(struct fsl_dcu_drm_device *fsl_dev)
 
 	ret = fsl_dcu_drm_crtc_create(fsl_dev);
 	if (ret)
-		return ret;
+		goto err;
 
 	ret = fsl_dcu_drm_encoder_create(fsl_dev, &fsl_dev->crtc);
 	if (ret)
-		goto fail_encoder;
+		goto err;
 
-	ret = fsl_dcu_drm_connector_create(fsl_dev, &fsl_dev->encoder);
+	ret = fsl_dcu_create_outputs(fsl_dev);
 	if (ret)
-		goto fail_connector;
+		goto err;
 
 	drm_mode_config_reset(fsl_dev->drm);
 	drm_kms_helper_poll_init(fsl_dev->drm);
 
 	return 0;
-fail_encoder:
-	fsl_dev->crtc.funcs->destroy(&fsl_dev->crtc);
-fail_connector:
-	fsl_dev->encoder.funcs->destroy(&fsl_dev->encoder);
+
+err:
+	drm_mode_config_cleanup(fsl_dev->drm);
 	return ret;
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * RapidIO enumeration and discovery support
  *
@@ -11,11 +12,6 @@
  * Copyright 2009 Sysgo AG
  * Thomas Moll <thomas.moll@sysgo.com>
  * - Added Input- Output- enable functionality, to allow full communication
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/types.h>
@@ -43,20 +39,11 @@ struct rio_id_table {
 	u16 start;	/* logical minimal id */
 	u32 max;	/* max number of IDs in table */
 	spinlock_t lock;
-	unsigned long table[0];
+	unsigned long table[];
 };
 
 static int next_destid = 0;
 static int next_comptag = 1;
-
-static int rio_mport_phys_table[] = {
-	RIO_EFB_PAR_EP_ID,
-	RIO_EFB_PAR_EP_REC_ID,
-	RIO_EFB_SER_EP_ID,
-	RIO_EFB_SER_EP_REC_ID,
-	-1,
-};
-
 
 /**
  * rio_destid_alloc - Allocate next available destID for given network
@@ -85,7 +72,7 @@ static u16 rio_destid_alloc(struct rio_net *net)
 }
 
 /**
- * rio_destid_reserve - Reserve the specivied destID
+ * rio_destid_reserve - Reserve the specified destID
  * @net: RIO network
  * @destid: destID to reserve
  *
@@ -343,7 +330,7 @@ static struct rio_dev *rio_setup_device(struct rio_net *net,
 	size_t size;
 	u32 swpinfo = 0;
 
-	size = sizeof(struct rio_dev);
+	size = sizeof(*rdev);
 	if (rio_mport_read_config_32(port, destid, hopcount,
 				     RIO_PEF_CAR, &result))
 		return NULL;
@@ -351,10 +338,8 @@ static struct rio_dev *rio_setup_device(struct rio_net *net,
 	if (result & (RIO_PEF_SWITCH | RIO_PEF_MULTIPORT)) {
 		rio_mport_read_config_32(port, destid, hopcount,
 					 RIO_SWP_INFO_CAR, &swpinfo);
-		if (result & RIO_PEF_SWITCH) {
-			size += (RIO_GET_TOTAL_PORTS(swpinfo) *
-				sizeof(rswitch->nextdev[0])) + sizeof(*rswitch);
-		}
+		if (result & RIO_PEF_SWITCH)
+			size += struct_size(rswitch, nextdev, RIO_GET_TOTAL_PORTS(swpinfo));
 	}
 
 	rdev = kzalloc(size, GFP_KERNEL);
@@ -380,10 +365,15 @@ static struct rio_dev *rio_setup_device(struct rio_net *net,
 	if (rdev->pef & RIO_PEF_EXT_FEATURES) {
 		rdev->efptr = result & 0xffff;
 		rdev->phys_efptr = rio_mport_get_physefb(port, 0, destid,
-							 hopcount);
+						hopcount, &rdev->phys_rmap);
+		pr_debug("RIO: %s Register Map %d device\n",
+			 __func__, rdev->phys_rmap);
 
 		rdev->em_efptr = rio_mport_get_feature(port, 0, destid,
 						hopcount, RIO_EFB_ERR_MGMNT);
+		if (!rdev->em_efptr)
+			rdev->em_efptr = rio_mport_get_feature(port, 0, destid,
+						hopcount, RIO_EFB_ERR_MGMNT_HS);
 	}
 
 	rio_mport_read_config_32(port, destid, hopcount, RIO_SRC_OPS_CAR,
@@ -429,9 +419,9 @@ static struct rio_dev *rio_setup_device(struct rio_net *net,
 		rswitch = rdev->rswitch;
 		rswitch->port_ok = 0;
 		spin_lock_init(&rswitch->lock);
-		rswitch->route_table = kzalloc(sizeof(u8)*
-					RIO_MAX_ROUTE_ENTRIES(port->sys_size),
-					GFP_KERNEL);
+		rswitch->route_table =
+			kzalloc(RIO_MAX_ROUTE_ENTRIES(port->sys_size),
+				GFP_KERNEL);
 		if (!rswitch->route_table)
 			goto cleanup;
 		/* Initialize switch route table */
@@ -445,7 +435,7 @@ static struct rio_dev *rio_setup_device(struct rio_net *net,
 			rio_route_clr_table(rdev, RIO_GLOBAL_TABLE, 0);
 	} else {
 		if (do_enum)
-			/*Enable Input Output Port (transmitter reviever)*/
+			/*Enable Input Output Port (transmitter receiver)*/
 			rio_enable_rx_tx_port(port, 0, destid, hopcount, 0);
 
 		dev_set_name(&rdev->dev, "%02x:e:%04x", rdev->net->id,
@@ -481,10 +471,8 @@ cleanup:
 
 /**
  * rio_sport_is_active- Tests if a switch port has an active connection.
- * @port: Master port to send transaction
- * @destid: Associated destination ID for switch
- * @hopcount: Hopcount to reach switch
- * @sport: Switch port number
+ * @rdev: RapidIO device object
+ * @sp: Switch port number
  *
  * Reads the port error status CSR for a particular switch port to
  * determine if the port has an active link.  Returns
@@ -492,31 +480,12 @@ cleanup:
  * inactive.
  */
 static int
-rio_sport_is_active(struct rio_mport *port, u16 destid, u8 hopcount, int sport)
+rio_sport_is_active(struct rio_dev *rdev, int sp)
 {
 	u32 result = 0;
-	u32 ext_ftr_ptr;
 
-	ext_ftr_ptr = rio_mport_get_efb(port, 0, destid, hopcount, 0);
-
-	while (ext_ftr_ptr) {
-		rio_mport_read_config_32(port, destid, hopcount,
-					 ext_ftr_ptr, &result);
-		result = RIO_GET_BLOCK_ID(result);
-		if ((result == RIO_EFB_SER_EP_FREE_ID) ||
-		    (result == RIO_EFB_SER_EP_FREE_ID_V13P) ||
-		    (result == RIO_EFB_SER_EP_FREC_ID))
-			break;
-
-		ext_ftr_ptr = rio_mport_get_efb(port, 0, destid, hopcount,
-						ext_ftr_ptr);
-	}
-
-	if (ext_ftr_ptr)
-		rio_mport_read_config_32(port, destid, hopcount,
-					 ext_ftr_ptr +
-					 RIO_PORT_N_ERR_STS_CSR(sport),
-					 &result);
+	rio_read_config_32(rdev, RIO_DEV_PORT_N_ERR_STS_CSR(rdev, sp),
+			   &result);
 
 	return result & RIO_PORT_N_ERR_STS_PORT_OK;
 }
@@ -655,9 +624,7 @@ static int rio_enum_peer(struct rio_net *net, struct rio_mport *port,
 
 			cur_destid = next_destid;
 
-			if (rio_sport_is_active
-			    (port, RIO_ANY_DESTID(port->sys_size), hopcount,
-			     port_num)) {
+			if (rio_sport_is_active(rdev, port_num)) {
 				pr_debug(
 				    "RIO: scanning device on port %d\n",
 				    port_num);
@@ -785,8 +752,7 @@ rio_disc_peer(struct rio_net *net, struct rio_mport *port, u16 destid,
 			if (RIO_GET_PORT_NUM(rdev->swpinfo) == port_num)
 				continue;
 
-			if (rio_sport_is_active
-			    (port, destid, hopcount, port_num)) {
+			if (rio_sport_is_active(rdev, port_num)) {
 				pr_debug(
 				    "RIO: scanning device on port %d\n",
 				    port_num);
@@ -831,21 +797,11 @@ rio_disc_peer(struct rio_net *net, struct rio_mport *port, u16 destid,
 static int rio_mport_is_active(struct rio_mport *port)
 {
 	u32 result = 0;
-	u32 ext_ftr_ptr;
-	int *entry = rio_mport_phys_table;
 
-	do {
-		if ((ext_ftr_ptr =
-		     rio_mport_get_feature(port, 1, 0, 0, *entry)))
-			break;
-	} while (*++entry >= 0);
-
-	if (ext_ftr_ptr)
-		rio_local_read_config_32(port,
-					 ext_ftr_ptr +
-					 RIO_PORT_N_ERR_STS_CSR(port->index),
-					 &result);
-
+	rio_local_read_config_32(port,
+		port->phys_efptr +
+			RIO_PORT_N_ERR_STS_CSR(port->index, port->phys_rmap),
+		&result);
 	return result & RIO_PORT_N_ERR_STS_PORT_OK;
 }
 
@@ -923,7 +879,7 @@ static struct rio_net *rio_scan_alloc_net(struct rio_mport *mport,
  *
  * For each enumerated device, ensure that each switch in a system
  * has correct routing entries. Add routes for devices that where
- * unknown dirung the first enumeration pass through the switch.
+ * unknown during the first enumeration pass through the switch.
  */
 static void rio_update_route_tables(struct rio_net *net)
 {
@@ -1021,7 +977,7 @@ static int rio_enum_mport(struct rio_mport *mport, u32 flags)
 		/* reserve mport destID in new net */
 		rio_destid_reserve(net, mport->host_deviceid);
 
-		/* Enable Input Output Port (transmitter reviever) */
+		/* Enable Input Output Port (transmitter receiver) */
 		rio_enable_rx_tx_port(mport, 1, 0, 0, 0);
 
 		/* Set component tag for host */

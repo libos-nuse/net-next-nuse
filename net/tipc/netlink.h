@@ -38,7 +38,6 @@
 #include <net/netlink.h>
 
 extern struct genl_family tipc_genl_family;
-int tipc_nlmsg_parse(const struct nlmsghdr *nlh, struct nlattr ***buf);
 
 struct tipc_nl_msg {
 	struct sk_buff *skb;
@@ -55,6 +54,7 @@ extern const struct nla_policy tipc_nl_prop_policy[];
 extern const struct nla_policy tipc_nl_bearer_policy[];
 extern const struct nla_policy tipc_nl_media_policy[];
 extern const struct nla_policy tipc_nl_udp_policy[];
+extern const struct nla_policy tipc_nl_monitor_policy[];
 
 int tipc_netlink_start(void);
 int tipc_netlink_compat_start(void);

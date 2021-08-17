@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <asm-generic/vmlinux.lds.h>
@@ -71,7 +68,6 @@ SECTIONS
 		INIT_SETUP(L1_CACHE_BYTES)
 		INIT_CALLS
 		CON_INITCALL
-		SECURITY_INITCALL
 	}
 
 	.init.arch.info : {
@@ -82,14 +78,6 @@ SECTIONS
 
 	PERCPU_SECTION(L1_CACHE_BYTES)
 
-	/*
-	 * .exit.text is discard at runtime, not link time, to deal with
-	 * references from .debug_frame
-	 * It will be init freed, being inside [__init_start : __init_end]
-	 */
-	.exit.text : { EXIT_TEXT }
-	.exit.data : { EXIT_DATA }
-
 	. = ALIGN(PAGE_SIZE);
 	__init_end = .;
 
@@ -97,6 +85,7 @@ SECTIONS
 		_text = .;
 		TEXT_TEXT
 		SCHED_TEXT
+		CPUIDLE_TEXT
 		LOCK_TEXT
 		KPROBES_TEXT
 		*(.fixup)
@@ -106,13 +95,13 @@ SECTIONS
 	_etext = .;
 
 	_sdata = .;
-	RO_DATA_SECTION(PAGE_SIZE)
+	RO_DATA(PAGE_SIZE)
 
 	/*
 	 * 1. this is .data essentially
 	 * 2. THREAD_SIZE for init.task, must be kernel-stk sz aligned
 	 */
-	RW_DATA_SECTION(L1_CACHE_BYTES, PAGE_SIZE, THREAD_SIZE)
+	RW_DATA(L1_CACHE_BYTES, PAGE_SIZE, THREAD_SIZE)
 
 	_edata = .;
 
@@ -120,26 +109,20 @@ SECTIONS
 
 #ifdef CONFIG_ARC_DW2_UNWIND
 	. = ALIGN(PAGE_SIZE);
-	.debug_frame  : {
+	.eh_frame  : {
 		__start_unwind = .;
-		*(.debug_frame)
+		*(.eh_frame)
 		__end_unwind = .;
 	}
-	/*
-	 * gcc 4.8 generates this for -fasynchonous-unwind-tables,
-	 * while we still use the .debug_frame based unwinder
-	 */
-	/DISCARD/ : {	*(.eh_frame) }
 #else
-	/DISCARD/ : {	*(.debug_frame) }
+	/DISCARD/ : {	*(.eh_frame) }
 #endif
-
-	NOTES
 
 	. = ALIGN(PAGE_SIZE);
 	_end = . ;
 
 	STABS_DEBUG
+	ELF_DETAILS
 	DISCARDS
 
 	.arcextmap 0 : {
@@ -148,7 +131,7 @@ SECTIONS
 	}
 
 #ifndef CONFIG_DEBUG_INFO
-	/* open-coded because we need .debug_frame seperately for unwinding */
+	/DISCARD/ : { *(.debug_frame) }
 	/DISCARD/ : { *(.debug_aranges) }
 	/DISCARD/ : { *(.debug_pubnames) }
 	/DISCARD/ : { *(.debug_info) }

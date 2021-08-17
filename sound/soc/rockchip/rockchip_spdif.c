@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* sound/soc/rockchip/rk_spdif.c
  *
  * ALSA SoC Audio Layer - Rockchip I2S Controller driver
@@ -6,10 +7,6 @@
  * Author: Jianqun <jay.xu@rock-chips.com>
  * Copyright (c) 2015 Collabora Ltd.
  * Author: Sjoerd Simons <sjoerd.simons@collabora.co.uk>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -49,8 +46,12 @@ static const struct of_device_id rk_spdif_match[] = {
 	  .data = (void *)RK_SPDIF_RK3066 },
 	{ .compatible = "rockchip,rk3188-spdif",
 	  .data = (void *)RK_SPDIF_RK3188 },
+	{ .compatible = "rockchip,rk3228-spdif",
+	  .data = (void *)RK_SPDIF_RK3366 },
 	{ .compatible = "rockchip,rk3288-spdif",
 	  .data = (void *)RK_SPDIF_RK3288 },
+	{ .compatible = "rockchip,rk3328-spdif",
+	  .data = (void *)RK_SPDIF_RK3366 },
 	{ .compatible = "rockchip,rk3366-spdif",
 	  .data = (void *)RK_SPDIF_RK3366 },
 	{ .compatible = "rockchip,rk3368-spdif",
@@ -65,6 +66,7 @@ static int __maybe_unused rk_spdif_runtime_suspend(struct device *dev)
 {
 	struct rk_spdif_dev *spdif = dev_get_drvdata(dev);
 
+	regcache_cache_only(spdif->regmap, true);
 	clk_disable_unprepare(spdif->mclk);
 	clk_disable_unprepare(spdif->hclk);
 
@@ -88,7 +90,16 @@ static int __maybe_unused rk_spdif_runtime_resume(struct device *dev)
 		return ret;
 	}
 
-	return 0;
+	regcache_cache_only(spdif->regmap, false);
+	regcache_mark_dirty(spdif->regmap);
+
+	ret = regcache_sync(spdif->regmap);
+	if (ret) {
+		clk_disable_unprepare(spdif->mclk);
+		clk_disable_unprepare(spdif->hclk);
+	}
+
+	return ret;
 }
 
 static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
@@ -101,21 +112,7 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 	int ret;
 
 	srate = params_rate(params);
-	switch (srate) {
-	case 32000:
-	case 48000:
-	case 96000:
-		mclk = 96000 * 128; /* 12288000 hz */
-		break;
-	case 44100:
-		mclk = 44100 * 256; /* 11289600 hz */
-		break;
-	case 192000:
-		mclk = 192000 * 128; /* 24576000 hz */
-		break;
-	default:
-		return -EINVAL;
-	}
+	mclk = srate * 128;
 
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S16_LE:
@@ -139,7 +136,6 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 		return ret;
 	}
 
-	val |= SPDIF_CFGR_CLK_DIV(mclk/(srate * 256));
 	ret = regmap_update_bits(spdif->regmap, SPDIF_CFGR,
 		SPDIF_CFGR_CLK_DIV_MASK | SPDIF_CFGR_HALFWORD_ENABLE |
 		SDPIF_CFGR_VDW_MASK,
@@ -310,27 +306,12 @@ static int rk_spdif_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	spdif->hclk = devm_clk_get(&pdev->dev, "hclk");
-	if (IS_ERR(spdif->hclk)) {
-		dev_err(&pdev->dev, "Can't retrieve rk_spdif bus clock\n");
+	if (IS_ERR(spdif->hclk))
 		return PTR_ERR(spdif->hclk);
-	}
-	ret = clk_prepare_enable(spdif->hclk);
-	if (ret) {
-		dev_err(spdif->dev, "hclock enable failed %d\n", ret);
-		return ret;
-	}
 
 	spdif->mclk = devm_clk_get(&pdev->dev, "mclk");
-	if (IS_ERR(spdif->mclk)) {
-		dev_err(&pdev->dev, "Can't retrieve rk_spdif master clock\n");
+	if (IS_ERR(spdif->mclk))
 		return PTR_ERR(spdif->mclk);
-	}
-
-	ret = clk_prepare_enable(spdif->mclk);
-	if (ret) {
-		dev_err(spdif->dev, "clock enable failed %d\n", ret);
-		return ret;
-	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	regs = devm_ioremap_resource(&pdev->dev, res);
@@ -339,11 +320,8 @@ static int rk_spdif_probe(struct platform_device *pdev)
 
 	spdif->regmap = devm_regmap_init_mmio_clk(&pdev->dev, "hclk", regs,
 						  &rk_spdif_regmap_config);
-	if (IS_ERR(spdif->regmap)) {
-		dev_err(&pdev->dev,
-			"Failed to initialise managed register map\n");
+	if (IS_ERR(spdif->regmap))
 		return PTR_ERR(spdif->regmap);
-	}
 
 	spdif->playback_dma_data.addr = res->start + SPDIF_SMPDR;
 	spdif->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
@@ -352,26 +330,32 @@ static int rk_spdif_probe(struct platform_device *pdev)
 	spdif->dev = &pdev->dev;
 	dev_set_drvdata(&pdev->dev, spdif);
 
-	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
-	pm_request_idle(&pdev->dev);
+	if (!pm_runtime_enabled(&pdev->dev)) {
+		ret = rk_spdif_runtime_resume(&pdev->dev);
+		if (ret)
+			goto err_pm_runtime;
+	}
 
 	ret = devm_snd_soc_register_component(&pdev->dev,
 					      &rk_spdif_component,
 					      &rk_spdif_dai, 1);
 	if (ret) {
 		dev_err(&pdev->dev, "Could not register DAI\n");
-		goto err_pm_runtime;
+		goto err_pm_suspend;
 	}
 
 	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (ret) {
 		dev_err(&pdev->dev, "Could not register PCM\n");
-		goto err_pm_runtime;
+		goto err_pm_suspend;
 	}
 
 	return 0;
 
+err_pm_suspend:
+	if (!pm_runtime_status_suspended(&pdev->dev))
+		rk_spdif_runtime_suspend(&pdev->dev);
 err_pm_runtime:
 	pm_runtime_disable(&pdev->dev);
 
@@ -380,14 +364,9 @@ err_pm_runtime:
 
 static int rk_spdif_remove(struct platform_device *pdev)
 {
-	struct rk_spdif_dev *spdif = dev_get_drvdata(&pdev->dev);
-
 	pm_runtime_disable(&pdev->dev);
 	if (!pm_runtime_status_suspended(&pdev->dev))
 		rk_spdif_runtime_suspend(&pdev->dev);
-
-	clk_disable_unprepare(spdif->mclk);
-	clk_disable_unprepare(spdif->hclk);
 
 	return 0;
 }

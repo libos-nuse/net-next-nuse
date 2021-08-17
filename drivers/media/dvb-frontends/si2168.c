@@ -1,22 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Silicon Labs Si2168 DVB-T/T2/C demodulator driver
  *
  * Copyright (C) 2014 Antti Palosaari <crope@iki.fi>
- *
- *    This program is free software; you can redistribute it and/or modify
- *    it under the terms of the GNU General Public License as published by
- *    the Free Software Foundation; either version 2 of the License, or
- *    (at your option) any later version.
- *
- *    This program is distributed in the hope that it will be useful,
- *    but WITHOUT ANY WARRANTY; without even the implied warranty of
- *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *    GNU General Public License for more details.
  */
+
+#include <linux/delay.h>
 
 #include "si2168_priv.h"
 
 static const struct dvb_frontend_ops si2168_ops;
+
+static void cmd_init(struct si2168_cmd *cmd, const u8 *buf, int wlen, int rlen)
+{
+	memcpy(cmd->args, buf, wlen);
+	cmd->wlen = wlen;
+	cmd->rlen = rlen;
+}
 
 /* execute firmware command */
 static int si2168_cmd_execute(struct i2c_client *client, struct si2168_cmd *cmd)
@@ -80,12 +80,44 @@ err_mutex_unlock:
 	return ret;
 }
 
+static int si2168_ts_bus_ctrl(struct dvb_frontend *fe, int acquire)
+{
+	struct i2c_client *client = fe->demodulator_priv;
+	struct si2168_dev *dev = i2c_get_clientdata(client);
+	struct si2168_cmd cmd;
+	int ret = 0;
+
+	dev_dbg(&client->dev, "%s acquire: %d\n", __func__, acquire);
+
+	/* set manual value */
+	if (dev->ts_mode & SI2168_TS_CLK_MANUAL) {
+		cmd_init(&cmd, "\x14\x00\x0d\x10\xe8\x03", 6, 4);
+		ret = si2168_cmd_execute(client, &cmd);
+		if (ret)
+			return ret;
+	}
+	/* set TS_MODE property */
+	cmd_init(&cmd, "\x14\x00\x01\x10\x10\x00", 6, 4);
+	if (dev->ts_mode & SI2168_TS_CLK_MANUAL)
+		cmd.args[4] = SI2168_TS_CLK_MANUAL;
+	if (acquire)
+		cmd.args[4] |= dev->ts_mode;
+	else
+		cmd.args[4] |= SI2168_TS_TRISTATE;
+	if (dev->ts_clock_gapped)
+		cmd.args[4] |= 0x40;
+	ret = si2168_cmd_execute(client, &cmd);
+
+	return ret;
+}
+
 static int si2168_read_status(struct dvb_frontend *fe, enum fe_status *status)
 {
 	struct i2c_client *client = fe->demodulator_priv;
 	struct si2168_dev *dev = i2c_get_clientdata(client);
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
-	int ret;
+	int ret, i;
+	unsigned int utmp, utmp1, utmp2;
 	struct si2168_cmd cmd;
 
 	*status = 0;
@@ -97,19 +129,13 @@ static int si2168_read_status(struct dvb_frontend *fe, enum fe_status *status)
 
 	switch (c->delivery_system) {
 	case SYS_DVBT:
-		memcpy(cmd.args, "\xa0\x01", 2);
-		cmd.wlen = 2;
-		cmd.rlen = 13;
+		cmd_init(&cmd, "\xa0\x01", 2, 13);
 		break;
 	case SYS_DVBC_ANNEX_A:
-		memcpy(cmd.args, "\x90\x01", 2);
-		cmd.wlen = 2;
-		cmd.rlen = 9;
+		cmd_init(&cmd, "\x90\x01", 2, 9);
 		break;
 	case SYS_DVBT2:
-		memcpy(cmd.args, "\x50\x01", 2);
-		cmd.wlen = 2;
-		cmd.rlen = 14;
+		cmd_init(&cmd, "\x50\x01", 2, 14);
 		break;
 	default:
 		ret = -EINVAL;
@@ -143,6 +169,57 @@ static int si2168_read_status(struct dvb_frontend *fe, enum fe_status *status)
 
 	dev_dbg(&client->dev, "status=%02x args=%*ph\n",
 			*status, cmd.rlen, cmd.args);
+
+	/* BER */
+	if (*status & FE_HAS_VITERBI) {
+		cmd_init(&cmd, "\x82\x00", 2, 3);
+		ret = si2168_cmd_execute(client, &cmd);
+		if (ret)
+			goto err;
+
+		/*
+		 * Firmware returns [0, 255] mantissa and [0, 8] exponent.
+		 * Convert to DVB API: mantissa * 10^(8 - exponent) / 10^8
+		 */
+		utmp = clamp(8 - cmd.args[1], 0, 8);
+		for (i = 0, utmp1 = 1; i < utmp; i++)
+			utmp1 = utmp1 * 10;
+
+		utmp1 = cmd.args[2] * utmp1;
+		utmp2 = 100000000; /* 10^8 */
+
+		dev_dbg(&client->dev,
+			"post_bit_error=%u post_bit_count=%u ber=%u*10^-%u\n",
+			utmp1, utmp2, cmd.args[2], cmd.args[1]);
+
+		c->post_bit_error.stat[0].scale = FE_SCALE_COUNTER;
+		c->post_bit_error.stat[0].uvalue += utmp1;
+		c->post_bit_count.stat[0].scale = FE_SCALE_COUNTER;
+		c->post_bit_count.stat[0].uvalue += utmp2;
+	} else {
+		c->post_bit_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+		c->post_bit_count.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+	}
+
+	/* UCB */
+	if (*status & FE_HAS_SYNC) {
+		cmd_init(&cmd, "\x84\x01", 2, 3);
+		ret = si2168_cmd_execute(client, &cmd);
+		if (ret)
+			goto err;
+
+		utmp1 = cmd.args[2] << 8 | cmd.args[1] << 0;
+		dev_dbg(&client->dev, "block_error=%u\n", utmp1);
+
+		/* Sometimes firmware returns bogus value */
+		if (utmp1 == 0xffff)
+			utmp1 = 0;
+
+		c->block_error.stat[0].scale = FE_SCALE_COUNTER;
+		c->block_error.stat[0].uvalue += utmp1;
+	} else {
+		c->block_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+	}
 
 	return 0;
 err:
@@ -212,22 +289,18 @@ static int si2168_set_frontend(struct dvb_frontend *fe)
 			goto err;
 	}
 
-	memcpy(cmd.args, "\x88\x02\x02\x02\x02", 5);
-	cmd.wlen = 5;
-	cmd.rlen = 5;
+	cmd_init(&cmd, "\x88\x02\x02\x02\x02", 5, 5);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
 	/* that has no big effect */
 	if (c->delivery_system == SYS_DVBT)
-		memcpy(cmd.args, "\x89\x21\x06\x11\xff\x98", 6);
+		cmd_init(&cmd, "\x89\x21\x06\x11\xff\x98", 6, 3);
 	else if (c->delivery_system == SYS_DVBC_ANNEX_A)
-		memcpy(cmd.args, "\x89\x21\x06\x11\x89\xf0", 6);
+		cmd_init(&cmd, "\x89\x21\x06\x11\x89\xf0", 6, 3);
 	else if (c->delivery_system == SYS_DVBT2)
-		memcpy(cmd.args, "\x89\x21\x06\x11\x89\x20", 6);
-	cmd.wlen = 6;
-	cmd.rlen = 3;
+		cmd_init(&cmd, "\x89\x21\x06\x11\x89\x20", 6, 3);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
@@ -244,106 +317,87 @@ static int si2168_set_frontend(struct dvb_frontend *fe)
 			goto err;
 	}
 
-	memcpy(cmd.args, "\x51\x03", 2);
-	cmd.wlen = 2;
-	cmd.rlen = 12;
+	cmd_init(&cmd, "\x51\x03", 2, 12);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x12\x08\x04", 3);
-	cmd.wlen = 3;
-	cmd.rlen = 3;
+	cmd_init(&cmd, "\x12\x08\x04", 3, 3);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x14\x00\x0c\x10\x12\x00", 6);
-	cmd.wlen = 6;
-	cmd.rlen = 4;
+	cmd_init(&cmd, "\x14\x00\x0c\x10\x12\x00", 6, 4);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x14\x00\x06\x10\x24\x00", 6);
-	cmd.wlen = 6;
-	cmd.rlen = 4;
+	cmd_init(&cmd, "\x14\x00\x06\x10\x24\x00", 6, 4);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x14\x00\x07\x10\x00\x24", 6);
-	cmd.wlen = 6;
-	cmd.rlen = 4;
+	cmd_init(&cmd, "\x14\x00\x07\x10\x00\x24", 6, 4);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x14\x00\x0a\x10\x00\x00", 6);
+	cmd_init(&cmd, "\x14\x00\x0a\x10\x00\x00", 6, 4);
 	cmd.args[4] = delivery_system | bandwidth;
-	cmd.wlen = 6;
-	cmd.rlen = 4;
+	if (dev->spectral_inversion)
+		cmd.args[5] |= 1;
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
 	/* set DVB-C symbol rate */
 	if (c->delivery_system == SYS_DVBC_ANNEX_A) {
-		memcpy(cmd.args, "\x14\x00\x02\x11", 4);
+		cmd_init(&cmd, "\x14\x00\x02\x11\x00\x00", 6, 4);
 		cmd.args[4] = ((c->symbol_rate / 1000) >> 0) & 0xff;
 		cmd.args[5] = ((c->symbol_rate / 1000) >> 8) & 0xff;
-		cmd.wlen = 6;
-		cmd.rlen = 4;
 		ret = si2168_cmd_execute(client, &cmd);
 		if (ret)
 			goto err;
 	}
 
-	memcpy(cmd.args, "\x14\x00\x0f\x10\x10\x00", 6);
-	cmd.wlen = 6;
-	cmd.rlen = 4;
+	cmd_init(&cmd, "\x14\x00\x0f\x10\x10\x00", 6, 4);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x14\x00\x09\x10\xe3\x08", 6);
+	cmd_init(&cmd, "\x14\x00\x09\x10\xe3\x08", 6, 4);
 	cmd.args[5] |= dev->ts_clock_inv ? 0x00 : 0x10;
-	cmd.wlen = 6;
-	cmd.rlen = 4;
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x14\x00\x08\x10\xd7\x05", 6);
+	cmd_init(&cmd, "\x14\x00\x08\x10\xd7\x05", 6, 4);
 	cmd.args[5] |= dev->ts_clock_inv ? 0x00 : 0x10;
-	cmd.wlen = 6;
-	cmd.rlen = 4;
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x14\x00\x01\x12\x00\x00", 6);
-	cmd.wlen = 6;
-	cmd.rlen = 4;
+	cmd_init(&cmd, "\x14\x00\x01\x12\x00\x00", 6, 4);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x14\x00\x01\x03\x0c\x00", 6);
-	cmd.wlen = 6;
-	cmd.rlen = 4;
+	cmd_init(&cmd, "\x14\x00\x01\x03\x0c\x00", 6, 4);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	memcpy(cmd.args, "\x85", 1);
-	cmd.wlen = 1;
-	cmd.rlen = 1;
+	cmd_init(&cmd, "\x85", 1, 1);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
 	dev->delivery_system = c->delivery_system;
+
+	/* enable ts bus */
+	ret = si2168_ts_bus_ctrl(fe, 1);
+	if (ret)
+		goto err;
 
 	return 0;
 err:
@@ -355,34 +409,29 @@ static int si2168_init(struct dvb_frontend *fe)
 {
 	struct i2c_client *client = fe->demodulator_priv;
 	struct si2168_dev *dev = i2c_get_clientdata(client);
+	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	int ret, len, remaining;
 	const struct firmware *fw;
-	const char *fw_name;
 	struct si2168_cmd cmd;
-	unsigned int chip_id;
 
 	dev_dbg(&client->dev, "\n");
 
 	/* initialize */
-	memcpy(cmd.args, "\xc0\x12\x00\x0c\x00\x0d\x16\x00\x00\x00\x00\x00\x00", 13);
-	cmd.wlen = 13;
-	cmd.rlen = 0;
+	cmd_init(&cmd, "\xc0\x12\x00\x0c\x00\x0d\x16\x00\x00\x00\x00\x00\x00",
+		 13, 0);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	if (dev->fw_loaded) {
+	if (dev->warm) {
 		/* resume */
-		memcpy(cmd.args, "\xc0\x06\x08\x0f\x00\x20\x21\x01", 8);
-		cmd.wlen = 8;
-		cmd.rlen = 1;
+		cmd_init(&cmd, "\xc0\x06\x08\x0f\x00\x20\x21\x01", 8, 1);
 		ret = si2168_cmd_execute(client, &cmd);
 		if (ret)
 			goto err;
 
-		memcpy(cmd.args, "\x85", 1);
-		cmd.wlen = 1;
-		cmd.rlen = 1;
+		udelay(100);
+		cmd_init(&cmd, "\x85", 1, 1);
 		ret = si2168_cmd_execute(client, &cmd);
 		if (ret)
 			goto err;
@@ -391,56 +440,19 @@ static int si2168_init(struct dvb_frontend *fe)
 	}
 
 	/* power up */
-	memcpy(cmd.args, "\xc0\x06\x01\x0f\x00\x20\x20\x01", 8);
-	cmd.wlen = 8;
-	cmd.rlen = 1;
+	cmd_init(&cmd, "\xc0\x06\x01\x0f\x00\x20\x20\x01", 8, 1);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
-
-	/* query chip revision */
-	memcpy(cmd.args, "\x02", 1);
-	cmd.wlen = 1;
-	cmd.rlen = 13;
-	ret = si2168_cmd_execute(client, &cmd);
-	if (ret)
-		goto err;
-
-	chip_id = cmd.args[1] << 24 | cmd.args[2] << 16 | cmd.args[3] << 8 |
-			cmd.args[4] << 0;
-
-	#define SI2168_A20 ('A' << 24 | 68 << 16 | '2' << 8 | '0' << 0)
-	#define SI2168_A30 ('A' << 24 | 68 << 16 | '3' << 8 | '0' << 0)
-	#define SI2168_B40 ('B' << 24 | 68 << 16 | '4' << 8 | '0' << 0)
-
-	switch (chip_id) {
-	case SI2168_A20:
-		fw_name = SI2168_A20_FIRMWARE;
-		break;
-	case SI2168_A30:
-		fw_name = SI2168_A30_FIRMWARE;
-		break;
-	case SI2168_B40:
-		fw_name = SI2168_B40_FIRMWARE;
-		break;
-	default:
-		dev_err(&client->dev, "unknown chip version Si21%d-%c%c%c\n",
-				cmd.args[2], cmd.args[1],
-				cmd.args[3], cmd.args[4]);
-		ret = -EINVAL;
-		goto err;
-	}
-
-	dev_info(&client->dev, "found a 'Silicon Labs Si21%d-%c%c%c'\n",
-			cmd.args[2], cmd.args[1], cmd.args[3], cmd.args[4]);
 
 	/* request the firmware, this will block and timeout */
-	ret = request_firmware(&fw, fw_name, &client->dev);
+	ret = request_firmware(&fw, dev->firmware_name, &client->dev);
 	if (ret) {
 		/* fallback mechanism to handle old name for Si2168 B40 fw */
-		if (chip_id == SI2168_B40) {
-			fw_name = SI2168_B40_FIRMWARE_FALLBACK;
-			ret = request_firmware(&fw, fw_name, &client->dev);
+		if (dev->chip_id == SI2168_CHIP_ID_B40) {
+			dev->firmware_name = SI2168_B40_FIRMWARE_FALLBACK;
+			ret = request_firmware(&fw, dev->firmware_name,
+					       &client->dev);
 		}
 
 		if (ret == 0) {
@@ -450,13 +462,13 @@ static int si2168_init(struct dvb_frontend *fe)
 		} else {
 			dev_err(&client->dev,
 					"firmware file '%s' not found\n",
-					fw_name);
+					dev->firmware_name);
 			goto err_release_firmware;
 		}
 	}
 
 	dev_info(&client->dev, "downloading firmware from file '%s'\n",
-			fw_name);
+			dev->firmware_name);
 
 	if ((fw->size % 17 == 0) && (fw->data[0] > 5)) {
 		/* firmware is in the new format */
@@ -466,9 +478,8 @@ static int si2168_init(struct dvb_frontend *fe)
 				ret = -EINVAL;
 				break;
 			}
-			memcpy(cmd.args, &fw->data[(fw->size - remaining) + 1], len);
-			cmd.wlen = len;
-			cmd.rlen = 1;
+			cmd_init(&cmd, &fw->data[(fw->size - remaining) + 1],
+				 len, 1);
 			ret = si2168_cmd_execute(client, &cmd);
 			if (ret)
 				break;
@@ -476,10 +487,7 @@ static int si2168_init(struct dvb_frontend *fe)
 	} else if (fw->size % 8 == 0) {
 		/* firmware is in the old format */
 		for (remaining = fw->size; remaining > 0; remaining -= 8) {
-			len = 8;
-			memcpy(cmd.args, &fw->data[fw->size - remaining], len);
-			cmd.wlen = len;
-			cmd.rlen = 1;
+			cmd_init(&cmd, &fw->data[fw->size - remaining], 8, 1);
 			ret = si2168_cmd_execute(client, &cmd);
 			if (ret)
 				break;
@@ -496,41 +504,43 @@ static int si2168_init(struct dvb_frontend *fe)
 
 	release_firmware(fw);
 
-	memcpy(cmd.args, "\x01\x01", 2);
-	cmd.wlen = 2;
-	cmd.rlen = 1;
+	cmd_init(&cmd, "\x01\x01", 2, 1);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
 	/* query firmware version */
-	memcpy(cmd.args, "\x11", 1);
-	cmd.wlen = 1;
-	cmd.rlen = 10;
+	cmd_init(&cmd, "\x11", 1, 10);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
 
-	dev_info(&client->dev, "firmware version: %c.%c.%d\n",
-			cmd.args[6], cmd.args[7], cmd.args[8]);
+	dev->version = (cmd.args[9] + '@') << 24 | (cmd.args[6] - '0') << 16 |
+		       (cmd.args[7] - '0') << 8 | (cmd.args[8]) << 0;
+	dev_info(&client->dev, "firmware version: %c %d.%d.%d\n",
+		 dev->version >> 24 & 0xff, dev->version >> 16 & 0xff,
+		 dev->version >> 8 & 0xff, dev->version >> 0 & 0xff);
 
 	/* set ts mode */
-	memcpy(cmd.args, "\x14\x00\x01\x10\x10\x00", 6);
-	cmd.args[4] |= dev->ts_mode;
-	if (dev->ts_clock_gapped)
-		cmd.args[4] |= 0x40;
-	cmd.wlen = 6;
-	cmd.rlen = 4;
-	ret = si2168_cmd_execute(client, &cmd);
+	ret = si2168_ts_bus_ctrl(fe, 1);
 	if (ret)
 		goto err;
 
-	dev->fw_loaded = true;
+	dev->warm = true;
 warm:
+	/* Init stats here to indicate which stats are supported */
+	c->cnr.len = 1;
+	c->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+	c->post_bit_error.len = 1;
+	c->post_bit_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+	c->post_bit_count.len = 1;
+	c->post_bit_count.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+	c->block_error.len = 1;
+	c->block_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+
 	dev->active = true;
 
 	return 0;
-
 err_release_firmware:
 	release_firmware(fw);
 err:
@@ -549,9 +559,16 @@ static int si2168_sleep(struct dvb_frontend *fe)
 
 	dev->active = false;
 
-	memcpy(cmd.args, "\x13", 1);
-	cmd.wlen = 1;
-	cmd.rlen = 0;
+	/* tri-state data bus */
+	ret = si2168_ts_bus_ctrl(fe, 0);
+	if (ret)
+		goto err;
+
+	/* Firmware later than B 4.0-11 loses warm state during sleep */
+	if (dev->version > ('B' << 24 | 4 << 16 | 0 << 8 | 11 << 0))
+		dev->warm = false;
+
+	cmd_init(&cmd, "\x13", 1, 0);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
@@ -577,9 +594,7 @@ static int si2168_select(struct i2c_mux_core *muxc, u32 chan)
 	struct si2168_cmd cmd;
 
 	/* open I2C gate */
-	memcpy(cmd.args, "\xc0\x0d\x01", 3);
-	cmd.wlen = 3;
-	cmd.rlen = 0;
+	cmd_init(&cmd, "\xc0\x0d\x01", 3, 0);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
@@ -597,9 +612,7 @@ static int si2168_deselect(struct i2c_mux_core *muxc, u32 chan)
 	struct si2168_cmd cmd;
 
 	/* close I2C gate */
-	memcpy(cmd.args, "\xc0\x0d\x00", 3);
-	cmd.wlen = 3;
-	cmd.rlen = 0;
+	cmd_init(&cmd, "\xc0\x0d\x00", 3, 0);
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;
@@ -614,8 +627,11 @@ static const struct dvb_frontend_ops si2168_ops = {
 	.delsys = {SYS_DVBT, SYS_DVBT2, SYS_DVBC_ANNEX_A},
 	.info = {
 		.name = "Silicon Labs Si2168",
-		.symbol_rate_min = 1000000,
-		.symbol_rate_max = 7200000,
+		.frequency_min_hz      =  48 * MHz,
+		.frequency_max_hz      = 870 * MHz,
+		.frequency_stepsize_hz = 62500,
+		.symbol_rate_min       = 1000000,
+		.symbol_rate_max       = 7200000,
 		.caps =	FE_CAN_FEC_1_2 |
 			FE_CAN_FEC_2_3 |
 			FE_CAN_FEC_3_4 |
@@ -653,17 +669,63 @@ static int si2168_probe(struct i2c_client *client,
 	struct si2168_config *config = client->dev.platform_data;
 	struct si2168_dev *dev;
 	int ret;
+	struct si2168_cmd cmd;
 
 	dev_dbg(&client->dev, "\n");
 
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev) {
 		ret = -ENOMEM;
-		dev_err(&client->dev, "kzalloc() failed\n");
 		goto err;
 	}
 
+	i2c_set_clientdata(client, dev);
 	mutex_init(&dev->i2c_mutex);
+
+	/* Initialize */
+	cmd_init(&cmd, "\xc0\x12\x00\x0c\x00\x0d\x16\x00\x00\x00\x00\x00\x00",
+		 13, 0);
+	ret = si2168_cmd_execute(client, &cmd);
+	if (ret)
+		goto err_kfree;
+
+	/* Power up */
+	cmd_init(&cmd, "\xc0\x06\x01\x0f\x00\x20\x20\x01", 8, 1);
+	ret = si2168_cmd_execute(client, &cmd);
+	if (ret)
+		goto err_kfree;
+
+	/* Query chip revision */
+	cmd_init(&cmd, "\x02", 1, 13);
+	ret = si2168_cmd_execute(client, &cmd);
+	if (ret)
+		goto err_kfree;
+
+	dev->chip_id = cmd.args[1] << 24 | cmd.args[2] << 16 |
+		       cmd.args[3] << 8 | cmd.args[4] << 0;
+
+	switch (dev->chip_id) {
+	case SI2168_CHIP_ID_A20:
+		dev->firmware_name = SI2168_A20_FIRMWARE;
+		break;
+	case SI2168_CHIP_ID_A30:
+		dev->firmware_name = SI2168_A30_FIRMWARE;
+		break;
+	case SI2168_CHIP_ID_B40:
+		dev->firmware_name = SI2168_B40_FIRMWARE;
+		break;
+	case SI2168_CHIP_ID_D60:
+		dev->firmware_name = SI2168_D60_FIRMWARE;
+		break;
+	default:
+		dev_dbg(&client->dev, "unknown chip version Si21%d-%c%c%c\n",
+			cmd.args[2], cmd.args[1], cmd.args[3], cmd.args[4]);
+		ret = -ENODEV;
+		goto err_kfree;
+	}
+
+	dev->version = (cmd.args[1]) << 24 | (cmd.args[3] - '0') << 16 |
+		       (cmd.args[4] - '0') << 8 | (cmd.args[5]) << 0;
 
 	/* create mux i2c adapter for tuner */
 	dev->muxc = i2c_mux_alloc(client->adapter, &client->dev,
@@ -686,16 +748,20 @@ static int si2168_probe(struct i2c_client *client,
 	dev->ts_mode = config->ts_mode;
 	dev->ts_clock_inv = config->ts_clock_inv;
 	dev->ts_clock_gapped = config->ts_clock_gapped;
-	dev->fw_loaded = false;
+	dev->spectral_inversion = config->spectral_inversion;
 
-	i2c_set_clientdata(client, dev);
+	dev_info(&client->dev, "Silicon Labs Si2168-%c%d%d successfully identified\n",
+		 dev->version >> 24 & 0xff, dev->version >> 16 & 0xff,
+		 dev->version >> 8 & 0xff);
+	dev_info(&client->dev, "firmware version: %c %d.%d.%d\n",
+		 dev->version >> 24 & 0xff, dev->version >> 16 & 0xff,
+		 dev->version >> 8 & 0xff, dev->version >> 0 & 0xff);
 
-	dev_info(&client->dev, "Silicon Labs Si2168 successfully attached\n");
 	return 0;
 err_kfree:
 	kfree(dev);
 err:
-	dev_dbg(&client->dev, "failed=%d\n", ret);
+	dev_warn(&client->dev, "probe failed = %d\n", ret);
 	return ret;
 }
 
@@ -723,7 +789,8 @@ MODULE_DEVICE_TABLE(i2c, si2168_id_table);
 
 static struct i2c_driver si2168_driver = {
 	.driver = {
-		.name	= "si2168",
+		.name                = "si2168",
+		.suppress_bind_attrs = true,
 	},
 	.probe		= si2168_probe,
 	.remove		= si2168_remove,
@@ -738,3 +805,4 @@ MODULE_LICENSE("GPL");
 MODULE_FIRMWARE(SI2168_A20_FIRMWARE);
 MODULE_FIRMWARE(SI2168_A30_FIRMWARE);
 MODULE_FIRMWARE(SI2168_B40_FIRMWARE);
+MODULE_FIRMWARE(SI2168_D60_FIRMWARE);

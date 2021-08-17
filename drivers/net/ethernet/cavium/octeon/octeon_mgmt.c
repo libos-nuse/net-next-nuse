@@ -28,7 +28,6 @@
 #include <asm/octeon/cvmx-agl-defs.h>
 
 #define DRV_NAME "octeon_mgmt"
-#define DRV_VERSION "2.0"
 #define DRV_DESCRIPTION \
 	"Cavium Networks Octeon MII (management) port Network Driver"
 
@@ -146,7 +145,6 @@ struct octeon_mgmt {
 	struct device *dev;
 	struct napi_struct napi;
 	struct tasklet_struct tx_clean_tasklet;
-	struct phy_device *phydev;
 	struct device_node *phy_np;
 	resource_size_t mix_phys;
 	resource_size_t mix_size;
@@ -236,6 +234,11 @@ static void octeon_mgmt_rx_fill_ring(struct net_device *netdev)
 
 		/* Put it in the ring.  */
 		p->rx_ring[p->rx_next_fill] = re.d64;
+		/* Make sure there is no reorder of filling the ring and ringing
+		 * the bell
+		 */
+		wmb();
+
 		dma_sync_single_for_device(p->dev, p->rx_ring_handle,
 					   ring_size_to_bytes(OCTEON_MGMT_RX_RING_SIZE),
 					   DMA_BIDIRECTIONAL);
@@ -312,9 +315,9 @@ static void octeon_mgmt_clean_tx_buffers(struct octeon_mgmt *p)
 		netif_wake_queue(p->netdev);
 }
 
-static void octeon_mgmt_clean_tx_tasklet(unsigned long arg)
+static void octeon_mgmt_clean_tx_tasklet(struct tasklet_struct *t)
 {
-	struct octeon_mgmt *p = (struct octeon_mgmt *)arg;
+	struct octeon_mgmt *p = from_tasklet(p, t, tx_clean_tasklet);
 	octeon_mgmt_clean_tx_buffers(p);
 	octeon_mgmt_enable_tx_irq(p);
 }
@@ -502,7 +505,7 @@ static int octeon_mgmt_napi_poll(struct napi_struct *napi, int budget)
 
 	if (work_done < budget) {
 		/* We stopped because no more packets were available. */
-		napi_complete(napi);
+		napi_complete_done(napi, work_done);
 		octeon_mgmt_enable_rx_irq(p);
 	}
 	octeon_mgmt_update_rx_stats(netdev);
@@ -644,23 +647,21 @@ static int octeon_mgmt_set_mac_address(struct net_device *netdev, void *addr)
 static int octeon_mgmt_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct octeon_mgmt *p = netdev_priv(netdev);
-	int size_without_fcs = new_mtu + OCTEON_MGMT_RX_HEADROOM;
-
-	/* Limit the MTU to make sure the ethernet packets are between
-	 * 64 bytes and 16383 bytes.
-	 */
-	if (size_without_fcs < 64 || size_without_fcs > 16383) {
-		dev_warn(p->dev, "MTU must be between %d and %d.\n",
-			 64 - OCTEON_MGMT_RX_HEADROOM,
-			 16383 - OCTEON_MGMT_RX_HEADROOM);
-		return -EINVAL;
-	}
+	int max_packet = new_mtu + ETH_HLEN + ETH_FCS_LEN;
 
 	netdev->mtu = new_mtu;
 
-	cvmx_write_csr(p->agl + AGL_GMX_RX_FRM_MAX, size_without_fcs);
+	/* HW lifts the limit if the frame is VLAN tagged
+	 * (+4 bytes per each tag, up to two tags)
+	 */
+	cvmx_write_csr(p->agl + AGL_GMX_RX_FRM_MAX, max_packet);
+	/* Set the hardware to truncate packets larger than the MTU. The jabber
+	 * register must be set to a multiple of 8 bytes, so round up. JABBER is
+	 * an unconditional limit, so we need to account for two possible VLAN
+	 * tags.
+	 */
 	cvmx_write_csr(p->agl + AGL_GMX_RX_JABBER,
-		       (size_without_fcs + 7) & 0xfff8);
+		       (max_packet + 7 + VLAN_HLEN * 2) & 0xfff8);
 
 	return 0;
 }
@@ -716,14 +717,15 @@ static int octeon_mgmt_ioctl_hwtstamp(struct net_device *netdev,
 			u64 clock_comp = (NSEC_PER_SEC << 32) /	octeon_get_io_clock_rate();
 			if (!ptp.s.ptp_en)
 				cvmx_write_csr(CVMX_MIO_PTP_CLOCK_COMP, clock_comp);
-			pr_info("PTP Clock: Using sclk reference at %lld Hz\n",
-				(NSEC_PER_SEC << 32) / clock_comp);
+			netdev_info(netdev,
+				    "PTP Clock using sclk reference @ %lldHz\n",
+				    (NSEC_PER_SEC << 32) / clock_comp);
 		} else {
 			/* The clock is already programmed to use a GPIO */
 			u64 clock_comp = cvmx_read_csr(CVMX_MIO_PTP_CLOCK_COMP);
-			pr_info("PTP Clock: Using GPIO %d at %lld Hz\n",
-				ptp.s.ext_clk_in,
-				(NSEC_PER_SEC << 32) / clock_comp);
+			netdev_info(netdev,
+				    "PTP Clock using GPIO%d @ %lld Hz\n",
+				    ptp.s.ext_clk_in, (NSEC_PER_SEC << 32) / clock_comp);
 		}
 
 		/* Enable the clock if it wasn't done already */
@@ -766,6 +768,7 @@ static int octeon_mgmt_ioctl_hwtstamp(struct net_device *netdev,
 	case HWTSTAMP_FILTER_PTP_V2_EVENT:
 	case HWTSTAMP_FILTER_PTP_V2_SYNC:
 	case HWTSTAMP_FILTER_PTP_V2_DELAY_REQ:
+	case HWTSTAMP_FILTER_NTP_ALL:
 		p->has_rx_tstamp = have_hw_timestamps;
 		config.rx_filter = HWTSTAMP_FILTER_ALL;
 		if (p->has_rx_tstamp) {
@@ -787,15 +790,11 @@ static int octeon_mgmt_ioctl_hwtstamp(struct net_device *netdev,
 static int octeon_mgmt_ioctl(struct net_device *netdev,
 			     struct ifreq *rq, int cmd)
 {
-	struct octeon_mgmt *p = netdev_priv(netdev);
-
 	switch (cmd) {
 	case SIOCSHWTSTAMP:
 		return octeon_mgmt_ioctl_hwtstamp(netdev, rq, cmd);
 	default:
-		if (p->phydev)
-			return phy_mii_ioctl(p->phydev, rq, cmd);
-		return -EINVAL;
+		return phy_do_ioctl(netdev, rq, cmd);
 	}
 }
 
@@ -836,16 +835,18 @@ static void octeon_mgmt_enable_link(struct octeon_mgmt *p)
 
 static void octeon_mgmt_update_link(struct octeon_mgmt *p)
 {
+	struct net_device *ndev = p->netdev;
+	struct phy_device *phydev = ndev->phydev;
 	union cvmx_agl_gmx_prtx_cfg prtx_cfg;
 
 	prtx_cfg.u64 = cvmx_read_csr(p->agl + AGL_GMX_PRT_CFG);
 
-	if (!p->phydev->link)
+	if (!phydev->link)
 		prtx_cfg.s.duplex = 1;
 	else
-		prtx_cfg.s.duplex = p->phydev->duplex;
+		prtx_cfg.s.duplex = phydev->duplex;
 
-	switch (p->phydev->speed) {
+	switch (phydev->speed) {
 	case 10:
 		prtx_cfg.s.speed = 0;
 		prtx_cfg.s.slottime = 0;
@@ -871,7 +872,7 @@ static void octeon_mgmt_update_link(struct octeon_mgmt *p)
 			prtx_cfg.s.speed_msb = 0;
 			/* Only matters for half-duplex */
 			prtx_cfg.s.slottime = 1;
-			prtx_cfg.s.burst = p->phydev->duplex;
+			prtx_cfg.s.burst = phydev->duplex;
 		}
 		break;
 	case 0:  /* No link */
@@ -894,9 +895,9 @@ static void octeon_mgmt_update_link(struct octeon_mgmt *p)
 		/* MII (both speeds) and RGMII 1000 speed. */
 		agl_clk.s.clk_cnt = 1;
 		if (prtx_ctl.s.mode == 0) { /* RGMII mode */
-			if (p->phydev->speed == 10)
+			if (phydev->speed == 10)
 				agl_clk.s.clk_cnt = 50;
-			else if (p->phydev->speed == 100)
+			else if (phydev->speed == 100)
 				agl_clk.s.clk_cnt = 5;
 		}
 		cvmx_write_csr(p->agl + AGL_GMX_TX_CLK, agl_clk.u64);
@@ -906,49 +907,48 @@ static void octeon_mgmt_update_link(struct octeon_mgmt *p)
 static void octeon_mgmt_adjust_link(struct net_device *netdev)
 {
 	struct octeon_mgmt *p = netdev_priv(netdev);
+	struct phy_device *phydev = netdev->phydev;
 	unsigned long flags;
 	int link_changed = 0;
 
-	if (!p->phydev)
+	if (!phydev)
 		return;
 
 	spin_lock_irqsave(&p->lock, flags);
 
 
-	if (!p->phydev->link && p->last_link)
+	if (!phydev->link && p->last_link)
 		link_changed = -1;
 
-	if (p->phydev->link
-	    && (p->last_duplex != p->phydev->duplex
-		|| p->last_link != p->phydev->link
-		|| p->last_speed != p->phydev->speed)) {
+	if (phydev->link &&
+	    (p->last_duplex != phydev->duplex ||
+	     p->last_link != phydev->link ||
+	     p->last_speed != phydev->speed)) {
 		octeon_mgmt_disable_link(p);
 		link_changed = 1;
 		octeon_mgmt_update_link(p);
 		octeon_mgmt_enable_link(p);
 	}
 
-	p->last_link = p->phydev->link;
-	p->last_speed = p->phydev->speed;
-	p->last_duplex = p->phydev->duplex;
+	p->last_link = phydev->link;
+	p->last_speed = phydev->speed;
+	p->last_duplex = phydev->duplex;
 
 	spin_unlock_irqrestore(&p->lock, flags);
 
 	if (link_changed != 0) {
-		if (link_changed > 0) {
-			pr_info("%s: Link is up - %d/%s\n", netdev->name,
-				p->phydev->speed,
-				DUPLEX_FULL == p->phydev->duplex ?
-				"Full" : "Half");
-		} else {
-			pr_info("%s: Link is down\n", netdev->name);
-		}
+		if (link_changed > 0)
+			netdev_info(netdev, "Link is up - %d/%s\n",
+				    phydev->speed, phydev->duplex == DUPLEX_FULL ? "Full" : "Half");
+		else
+			netdev_info(netdev, "Link is down\n");
 	}
 }
 
 static int octeon_mgmt_init_phy(struct net_device *netdev)
 {
 	struct octeon_mgmt *p = netdev_priv(netdev);
+	struct phy_device *phydev = NULL;
 
 	if (octeon_is_simulation() || p->phy_np == NULL) {
 		/* No PHYs in the simulator. */
@@ -956,12 +956,12 @@ static int octeon_mgmt_init_phy(struct net_device *netdev)
 		return 0;
 	}
 
-	p->phydev = of_phy_connect(netdev, p->phy_np,
-				   octeon_mgmt_adjust_link, 0,
-				   PHY_INTERFACE_MODE_MII);
+	phydev = of_phy_connect(netdev, p->phy_np,
+				octeon_mgmt_adjust_link, 0,
+				PHY_INTERFACE_MODE_MII);
 
-	if (!p->phydev)
-		return -ENODEV;
+	if (!phydev)
+		return -EPROBE_DEFER;
 
 	return 0;
 }
@@ -1080,10 +1080,13 @@ static int octeon_mgmt_open(struct net_device *netdev)
 	}
 
 	/* Set the mode of the interface, RGMII/MII. */
-	if (OCTEON_IS_MODEL(OCTEON_CN6XXX) && p->phydev) {
+	if (OCTEON_IS_MODEL(OCTEON_CN6XXX) && netdev->phydev) {
 		union cvmx_agl_prtx_ctl agl_prtx_ctl;
-		int rgmii_mode = (p->phydev->supported &
-				  (SUPPORTED_1000baseT_Half | SUPPORTED_1000baseT_Full)) != 0;
+		int rgmii_mode =
+			(linkmode_test_bit(ETHTOOL_LINK_MODE_1000baseT_Half_BIT,
+					   netdev->phydev->supported) |
+			 linkmode_test_bit(ETHTOOL_LINK_MODE_1000baseT_Full_BIT,
+					   netdev->phydev->supported)) != 0;
 
 		agl_prtx_ctl.u64 = cvmx_read_csr(p->agl_prt_ctl);
 		agl_prtx_ctl.s.mode = rgmii_mode ? 0 : 1;
@@ -1205,7 +1208,7 @@ static int octeon_mgmt_open(struct net_device *netdev)
 
 	/* Configure the port duplex, speed and enables */
 	octeon_mgmt_disable_link(p);
-	if (p->phydev)
+	if (netdev->phydev)
 		octeon_mgmt_update_link(p);
 	octeon_mgmt_enable_link(p);
 
@@ -1214,9 +1217,9 @@ static int octeon_mgmt_open(struct net_device *netdev)
 	/* PHY is not present in simulator. The carrier is enabled
 	 * while initializing the phy for simulator, leave it enabled.
 	 */
-	if (p->phydev) {
+	if (netdev->phydev) {
 		netif_carrier_off(netdev);
-		phy_start_aneg(p->phydev);
+		phy_start(netdev->phydev);
 	}
 
 	netif_wake_queue(netdev);
@@ -1244,9 +1247,10 @@ static int octeon_mgmt_stop(struct net_device *netdev)
 	napi_disable(&p->napi);
 	netif_stop_queue(netdev);
 
-	if (p->phydev)
-		phy_disconnect(p->phydev);
-	p->phydev = NULL;
+	if (netdev->phydev) {
+		phy_stop(netdev->phydev);
+		phy_disconnect(netdev->phydev);
+	}
 
 	netif_carrier_off(netdev);
 
@@ -1271,12 +1275,13 @@ static int octeon_mgmt_stop(struct net_device *netdev)
 	return 0;
 }
 
-static int octeon_mgmt_xmit(struct sk_buff *skb, struct net_device *netdev)
+static netdev_tx_t
+octeon_mgmt_xmit(struct sk_buff *skb, struct net_device *netdev)
 {
 	struct octeon_mgmt *p = netdev_priv(netdev);
 	union mgmt_port_ring_entry re;
 	unsigned long flags;
-	int rv = NETDEV_TX_BUSY;
+	netdev_tx_t rv = NETDEV_TX_BUSY;
 
 	re.d64 = 0;
 	re.s.tstamp = ((skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) != 0);
@@ -1341,55 +1346,25 @@ static void octeon_mgmt_get_drvinfo(struct net_device *netdev,
 				    struct ethtool_drvinfo *info)
 {
 	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
-	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
-	strlcpy(info->fw_version, "N/A", sizeof(info->fw_version));
-	strlcpy(info->bus_info, "N/A", sizeof(info->bus_info));
-}
-
-static int octeon_mgmt_get_settings(struct net_device *netdev,
-				    struct ethtool_cmd *cmd)
-{
-	struct octeon_mgmt *p = netdev_priv(netdev);
-
-	if (p->phydev)
-		return phy_ethtool_gset(p->phydev, cmd);
-
-	return -EOPNOTSUPP;
-}
-
-static int octeon_mgmt_set_settings(struct net_device *netdev,
-				    struct ethtool_cmd *cmd)
-{
-	struct octeon_mgmt *p = netdev_priv(netdev);
-
-	if (!capable(CAP_NET_ADMIN))
-		return -EPERM;
-
-	if (p->phydev)
-		return phy_ethtool_sset(p->phydev, cmd);
-
-	return -EOPNOTSUPP;
 }
 
 static int octeon_mgmt_nway_reset(struct net_device *dev)
 {
-	struct octeon_mgmt *p = netdev_priv(dev);
-
 	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
-	if (p->phydev)
-		return phy_start_aneg(p->phydev);
+	if (dev->phydev)
+		return phy_start_aneg(dev->phydev);
 
 	return -EOPNOTSUPP;
 }
 
 static const struct ethtool_ops octeon_mgmt_ethtool_ops = {
 	.get_drvinfo = octeon_mgmt_get_drvinfo,
-	.get_settings = octeon_mgmt_get_settings,
-	.set_settings = octeon_mgmt_set_settings,
 	.nway_reset = octeon_mgmt_nway_reset,
 	.get_link = ethtool_op_get_link,
+	.get_link_ksettings = phy_ethtool_get_link_ksettings,
+	.set_link_ksettings = phy_ethtool_set_link_ksettings,
 };
 
 static const struct net_device_ops octeon_mgmt_ops = {
@@ -1506,22 +1481,31 @@ static int octeon_mgmt_probe(struct platform_device *pdev)
 	p->agl = (u64)devm_ioremap(&pdev->dev, p->agl_phys, p->agl_size);
 	p->agl_prt_ctl = (u64)devm_ioremap(&pdev->dev, p->agl_prt_ctl_phys,
 					   p->agl_prt_ctl_size);
+	if (!p->mix || !p->agl || !p->agl_prt_ctl) {
+		dev_err(&pdev->dev, "failed to map I/O memory\n");
+		result = -ENOMEM;
+		goto err;
+	}
+
 	spin_lock_init(&p->lock);
 
 	skb_queue_head_init(&p->tx_list);
 	skb_queue_head_init(&p->rx_list);
-	tasklet_init(&p->tx_clean_tasklet,
-		     octeon_mgmt_clean_tx_tasklet, (unsigned long)p);
+	tasklet_setup(&p->tx_clean_tasklet,
+		      octeon_mgmt_clean_tx_tasklet);
 
 	netdev->priv_flags |= IFF_UNICAST_FLT;
 
 	netdev->netdev_ops = &octeon_mgmt_ops;
 	netdev->ethtool_ops = &octeon_mgmt_ethtool_ops;
 
+	netdev->min_mtu = 64 - OCTEON_MGMT_RX_HEADROOM;
+	netdev->max_mtu = 16383 - OCTEON_MGMT_RX_HEADROOM - VLAN_HLEN;
+
 	mac = of_get_mac_address(pdev->dev.of_node);
 
-	if (mac)
-		memcpy(netdev->dev_addr, mac, ETH_ALEN);
+	if (!IS_ERR(mac))
+		ether_addr_copy(netdev->dev_addr, mac);
 	else
 		eth_hw_addr_random(netdev);
 
@@ -1536,10 +1520,10 @@ static int octeon_mgmt_probe(struct platform_device *pdev)
 	if (result)
 		goto err;
 
-	dev_info(&pdev->dev, "Version " DRV_VERSION "\n");
 	return 0;
 
 err:
+	of_node_put(p->phy_np);
 	free_netdev(netdev);
 	return result;
 }
@@ -1547,8 +1531,10 @@ err:
 static int octeon_mgmt_remove(struct platform_device *pdev)
 {
 	struct net_device *netdev = platform_get_drvdata(pdev);
+	struct octeon_mgmt *p = netdev_priv(netdev);
 
 	unregister_netdev(netdev);
+	of_node_put(p->phy_np);
 	free_netdev(netdev);
 	return 0;
 }
@@ -1570,12 +1556,8 @@ static struct platform_driver octeon_mgmt_driver = {
 	.remove		= octeon_mgmt_remove,
 };
 
-extern void octeon_mdiobus_force_mod_depencency(void);
-
 static int __init octeon_mgmt_mod_init(void)
 {
-	/* Force our mdiobus driver module to be loaded first. */
-	octeon_mdiobus_force_mod_depencency();
 	return platform_driver_register(&octeon_mgmt_driver);
 }
 
@@ -1587,7 +1569,7 @@ static void __exit octeon_mgmt_mod_exit(void)
 module_init(octeon_mgmt_mod_init);
 module_exit(octeon_mgmt_mod_exit);
 
+MODULE_SOFTDEP("pre: mdio-cavium");
 MODULE_DESCRIPTION(DRV_DESCRIPTION);
 MODULE_AUTHOR("David Daney");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(DRV_VERSION);

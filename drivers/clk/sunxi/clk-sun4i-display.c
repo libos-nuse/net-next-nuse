@@ -1,20 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2015 Maxime Ripard
  *
  * Maxime Ripard <maxime.ripard@free-electrons.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/of_address.h>
 #include <linux/reset-controller.h>
@@ -33,6 +25,8 @@ struct sun4i_a10_display_clk_data {
 
 	u8	width_div;
 	u8	width_mux;
+
+	u32	flags;
 };
 
 struct reset_data {
@@ -166,7 +160,7 @@ static void __init sun4i_a10_display_init(struct device_node *node,
 				     data->has_div ? &div->hw : NULL,
 				     data->has_div ? &clk_divider_ops : NULL,
 				     &gate->hw, &clk_gate_ops,
-				     0);
+				     data->flags);
 	if (IS_ERR(clk)) {
 		pr_err("%s: Couldn't register the clock\n", clk_name);
 		goto free_div;
@@ -232,6 +226,7 @@ static const struct sun4i_a10_display_clk_data sun4i_a10_tcon_ch0_data __initcon
 	.offset_rst	= 29,
 	.offset_mux	= 24,
 	.width_mux	= 2,
+	.flags		= CLK_SET_RATE_PARENT,
 };
 
 static void __init sun4i_a10_tcon_ch0_setup(struct device_node *node)

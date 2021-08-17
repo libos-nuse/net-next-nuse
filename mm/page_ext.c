@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/mm.h>
 #include <linux/mmzone.h>
-#include <linux/bootmem.h>
+#include <linux/memblock.h>
 #include <linux/page_ext.h>
 #include <linux/memory.h>
 #include <linux/vmalloc.h>
@@ -42,6 +43,11 @@
  * and page extension core can skip to allocate memory. As result,
  * none of memory is wasted.
  *
+ * When need callback returns true, page_ext checks if there is a request for
+ * extra memory through size in struct page_ext_operations. If it is non-zero,
+ * extra space is allocated for each page_ext entry and offset is returned to
+ * user through offset in struct page_ext_operations.
+ *
  * The init callback is used to do proper initialization after page extension
  * is completely initialized. In sparse memory system, extra memory is
  * allocated some time later than memmap is allocated. In other words, lifetime
@@ -53,10 +59,6 @@
  */
 
 static struct page_ext_operations *page_ext_ops[] = {
-	&debug_guardpage_ops,
-#ifdef CONFIG_PAGE_POISONING
-	&page_poisoning_ops,
-#endif
 #ifdef CONFIG_PAGE_OWNER
 	&page_owner_ops,
 #endif
@@ -65,19 +67,25 @@ static struct page_ext_operations *page_ext_ops[] = {
 #endif
 };
 
+unsigned long page_ext_size = sizeof(struct page_ext);
+
 static unsigned long total_usage;
 
 static bool __init invoke_need_callbacks(void)
 {
 	int i;
 	int entries = ARRAY_SIZE(page_ext_ops);
+	bool need = false;
 
 	for (i = 0; i < entries; i++) {
-		if (page_ext_ops[i]->need && page_ext_ops[i]->need())
-			return true;
+		if (page_ext_ops[i]->need && page_ext_ops[i]->need()) {
+			page_ext_ops[i]->offset = page_ext_size;
+			page_ext_size += page_ext_ops[i]->size;
+			need = true;
+		}
 	}
 
-	return false;
+	return need;
 }
 
 static void __init invoke_init_callbacks(void)
@@ -91,6 +99,11 @@ static void __init invoke_init_callbacks(void)
 	}
 }
 
+static inline struct page_ext *get_entry(void *base, unsigned long index)
+{
+	return base + page_ext_size * index;
+}
+
 #if !defined(CONFIG_SPARSEMEM)
 
 
@@ -99,29 +112,24 @@ void __meminit pgdat_page_ext_init(struct pglist_data *pgdat)
 	pgdat->node_page_ext = NULL;
 }
 
-struct page_ext *lookup_page_ext(struct page *page)
+struct page_ext *lookup_page_ext(const struct page *page)
 {
 	unsigned long pfn = page_to_pfn(page);
-	unsigned long offset;
+	unsigned long index;
 	struct page_ext *base;
 
 	base = NODE_DATA(page_to_nid(page))->node_page_ext;
-#if defined(CONFIG_DEBUG_VM) || defined(CONFIG_PAGE_POISONING)
 	/*
 	 * The sanity checks the page allocator does upon freeing a
 	 * page can reach here before the page_ext arrays are
 	 * allocated when feeding a range of pages to the allocator
 	 * for the first time during bootup or memory hotplug.
-	 *
-	 * This check is also necessary for ensuring page poisoning
-	 * works as expected when enabled
 	 */
 	if (unlikely(!base))
 		return NULL;
-#endif
-	offset = pfn - round_down(node_start_pfn(page_to_nid(page)),
+	index = pfn - round_down(node_start_pfn(page_to_nid(page)),
 					MAX_ORDER_NR_PAGES);
-	return base + offset;
+	return get_entry(base, index);
 }
 
 static int __init alloc_node_page_ext(int nid)
@@ -143,11 +151,11 @@ static int __init alloc_node_page_ext(int nid)
 		!IS_ALIGNED(node_end_pfn(nid), MAX_ORDER_NR_PAGES))
 		nr_pages += MAX_ORDER_NR_PAGES;
 
-	table_size = sizeof(struct page_ext) * nr_pages;
+	table_size = page_ext_size * nr_pages;
 
-	base = memblock_virt_alloc_try_nid_nopanic(
+	base = memblock_alloc_try_nid(
 			table_size, PAGE_SIZE, __pa(MAX_DMA_ADDRESS),
-			BOOTMEM_ALLOC_ACCESSIBLE, nid);
+			MEMBLOCK_ALLOC_ACCESSIBLE, nid);
 	if (!base)
 		return -ENOMEM;
 	NODE_DATA(nid)->node_page_ext = base;
@@ -179,24 +187,19 @@ fail:
 
 #else /* CONFIG_FLAT_NODE_MEM_MAP */
 
-struct page_ext *lookup_page_ext(struct page *page)
+struct page_ext *lookup_page_ext(const struct page *page)
 {
 	unsigned long pfn = page_to_pfn(page);
 	struct mem_section *section = __pfn_to_section(pfn);
-#if defined(CONFIG_DEBUG_VM) || defined(CONFIG_PAGE_POISONING)
 	/*
 	 * The sanity checks the page allocator does upon freeing a
 	 * page can reach here before the page_ext arrays are
 	 * allocated when feeding a range of pages to the allocator
 	 * for the first time during bootup or memory hotplug.
-	 *
-	 * This check is also necessary for ensuring page poisoning
-	 * works as expected when enabled
 	 */
 	if (!section->page_ext)
 		return NULL;
-#endif
-	return section->page_ext + pfn;
+	return get_entry(section->page_ext, pfn);
 }
 
 static void *__meminit alloc_page_ext(size_t size, int nid)
@@ -210,10 +213,7 @@ static void *__meminit alloc_page_ext(size_t size, int nid)
 		return addr;
 	}
 
-	if (node_state(nid, N_HIGH_MEMORY))
-		addr = vzalloc_node(size, nid);
-	else
-		addr = vzalloc(size);
+	addr = vzalloc_node(size, nid);
 
 	return addr;
 }
@@ -229,7 +229,7 @@ static int __meminit init_section_page_ext(unsigned long pfn, int nid)
 	if (section->page_ext)
 		return 0;
 
-	table_size = sizeof(struct page_ext) * PAGES_PER_SECTION;
+	table_size = page_ext_size * PAGES_PER_SECTION;
 	base = alloc_page_ext(table_size, nid);
 
 	/*
@@ -249,7 +249,7 @@ static int __meminit init_section_page_ext(unsigned long pfn, int nid)
 	 * we need to apply a mask.
 	 */
 	pfn &= PAGE_SECTION_MASK;
-	section->page_ext = base - pfn;
+	section->page_ext = (void *)base - page_ext_size * pfn;
 	total_usage += table_size;
 	return 0;
 }
@@ -262,9 +262,10 @@ static void free_page_ext(void *addr)
 		struct page *page = virt_to_page(addr);
 		size_t table_size;
 
-		table_size = sizeof(struct page_ext) * PAGES_PER_SECTION;
+		table_size = page_ext_size * PAGES_PER_SECTION;
 
 		BUG_ON(PageReserved(page));
+		kmemleak_free(addr);
 		free_pages_exact(addr, table_size);
 	}
 }
@@ -277,7 +278,7 @@ static void __free_page_ext(unsigned long pfn)
 	ms = __pfn_to_section(pfn);
 	if (!ms || !ms->page_ext)
 		return;
-	base = ms->page_ext + pfn;
+	base = get_entry(ms->page_ext, pfn);
 	free_page_ext(base);
 	ms->page_ext = NULL;
 }
@@ -292,7 +293,7 @@ static int __meminit online_page_ext(unsigned long start_pfn,
 	start = SECTION_ALIGN_DOWN(start_pfn);
 	end = SECTION_ALIGN_UP(start_pfn + nr_pages);
 
-	if (nid == -1) {
+	if (nid == NUMA_NO_NODE) {
 		/*
 		 * In this case, "nid" already exists and contains valid memory.
 		 * "start_pfn" passed to us is a pfn which is an arg for
@@ -302,11 +303,8 @@ static int __meminit online_page_ext(unsigned long start_pfn,
 		VM_BUG_ON(!node_state(nid, N_ONLINE));
 	}
 
-	for (pfn = start; !fail && pfn < end; pfn += PAGES_PER_SECTION) {
-		if (!pfn_present(pfn))
-			continue;
+	for (pfn = start; !fail && pfn < end; pfn += PAGES_PER_SECTION)
 		fail = init_section_page_ext(pfn, nid);
-	}
 	if (!fail)
 		return 0;
 
@@ -390,13 +388,12 @@ void __init page_ext_init(void)
 			 * We know some arch can have a nodes layout such as
 			 * -------------pfn-------------->
 			 * N0 | N1 | N2 | N0 | N1 | N2|....
-			 *
-			 * Take into account DEFERRED_STRUCT_PAGE_INIT.
 			 */
-			if (early_pfn_to_nid(pfn) != nid)
+			if (pfn_to_nid(pfn) != nid)
 				continue;
 			if (init_section_page_ext(pfn, nid))
 				goto oom;
+			cond_resched();
 		}
 	}
 	hotplug_memory_notifier(page_ext_callback, 0);

@@ -1,8 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2013-2015 Analog Devices Inc.
  *  Author: Lars-Peter Clausen <lars@metafoo.de>
- *
- * Licensed under the GPL-2.
  */
 
 #include <linux/slab.h>
@@ -13,7 +12,7 @@
 #include <linux/mutex.h>
 #include <linux/sched.h>
 #include <linux/poll.h>
-#include <linux/iio/buffer.h>
+#include <linux/iio/buffer_impl.h>
 #include <linux/iio/buffer-dma.h>
 #include <linux/dma-mapping.h>
 #include <linux/sizes.h>
@@ -221,7 +220,7 @@ void iio_dma_buffer_block_done(struct iio_dma_buffer_block *block)
 	spin_unlock_irqrestore(&queue->list_lock, flags);
 
 	iio_buffer_block_put_atomic(block);
-	wake_up_interruptible_poll(&queue->buffer.pollq, POLLIN | POLLRDNORM);
+	wake_up_interruptible_poll(&queue->buffer.pollq, EPOLLIN | EPOLLRDNORM);
 }
 EXPORT_SYMBOL_GPL(iio_dma_buffer_block_done);
 
@@ -250,7 +249,7 @@ void iio_dma_buffer_block_list_abort(struct iio_dma_buffer_queue *queue,
 	}
 	spin_unlock_irqrestore(&queue->list_lock, flags);
 
-	wake_up_interruptible_poll(&queue->buffer.pollq, POLLIN | POLLRDNORM);
+	wake_up_interruptible_poll(&queue->buffer.pollq, EPOLLIN | EPOLLRDNORM);
 }
 EXPORT_SYMBOL_GPL(iio_dma_buffer_block_list_abort);
 
@@ -305,7 +304,7 @@ int iio_dma_buffer_request_update(struct iio_buffer *buffer)
 	queue->fileio.active_block = NULL;
 
 	spin_lock_irq(&queue->list_lock);
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < ARRAY_SIZE(queue->fileio.blocks); i++) {
 		block = queue->fileio.blocks[i];
 
 		/* If we can't re-use it free it */
@@ -323,7 +322,7 @@ int iio_dma_buffer_request_update(struct iio_buffer *buffer)
 
 	INIT_LIST_HEAD(&queue->incoming);
 
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < ARRAY_SIZE(queue->fileio.blocks); i++) {
 		if (queue->fileio.blocks[i]) {
 			block = queue->fileio.blocks[i];
 			if (block->state == IIO_BLOCK_STATE_DEAD) {
@@ -476,7 +475,7 @@ static struct iio_dma_buffer_block *iio_dma_buffer_dequeue(
  * @n: Number of bytes to read
  * @user_buffer: Userspace buffer to copy the data to
  *
- * Should be used as the read_first_n callback for iio_buffer_access_ops
+ * Should be used as the read callback for iio_buffer_access_ops
  * struct for DMA buffers.
  */
 int iio_dma_buffer_read(struct iio_buffer *buffer, size_t n,
@@ -586,7 +585,7 @@ EXPORT_SYMBOL_GPL(iio_dma_buffer_set_bytes_per_datum);
  * Should be used as the set_length callback for iio_buffer_access_ops
  * struct for DMA buffers.
  */
-int iio_dma_buffer_set_length(struct iio_buffer *buffer, int length)
+int iio_dma_buffer_set_length(struct iio_buffer *buffer, unsigned int length)
 {
 	/* Avoid an invalid state */
 	if (length < 2)

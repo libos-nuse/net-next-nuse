@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  *  linux/include/asm-arm/hardware/serial_amba.h
  *
@@ -5,20 +6,6 @@
  *
  *  Copyright (C) ARM Limited
  *  Copyright (C) 2000 Deep Blue Solutions Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #ifndef ASM_ARM_HARDWARE_SERIAL_AMBA_H
 #define ASM_ARM_HARDWARE_SERIAL_AMBA_H
@@ -103,6 +90,15 @@
 #define UART01x_FR_DSR 		0x002
 #define UART01x_FR_CTS 		0x001
 #define UART01x_FR_TMSK		(UART01x_FR_TXFF + UART01x_FR_BUSY)
+
+/*
+ * Some bits of Flag Register on ZTE device have different position from
+ * standard ones.
+ */
+#define ZX_UART01x_FR_BUSY	0x100
+#define ZX_UART01x_FR_DSR	0x008
+#define ZX_UART01x_FR_CTS	0x002
+#define ZX_UART011_FR_RI	0x001
 
 #define UART011_CR_CTSEN	0x8000	/* CTS hardware flow control */
 #define UART011_CR_RTSEN	0x4000	/* RTS hardware flow control */

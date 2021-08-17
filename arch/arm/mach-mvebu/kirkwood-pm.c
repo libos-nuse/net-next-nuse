@@ -1,23 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Power Management driver for Marvell Kirkwood SoCs
  *
  * Copyright (C) 2013 Ezequiel Garcia <ezequiel@free-electrons.com>
  * Copyright (C) 2010 Simon Guinot <sguinot@lacie.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License,
- * version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
 #include <linux/suspend.h>
 #include <linux/io.h>
 #include "kirkwood.h"
+#include "kirkwood-pm.h"
 
 static void __iomem *ddr_operation_base;
 static void __iomem *memory_pm_ctrl;
@@ -66,11 +59,10 @@ static const struct platform_suspend_ops kirkwood_suspend_ops = {
 	.valid = kirkwood_pm_valid_standby,
 };
 
-int __init kirkwood_pm_init(void)
+void __init kirkwood_pm_init(void)
 {
 	ddr_operation_base = ioremap(DDR_OPERATION_BASE, 4);
 	memory_pm_ctrl = ioremap(MEMORY_PM_CTRL_PHYS, 4);
 
 	suspend_set_ops(&kirkwood_suspend_ops);
-	return 0;
 }

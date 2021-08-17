@@ -1,13 +1,6 @@
 /*
- * Fushicai USBTV007 Audio-Video Grabber Driver
- *
- * Product web site:
- * http://www.fushicai.com/products_detail/&productId=d05449ee-b690-42f9-a661-aa7353894bed.html
- *
  * Copyright (c) 2013 Federico Simoncelli
  * All rights reserved.
- * No physical hardware was harmed running Windows during the
- * reverse-engineering activity
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -20,6 +13,27 @@
  *
  * Alternatively, this software may be distributed under the terms of the
  * GNU General Public License ("GPL").
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+/*
+ * Fushicai USBTV007 Audio-Video Grabber Driver
+ *
+ * Product web site:
+ * http://www.fushicai.com/products_detail/&productId=d05449ee-b690-42f9-a661-aa7353894bed.html
+ *
+ * No physical hardware was harmed running Windows during the
+ * reverse-engineering activity
  */
 
 #include <sound/core.h>
@@ -29,7 +43,7 @@
 
 #include "usbtv.h"
 
-static struct snd_pcm_hardware snd_usbtv_digital_hw = {
+static const struct snd_pcm_hardware snd_usbtv_digital_hw = {
 	.info = SNDRV_PCM_INFO_BATCH |
 		SNDRV_PCM_INFO_MMAP |
 		SNDRV_PCM_INFO_INTERLEAVED |
@@ -71,30 +85,6 @@ static int snd_usbtv_pcm_close(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static int snd_usbtv_hw_params(struct snd_pcm_substream *substream,
-		struct snd_pcm_hw_params *hw_params)
-{
-	int rv;
-	struct usbtv *chip = snd_pcm_substream_chip(substream);
-
-	rv = snd_pcm_lib_malloc_pages(substream,
-		params_buffer_bytes(hw_params));
-
-	if (rv < 0) {
-		dev_warn(chip->dev, "pcm audio buffer allocation failure %i\n",
-			rv);
-		return rv;
-	}
-
-	return 0;
-}
-
-static int snd_usbtv_hw_free(struct snd_pcm_substream *substream)
-{
-	snd_pcm_lib_free_pages(substream);
-	return 0;
-}
-
 static int snd_usbtv_prepare(struct snd_pcm_substream *substream)
 {
 	struct usbtv *chip = snd_pcm_substream_chip(substream);
@@ -112,6 +102,7 @@ static void usbtv_audio_urb_received(struct urb *urb)
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	size_t i, frame_bytes, chunk_length, buffer_pos, period_pos;
 	int period_elapsed;
+	unsigned long flags;
 	void *urb_current;
 
 	switch (urb->status) {
@@ -165,12 +156,12 @@ static void usbtv_audio_urb_received(struct urb *urb)
 		}
 	}
 
-	snd_pcm_stream_lock(substream);
+	snd_pcm_stream_lock_irqsave(substream, flags);
 
 	chip->snd_buffer_pos = buffer_pos;
 	chip->snd_period_pos = period_pos;
 
-	snd_pcm_stream_unlock(substream);
+	snd_pcm_stream_unlock_irqrestore(substream, flags);
 
 	if (period_elapsed)
 		snd_pcm_period_elapsed(substream);
@@ -278,6 +269,9 @@ static void snd_usbtv_trigger(struct work_struct *work)
 {
 	struct usbtv *chip = container_of(work, struct usbtv, snd_trigger);
 
+	if (!chip->snd)
+		return;
+
 	if (atomic_read(&chip->snd_stream))
 		usbtv_audio_start(chip);
 	else
@@ -315,12 +309,9 @@ static snd_pcm_uframes_t snd_usbtv_pointer(struct snd_pcm_substream *substream)
 	return chip->snd_buffer_pos;
 }
 
-static struct snd_pcm_ops snd_usbtv_pcm_ops = {
+static const struct snd_pcm_ops snd_usbtv_pcm_ops = {
 	.open = snd_usbtv_pcm_open,
 	.close = snd_usbtv_pcm_close,
-	.ioctl = snd_pcm_lib_ioctl,
-	.hw_params = snd_usbtv_hw_params,
-	.hw_free = snd_usbtv_hw_free,
 	.prepare = snd_usbtv_prepare,
 	.trigger = snd_usbtv_card_trigger,
 	.pointer = snd_usbtv_pointer,
@@ -340,8 +331,8 @@ int usbtv_audio_init(struct usbtv *usbtv)
 	if (rv < 0)
 		return rv;
 
-	strlcpy(card->driver, usbtv->dev->driver->name, sizeof(card->driver));
-	strlcpy(card->shortname, "usbtv", sizeof(card->shortname));
+	strscpy(card->driver, usbtv->dev->driver->name, sizeof(card->driver));
+	strscpy(card->shortname, "usbtv", sizeof(card->shortname));
 	snprintf(card->longname, sizeof(card->longname),
 		"USBTV Audio at bus %d device %d", usbtv->udev->bus->busnum,
 		usbtv->udev->devnum);
@@ -354,14 +345,13 @@ int usbtv_audio_init(struct usbtv *usbtv)
 	if (rv < 0)
 		goto err;
 
-	strlcpy(pcm->name, "USBTV Audio Input", sizeof(pcm->name));
+	strscpy(pcm->name, "USBTV Audio Input", sizeof(pcm->name));
 	pcm->info_flags = 0;
 	pcm->private_data = usbtv;
 
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &snd_usbtv_pcm_ops);
-	snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_CONTINUOUS,
-		snd_dma_continuous_data(GFP_KERNEL), USBTV_AUDIO_BUFFER,
-		USBTV_AUDIO_BUFFER);
+	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_CONTINUOUS,
+		NULL, USBTV_AUDIO_BUFFER, USBTV_AUDIO_BUFFER);
 
 	rv = snd_card_register(card);
 	if (rv)
@@ -378,8 +368,10 @@ err:
 
 void usbtv_audio_free(struct usbtv *usbtv)
 {
+	cancel_work_sync(&usbtv->snd_trigger);
+
 	if (usbtv->snd && usbtv->udev) {
-		snd_card_free(usbtv->snd);
+		snd_card_free_when_closed(usbtv->snd);
 		usbtv->snd = NULL;
 	}
 }

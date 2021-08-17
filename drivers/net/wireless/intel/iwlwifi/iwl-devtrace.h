@@ -1,22 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /******************************************************************************
  *
  * Copyright(c) 2009 - 2014 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- * The full GNU General Public License is included in this distribution in the
- * file called LICENSE.
+ * Copyright(C) 2016        Intel Deutschland GmbH
+ * Copyright(c) 2018        Intel Corporation
  *
  * Contact Information:
  *  Intel Linux Wireless <linuxwifi@intel.com>
@@ -33,24 +20,49 @@
 static inline bool iwl_trace_data(struct sk_buff *skb)
 {
 	struct ieee80211_hdr *hdr = (void *)skb->data;
-	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+	__le16 fc = hdr->frame_control;
+	int offs = 24; /* start with normal header length */
 
-	if (!ieee80211_is_data(hdr->frame_control))
+	if (!ieee80211_is_data(fc))
 		return false;
-	return !(info->control.flags & IEEE80211_TX_CTRL_PORT_CTRL_PROTO);
+
+	/* Try to determine if the frame is EAPOL. This might have false
+	 * positives (if there's no RFC 1042 header and we compare to some
+	 * payload instead) but since we're only doing tracing that's not
+	 * a problem.
+	 */
+
+	if (ieee80211_has_a4(fc))
+		offs += 6;
+	if (ieee80211_is_data_qos(fc))
+		offs += 2;
+	/* don't account for crypto - these are unencrypted */
+
+	/* also account for the RFC 1042 header, of course */
+	offs += 6;
+
+	return skb->len <= offs + 2 ||
+		*(__be16 *)(skb->data + offs) != cpu_to_be16(ETH_P_PAE);
 }
 
 static inline size_t iwl_rx_trace_len(const struct iwl_trans *trans,
-				      void *rxbuf, size_t len)
+				      void *rxbuf, size_t len,
+				      size_t *out_hdr_offset)
 {
 	struct iwl_cmd_header *cmd = (void *)((u8 *)rxbuf + sizeof(__le32));
-	struct ieee80211_hdr *hdr;
+	struct ieee80211_hdr *hdr = NULL;
+	size_t hdr_offset;
 
 	if (cmd->cmd != trans->rx_mpdu_cmd)
 		return len;
 
-	hdr = (void *)((u8 *)cmd + sizeof(struct iwl_cmd_header) +
-			trans->rx_mpdu_cmd_hdr_size);
+	hdr_offset = sizeof(struct iwl_cmd_header) +
+		     trans->rx_mpdu_cmd_hdr_size;
+
+	if (out_hdr_offset)
+		*out_hdr_offset = hdr_offset;
+
+	hdr = (void *)((u8 *)cmd + hdr_offset);
 	if (!ieee80211_is_data(hdr->frame_control))
 		return len;
 	/* maybe try to identify EAPOL frames? */
@@ -63,7 +75,6 @@ static inline size_t iwl_rx_trace_len(const struct iwl_trans *trans,
 
 #include <linux/tracepoint.h>
 #include <linux/device.h>
-#include "iwl-trans.h"
 
 
 #if !defined(CONFIG_IWLWIFI_DEVICE_TRACING) || defined(__CHECKER__)

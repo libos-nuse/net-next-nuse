@@ -1,7 +1,7 @@
 /*
  * AM33XX PRM instance offset macros
  *
- * Copyright (C) 2011-2012 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2011-2012 Texas Instruments Incorporated - https://www.ti.com/
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -52,8 +52,6 @@
 /* PRM.PER_PRM register offsets */
 #define AM33XX_RM_PER_RSTCTRL_OFFSET		0x0000
 #define AM33XX_RM_PER_RSTCTRL			AM33XX_PRM_REGADDR(AM33XX_PRM_PER_MOD, 0x0000)
-#define AM33XX_RM_PER_RSTST_OFFSET		0x0004
-#define AM33XX_RM_PER_RSTST			AM33XX_PRM_REGADDR(AM33XX_PRM_PER_MOD, 0x0004)
 #define AM33XX_PM_PER_PWRSTST_OFFSET		0x0008
 #define AM33XX_PM_PER_PWRSTST			AM33XX_PRM_REGADDR(AM33XX_PRM_PER_MOD, 0x0008)
 #define AM33XX_PM_PER_PWRSTCTRL_OFFSET		0x000c

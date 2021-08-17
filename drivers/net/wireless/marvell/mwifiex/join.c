@@ -1,10 +1,10 @@
 /*
- * Marvell Wireless LAN device driver: association and ad-hoc start/join
+ * NXP Wireless LAN device driver: association and ad-hoc start/join
  *
- * Copyright (C) 2011-2014, Marvell International Ltd.
+ * Copyright 2011-2020 NXP
  *
- * This software file (the "File") is distributed by Marvell International
- * Ltd. under the terms of the GNU General Public License Version 2, June 1991
+ * This software file (the "File") is distributed by NXP
+ * under the terms of the GNU General Public License Version 2, June 1991
  * (the "License").  You may use, redistribute and/or modify this File in
  * accordance with the terms and conditions of the License, a copy of which
  * is available by writing to the Free Software Foundation, Inc.,
@@ -253,7 +253,7 @@ mwifiex_cmd_append_wps_ie(struct mwifiex_private *priv, u8 **buffer)
 			    priv->wps_ie_len, *buffer);
 
 		/* Wrap the generic IE buffer with a pass through TLV type */
-		ie_header.type = cpu_to_le16(TLV_TYPE_MGMT_IE);
+		ie_header.type = cpu_to_le16(TLV_TYPE_PASSTHROUGH);
 		ie_header.len = cpu_to_le16(priv->wps_ie_len);
 		memcpy(*buffer, &ie_header, sizeof(ie_header));
 		*buffer += sizeof(ie_header);
@@ -647,6 +647,12 @@ int mwifiex_ret_802_11_associate(struct mwifiex_private *priv,
 	const u8 *ie_ptr;
 	struct ieee80211_ht_operation *assoc_resp_ht_oper;
 
+	if (!priv->attempted_bss_desc) {
+		mwifiex_dbg(priv->adapter, ERROR,
+			    "ASSOC_RESP: failed, association terminated by host\n");
+		goto done;
+	}
+
 	assoc_rsp = (struct ieee_types_assoc_rsp *) &resp->params;
 
 	cap_info = le16_to_cpu(assoc_rsp->cap_info_bitmap);
@@ -663,9 +669,8 @@ int mwifiex_ret_802_11_associate(struct mwifiex_private *priv,
 	priv->assoc_rsp_size = min(le16_to_cpu(resp->size) - S_DS_GEN,
 				   sizeof(priv->assoc_rsp_buf));
 
-	memcpy(priv->assoc_rsp_buf, &resp->params, priv->assoc_rsp_size);
-
 	assoc_rsp->a_id = cpu_to_le16(aid);
+	memcpy(priv->assoc_rsp_buf, &resp->params, priv->assoc_rsp_size);
 
 	if (status_code) {
 		priv->adapter->dbg.num_cmd_assoc_failure++;
@@ -872,6 +877,8 @@ mwifiex_cmd_802_11_ad_hoc_start(struct mwifiex_private *priv,
 
 	memset(adhoc_start->ssid, 0, IEEE80211_MAX_SSID_LEN);
 
+	if (req_ssid->ssid_len > IEEE80211_MAX_SSID_LEN)
+		req_ssid->ssid_len = IEEE80211_MAX_SSID_LEN;
 	memcpy(adhoc_start->ssid, req_ssid->ssid, req_ssid->ssid_len);
 
 	mwifiex_dbg(adapter, INFO, "info: ADHOC_S_CMD: SSID = %s\n",
@@ -1269,6 +1276,12 @@ int mwifiex_ret_802_11_ad_hoc(struct mwifiex_private *priv,
 	struct mwifiex_bssdescriptor *bss_desc;
 	u16 cmd = le16_to_cpu(resp->command);
 	u8 result;
+
+	if (!priv->attempted_bss_desc) {
+		mwifiex_dbg(priv->adapter, ERROR,
+			    "ADHOC_RESP: failed, association terminated by host\n");
+		goto done;
+	}
 
 	if (cmd == HostCmd_CMD_802_11_AD_HOC_START)
 		result = start_result->result;

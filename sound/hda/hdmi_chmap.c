@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * HDMI Channel map support helpers
  */
@@ -58,7 +59,7 @@ static const char * const cea_speaker_allocation_names[] = {
 /*
  * ELD SA bits in the CEA Speaker Allocation data block
  */
-static int eld_speaker_allocation_bits[] = {
+static const int eld_speaker_allocation_bits[] = {
 	[0] = FL | FR,
 	[1] = LFE,
 	[2] = FC,
@@ -249,7 +250,7 @@ void snd_hdac_print_channel_allocation(int spk_alloc, char *buf, int buflen)
 
 	for (i = 0, j = 0; i < ARRAY_SIZE(cea_speaker_allocation_names); i++) {
 		if (spk_alloc & (1 << i))
-			j += snprintf(buf + j, buflen - j,  " %s",
+			j += scnprintf(buf + j, buflen - j,  " %s",
 					cea_speaker_allocation_names[i]);
 	}
 	buf[j] = '\0';	/* necessary when j == 0 */
@@ -353,7 +354,8 @@ static void hdmi_std_setup_channel_mapping(struct hdac_chmap *chmap,
 		int hdmi_slot = 0;
 		/* fill actual channel mappings in ALSA channel (i) order */
 		for (i = 0; i < ch_alloc->channels; i++) {
-			while (!ch_alloc->speakers[7 - hdmi_slot] && !WARN_ON(hdmi_slot >= 8))
+			while (!WARN_ON(hdmi_slot >= 8) &&
+			       !ch_alloc->speakers[7 - hdmi_slot])
 				hdmi_slot++; /* skip zero slots */
 
 			hdmi_channel_mapping[ca][i] = (i << 4) | hdmi_slot++;
@@ -430,6 +432,12 @@ static int to_cea_slot(int ordered_ca, unsigned char pos)
 	int mask = snd_hdac_chmap_to_spk_mask(pos);
 	int i;
 
+	/* Add sanity check to pass klockwork check.
+	 * This should never happen.
+	 */
+	if (ordered_ca >= ARRAY_SIZE(channel_allocations))
+		return -1;
+
 	if (mask) {
 		for (i = 0; i < 8; i++) {
 			if (channel_allocations[ordered_ca].speakers[7 - i] == mask)
@@ -456,7 +464,15 @@ EXPORT_SYMBOL_GPL(snd_hdac_spk_to_chmap);
 /* from CEA slot to ALSA API channel position */
 static int from_cea_slot(int ordered_ca, unsigned char slot)
 {
-	int mask = channel_allocations[ordered_ca].speakers[7 - slot];
+	int mask;
+
+	/* Add sanity check to pass klockwork check.
+	 * This should never happen.
+	 */
+	if (slot >= 8)
+		return 0;
+
+	mask = channel_allocations[ordered_ca].speakers[7 - slot];
 
 	return snd_hdac_spk_to_chmap(mask);
 }
@@ -523,7 +539,8 @@ static void hdmi_setup_fake_chmap(unsigned char *map, int ca)
 	int ordered_ca = get_channel_allocation_order(ca);
 
 	for (i = 0; i < 8; i++) {
-		if (i < channel_allocations[ordered_ca].channels)
+		if (ordered_ca < ARRAY_SIZE(channel_allocations) &&
+		    i < channel_allocations[ordered_ca].channels)
 			map[i] = from_cea_slot(ordered_ca, hdmi_channel_mapping[ca][i] & 0x0f);
 		else
 			map[i] = 0;
@@ -550,6 +567,12 @@ EXPORT_SYMBOL_GPL(snd_hdac_setup_channel_mapping);
 int snd_hdac_get_active_channels(int ca)
 {
 	int ordered_ca = get_channel_allocation_order(ca);
+
+	/* Add sanity check to pass klockwork check.
+	 * This should never happen.
+	 */
+	if (ordered_ca >= ARRAY_SIZE(channel_allocations))
+		ordered_ca = 0;
 
 	return channel_allocations[ordered_ca].channels;
 }
@@ -724,7 +747,7 @@ static int hdmi_chmap_ctl_get(struct snd_kcontrol *kcontrol,
 	memset(pcm_chmap, 0, sizeof(pcm_chmap));
 	chmap->ops.get_chmap(chmap->hdac, pcm_idx, pcm_chmap);
 
-	for (i = 0; i < sizeof(chmap); i++)
+	for (i = 0; i < ARRAY_SIZE(pcm_chmap); i++)
 		ucontrol->value.integer.value[i] = pcm_chmap[i];
 
 	return 0;

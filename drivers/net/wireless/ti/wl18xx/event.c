@@ -1,27 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file is part of wl12xx
  *
  * Copyright (C) 2012 Texas Instruments. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include <net/genetlink.h>
 #include "event.h"
 #include "scan.h"
+#include "conf.h"
 #include "../wlcore/cmd.h"
 #include "../wlcore/debug.h"
 #include "../wlcore/vendor_cmd.h"
@@ -112,12 +99,18 @@ static int wlcore_smart_config_decode_event(struct wl1271 *wl,
 	return 0;
 }
 
-static void wlcore_event_time_sync(struct wl1271 *wl, u16 tsf_msb, u16 tsf_lsb)
+static void wlcore_event_time_sync(struct wl1271 *wl,
+				   u16 tsf_high_msb, u16 tsf_high_lsb,
+				   u16 tsf_low_msb, u16 tsf_low_lsb)
 {
-	u32 clock;
-	/* convert the MSB+LSB to a u32 TSF value */
-	clock = (tsf_msb << 16) | tsf_lsb;
-	wl1271_info("TIME_SYNC_EVENT_ID: clock %u", clock);
+	u32 clock_low;
+	u32 clock_high;
+
+	clock_high = (tsf_high_msb << 16) | tsf_high_lsb;
+	clock_low = (tsf_low_msb << 16) | tsf_low_lsb;
+
+	wl1271_info("TIME_SYNC_EVENT_ID: clock_high %u, clock low %u",
+		    clock_high, clock_low);
 }
 
 int wl18xx_process_mailbox_events(struct wl1271 *wl)
@@ -138,8 +131,10 @@ int wl18xx_process_mailbox_events(struct wl1271 *wl)
 
 	if (vector & TIME_SYNC_EVENT_ID)
 		wlcore_event_time_sync(wl,
-				mbox->time_sync_tsf_msb,
-				mbox->time_sync_tsf_lsb);
+			mbox->time_sync_tsf_high_msb,
+			mbox->time_sync_tsf_high_lsb,
+			mbox->time_sync_tsf_low_msb,
+			mbox->time_sync_tsf_low_lsb);
 
 	if (vector & RADAR_DETECTED_EVENT_ID) {
 		wl1271_info("radar event: channel %d type %s",
@@ -187,11 +182,11 @@ int wl18xx_process_mailbox_events(struct wl1271 *wl)
 	 */
 	if (vector & MAX_TX_FAILURE_EVENT_ID)
 		wlcore_event_max_tx_failure(wl,
-				le32_to_cpu(mbox->tx_retry_exceeded_bitmap));
+				le16_to_cpu(mbox->tx_retry_exceeded_bitmap));
 
 	if (vector & INACTIVE_STA_EVENT_ID)
 		wlcore_event_inactive_sta(wl,
-				le32_to_cpu(mbox->inactive_sta_bitmap));
+				le16_to_cpu(mbox->inactive_sta_bitmap));
 
 	if (vector & REMAIN_ON_CHANNEL_COMPLETE_EVENT_ID)
 		wlcore_event_roc_complete(wl);
@@ -208,6 +203,34 @@ int wl18xx_process_mailbox_events(struct wl1271 *wl)
 						 mbox->sc_pwd);
 	if (vector & FW_LOGGER_INDICATION)
 		wlcore_event_fw_logger(wl);
+
+	if (vector & RX_BA_WIN_SIZE_CHANGE_EVENT_ID) {
+		struct wl12xx_vif *wlvif;
+		struct ieee80211_vif *vif;
+		struct ieee80211_sta *sta;
+		u8 link_id = mbox->rx_ba_link_id;
+		u8 win_size = mbox->rx_ba_win_size;
+		const u8 *addr;
+
+		wlvif = wl->links[link_id].wlvif;
+		vif = wl12xx_wlvif_to_vif(wlvif);
+
+		/* Update RX aggregation window size and call
+		 * MAC routine to stop active RX aggregations for this link
+		 */
+		if (wlvif->bss_type != BSS_TYPE_AP_BSS)
+			addr = vif->bss_conf.bssid;
+		else
+			addr = wl->links[link_id].addr;
+
+		sta = ieee80211_find_sta(vif, addr);
+		if (sta) {
+			sta->max_rx_aggregation_subframes = win_size;
+			ieee80211_stop_rx_ba_session(vif,
+						wl->links[link_id].ba_bitmap,
+						addr);
+		}
+	}
 
 	return 0;
 }

@@ -145,42 +145,52 @@ static int b53_spi_read8(struct b53_device *dev, u8 page, u8 reg, u8 *val)
 
 static int b53_spi_read16(struct b53_device *dev, u8 page, u8 reg, u16 *val)
 {
-	int ret = b53_spi_read(dev, page, reg, (u8 *)val, 2);
+	__le16 value;
+	int ret;
+
+	ret = b53_spi_read(dev, page, reg, (u8 *)&value, 2);
 
 	if (!ret)
-		*val = le16_to_cpu(*val);
+		*val = le16_to_cpu(value);
 
 	return ret;
 }
 
 static int b53_spi_read32(struct b53_device *dev, u8 page, u8 reg, u32 *val)
 {
-	int ret = b53_spi_read(dev, page, reg, (u8 *)val, 4);
+	__le32 value;
+	int ret;
+
+	ret = b53_spi_read(dev, page, reg, (u8 *)&value, 4);
 
 	if (!ret)
-		*val = le32_to_cpu(*val);
+		*val = le32_to_cpu(value);
 
 	return ret;
 }
 
 static int b53_spi_read48(struct b53_device *dev, u8 page, u8 reg, u64 *val)
 {
+	__le64 value;
 	int ret;
 
 	*val = 0;
-	ret = b53_spi_read(dev, page, reg, (u8 *)val, 6);
+	ret = b53_spi_read(dev, page, reg, (u8 *)&value, 6);
 	if (!ret)
-		*val = le64_to_cpu(*val);
+		*val = le64_to_cpu(value);
 
 	return ret;
 }
 
 static int b53_spi_read64(struct b53_device *dev, u8 page, u8 reg, u64 *val)
 {
-	int ret = b53_spi_read(dev, page, reg, (u8 *)val, 8);
+	__le64 value;
+	int ret;
+
+	ret = b53_spi_read(dev, page, reg, (u8 *)&value, 8);
 
 	if (!ret)
-		*val = le64_to_cpu(*val);
+		*val = le64_to_cpu(value);
 
 	return ret;
 }
@@ -270,7 +280,7 @@ static int b53_spi_write64(struct b53_device *dev, u8 page, u8 reg, u64 value)
 	return spi_write(spi, txbuf, sizeof(txbuf));
 }
 
-static struct b53_io_ops b53_spi_ops = {
+static const struct b53_io_ops b53_spi_ops = {
 	.read8 = b53_spi_read8,
 	.read16 = b53_spi_read16,
 	.read32 = b53_spi_read32,
@@ -317,8 +327,6 @@ static int b53_spi_remove(struct spi_device *spi)
 static struct spi_driver b53_spi_driver = {
 	.driver = {
 		.name	= "b53-switch",
-		.bus	= &spi_bus_type,
-		.owner	= THIS_MODULE,
 	},
 	.probe	= b53_spi_probe,
 	.remove	= b53_spi_remove,

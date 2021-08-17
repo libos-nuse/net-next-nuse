@@ -1,15 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * I2C driver for Maxim MAX8925
  *
  * Copyright (C) 2009 Marvell International Ltd.
  *	Haojian Zhuang <haojian.zhuang@marvell.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/kernel.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/i2c.h>
 #include <linux/mfd/max8925.h>
@@ -133,7 +130,6 @@ static const struct i2c_device_id max8925_id_table[] = {
 	{ "max8925", 0 },
 	{ },
 };
-MODULE_DEVICE_TABLE(i2c, max8925_id_table);
 
 static int max8925_dt_init(struct device_node *np, struct device *dev,
 			   struct max8925_platform_data *pdata)
@@ -152,7 +148,7 @@ static int max8925_probe(struct i2c_client *client,
 				   const struct i2c_device_id *id)
 {
 	struct max8925_platform_data *pdata = dev_get_platdata(&client->dev);
-	static struct max8925_chip *chip;
+	struct max8925_chip *chip;
 	struct device_node *node = client->dev.of_node;
 
 	if (node && !pdata) {
@@ -180,18 +176,18 @@ static int max8925_probe(struct i2c_client *client,
 	dev_set_drvdata(chip->dev, chip);
 	mutex_init(&chip->io_lock);
 
-	chip->rtc = i2c_new_dummy(chip->i2c->adapter, RTC_I2C_ADDR);
-	if (!chip->rtc) {
+	chip->rtc = i2c_new_dummy_device(chip->i2c->adapter, RTC_I2C_ADDR);
+	if (IS_ERR(chip->rtc)) {
 		dev_err(chip->dev, "Failed to allocate I2C device for RTC\n");
-		return -ENODEV;
+		return PTR_ERR(chip->rtc);
 	}
 	i2c_set_clientdata(chip->rtc, chip);
 
-	chip->adc = i2c_new_dummy(chip->i2c->adapter, ADC_I2C_ADDR);
-	if (!chip->adc) {
+	chip->adc = i2c_new_dummy_device(chip->i2c->adapter, ADC_I2C_ADDR);
+	if (IS_ERR(chip->adc)) {
 		dev_err(chip->dev, "Failed to allocate I2C device for ADC\n");
 		i2c_unregister_device(chip->rtc);
-		return -ENODEV;
+		return PTR_ERR(chip->adc);
 	}
 	i2c_set_clientdata(chip->adc, chip);
 
@@ -240,7 +236,6 @@ static const struct of_device_id max8925_dt_ids[] = {
 	{ .compatible = "maxim,max8925", },
 	{},
 };
-MODULE_DEVICE_TABLE(of, max8925_dt_ids);
 
 static struct i2c_driver max8925_driver = {
 	.driver	= {
@@ -264,13 +259,3 @@ static int __init max8925_i2c_init(void)
 	return ret;
 }
 subsys_initcall(max8925_i2c_init);
-
-static void __exit max8925_i2c_exit(void)
-{
-	i2c_del_driver(&max8925_driver);
-}
-module_exit(max8925_i2c_exit);
-
-MODULE_DESCRIPTION("I2C Driver for Maxim 8925");
-MODULE_AUTHOR("Haojian Zhuang <haojian.zhuang@marvell.com>");
-MODULE_LICENSE("GPL");

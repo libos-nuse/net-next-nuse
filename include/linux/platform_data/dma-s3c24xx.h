@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * S3C24XX DMA handling
  *
  * Copyright (c) 2013 Heiko Stuebner <heiko@sntech.de>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
  */
 
 /* Helper to encode the source selection constraints for early s3c socs. */
@@ -30,16 +26,22 @@ struct s3c24xx_dma_channel {
 	u16 chansel;
 };
 
+struct dma_slave_map;
+
 /**
  * struct s3c24xx_dma_platdata - platform specific settings
  * @num_phy_channels: number of physical channels
  * @channels: array of virtual channel descriptions
  * @num_channels: number of virtual channels
+ * @slave_map: dma slave map matching table
+ * @slavecnt: number of elements in slave_map
  */
 struct s3c24xx_dma_platdata {
 	int num_phy_channels;
 	struct s3c24xx_dma_channel *channels;
 	int num_channels;
+	const struct dma_slave_map *slave_map;
+	int slavecnt;
 };
 
 struct dma_chan;

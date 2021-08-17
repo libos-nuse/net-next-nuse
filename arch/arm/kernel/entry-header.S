@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/init.h>
 #include <linux/linkage.h>
 
@@ -5,6 +6,7 @@
 #include <asm/asm-offsets.h>
 #include <asm/errno.h>
 #include <asm/thread_info.h>
+#include <asm/uaccess-asm.h>
 #include <asm/v7m.h>
 
 @ Bad Abort numbers
@@ -90,7 +92,7 @@
 	@ Linux expects to have irqs off. Do it here before taking stack space
 	cpsid	i
 
-	sub	sp, #S_FRAME_SIZE-S_IP
+	sub	sp, #PT_REGS_SIZE-S_IP
 	stmdb	sp!, {r0-r11}
 
 	@ load saved r12, lr, return address and xPSR.
@@ -126,7 +128,8 @@
          */
 	.macro	v7m_exception_slow_exit ret_r0
 	cpsid	i
-	ldr	lr, =EXC_RET_THREADMODE_PROCESSSTACK
+	ldr	lr, =exc_ret
+	ldr	lr, [lr]
 
 	@ read original r12, sp, lr, pc and xPSR
 	add	r12, sp, #S_IP
@@ -160,7 +163,7 @@
 	ldmia	sp!, {r0-r11}
 
 	@ restore main sp
-	add	sp, sp, #S_FRAME_SIZE-S_IP
+	add	sp, sp, #PT_REGS_SIZE-S_IP
 
 	cpsie	i
 	bx	lr
@@ -215,7 +218,7 @@
 	blne	trace_hardirqs_off
 #endif
 	.endif
-	uaccess_restore
+	uaccess_exit tsk, r0, r1
 
 #ifndef CONFIG_THUMB2_KERNEL
 	@ ARM mode SVC restore
@@ -259,7 +262,7 @@
 	@ on the stack remains correct).
 	@
 	.macro  svc_exit_via_fiq
-	uaccess_restore
+	uaccess_exit tsk, r0, r1
 #ifndef CONFIG_THUMB2_KERNEL
 	@ ARM mode restore
 	mov	r0, sp
@@ -295,6 +298,8 @@
 	mov	r2, sp
 	ldr	r1, [r2, #\offset + S_PSR]	@ get calling cpsr
 	ldr	lr, [r2, #\offset + S_PC]!	@ get pc
+	tst	r1, #PSR_I_BIT | 0x0f
+	bne	1f
 	msr	spsr_cxsf, r1			@ save in spsr_svc
 #if defined(CONFIG_CPU_V6) || defined(CONFIG_CPU_32v6K)
 	@ We must avoid clrex due to Cortex-A15 erratum #830321
@@ -307,8 +312,9 @@
 	.endif
 	mov	r0, r0				@ ARMv5T and earlier require a nop
 						@ after ldm {}^
-	add	sp, sp, #\offset + S_FRAME_SIZE
+	add	sp, sp, #\offset + PT_REGS_SIZE
 	movs	pc, lr				@ return & move spsr_svc into cpsr
+1:	bug	"Returning to usermode but unexpected PSR bits set?", \@
 #elif defined(CONFIG_CPU_V7M)
 	@ V7M restore.
 	@ Note that we don't need to do clrex here as clearing the local
@@ -324,6 +330,8 @@
 	ldr	r1, [sp, #\offset + S_PSR]	@ get calling cpsr
 	ldr	lr, [sp, #\offset + S_PC]	@ get pc
 	add	sp, sp, #\offset + S_SP
+	tst	r1, #PSR_I_BIT | 0x0f
+	bne	1f
 	msr	spsr_cxsf, r1			@ save in spsr_svc
 
 	@ We must avoid clrex due to Cortex-A15 erratum #830321
@@ -334,8 +342,9 @@
 	.else
 	ldmdb	sp, {r0 - r12}			@ get calling r0 - r12
 	.endif
-	add	sp, sp, #S_FRAME_SIZE - S_SP
+	add	sp, sp, #PT_REGS_SIZE - S_SP
 	movs	pc, lr				@ return & move spsr_svc into cpsr
+1:	bug	"Returning to usermode but unexpected PSR bits set?", \@
 #endif	/* !CONFIG_THUMB2_KERNEL */
 	.endm
 
@@ -364,6 +373,31 @@
 	.else
 	bl	context_tracking_user_enter
 	.endif
+#endif
+	.endm
+
+	.macro	invoke_syscall, table, nr, tmp, ret, reload=0
+#ifdef CONFIG_CPU_SPECTRE
+	mov	\tmp, \nr
+	cmp	\tmp, #NR_syscalls		@ check upper syscall limit
+	movcs	\tmp, #0
+	csdb
+	badr	lr, \ret			@ return address
+	.if	\reload
+	add	r1, sp, #S_R0 + S_OFF		@ pointer to regs
+	ldmiacc	r1, {r0 - r6}			@ reload r0-r6
+	stmiacc	sp, {r4, r5}			@ update stack arguments
+	.endif
+	ldrcc	pc, [\table, \tmp, lsl #2]	@ call sys_* routine
+#else
+	cmp	\nr, #NR_syscalls		@ check upper syscall limit
+	badr	lr, \ret			@ return address
+	.if	\reload
+	add	r1, sp, #S_R0 + S_OFF		@ pointer to regs
+	ldmiacc	r1, {r0 - r6}			@ reload r0-r6
+	stmiacc	sp, {r4, r5}			@ update stack arguments
+	.endif
+	ldrcc	pc, [\table, \nr, lsl #2]	@ call sys_* routine
 #endif
 	.endm
 

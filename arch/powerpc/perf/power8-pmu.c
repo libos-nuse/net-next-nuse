@@ -1,21 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Performance counter support for POWER8 processors.
  *
  * Copyright 2009 Paul Mackerras, IBM Corporation.
  * Copyright 2013 Michael Ellerman, IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt)	"power8-pmu: " fmt
 
-#include <linux/kernel.h>
-#include <linux/perf_event.h>
-#include <asm/firmware.h>
-#include <asm/cputable.h>
+#include "isa207-common.h"
 
 /*
  * Some power8 event codes.
@@ -28,8 +21,14 @@ enum {
 
 #undef EVENT
 
+/* MMCRA IFM bits - POWER8 */
+#define	POWER8_MMCRA_IFM1		0x0000000040000000UL
+#define	POWER8_MMCRA_IFM2		0x0000000080000000UL
+#define	POWER8_MMCRA_IFM3		0x00000000C0000000UL
+#define	POWER8_MMCRA_BHRB_MASK		0x00000000C0000000UL
+
 /*
- * Raw event encoding for POWER8:
+ * Raw event encoding for PowerISA v2.07 (Power8):
  *
  *        60        56        52        48        44        40        36        32
  * | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - |
@@ -92,400 +91,8 @@ enum {
  *
  */
 
-#define EVENT_EBB_MASK		1ull
-#define EVENT_EBB_SHIFT		PERF_EVENT_CONFIG_EBB_SHIFT
-#define EVENT_BHRB_MASK		1ull
-#define EVENT_BHRB_SHIFT	62
-#define EVENT_WANTS_BHRB	(EVENT_BHRB_MASK << EVENT_BHRB_SHIFT)
-#define EVENT_IFM_MASK		3ull
-#define EVENT_IFM_SHIFT		60
-#define EVENT_THR_CMP_SHIFT	40	/* Threshold CMP value */
-#define EVENT_THR_CMP_MASK	0x3ff
-#define EVENT_THR_CTL_SHIFT	32	/* Threshold control value (start/stop) */
-#define EVENT_THR_CTL_MASK	0xffull
-#define EVENT_THR_SEL_SHIFT	29	/* Threshold select value */
-#define EVENT_THR_SEL_MASK	0x7
-#define EVENT_THRESH_SHIFT	29	/* All threshold bits */
-#define EVENT_THRESH_MASK	0x1fffffull
-#define EVENT_SAMPLE_SHIFT	24	/* Sampling mode & eligibility */
-#define EVENT_SAMPLE_MASK	0x1f
-#define EVENT_CACHE_SEL_SHIFT	20	/* L2/L3 cache select */
-#define EVENT_CACHE_SEL_MASK	0xf
-#define EVENT_IS_L1		(4 << EVENT_CACHE_SEL_SHIFT)
-#define EVENT_PMC_SHIFT		16	/* PMC number (1-based) */
-#define EVENT_PMC_MASK		0xf
-#define EVENT_UNIT_SHIFT	12	/* Unit */
-#define EVENT_UNIT_MASK		0xf
-#define EVENT_COMBINE_SHIFT	11	/* Combine bit */
-#define EVENT_COMBINE_MASK	0x1
-#define EVENT_MARKED_SHIFT	8	/* Marked bit */
-#define EVENT_MARKED_MASK	0x1
-#define EVENT_IS_MARKED		(EVENT_MARKED_MASK << EVENT_MARKED_SHIFT)
-#define EVENT_PSEL_MASK		0xff	/* PMCxSEL value */
-
-/* Bits defined by Linux */
-#define EVENT_LINUX_MASK	\
-	((EVENT_EBB_MASK  << EVENT_EBB_SHIFT)			|	\
-	 (EVENT_BHRB_MASK << EVENT_BHRB_SHIFT)			|	\
-	 (EVENT_IFM_MASK  << EVENT_IFM_SHIFT))
-
-#define EVENT_VALID_MASK	\
-	((EVENT_THRESH_MASK    << EVENT_THRESH_SHIFT)		|	\
-	 (EVENT_SAMPLE_MASK    << EVENT_SAMPLE_SHIFT)		|	\
-	 (EVENT_CACHE_SEL_MASK << EVENT_CACHE_SEL_SHIFT)	|	\
-	 (EVENT_PMC_MASK       << EVENT_PMC_SHIFT)		|	\
-	 (EVENT_UNIT_MASK      << EVENT_UNIT_SHIFT)		|	\
-	 (EVENT_COMBINE_MASK   << EVENT_COMBINE_SHIFT)		|	\
-	 (EVENT_MARKED_MASK    << EVENT_MARKED_SHIFT)		|	\
-	  EVENT_LINUX_MASK					|	\
-	  EVENT_PSEL_MASK)
-
-/* MMCRA IFM bits - POWER8 */
-#define	POWER8_MMCRA_IFM1		0x0000000040000000UL
-#define	POWER8_MMCRA_IFM2		0x0000000080000000UL
-#define	POWER8_MMCRA_IFM3		0x00000000C0000000UL
-
-#define ONLY_PLM \
-	(PERF_SAMPLE_BRANCH_USER        |\
-	 PERF_SAMPLE_BRANCH_KERNEL      |\
-	 PERF_SAMPLE_BRANCH_HV)
-
-/*
- * Layout of constraint bits:
- *
- *        60        56        52        48        44        40        36        32
- * | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - |
- *   [   fab_match   ]         [       thresh_cmp      ] [   thresh_ctl    ] [   ]
- *                                                                             |
- *                                                                 thresh_sel -*
- *
- *        28        24        20        16        12         8         4         0
- * | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - |
- *               [ ] |   [ ]   [  sample ]   [     ]   [6] [5]   [4] [3]   [2] [1]
- *                |  |    |                     |
- *      BHRB IFM -*  |    |                     |      Count of events for each PMC.
- *              EBB -*    |                     |        p1, p2, p3, p4, p5, p6.
- *      L1 I/D qualifier -*                     |
- *                     nc - number of counters -*
- *
- * The PMC fields P1..P6, and NC, are adder fields. As we accumulate constraints
- * we want the low bit of each field to be added to any existing value.
- *
- * Everything else is a value field.
- */
-
-#define CNST_FAB_MATCH_VAL(v)	(((v) & EVENT_THR_CTL_MASK) << 56)
-#define CNST_FAB_MATCH_MASK	CNST_FAB_MATCH_VAL(EVENT_THR_CTL_MASK)
-
-/* We just throw all the threshold bits into the constraint */
-#define CNST_THRESH_VAL(v)	(((v) & EVENT_THRESH_MASK) << 32)
-#define CNST_THRESH_MASK	CNST_THRESH_VAL(EVENT_THRESH_MASK)
-
-#define CNST_EBB_VAL(v)		(((v) & EVENT_EBB_MASK) << 24)
-#define CNST_EBB_MASK		CNST_EBB_VAL(EVENT_EBB_MASK)
-
-#define CNST_IFM_VAL(v)		(((v) & EVENT_IFM_MASK) << 25)
-#define CNST_IFM_MASK		CNST_IFM_VAL(EVENT_IFM_MASK)
-
-#define CNST_L1_QUAL_VAL(v)	(((v) & 3) << 22)
-#define CNST_L1_QUAL_MASK	CNST_L1_QUAL_VAL(3)
-
-#define CNST_SAMPLE_VAL(v)	(((v) & EVENT_SAMPLE_MASK) << 16)
-#define CNST_SAMPLE_MASK	CNST_SAMPLE_VAL(EVENT_SAMPLE_MASK)
-
-/*
- * For NC we are counting up to 4 events. This requires three bits, and we need
- * the fifth event to overflow and set the 4th bit. To achieve that we bias the
- * fields by 3 in test_adder.
- */
-#define CNST_NC_SHIFT		12
-#define CNST_NC_VAL		(1 << CNST_NC_SHIFT)
-#define CNST_NC_MASK		(8 << CNST_NC_SHIFT)
-#define POWER8_TEST_ADDER	(3 << CNST_NC_SHIFT)
-
-/*
- * For the per-PMC fields we have two bits. The low bit is added, so if two
- * events ask for the same PMC the sum will overflow, setting the high bit,
- * indicating an error. So our mask sets the high bit.
- */
-#define CNST_PMC_SHIFT(pmc)	((pmc - 1) * 2)
-#define CNST_PMC_VAL(pmc)	(1 << CNST_PMC_SHIFT(pmc))
-#define CNST_PMC_MASK(pmc)	(2 << CNST_PMC_SHIFT(pmc))
-
-/* Our add_fields is defined as: */
-#define POWER8_ADD_FIELDS	\
-	CNST_PMC_VAL(1) | CNST_PMC_VAL(2) | CNST_PMC_VAL(3) | \
-	CNST_PMC_VAL(4) | CNST_PMC_VAL(5) | CNST_PMC_VAL(6) | CNST_NC_VAL
-
-
-/* Bits in MMCR1 for POWER8 */
-#define MMCR1_UNIT_SHIFT(pmc)		(60 - (4 * ((pmc) - 1)))
-#define MMCR1_COMBINE_SHIFT(pmc)	(35 - ((pmc) - 1))
-#define MMCR1_PMCSEL_SHIFT(pmc)		(24 - (((pmc) - 1)) * 8)
-#define MMCR1_FAB_SHIFT			36
-#define MMCR1_DC_QUAL_SHIFT		47
-#define MMCR1_IC_QUAL_SHIFT		46
-
-/* Bits in MMCRA for POWER8 */
-#define MMCRA_SAMP_MODE_SHIFT		1
-#define MMCRA_SAMP_ELIG_SHIFT		4
-#define MMCRA_THR_CTL_SHIFT		8
-#define MMCRA_THR_SEL_SHIFT		16
-#define MMCRA_THR_CMP_SHIFT		32
-#define MMCRA_SDAR_MODE_TLB		(1ull << 42)
-#define MMCRA_IFM_SHIFT			30
-
-/* Bits in MMCR2 for POWER8 */
-#define MMCR2_FCS(pmc)			(1ull << (63 - (((pmc) - 1) * 9)))
-#define MMCR2_FCP(pmc)			(1ull << (62 - (((pmc) - 1) * 9)))
-#define MMCR2_FCH(pmc)			(1ull << (57 - (((pmc) - 1) * 9)))
-
-
-static inline bool event_is_fab_match(u64 event)
-{
-	/* Only check pmc, unit and pmcxsel, ignore the edge bit (0) */
-	event &= 0xff0fe;
-
-	/* PM_MRK_FAB_RSP_MATCH & PM_MRK_FAB_RSP_MATCH_CYC */
-	return (event == 0x30056 || event == 0x4f052);
-}
-
-static int power8_get_constraint(u64 event, unsigned long *maskp, unsigned long *valp)
-{
-	unsigned int unit, pmc, cache, ebb;
-	unsigned long mask, value;
-
-	mask = value = 0;
-
-	if (event & ~EVENT_VALID_MASK)
-		return -1;
-
-	pmc   = (event >> EVENT_PMC_SHIFT)        & EVENT_PMC_MASK;
-	unit  = (event >> EVENT_UNIT_SHIFT)       & EVENT_UNIT_MASK;
-	cache = (event >> EVENT_CACHE_SEL_SHIFT)  & EVENT_CACHE_SEL_MASK;
-	ebb   = (event >> EVENT_EBB_SHIFT)        & EVENT_EBB_MASK;
-
-	if (pmc) {
-		u64 base_event;
-
-		if (pmc > 6)
-			return -1;
-
-		/* Ignore Linux defined bits when checking event below */
-		base_event = event & ~EVENT_LINUX_MASK;
-
-		if (pmc >= 5 && base_event != PM_RUN_INST_CMPL &&
-				base_event != PM_RUN_CYC)
-			return -1;
-
-		mask  |= CNST_PMC_MASK(pmc);
-		value |= CNST_PMC_VAL(pmc);
-	}
-
-	if (pmc <= 4) {
-		/*
-		 * Add to number of counters in use. Note this includes events with
-		 * a PMC of 0 - they still need a PMC, it's just assigned later.
-		 * Don't count events on PMC 5 & 6, there is only one valid event
-		 * on each of those counters, and they are handled above.
-		 */
-		mask  |= CNST_NC_MASK;
-		value |= CNST_NC_VAL;
-	}
-
-	if (unit >= 6 && unit <= 9) {
-		/*
-		 * L2/L3 events contain a cache selector field, which is
-		 * supposed to be programmed into MMCRC. However MMCRC is only
-		 * HV writable, and there is no API for guest kernels to modify
-		 * it. The solution is for the hypervisor to initialise the
-		 * field to zeroes, and for us to only ever allow events that
-		 * have a cache selector of zero. The bank selector (bit 3) is
-		 * irrelevant, as long as the rest of the value is 0.
-		 */
-		if (cache & 0x7)
-			return -1;
-
-	} else if (event & EVENT_IS_L1) {
-		mask  |= CNST_L1_QUAL_MASK;
-		value |= CNST_L1_QUAL_VAL(cache);
-	}
-
-	if (event & EVENT_IS_MARKED) {
-		mask  |= CNST_SAMPLE_MASK;
-		value |= CNST_SAMPLE_VAL(event >> EVENT_SAMPLE_SHIFT);
-	}
-
-	/*
-	 * Special case for PM_MRK_FAB_RSP_MATCH and PM_MRK_FAB_RSP_MATCH_CYC,
-	 * the threshold control bits are used for the match value.
-	 */
-	if (event_is_fab_match(event)) {
-		mask  |= CNST_FAB_MATCH_MASK;
-		value |= CNST_FAB_MATCH_VAL(event >> EVENT_THR_CTL_SHIFT);
-	} else {
-		/*
-		 * Check the mantissa upper two bits are not zero, unless the
-		 * exponent is also zero. See the THRESH_CMP_MANTISSA doc.
-		 */
-		unsigned int cmp, exp;
-
-		cmp = (event >> EVENT_THR_CMP_SHIFT) & EVENT_THR_CMP_MASK;
-		exp = cmp >> 7;
-
-		if (exp && (cmp & 0x60) == 0)
-			return -1;
-
-		mask  |= CNST_THRESH_MASK;
-		value |= CNST_THRESH_VAL(event >> EVENT_THRESH_SHIFT);
-	}
-
-	if (!pmc && ebb)
-		/* EBB events must specify the PMC */
-		return -1;
-
-	if (event & EVENT_WANTS_BHRB) {
-		if (!ebb)
-			/* Only EBB events can request BHRB */
-			return -1;
-
-		mask  |= CNST_IFM_MASK;
-		value |= CNST_IFM_VAL(event >> EVENT_IFM_SHIFT);
-	}
-
-	/*
-	 * All events must agree on EBB, either all request it or none.
-	 * EBB events are pinned & exclusive, so this should never actually
-	 * hit, but we leave it as a fallback in case.
-	 */
-	mask  |= CNST_EBB_VAL(ebb);
-	value |= CNST_EBB_MASK;
-
-	*maskp = mask;
-	*valp = value;
-
-	return 0;
-}
-
-static int power8_compute_mmcr(u64 event[], int n_ev,
-			       unsigned int hwc[], unsigned long mmcr[],
-			       struct perf_event *pevents[])
-{
-	unsigned long mmcra, mmcr1, mmcr2, unit, combine, psel, cache, val;
-	unsigned int pmc, pmc_inuse;
-	int i;
-
-	pmc_inuse = 0;
-
-	/* First pass to count resource use */
-	for (i = 0; i < n_ev; ++i) {
-		pmc = (event[i] >> EVENT_PMC_SHIFT) & EVENT_PMC_MASK;
-		if (pmc)
-			pmc_inuse |= 1 << pmc;
-	}
-
-	/* In continuous sampling mode, update SDAR on TLB miss */
-	mmcra = MMCRA_SDAR_MODE_TLB;
-	mmcr1 = mmcr2 = 0;
-
-	/* Second pass: assign PMCs, set all MMCR1 fields */
-	for (i = 0; i < n_ev; ++i) {
-		pmc     = (event[i] >> EVENT_PMC_SHIFT) & EVENT_PMC_MASK;
-		unit    = (event[i] >> EVENT_UNIT_SHIFT) & EVENT_UNIT_MASK;
-		combine = (event[i] >> EVENT_COMBINE_SHIFT) & EVENT_COMBINE_MASK;
-		psel    =  event[i] & EVENT_PSEL_MASK;
-
-		if (!pmc) {
-			for (pmc = 1; pmc <= 4; ++pmc) {
-				if (!(pmc_inuse & (1 << pmc)))
-					break;
-			}
-
-			pmc_inuse |= 1 << pmc;
-		}
-
-		if (pmc <= 4) {
-			mmcr1 |= unit << MMCR1_UNIT_SHIFT(pmc);
-			mmcr1 |= combine << MMCR1_COMBINE_SHIFT(pmc);
-			mmcr1 |= psel << MMCR1_PMCSEL_SHIFT(pmc);
-		}
-
-		if (event[i] & EVENT_IS_L1) {
-			cache = event[i] >> EVENT_CACHE_SEL_SHIFT;
-			mmcr1 |= (cache & 1) << MMCR1_IC_QUAL_SHIFT;
-			cache >>= 1;
-			mmcr1 |= (cache & 1) << MMCR1_DC_QUAL_SHIFT;
-		}
-
-		if (event[i] & EVENT_IS_MARKED) {
-			mmcra |= MMCRA_SAMPLE_ENABLE;
-
-			val = (event[i] >> EVENT_SAMPLE_SHIFT) & EVENT_SAMPLE_MASK;
-			if (val) {
-				mmcra |= (val &  3) << MMCRA_SAMP_MODE_SHIFT;
-				mmcra |= (val >> 2) << MMCRA_SAMP_ELIG_SHIFT;
-			}
-		}
-
-		/*
-		 * PM_MRK_FAB_RSP_MATCH and PM_MRK_FAB_RSP_MATCH_CYC,
-		 * the threshold bits are used for the match value.
-		 */
-		if (event_is_fab_match(event[i])) {
-			mmcr1 |= ((event[i] >> EVENT_THR_CTL_SHIFT) &
-				  EVENT_THR_CTL_MASK) << MMCR1_FAB_SHIFT;
-		} else {
-			val = (event[i] >> EVENT_THR_CTL_SHIFT) & EVENT_THR_CTL_MASK;
-			mmcra |= val << MMCRA_THR_CTL_SHIFT;
-			val = (event[i] >> EVENT_THR_SEL_SHIFT) & EVENT_THR_SEL_MASK;
-			mmcra |= val << MMCRA_THR_SEL_SHIFT;
-			val = (event[i] >> EVENT_THR_CMP_SHIFT) & EVENT_THR_CMP_MASK;
-			mmcra |= val << MMCRA_THR_CMP_SHIFT;
-		}
-
-		if (event[i] & EVENT_WANTS_BHRB) {
-			val = (event[i] >> EVENT_IFM_SHIFT) & EVENT_IFM_MASK;
-			mmcra |= val << MMCRA_IFM_SHIFT;
-		}
-
-		if (pevents[i]->attr.exclude_user)
-			mmcr2 |= MMCR2_FCP(pmc);
-
-		if (pevents[i]->attr.exclude_hv)
-			mmcr2 |= MMCR2_FCH(pmc);
-
-		if (pevents[i]->attr.exclude_kernel) {
-			if (cpu_has_feature(CPU_FTR_HVMODE))
-				mmcr2 |= MMCR2_FCH(pmc);
-			else
-				mmcr2 |= MMCR2_FCS(pmc);
-		}
-
-		hwc[i] = pmc - 1;
-	}
-
-	/* Return MMCRx values */
-	mmcr[0] = 0;
-
-	/* pmc_inuse is 1-based */
-	if (pmc_inuse & 2)
-		mmcr[0] = MMCR0_PMC1CE;
-
-	if (pmc_inuse & 0x7c)
-		mmcr[0] |= MMCR0_PMCjCE;
-
-	/* If we're not using PMC 5 or 6, freeze them */
-	if (!(pmc_inuse & 0x60))
-		mmcr[0] |= MMCR0_FC56;
-
-	mmcr[1] = mmcr1;
-	mmcr[2] = mmcra;
-	mmcr[3] = mmcr2;
-
-	return 0;
-}
-
-#define MAX_ALT	2
+/* PowerISA v2.07 format attribute structure*/
+extern struct attribute_group isa207_pmu_format_group;
 
 /* Table of alternatives, sorted by column 0 */
 static const unsigned int event_alternatives[][MAX_ALT] = {
@@ -502,75 +109,15 @@ static const unsigned int event_alternatives[][MAX_ALT] = {
 	{ PM_RUN_INST_CMPL_ALT,		PM_RUN_INST_CMPL },
 };
 
-/*
- * Scan the alternatives table for a match and return the
- * index into the alternatives table if found, else -1.
- */
-static int find_alternative(u64 event)
-{
-	int i, j;
-
-	for (i = 0; i < ARRAY_SIZE(event_alternatives); ++i) {
-		if (event < event_alternatives[i][0])
-			break;
-
-		for (j = 0; j < MAX_ALT && event_alternatives[i][j]; ++j)
-			if (event == event_alternatives[i][j])
-				return i;
-	}
-
-	return -1;
-}
-
 static int power8_get_alternatives(u64 event, unsigned int flags, u64 alt[])
 {
-	int i, j, num_alt = 0;
-	u64 alt_event;
+	int num_alt = 0;
 
-	alt[num_alt++] = event;
-
-	i = find_alternative(event);
-	if (i >= 0) {
-		/* Filter out the original event, it's already in alt[0] */
-		for (j = 0; j < MAX_ALT; ++j) {
-			alt_event = event_alternatives[i][j];
-			if (alt_event && alt_event != event)
-				alt[num_alt++] = alt_event;
-		}
-	}
-
-	if (flags & PPMU_ONLY_COUNT_RUN) {
-		/*
-		 * We're only counting in RUN state, so PM_CYC is equivalent to
-		 * PM_RUN_CYC and PM_INST_CMPL === PM_RUN_INST_CMPL.
-		 */
-		j = num_alt;
-		for (i = 0; i < num_alt; ++i) {
-			switch (alt[i]) {
-			case PM_CYC:
-				alt[j++] = PM_RUN_CYC;
-				break;
-			case PM_RUN_CYC:
-				alt[j++] = PM_CYC;
-				break;
-			case PM_INST_CMPL:
-				alt[j++] = PM_RUN_INST_CMPL;
-				break;
-			case PM_RUN_INST_CMPL:
-				alt[j++] = PM_INST_CMPL;
-				break;
-			}
-		}
-		num_alt = j;
-	}
+	num_alt = isa207_get_alternatives(event, alt,
+					  ARRAY_SIZE(event_alternatives), flags,
+					  event_alternatives);
 
 	return num_alt;
-}
-
-static void power8_disable_pmc(unsigned int pmc, unsigned long mmcr[])
-{
-	if (pmc <= 3)
-		mmcr[1] &= ~(0xffUL << MMCR1_PMCSEL_SHIFT(pmc + 1));
 }
 
 GENERIC_EVENT_ATTR(cpu-cycles,			PM_CYC);
@@ -581,6 +128,7 @@ GENERIC_EVENT_ATTR(branch-instructions,		PM_BRU_FIN);
 GENERIC_EVENT_ATTR(branch-misses,		PM_BR_MPRED_CMPL);
 GENERIC_EVENT_ATTR(cache-references,		PM_LD_REF_L1);
 GENERIC_EVENT_ATTR(cache-misses,		PM_LD_MISS_L1);
+GENERIC_EVENT_ATTR(mem_access,			MEM_ACCESS);
 
 CACHE_EVENT_ATTR(L1-dcache-load-misses,		PM_LD_MISS_L1);
 CACHE_EVENT_ATTR(L1-dcache-loads,		PM_LD_REF_L1);
@@ -611,6 +159,7 @@ static struct attribute *power8_events_attr[] = {
 	GENERIC_EVENT_PTR(PM_BR_MPRED_CMPL),
 	GENERIC_EVENT_PTR(PM_LD_REF_L1),
 	GENERIC_EVENT_PTR(PM_LD_MISS_L1),
+	GENERIC_EVENT_PTR(MEM_ACCESS),
 
 	CACHE_EVENT_PTR(PM_LD_MISS_L1),
 	CACHE_EVENT_PTR(PM_LD_REF_L1),
@@ -638,42 +187,8 @@ static struct attribute_group power8_pmu_events_group = {
 	.attrs = power8_events_attr,
 };
 
-PMU_FORMAT_ATTR(event,		"config:0-49");
-PMU_FORMAT_ATTR(pmcxsel,	"config:0-7");
-PMU_FORMAT_ATTR(mark,		"config:8");
-PMU_FORMAT_ATTR(combine,	"config:11");
-PMU_FORMAT_ATTR(unit,		"config:12-15");
-PMU_FORMAT_ATTR(pmc,		"config:16-19");
-PMU_FORMAT_ATTR(cache_sel,	"config:20-23");
-PMU_FORMAT_ATTR(sample_mode,	"config:24-28");
-PMU_FORMAT_ATTR(thresh_sel,	"config:29-31");
-PMU_FORMAT_ATTR(thresh_stop,	"config:32-35");
-PMU_FORMAT_ATTR(thresh_start,	"config:36-39");
-PMU_FORMAT_ATTR(thresh_cmp,	"config:40-49");
-
-static struct attribute *power8_pmu_format_attr[] = {
-	&format_attr_event.attr,
-	&format_attr_pmcxsel.attr,
-	&format_attr_mark.attr,
-	&format_attr_combine.attr,
-	&format_attr_unit.attr,
-	&format_attr_pmc.attr,
-	&format_attr_cache_sel.attr,
-	&format_attr_sample_mode.attr,
-	&format_attr_thresh_sel.attr,
-	&format_attr_thresh_stop.attr,
-	&format_attr_thresh_start.attr,
-	&format_attr_thresh_cmp.attr,
-	NULL,
-};
-
-struct attribute_group power8_pmu_format_group = {
-	.name = "format",
-	.attrs = power8_pmu_format_attr,
-};
-
 static const struct attribute_group *power8_pmu_attr_groups[] = {
-	&power8_pmu_format_group,
+	&isa207_pmu_format_group,
 	&power8_pmu_events_group,
 	NULL,
 };
@@ -725,6 +240,8 @@ static u64 power8_bhrb_filter_map(u64 branch_sample_type)
 
 static void power8_config_bhrb(u64 pmu_bhrb_filter)
 {
+	pmu_bhrb_filter &= POWER8_MMCRA_BHRB_MASK;
+
 	/* Enable BHRB filter in PMU */
 	mtspr(SPRN_MMCRA, (mfspr(SPRN_MMCRA) | pmu_bhrb_filter));
 }
@@ -736,7 +253,7 @@ static void power8_config_bhrb(u64 pmu_bhrb_filter)
  * 0 means not supported, -1 means nonsensical, other values
  * are event codes.
  */
-static int power8_cache_events[C(MAX)][C(OP_MAX)][C(RESULT_MAX)] = {
+static u64 power8_cache_events[C(MAX)][C(OP_MAX)][C(RESULT_MAX)] = {
 	[ C(L1D) ] = {
 		[ C(OP_READ) ] = {
 			[ C(RESULT_ACCESS) ] = PM_LD_REF_L1,
@@ -841,16 +358,18 @@ static int power8_cache_events[C(MAX)][C(OP_MAX)][C(RESULT_MAX)] = {
 
 static struct power_pmu power8_pmu = {
 	.name			= "POWER8",
-	.n_counter		= 6,
+	.n_counter		= MAX_PMU_COUNTERS,
 	.max_alternatives	= MAX_ALT + 1,
-	.add_fields		= POWER8_ADD_FIELDS,
-	.test_adder		= POWER8_TEST_ADDER,
-	.compute_mmcr		= power8_compute_mmcr,
+	.add_fields		= ISA207_ADD_FIELDS,
+	.test_adder		= ISA207_TEST_ADDER,
+	.compute_mmcr		= isa207_compute_mmcr,
 	.config_bhrb		= power8_config_bhrb,
 	.bhrb_filter_map	= power8_bhrb_filter_map,
-	.get_constraint		= power8_get_constraint,
+	.get_constraint		= isa207_get_constraint,
 	.get_alternatives	= power8_get_alternatives,
-	.disable_pmc		= power8_disable_pmc,
+	.get_mem_data_src	= isa207_get_mem_data_src,
+	.get_mem_weight		= isa207_get_mem_weight,
+	.disable_pmc		= isa207_disable_pmc,
 	.flags			= PPMU_HAS_SIER | PPMU_ARCH_207S,
 	.n_generic		= ARRAY_SIZE(power8_generic_events),
 	.generic_events		= power8_generic_events,
@@ -859,7 +378,7 @@ static struct power_pmu power8_pmu = {
 	.bhrb_nr		= 32,
 };
 
-static int __init init_power8_pmu(void)
+int init_power8_pmu(void)
 {
 	int rc;
 
@@ -879,4 +398,3 @@ static int __init init_power8_pmu(void)
 
 	return 0;
 }
-early_initcall(init_power8_pmu);

@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2009-2010, 2012 Freescale Semiconductor, Inc.
  *
  * QorIQ (P1/P2) L2 controller init for Cache-SRAM instantiation
  *
  * Author: Vivek Mahajan <vivek.mahajan@freescale.com>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>
@@ -90,12 +77,8 @@ static int mpc85xx_l2ctlr_of_probe(struct platform_device *dev)
 	}
 	l2cache_size = *prop;
 
-	if (get_cache_sram_params(&sram_params)) {
-		dev_err(&dev->dev,
-			"Entire L2 as cache, provide valid sram offset and size\n");
-		return -EINVAL;
-	}
-
+	if (get_cache_sram_params(&sram_params))
+		return 0; /* fall back to L2 cache only */
 
 	rem = l2cache_size % sram_params.sram_size;
 	ways = LOCK_WAYS_FULL * sram_params.sram_size / l2cache_size;

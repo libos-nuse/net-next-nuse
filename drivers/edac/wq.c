@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #include "edac_module.h"
 
 static struct workqueue_struct *wq;
@@ -27,7 +28,7 @@ EXPORT_SYMBOL_GPL(edac_stop_work);
 
 int edac_workqueue_setup(void)
 {
-	wq = create_singlethread_workqueue("edac-poller");
+	wq = alloc_ordered_workqueue("edac-poller", WQ_MEM_RECLAIM);
 	if (!wq)
 		return -ENODEV;
 	else

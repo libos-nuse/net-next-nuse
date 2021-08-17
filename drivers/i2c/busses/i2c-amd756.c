@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
     Copyright (c) 1999-2002 Merlin Hughes <merlin@merlin.org>
 
@@ -6,15 +7,6 @@
     Copyright (c) 1998, 1999  Frodo Looijaard <frodol@dds.nl> and
     Philip Edelbrock <phil@netroedge.com>
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
 */
 
 /*
@@ -378,11 +370,8 @@ static int amd756_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		 amd756_ioport);
 
 	error = i2c_add_adapter(&amd756_smbus);
-	if (error) {
-		dev_err(&pdev->dev,
-			"Adapter registration failed, module not inserted\n");
+	if (error)
 		goto out_err;
-	}
 
 	return 0;
 

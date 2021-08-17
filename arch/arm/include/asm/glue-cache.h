@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  arch/arm/include/asm/glue-cache.h
  *
  *  Copyright (C) 1999-2002 Russell King
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #ifndef ASM_GLUE_CACHE_H
 #define ASM_GLUE_CACHE_H
@@ -117,12 +114,12 @@
 # endif
 #endif
 
+#if defined(CONFIG_CACHE_B15_RAC)
+# define MULTI_CACHE 1
+#endif
+
 #if defined(CONFIG_CPU_V7M)
-# ifdef _CACHE
 #  define MULTI_CACHE 1
-# else
-#  define _CACHE nop
-# endif
 #endif
 
 #if !defined(_CACHE) && !defined(MULTI_CACHE)

@@ -1,11 +1,15 @@
+#include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <linux/kernel.h>
 #ifdef HAVE_BACKTRACE_SUPPORT
 #include <execinfo.h>
 #endif
 
-#include "../../util/cache.h"
 #include "../../util/debug.h"
+#include "../../perf.h"
 #include "../browser.h"
 #include "../helpline.h"
 #include "../ui.h"

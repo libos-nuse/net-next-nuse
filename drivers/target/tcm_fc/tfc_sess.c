@@ -1,18 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2010 Cisco Systems, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 /* XXX TBD some includes may be extraneous */
@@ -38,6 +26,11 @@
 #include <target/target_core_fabric.h>
 
 #include "tcm_fc.h"
+
+#define TFC_SESS_DBG(lport, fmt, args...) \
+	pr_debug("host%u: rport %6.6x: " fmt,	   \
+		 (lport)->host->host_no,	   \
+		 (lport)->port_id, ##args )
 
 static void ft_sess_delete_all(struct ft_tport *);
 
@@ -91,6 +84,7 @@ static void ft_tport_delete(struct ft_tport *tport)
 
 	ft_sess_delete_all(tport);
 	lport = tport->lport;
+	lport->service_params &= ~FCP_SPPF_TARG_FCN;
 	BUG_ON(tport != lport->prov[FC_TYPE_FCP]);
 	RCU_INIT_POINTER(lport->prov[FC_TYPE_FCP], NULL);
 
@@ -110,6 +104,7 @@ void ft_lport_add(struct fc_lport *lport, void *arg)
 {
 	mutex_lock(&ft_lport_lock);
 	ft_tport_get(lport);
+	lport->service_params |= FCP_SPPF_TARG_FCN;
 	mutex_unlock(&ft_lport_lock);
 }
 
@@ -165,24 +160,29 @@ static struct ft_sess *ft_sess_get(struct fc_lport *lport, u32 port_id)
 	struct ft_tport *tport;
 	struct hlist_head *head;
 	struct ft_sess *sess;
+	char *reason = "no session created";
 
 	rcu_read_lock();
 	tport = rcu_dereference(lport->prov[FC_TYPE_FCP]);
-	if (!tport)
+	if (!tport) {
+		reason = "not an FCP port";
 		goto out;
+	}
 
 	head = &tport->hash[ft_sess_hash(port_id)];
 	hlist_for_each_entry_rcu(sess, head, hash) {
 		if (sess->port_id == port_id) {
 			kref_get(&sess->kref);
 			rcu_read_unlock();
-			pr_debug("port_id %x found %p\n", port_id, sess);
+			TFC_SESS_DBG(lport, "port_id %x found %p\n",
+				     port_id, sess);
 			return sess;
 		}
 	}
 out:
 	rcu_read_unlock();
-	pr_debug("port_id %x not found\n", port_id);
+	TFC_SESS_DBG(lport, "port_id %x not found, %s\n",
+		     port_id, reason);
 	return NULL;
 }
 
@@ -193,7 +193,7 @@ static int ft_sess_alloc_cb(struct se_portal_group *se_tpg,
 	struct ft_tport *tport = sess->tport;
 	struct hlist_head *head = &tport->hash[ft_sess_hash(sess->port_id)];
 
-	pr_debug("port_id %x sess %p\n", sess->port_id, sess);
+	TFC_SESS_DBG(tport->lport, "port_id %x sess %p\n", sess->port_id, sess);
 	hlist_add_head_rcu(&sess->hash, head);
 	tport->sess_count++;
 
@@ -221,19 +221,20 @@ static struct ft_sess *ft_sess_create(struct ft_tport *tport, u32 port_id,
 
 	sess = kzalloc(sizeof(*sess), GFP_KERNEL);
 	if (!sess)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	kref_init(&sess->kref); /* ref for table entry */
 	sess->tport = tport;
 	sess->port_id = port_id;
 
-	sess->se_sess = target_alloc_session(se_tpg, TCM_FC_DEFAULT_TAGS,
+	sess->se_sess = target_setup_session(se_tpg, TCM_FC_DEFAULT_TAGS,
 					     sizeof(struct ft_cmd),
 					     TARGET_PROT_NORMAL, &initiatorname[0],
 					     sess, ft_sess_alloc_cb);
 	if (IS_ERR(sess->se_sess)) {
+		int rc = PTR_ERR(sess->se_sess);
 		kfree(sess);
-		return NULL;
+		sess = ERR_PTR(rc);
 	}
 	return sess;
 }
@@ -274,7 +275,6 @@ static struct ft_sess *ft_sess_delete(struct ft_tport *tport, u32 port_id)
 
 static void ft_close_sess(struct ft_sess *sess)
 {
-	transport_deregister_session_configfs(sess->se_sess);
 	target_sess_cmd_list_set_waiting(sess->se_sess);
 	target_wait_for_sess_cmds(sess->se_sess);
 	ft_sess_put(sess);
@@ -317,7 +317,7 @@ void ft_sess_close(struct se_session *se_sess)
 		mutex_unlock(&ft_lport_lock);
 		return;
 	}
-	pr_debug("port_id %x\n", port_id);
+	TFC_SESS_DBG(sess->tport->lport, "port_id %x close session\n", port_id);
 	ft_sess_unhash(sess);
 	mutex_unlock(&ft_lport_lock);
 	ft_close_sess(sess);
@@ -377,8 +377,13 @@ static int ft_prli_locked(struct fc_rport_priv *rdata, u32 spp_len,
 		if (!(fcp_parm & FCP_SPPF_INIT_FCN))
 			return FC_SPP_RESP_CONF;
 		sess = ft_sess_create(tport, rdata->ids.port_id, rdata);
-		if (!sess)
-			return FC_SPP_RESP_RES;
+		if (IS_ERR(sess)) {
+			if (PTR_ERR(sess) == -EACCES) {
+				spp->spp_flags &= ~FC_SPP_EST_IMG_PAIR;
+				return FC_SPP_RESP_CONF;
+			} else
+				return FC_SPP_RESP_RES;
+		}
 		if (!sess->params)
 			rdata->prli_count++;
 		sess->params = fcp_parm;
@@ -421,8 +426,8 @@ static int ft_prli(struct fc_rport_priv *rdata, u32 spp_len,
 	mutex_lock(&ft_lport_lock);
 	ret = ft_prli_locked(rdata, spp_len, rspp, spp);
 	mutex_unlock(&ft_lport_lock);
-	pr_debug("port_id %x flags %x ret %x\n",
-	       rdata->ids.port_id, rspp ? rspp->spp_flags : 0, ret);
+	TFC_SESS_DBG(rdata->local_port, "port_id %x flags %x ret %x\n",
+		     rdata->ids.port_id, rspp ? rspp->spp_flags : 0, ret);
 	return ret;
 }
 
@@ -430,13 +435,13 @@ static void ft_sess_free(struct kref *kref)
 {
 	struct ft_sess *sess = container_of(kref, struct ft_sess, kref);
 
-	transport_deregister_session(sess->se_sess);
+	target_remove_session(sess->se_sess);
 	kfree_rcu(sess, rcu);
 }
 
 void ft_sess_put(struct ft_sess *sess)
 {
-	int sess_held = atomic_read(&sess->kref.refcount);
+	int sess_held = kref_read(&sess->kref);
 
 	BUG_ON(!sess_held);
 	kref_put(&sess->kref, ft_sess_free);
@@ -475,11 +480,11 @@ static void ft_recv(struct fc_lport *lport, struct fc_frame *fp)
 	struct ft_sess *sess;
 	u32 sid = fc_frame_sid(fp);
 
-	pr_debug("sid %x\n", sid);
+	TFC_SESS_DBG(lport, "recv sid %x\n", sid);
 
 	sess = ft_sess_get(lport, sid);
 	if (!sess) {
-		pr_debug("sid %x sess lookup failed\n", sid);
+		TFC_SESS_DBG(lport, "sid %x sess lookup failed\n", sid);
 		/* TBD XXX - if FCP_CMND, send PRLO */
 		fc_frame_free(fp);
 		return;

@@ -1,19 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * MMCIF eMMC driver.
  *
  * Copyright (C) 2010 Renesas Solutions Corp.
  * Yusuke Goda <yusuke.goda.sx@renesas.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License.
- *
- *
- * TODO
- *  1. DMA
- *  2. Power management
- *  3. Handle MMC errors better
- *
  */
 
 /*
@@ -67,7 +57,6 @@
 #include <linux/module.h>
 
 #define DRIVER_NAME	"sh_mmcif"
-#define DRIVER_VERSION	"2010-04-28"
 
 /* CE_CMD_SET */
 #define CMD_MASK		0x3f000000
@@ -202,9 +191,9 @@
 				 STS2_AC12BSYTO | STS2_RSPBSYTO |	\
 				 STS2_AC12RSPTO | STS2_RSPTO)
 
-#define CLKDEV_EMMC_DATA	52000000 /* 52MHz */
-#define CLKDEV_MMC_DATA		20000000 /* 20MHz */
-#define CLKDEV_INIT		400000   /* 400 KHz */
+#define CLKDEV_EMMC_DATA	52000000 /* 52 MHz */
+#define CLKDEV_MMC_DATA		20000000 /* 20 MHz */
+#define CLKDEV_INIT		400000   /* 400 kHz */
 
 enum sh_mmcif_state {
 	STATE_IDLE,
@@ -443,8 +432,12 @@ static void sh_mmcif_request_dma(struct sh_mmcif_host *host)
 		host->chan_rx = sh_mmcif_request_dma_pdata(host,
 							pdata->slave_id_rx);
 	} else {
-		host->chan_tx = dma_request_slave_channel(dev, "tx");
-		host->chan_rx = dma_request_slave_channel(dev, "rx");
+		host->chan_tx = dma_request_chan(dev, "tx");
+		if (IS_ERR(host->chan_tx))
+			host->chan_tx = NULL;
+		host->chan_rx = dma_request_chan(dev, "rx");
+		if (IS_ERR(host->chan_rx))
+			host->chan_rx = NULL;
 	}
 	dev_dbg(dev, "%s: got channel TX %p RX %p\n", __func__, host->chan_tx,
 		host->chan_rx);
@@ -574,7 +567,7 @@ static int sh_mmcif_error_manage(struct sh_mmcif_host *host)
 	if (state1 & STS1_CMDSEQ) {
 		sh_mmcif_bitset(host, MMCIF_CE_CMD_CTRL, CMD_CTRL_BREAK);
 		sh_mmcif_bitset(host, MMCIF_CE_CMD_CTRL, ~CMD_CTRL_BREAK);
-		for (timeout = 10000000; timeout; timeout--) {
+		for (timeout = 10000; timeout; timeout--) {
 			if (!(sh_mmcif_readl(host->addr, MMCIF_CE_HOST_STS1)
 			      & STS1_CMDSEQ))
 				break;
@@ -819,9 +812,11 @@ static u32 sh_mmcif_set_cmd(struct sh_mmcif_host *host,
 		tmp |= CMD_SET_RTYP_NO;
 		break;
 	case MMC_RSP_R1:
-	case MMC_RSP_R1B:
 	case MMC_RSP_R3:
 		tmp |= CMD_SET_RTYP_6B;
+		break;
+	case MMC_RSP_R1B:
+		tmp |= CMD_SET_RBSY | CMD_SET_RTYP_6B;
 		break;
 	case MMC_RSP_R2:
 		tmp |= CMD_SET_RTYP_17B;
@@ -830,17 +825,7 @@ static u32 sh_mmcif_set_cmd(struct sh_mmcif_host *host,
 		dev_err(dev, "Unsupported response type.\n");
 		break;
 	}
-	switch (opc) {
-	/* RBSY */
-	case MMC_SLEEP_AWAKE:
-	case MMC_SWITCH:
-	case MMC_STOP_TRANSMISSION:
-	case MMC_SET_WRITE_PROT:
-	case MMC_CLR_WRITE_PROT:
-	case MMC_ERASE:
-		tmp |= CMD_SET_RBSY;
-		break;
-	}
+
 	/* WDAT / DATW */
 	if (data) {
 		tmp |= CMD_SET_WDAT;
@@ -924,24 +909,14 @@ static void sh_mmcif_start_cmd(struct sh_mmcif_host *host,
 			       struct mmc_request *mrq)
 {
 	struct mmc_command *cmd = mrq->cmd;
-	u32 opc = cmd->opcode;
-	u32 mask;
+	u32 opc;
+	u32 mask = 0;
 	unsigned long flags;
 
-	switch (opc) {
-	/* response busy check */
-	case MMC_SLEEP_AWAKE:
-	case MMC_SWITCH:
-	case MMC_STOP_TRANSMISSION:
-	case MMC_SET_WRITE_PROT:
-	case MMC_CLR_WRITE_PROT:
-	case MMC_ERASE:
+	if (cmd->flags & MMC_RSP_BUSY)
 		mask = MASK_START_CMD | MASK_MRBSYE;
-		break;
-	default:
+	else
 		mask = MASK_START_CMD | MASK_MCRSPE;
-		break;
-	}
 
 	if (host->ccs_enable)
 		mask |= MASK_MCCSTO;
@@ -1008,22 +983,6 @@ static void sh_mmcif_request(struct mmc_host *mmc, struct mmc_request *mrq)
 
 	host->state = STATE_REQUEST;
 	spin_unlock_irqrestore(&host->lock, flags);
-
-	switch (mrq->cmd->opcode) {
-	/* MMCIF does not support SD/SDIO command */
-	case MMC_SLEEP_AWAKE: /* = SD_IO_SEND_OP_COND (5) */
-	case MMC_SEND_EXT_CSD: /* = SD_SEND_IF_COND (8) */
-		if ((mrq->cmd->flags & MMC_CMD_MASK) != MMC_CMD_BCR)
-			break;
-	case MMC_APP_CMD:
-	case SD_IO_RW_DIRECT:
-		host->state = STATE_IDLE;
-		mrq->cmd->error = -ETIMEDOUT;
-		mmc_request_done(mmc, mrq);
-		return;
-	default:
-		break;
-	}
 
 	host->mrq = mrq;
 
@@ -1113,26 +1072,10 @@ static void sh_mmcif_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	host->state = STATE_IDLE;
 }
 
-static int sh_mmcif_get_cd(struct mmc_host *mmc)
-{
-	struct sh_mmcif_host *host = mmc_priv(mmc);
-	struct device *dev = sh_mmcif_host_to_dev(host);
-	struct sh_mmcif_plat_data *p = dev->platform_data;
-	int ret = mmc_gpio_get_cd(mmc);
-
-	if (ret >= 0)
-		return ret;
-
-	if (!p || !p->get_cd)
-		return -ENOSYS;
-	else
-		return p->get_cd(host->pd);
-}
-
-static struct mmc_host_ops sh_mmcif_ops = {
+static const struct mmc_host_ops sh_mmcif_ops = {
 	.request	= sh_mmcif_request,
 	.set_ios	= sh_mmcif_set_ios,
-	.get_cd		= sh_mmcif_get_cd,
+	.get_cd		= mmc_gpio_get_cd,
 };
 
 static bool sh_mmcif_end_cmd(struct sh_mmcif_host *host)
@@ -1449,19 +1392,15 @@ static int sh_mmcif_probe(struct platform_device *pdev)
 	struct sh_mmcif_host *host;
 	struct device *dev = &pdev->dev;
 	struct sh_mmcif_plat_data *pd = dev->platform_data;
-	struct resource *res;
 	void __iomem *reg;
 	const char *name;
 
 	irq[0] = platform_get_irq(pdev, 0);
-	irq[1] = platform_get_irq(pdev, 1);
-	if (irq[0] < 0) {
-		dev_err(dev, "Get irq error\n");
+	irq[1] = platform_get_irq_optional(pdev, 1);
+	if (irq[0] < 0)
 		return -ENXIO;
-	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	reg = devm_ioremap_resource(dev, res);
+	reg = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(reg))
 		return PTR_ERR(reg);
 
@@ -1477,8 +1416,8 @@ static int sh_mmcif_probe(struct platform_device *pdev)
 	host->mmc	= mmc;
 	host->addr	= reg;
 	host->timeout	= msecs_to_jiffies(10000);
-	host->ccs_enable = !pd || !pd->ccs_unsupported;
-	host->clk_ctrl2_enable = pd && pd->clk_ctrl2_present;
+	host->ccs_enable = true;
+	host->clk_ctrl2_enable = false;
 
 	host->pd = pdev;
 
@@ -1488,6 +1427,9 @@ static int sh_mmcif_probe(struct platform_device *pdev)
 	sh_mmcif_init_ocr(host);
 
 	mmc->caps |= MMC_CAP_MMC_HIGHSPEED | MMC_CAP_WAIT_WHILE_BUSY;
+	mmc->caps2 |= MMC_CAP2_NO_SD | MMC_CAP2_NO_SDIO;
+	mmc->max_busy_timeout = 10000;
+
 	if (pd && pd->caps)
 		mmc->caps |= pd->caps;
 	mmc->max_segs = 32;
@@ -1538,12 +1480,6 @@ static int sh_mmcif_probe(struct platform_device *pdev)
 			dev_err(dev, "request_irq error (sh_mmc:int)\n");
 			goto err_clk;
 		}
-	}
-
-	if (pd && pd->use_cd_gpio) {
-		ret = mmc_gpio_request_cd(mmc, pd->cd_gpio, 0);
-		if (ret < 0)
-			goto err_clk;
 	}
 
 	mutex_init(&host->thread_lock);
@@ -1626,6 +1562,7 @@ static struct platform_driver sh_mmcif_driver = {
 	.remove		= sh_mmcif_remove,
 	.driver		= {
 		.name	= DRIVER_NAME,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.pm	= &sh_mmcif_dev_pm_ops,
 		.of_match_table = sh_mmcif_of_match,
 	},
@@ -1634,6 +1571,6 @@ static struct platform_driver sh_mmcif_driver = {
 module_platform_driver(sh_mmcif_driver);
 
 MODULE_DESCRIPTION("SuperH on-chip MMC/eMMC interface driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("platform:" DRIVER_NAME);
 MODULE_AUTHOR("Yusuke Goda <yusuke.goda.sx@renesas.com>");

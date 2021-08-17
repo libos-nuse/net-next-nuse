@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Device driver for regulators in hi655x IC
  *
@@ -6,10 +7,6 @@
  * Authors:
  * Chen Feng <puck.chen@hisilicon.com>
  * Fei  Wang <w.f@huawei.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __HI655X_PMIC_H
@@ -34,14 +31,23 @@
 #define PMU_VER_START                   0x10
 #define PMU_VER_END                     0x38
 
-#define RESERVE_INT                     BIT(7)
-#define PWRON_D20R_INT                  BIT(6)
-#define PWRON_D20F_INT                  BIT(5)
-#define PWRON_D4SR_INT                  BIT(4)
-#define VSYS_6P0_D200UR_INT             BIT(3)
-#define VSYS_UV_D3R_INT                 BIT(2)
-#define VSYS_2P5_R_INT                  BIT(1)
-#define OTMP_D1R_INT                    BIT(0)
+#define RESERVE_INT                     7
+#define PWRON_D20R_INT                  6
+#define PWRON_D20F_INT                  5
+#define PWRON_D4SR_INT                  4
+#define VSYS_6P0_D200UR_INT             3
+#define VSYS_UV_D3R_INT                 2
+#define VSYS_2P5_R_INT                  1
+#define OTMP_D1R_INT                    0
+
+#define RESERVE_INT_MASK                BIT(RESERVE_INT)
+#define PWRON_D20R_INT_MASK             BIT(PWRON_D20R_INT)
+#define PWRON_D20F_INT_MASK             BIT(PWRON_D20F_INT)
+#define PWRON_D4SR_INT_MASK             BIT(PWRON_D4SR_INT)
+#define VSYS_6P0_D200UR_INT_MASK        BIT(VSYS_6P0_D200UR_INT)
+#define VSYS_UV_D3R_INT_MASK            BIT(VSYS_UV_D3R_INT)
+#define VSYS_2P5_R_INT_MASK             BIT(VSYS_2P5_R_INT)
+#define OTMP_D1R_INT_MASK               BIT(OTMP_D1R_INT)
 
 struct hi655x_pmic {
 	struct resource *res;

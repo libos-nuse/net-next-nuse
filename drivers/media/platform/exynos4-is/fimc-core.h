@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2010 - 2012 Samsung Electronics Co., Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef FIMC_CORE_H_
@@ -299,15 +296,11 @@ struct fimc_m2m_device {
  * @buf_index: index for managing the output DMA buffers
  * @frame_count: the frame counter for statistics
  * @reqbufs_count: the number of buffers requested in REQBUFS ioctl
- * @input_index: input (camera sensor) index
  * @input: capture input type, grp_id of the attached subdev
  * @user_subdev_api: true if subdevs are not configured by the host driver
- * @inh_sensor_ctrls: a flag indicating v4l2 controls are inherited from
- * 		      an image sensor subdev
  */
 struct fimc_vid_cap {
 	struct fimc_ctx			*ctx;
-	struct vb2_alloc_ctx		*alloc_ctx;
 	struct v4l2_subdev		subdev;
 	struct exynos_video_entity	ve;
 	struct media_pad		vd_pad;
@@ -323,10 +316,8 @@ struct fimc_vid_cap {
 	unsigned int			frame_count;
 	unsigned int			reqbufs_count;
 	bool				streaming;
-	int				input_index;
 	u32				input;
 	bool				user_subdev_api;
-	bool				inh_sensor_ctrls;
 };
 
 /**
@@ -359,7 +350,7 @@ struct fimc_pix_limit {
  * @pix_limit: pixel size constraints for the scaler
  * @min_inp_pixsize: minimum input pixel size
  * @min_out_pixsize: minimum output pixel size
- * @hor_offs_align: horizontal pixel offset aligment
+ * @hor_offs_align: horizontal pixel offset alignment
  * @min_vsize_align: minimum vertical pixel size alignment
  */
 struct fimc_variant {
@@ -417,7 +408,6 @@ struct fimc_ctx;
  * @m2m:	memory-to-memory V4L2 device information
  * @vid_cap:	camera capture device information
  * @state:	flags used to synchronize m2m and capture mode operation
- * @alloc_ctx:	videobuf2 memory allocator context
  * @pipeline:	fimc video capture pipeline data structure
  */
 struct fimc_dev {
@@ -436,7 +426,6 @@ struct fimc_dev {
 	struct fimc_m2m_device		m2m;
 	struct fimc_vid_cap		vid_cap;
 	unsigned long			state;
-	struct vb2_alloc_ctx		*alloc_ctx;
 };
 
 /**
@@ -599,12 +588,14 @@ static inline struct fimc_frame *ctx_get_frame(struct fimc_ctx *ctx,
 {
 	struct fimc_frame *frame;
 
-	if (V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE == type) {
+	if (type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE ||
+	    type == V4L2_BUF_TYPE_VIDEO_OUTPUT) {
 		if (fimc_ctx_state_is_set(FIMC_CTX_M2M, ctx))
 			frame = &ctx->s_frame;
 		else
 			return ERR_PTR(-EINVAL);
-	} else if (V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE == type) {
+	} else if (type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE ||
+		   type == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
 		frame = &ctx->d_frame;
 	} else {
 		v4l2_err(ctx->fimc_dev->v4l2_dev,

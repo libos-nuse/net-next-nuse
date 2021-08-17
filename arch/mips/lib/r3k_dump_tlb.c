@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Dump R3000 TLB for debugging purposes.
  *
@@ -11,7 +12,6 @@
 #include <asm/mipsregs.h>
 #include <asm/mmu_context.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
 #include <asm/tlbdebug.h>
 
 extern int r3k_have_wired_reg;
@@ -53,15 +53,15 @@ static void dump_tlb(int first, int last)
 			 */
 			printk("Index: %2d ", i);
 
-			printk("va=%08lx asid=%08lx"
-			       "  [pa=%06lx n=%d d=%d v=%d g=%d]",
-			       entryhi & PAGE_MASK,
-			       entryhi & asid_mask,
-			       entrylo0 & PAGE_MASK,
-			       (entrylo0 & R3K_ENTRYLO_N) ? 1 : 0,
-			       (entrylo0 & R3K_ENTRYLO_D) ? 1 : 0,
-			       (entrylo0 & R3K_ENTRYLO_V) ? 1 : 0,
-			       (entrylo0 & R3K_ENTRYLO_G) ? 1 : 0);
+			pr_cont("va=%08lx asid=%08lx"
+				"  [pa=%06lx n=%d d=%d v=%d g=%d]",
+				entryhi & PAGE_MASK,
+				entryhi & asid_mask,
+				entrylo0 & PAGE_MASK,
+				(entrylo0 & R3K_ENTRYLO_N) ? 1 : 0,
+				(entrylo0 & R3K_ENTRYLO_D) ? 1 : 0,
+				(entrylo0 & R3K_ENTRYLO_V) ? 1 : 0,
+				(entrylo0 & R3K_ENTRYLO_G) ? 1 : 0);
 		}
 	}
 	printk("\n");

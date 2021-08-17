@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2014 IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -54,6 +50,19 @@ static inline void cxl_calls_put(struct cxl_calls *calls) { }
 
 #endif /* CONFIG_CXL_MODULE */
 
+/* AFU refcount management */
+struct cxl_afu *cxl_afu_get(struct cxl_afu *afu)
+{
+	return (get_device(&afu->dev) == NULL) ? NULL : afu;
+}
+EXPORT_SYMBOL_GPL(cxl_afu_get);
+
+void cxl_afu_put(struct cxl_afu *afu)
+{
+	put_device(&afu->dev);
+}
+EXPORT_SYMBOL_GPL(cxl_afu_put);
+
 void cxl_slbia(struct mm_struct *mm)
 {
 	struct cxl_calls *calls;
@@ -95,7 +104,7 @@ EXPORT_SYMBOL_GPL(cxl_update_properties);
 
 static int __init cxl_base_init(void)
 {
-	struct device_node *np = NULL;
+	struct device_node *np;
 	struct platform_device *dev;
 	int count = 0;
 
@@ -105,8 +114,7 @@ static int __init cxl_base_init(void)
 	if (cpu_has_feature(CPU_FTR_HVMODE))
 		return 0;
 
-	while ((np = of_find_compatible_node(np, NULL,
-				     "ibm,coherent-platform-facility"))) {
+	for_each_compatible_node(np, NULL, "ibm,coherent-platform-facility") {
 		dev = of_platform_device_create(np, NULL, NULL);
 		if (dev)
 			count++;
@@ -114,5 +122,4 @@ static int __init cxl_base_init(void)
 	pr_devel("Found %d cxl device(s)\n", count);
 	return 0;
 }
-
-module_init(cxl_base_init);
+device_initcall(cxl_base_init);

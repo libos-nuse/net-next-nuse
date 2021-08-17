@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * IBM/3270 Driver - console view.
  *
@@ -31,7 +32,7 @@
 
 static struct raw3270_fn con3270_fn;
 
-static bool auto_update = 1;
+static bool auto_update = true;
 module_param(auto_update, bool, 0);
 
 /*
@@ -68,7 +69,7 @@ static struct con3270 *condev;
 #define CON_UPDATE_STATUS	4	/* Update status line. */
 #define CON_UPDATE_ALL		8	/* Recreate screen. */
 
-static void con3270_update(struct con3270 *);
+static void con3270_update(struct timer_list *);
 
 /*
  * Setup timeout for a device. On timeout trigger an update.
@@ -124,7 +125,12 @@ con3270_create_status(struct con3270 *cp)
 static void
 con3270_update_string(struct con3270 *cp, struct string *s, int nr)
 {
-	if (s->len >= cp->view.cols - 5)
+	if (s->len < 4) {
+		/* This indicates a bug, but printing a warning would
+		 * cause a deadlock. */
+		return;
+	}
+	if (s->string[s->len - 4] != TO_RA)
 		return;
 	raw3270_buffer_address(cp->view.dev, s->string + s->len - 3,
 			       cp->view.cols * (nr + 1));
@@ -199,8 +205,9 @@ con3270_write_callback(struct raw3270_request *rq, void *data)
  * Update console display.
  */
 static void
-con3270_update(struct con3270 *cp)
+con3270_update(struct timer_list *t)
 {
+	struct con3270 *cp = from_timer(cp, t, timer);
 	struct raw3270_request *wrq;
 	char wcc, prolog[6];
 	unsigned long flags;
@@ -460,11 +467,11 @@ con3270_cline_end(struct con3270 *cp)
 		cp->cline->len + 4 : cp->view.cols;
 	s = con3270_alloc_string(cp, size);
 	memcpy(s->string, cp->cline->string, cp->cline->len);
-	if (s->len < cp->view.cols - 5) {
+	if (cp->cline->len < cp->view.cols - 5) {
 		s->string[s->len - 4] = TO_RA;
 		s->string[s->len - 1] = 0;
 	} else {
-		while (--size > cp->cline->len)
+		while (--size >= cp->cline->len)
 			s->string[size] = cp->view.ascebc[' '];
 	}
 	/* Replace cline with allocated line s and reset cline. */
@@ -546,7 +553,7 @@ con3270_flush(void)
 	con3270_update_status(cp);
 	while (cp->update_flags != 0) {
 		spin_unlock_irqrestore(&cp->view.lock, flags);
-		con3270_update(cp);
+		con3270_update(&cp->timer);
 		spin_lock_irqsave(&cp->view.lock, flags);
 		con3270_wait_write(cp);
 	}
@@ -617,13 +624,12 @@ con3270_init(void)
 
 	INIT_LIST_HEAD(&condev->lines);
 	INIT_LIST_HEAD(&condev->update);
-	setup_timer(&condev->timer, (void (*)(unsigned long)) con3270_update,
-		    (unsigned long) condev);
+	timer_setup(&condev->timer, con3270_update, 0);
 	tasklet_init(&condev->readlet, 
 		     (void (*)(unsigned long)) con3270_read_tasklet,
 		     (unsigned long) condev->read);
 
-	raw3270_add_view(&condev->view, &con3270_fn, 1);
+	raw3270_add_view(&condev->view, &con3270_fn, 1, RAW3270_VIEW_LOCK_IRQ);
 
 	INIT_LIST_HEAD(&condev->freemem);
 	for (i = 0; i < CON3270_STRING_PAGES; i++) {

@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Generic DSI Command Mode panel driver
  *
  * Copyright (C) 2013 Texas Instruments
  * Author: Tomi Valkeinen <tomi.valkeinen@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  */
 
 /* #define DEBUG */
@@ -19,14 +16,13 @@
 #include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
 
-#include <video/omapdss.h>
-#include <video/omap-panel-data.h>
+#include <video/omapfb_dss.h>
 #include <video/mipi_display.h>
 
 /* DSI Virtual channel. Hardcoded for now. */
@@ -76,8 +72,6 @@ struct panel_drv_data {
 
 	bool intro_printed;
 
-	struct workqueue_struct *workqueue;
-
 	bool ulps_enabled;
 	unsigned ulps_timeout;
 	struct delayed_work ulps_work;
@@ -103,7 +97,7 @@ static void hw_guard_wait(struct panel_drv_data *ddata)
 {
 	unsigned long wait = ddata->hw_guard_end - jiffies;
 
-	if ((long)wait > 0 && wait <= ddata->hw_guard_wait) {
+	if ((long)wait > 0 && time_before_eq(wait, ddata->hw_guard_wait)) {
 		set_current_state(TASK_UNINTERRUPTIBLE);
 		schedule_timeout(wait);
 	}
@@ -233,7 +227,7 @@ static int dsicm_set_update_window(struct panel_drv_data *ddata,
 static void dsicm_queue_ulps_work(struct panel_drv_data *ddata)
 {
 	if (ddata->ulps_timeout > 0)
-		queue_delayed_work(ddata->workqueue, &ddata->ulps_work,
+		schedule_delayed_work(&ddata->ulps_work,
 				msecs_to_jiffies(ddata->ulps_timeout));
 }
 
@@ -390,8 +384,7 @@ static void dsicm_get_resolution(struct omap_dss_device *dssdev,
 static ssize_t dsicm_num_errors_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
 	struct omap_dss_device *in = ddata->in;
 	u8 errors = 0;
 	int r;
@@ -422,8 +415,7 @@ static ssize_t dsicm_num_errors_show(struct device *dev,
 static ssize_t dsicm_hw_revision_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
 	struct omap_dss_device *in = ddata->in;
 	u8 id1, id2, id3;
 	int r;
@@ -454,8 +446,7 @@ static ssize_t dsicm_store_ulps(struct device *dev,
 		struct device_attribute *attr,
 		const char *buf, size_t count)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
 	struct omap_dss_device *in = ddata->in;
 	unsigned long t;
 	int r;
@@ -489,8 +480,7 @@ static ssize_t dsicm_show_ulps(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
 	unsigned t;
 
 	mutex_lock(&ddata->lock);
@@ -504,8 +494,7 @@ static ssize_t dsicm_store_ulps_timeout(struct device *dev,
 		struct device_attribute *attr,
 		const char *buf, size_t count)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
 	struct omap_dss_device *in = ddata->in;
 	unsigned long t;
 	int r;
@@ -536,8 +525,7 @@ static ssize_t dsicm_show_ulps_timeout(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
 	unsigned t;
 
 	mutex_lock(&ddata->lock);
@@ -562,7 +550,7 @@ static struct attribute *dsicm_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group dsicm_attr_group = {
+static const struct attribute_group dsicm_attr_group = {
 	.attrs = dsicm_attrs,
 };
 
@@ -1127,40 +1115,6 @@ static struct omap_dss_driver dsicm_ops = {
 	.memory_read	= dsicm_memory_read,
 };
 
-static int dsicm_probe_pdata(struct platform_device *pdev)
-{
-	const struct panel_dsicm_platform_data *pdata;
-	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
-	struct omap_dss_device *dssdev, *in;
-
-	pdata = dev_get_platdata(&pdev->dev);
-
-	in = omap_dss_find_output(pdata->source);
-	if (in == NULL) {
-		dev_err(&pdev->dev, "failed to find video source\n");
-		return -EPROBE_DEFER;
-	}
-	ddata->in = in;
-
-	ddata->reset_gpio = pdata->reset_gpio;
-
-	if (pdata->use_ext_te)
-		ddata->ext_te_gpio = pdata->ext_te_gpio;
-	else
-		ddata->ext_te_gpio = -1;
-
-	ddata->ulps_timeout = pdata->ulps_timeout;
-
-	ddata->use_dsi_backlight = pdata->use_dsi_backlight;
-
-	ddata->pin_config = pdata->pin_config;
-
-	dssdev = &ddata->dssdev;
-	dssdev->name = pdata->name;
-
-	return 0;
-}
-
 static int dsicm_probe_of(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
@@ -1207,6 +1161,9 @@ static int dsicm_probe(struct platform_device *pdev)
 
 	dev_dbg(dev, "probe\n");
 
+	if (!pdev->dev.of_node)
+		return -ENODEV;
+
 	ddata = devm_kzalloc(dev, sizeof(*ddata), GFP_KERNEL);
 	if (!ddata)
 		return -ENOMEM;
@@ -1214,17 +1171,9 @@ static int dsicm_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, ddata);
 	ddata->pdev = pdev;
 
-	if (dev_get_platdata(dev)) {
-		r = dsicm_probe_pdata(pdev);
-		if (r)
-			return r;
-	} else if (pdev->dev.of_node) {
-		r = dsicm_probe_of(pdev);
-		if (r)
-			return r;
-	} else {
-		return -ENODEV;
-	}
+	r = dsicm_probe_of(pdev);
+	if (r)
+		return r;
 
 	ddata->timings.x_res = 864;
 	ddata->timings.y_res = 480;
@@ -1284,11 +1233,6 @@ static int dsicm_probe(struct platform_device *pdev)
 		dev_dbg(dev, "Using GPIO TE\n");
 	}
 
-	ddata->workqueue = create_singlethread_workqueue("dsicm_wq");
-	if (ddata->workqueue == NULL) {
-		dev_err(dev, "can't create workqueue\n");
-		return -ENOMEM;
-	}
 	INIT_DELAYED_WORK(&ddata->ulps_work, dsicm_ulps_work);
 
 	dsicm_hw_reset(ddata);
@@ -1302,7 +1246,7 @@ static int dsicm_probe(struct platform_device *pdev)
 				dev, ddata, &dsicm_bl_ops, &props);
 		if (IS_ERR(bldev)) {
 			r = PTR_ERR(bldev);
-			goto err_bl;
+			goto err_reg;
 		}
 
 		ddata->bldev = bldev;
@@ -1325,8 +1269,6 @@ static int dsicm_probe(struct platform_device *pdev)
 err_sysfs_create:
 	if (bldev != NULL)
 		backlight_device_unregister(bldev);
-err_bl:
-	destroy_workqueue(ddata->workqueue);
 err_reg:
 	return r;
 }
@@ -1356,7 +1298,6 @@ static int __exit dsicm_remove(struct platform_device *pdev)
 	omap_dss_put_device(ddata->in);
 
 	dsicm_cancel_ulps_work(ddata);
-	destroy_workqueue(ddata->workqueue);
 
 	/* reset, to be sure that the panel is in a valid state */
 	dsicm_hw_reset(ddata);

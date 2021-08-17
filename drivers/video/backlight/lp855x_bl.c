@@ -1,18 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TI LP855x Backlight Driver
  *
  *			Copyright (C) 2011 Texas Instruments
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/backlight.h>
+#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/platform_data/lp855x.h>
@@ -74,6 +71,7 @@ struct lp855x {
 	struct lp855x_platform_data *pdata;
 	struct pwm_device *pwm;
 	struct regulator *supply;	/* regulator for VDD input */
+	struct regulator *enable;	/* regulator for EN/VDDIO input */
 };
 
 static int lp855x_write_byte(struct lp855x *lp, u8 reg, u8 data)
@@ -372,7 +370,7 @@ static int lp855x_parse_dt(struct lp855x *lp)
 		struct device_node *child;
 		int i = 0;
 
-		rom = devm_kzalloc(dev, sizeof(*rom) * rom_length, GFP_KERNEL);
+		rom = devm_kcalloc(dev, rom_length, sizeof(*rom), GFP_KERNEL);
 		if (!rom)
 			return -ENOMEM;
 
@@ -433,6 +431,19 @@ static int lp855x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 		lp->supply = NULL;
 	}
 
+	lp->enable = devm_regulator_get_optional(lp->dev, "enable");
+	if (IS_ERR(lp->enable)) {
+		ret = PTR_ERR(lp->enable);
+		if (ret == -ENODEV) {
+			lp->enable = NULL;
+		} else {
+			if (ret != -EPROBE_DEFER)
+				dev_err(lp->dev, "error getting enable regulator: %d\n",
+					ret);
+			return ret;
+		}
+	}
+
 	if (lp->supply) {
 		ret = regulator_enable(lp->supply);
 		if (ret < 0) {
@@ -441,29 +452,53 @@ static int lp855x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 		}
 	}
 
+	if (lp->enable) {
+		ret = regulator_enable(lp->enable);
+		if (ret < 0) {
+			dev_err(lp->dev, "failed to enable vddio: %d\n", ret);
+			goto disable_supply;
+		}
+
+		/*
+		 * LP8555 datasheet says t_RESPONSE (time between VDDIO and
+		 * I2C) is 1ms.
+		 */
+		usleep_range(1000, 2000);
+	}
+
 	i2c_set_clientdata(cl, lp);
 
 	ret = lp855x_configure(lp);
 	if (ret) {
 		dev_err(lp->dev, "device config err: %d", ret);
-		return ret;
+		goto disable_vddio;
 	}
 
 	ret = lp855x_backlight_register(lp);
 	if (ret) {
 		dev_err(lp->dev,
 			"failed to register backlight. err: %d\n", ret);
-		return ret;
+		goto disable_vddio;
 	}
 
 	ret = sysfs_create_group(&lp->dev->kobj, &lp855x_attr_group);
 	if (ret) {
 		dev_err(lp->dev, "failed to register sysfs. err: %d\n", ret);
-		return ret;
+		goto disable_vddio;
 	}
 
 	backlight_update_status(lp->bl);
+
 	return 0;
+
+disable_vddio:
+	if (lp->enable)
+		regulator_disable(lp->enable);
+disable_supply:
+	if (lp->supply)
+		regulator_disable(lp->supply);
+
+	return ret;
 }
 
 static int lp855x_remove(struct i2c_client *cl)
@@ -472,6 +507,8 @@ static int lp855x_remove(struct i2c_client *cl)
 
 	lp->bl->props.brightness = 0;
 	backlight_update_status(lp->bl);
+	if (lp->enable)
+		regulator_disable(lp->enable);
 	if (lp->supply)
 		regulator_disable(lp->supply);
 	sysfs_remove_group(&lp->dev->kobj, &lp855x_attr_group);

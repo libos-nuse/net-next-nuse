@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * RPC client multipathing definitions
  *
@@ -14,6 +15,8 @@ struct rpc_xprt_switch {
 	struct kref		xps_kref;
 
 	unsigned int		xps_nxprts;
+	unsigned int		xps_nactive;
+	atomic_long_t		xps_queuelen;
 	struct list_head	xps_xprt_list;
 
 	struct net *		xps_net;
@@ -66,4 +69,6 @@ extern struct rpc_xprt *xprt_iter_xprt(struct rpc_xprt_iter *xpi);
 extern struct rpc_xprt *xprt_iter_get_xprt(struct rpc_xprt_iter *xpi);
 extern struct rpc_xprt *xprt_iter_get_next(struct rpc_xprt_iter *xpi);
 
+extern bool rpc_xprt_switch_has_addr(struct rpc_xprt_switch *xps,
+		const struct sockaddr *sap);
 #endif

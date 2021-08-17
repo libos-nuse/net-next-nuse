@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * (C) 2001 Clemson University and The University of Chicago
  *
@@ -40,16 +41,6 @@ struct orangefs_mkdir_response {
 	struct orangefs_object_kref refn;
 };
 
-/*
- * duplication of some system interface structures so that I don't have
- * to allocate extra memory
- */
-struct orangefs_dirent {
-	char *d_name;
-	int d_length;
-	struct orangefs_khandle khandle;
-};
-
 struct orangefs_statfs_response {
 	__s64 block_size;
 	__s64 blocks_total;
@@ -83,7 +74,10 @@ struct orangefs_listxattr_response {
 };
 
 struct orangefs_param_response {
-	__s64 value;
+	union {
+		__s64 value64;
+		__s32 value32[2];
+	} u;
 };
 
 #define PERF_COUNT_BUF_SIZE 4096
@@ -96,6 +90,11 @@ struct orangefs_fs_key_response {
 	__s32 fs_keylen;
 	__s32 __pad1;
 	char fs_key[FS_KEY_BUF_SIZE];
+};
+
+/* 2.9.6 */
+struct orangefs_features_response {
+	__u64 features;
 };
 
 struct orangefs_downcall_s {
@@ -119,15 +118,20 @@ struct orangefs_downcall_s {
 		struct orangefs_param_response param;
 		struct orangefs_perf_count_response perf_count;
 		struct orangefs_fs_key_response fs_key;
+		struct orangefs_features_response features;
 	} resp;
 };
+
+/*
+ * The readdir response comes in the trailer.  It is followed by the
+ * directory entries as described in dir.c.
+ */
 
 struct orangefs_readdir_response_s {
 	__u64 token;
 	__u64 directory_version;
 	__u32 __pad2;
 	__u32 orangefs_dirent_outcount;
-	struct orangefs_dirent *dirent_array;
 };
 
 #endif /* __DOWNCALL_H */

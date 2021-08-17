@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_CPU_H
 #define _ASM_X86_CPU_H
 
@@ -16,8 +17,8 @@ extern void prefill_possible_map(void);
 static inline void prefill_possible_map(void) {}
 
 #define cpu_physical_id(cpu)			boot_cpu_physical_apicid
+#define cpu_acpi_id(cpu)			0
 #define safe_smp_processor_id()			0
-#define stack_smp_processor_id()		0
 
 #endif /* CONFIG_SMP */
 
@@ -39,4 +40,27 @@ int mwait_usable(const struct cpuinfo_x86 *);
 unsigned int x86_family(unsigned int sig);
 unsigned int x86_model(unsigned int sig);
 unsigned int x86_stepping(unsigned int sig);
+#ifdef CONFIG_CPU_SUP_INTEL
+extern void __init cpu_set_core_cap_bits(struct cpuinfo_x86 *c);
+extern void switch_to_sld(unsigned long tifn);
+extern bool handle_user_split_lock(struct pt_regs *regs, long error_code);
+extern bool handle_guest_split_lock(unsigned long ip);
+#else
+static inline void __init cpu_set_core_cap_bits(struct cpuinfo_x86 *c) {}
+static inline void switch_to_sld(unsigned long tifn) {}
+static inline bool handle_user_split_lock(struct pt_regs *regs, long error_code)
+{
+	return false;
+}
+
+static inline bool handle_guest_split_lock(unsigned long ip)
+{
+	return false;
+}
+#endif
+#ifdef CONFIG_IA32_FEAT_CTL
+void init_ia32_feat_ctl(struct cpuinfo_x86 *c);
+#else
+static inline void init_ia32_feat_ctl(struct cpuinfo_x86 *c) {}
+#endif
 #endif /* _ASM_X86_CPU_H */

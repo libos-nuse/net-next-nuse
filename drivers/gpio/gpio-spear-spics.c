@@ -10,9 +10,9 @@
  */
 
 #include <linux/err.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/io.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/types.h>
@@ -122,15 +122,13 @@ static int spics_gpio_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	struct spear_spics *spics;
-	struct resource *res;
 	int ret;
 
 	spics = devm_kzalloc(&pdev->dev, sizeof(*spics), GFP_KERNEL);
 	if (!spics)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	spics->base = devm_ioremap_resource(&pdev->dev, res);
+	spics->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(spics->base))
 		return PTR_ERR(spics->base);
 
@@ -183,7 +181,6 @@ static const struct of_device_id spics_gpio_of_match[] = {
 	{ .compatible = "st,spear-spics-gpio" },
 	{}
 };
-MODULE_DEVICE_TABLE(of, spics_gpio_of_match);
 
 static struct platform_driver spics_gpio_driver = {
 	.probe = spics_gpio_probe,
@@ -198,7 +195,3 @@ static int __init spics_gpio_init(void)
 	return platform_driver_register(&spics_gpio_driver);
 }
 subsys_initcall(spics_gpio_init);
-
-MODULE_AUTHOR("Shiraz Hashim <shiraz.linux.kernel@gmail.com>");
-MODULE_DESCRIPTION("STMicroelectronics SPEAr SPI Chip Select Abstraction");
-MODULE_LICENSE("GPL");
