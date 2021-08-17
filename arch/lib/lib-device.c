@@ -29,13 +29,13 @@ kernel_dev_xmit(struct sk_buff *skb,
   int err;
 
   netif_stop_queue(dev);
-  if (skb->ip_summed == CHECKSUM_PARTIAL) {
+  /*if (skb->ip_summed == CHECKSUM_PARTIAL) {
     err = skb_checksum_help(skb);
     if (unlikely(err)) {
       pr_err("checksum error (%d)\n", err);
       return 0;
     }
-  }
+  }*/
 
   lib_dev_xmit((struct SimDevice *)dev, skb->data, skb->len);
   dev_kfree_skb(skb);
@@ -67,6 +67,7 @@ static void lib_dev_setup(struct net_device *dev)
 	dev->flags              = 0;
 	/* dev->priv_flags        &= ~IFF_XMIT_DST_RELEASE; */
 	dev->features           = 0
+          | NETIF_F_CSUM_MASK
 				  | NETIF_F_HIGHDMA
 				  | NETIF_F_NETNS_LOCAL;
 	/* disabled  NETIF_F_TSO NETIF_F_SG  NETIF_F_FRAGLIST NETIF_F_LLTX */
