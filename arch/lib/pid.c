@@ -91,7 +91,7 @@ pid_t __task_pid_nr_ns(struct task_struct *task, enum pid_type type,
 	if (!ns)
 		ns = task_active_pid_ns(current);
 
-	nr = pid_nr_ns(rcu_dereference(*task_pid_ptr(task, type)), ns);
+	nr = pid_nr(rcu_dereference(*task_pid_ptr(task, type)));
 	rcu_read_unlock();
 
 	return nr;

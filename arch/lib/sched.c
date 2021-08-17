@@ -131,6 +131,7 @@ struct SimTask *lib_task_create(void *private, unsigned long pid)
 	task->kernel_task.signal = lib_malloc(sizeof(struct signal_struct));
 	task->kernel_task.signal->pids[PIDTYPE_PGID] = kpid;
 	task->kernel_task.signal->pids[PIDTYPE_SID] = kpid;
+	task->kernel_task.signal->pids[PIDTYPE_TGID] = kpid;
 	// File open Hack
 	task->kernel_task.signal->rlim[RLIMIT_NOFILE].rlim_cur = NR_OPEN_DEFAULT;
 	task->kernel_task.signal->rlim[RLIMIT_NOFILE].rlim_max = NR_OPEN_DEFAULT;
@@ -153,14 +154,16 @@ struct SimTask *lib_task_create(void *private, unsigned long pid)
 	fs->pwd = def_root;
 	task->kernel_task.fs = fs;
 
+	
 	struct files_struct * files;
 	struct fdtable *  fdt;
 	files = kmem_cache_alloc(files_cachep, GFP_KERNEL);	
 
-	if(COPY_FDTABLE == NULL)
-	COPY_FDTABLE = alloc_fdtable(NR_OPEN_DEFAULT);	
+	//if(COPY_FDTABLE == NULL)
+	//COPY_FDTABLE = alloc_fdtable(NR_OPEN_DEFAULT);	
 
-	fdt = COPY_FDTABLE;
+	//fdt = COPY_FDTABLE;
+	fdt = alloc_fdtable(NR_OPEN_DEFAULT);
 	
 	atomic_set(&files->count, 1);
 	files->next_fd = 0;
@@ -300,7 +303,7 @@ static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 			int nr_exclusive, int wake_flags, void *key,
 			wait_queue_entry_t *bookmark)
 {
-	wait_queue_entry_t *curr, *next;
+	wait_queue_entry_t *curr, *next=lib_malloc(sizeof(wait_queue_entry_t));
 	int cnt = 0;
 
 	lockdep_assert_held(&wq_head->lock);
@@ -315,6 +318,10 @@ static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 
 	if (&curr->entry == &wq_head->head)
 		return nr_exclusive;
+
+	if(curr == NULL) printk("WC1");
+	if(next == NULL) printk("WC2");
+	if(&wq_head->head == NULL) printk("WC3");	
 
 	list_for_each_entry_safe_from(curr, next, &wq_head->head, entry) {
 		unsigned flags = curr->flags;

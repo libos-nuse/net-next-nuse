@@ -108,7 +108,7 @@ static int namecmp(const char *name1, int len1, const char *name2, int len2)
 }
 
 /* Called under sysctl_lock */
-static struct ctl_table *find_entry(struct ctl_table_header **phead,
+struct ctl_table *ctl_table_find_entry(struct ctl_table_header **phead,
 	struct ctl_dir *dir, const char *name, int namelen)
 {
 	struct ctl_table_header *head;
@@ -341,7 +341,7 @@ static struct ctl_table *lookup_entry(struct ctl_table_header **phead,
 	struct ctl_table *entry;
 
 	spin_lock(&sysctl_lock);
-	entry = find_entry(&head, dir, name, namelen);
+	entry = ctl_table_find_entry(&head, dir, name, namelen);
 	if (entry && use_table(head))
 		*phead = head;
 	else
@@ -350,7 +350,7 @@ static struct ctl_table *lookup_entry(struct ctl_table_header **phead,
 	return entry;
 }
 
-static struct ctl_node *first_usable_entry(struct rb_node *node)
+struct ctl_node *ctl_table_first_usable_entry(struct rb_node *node)
 {
 	struct ctl_node *ctl_node;
 
@@ -362,7 +362,7 @@ static struct ctl_node *first_usable_entry(struct rb_node *node)
 	return NULL;
 }
 
-static void first_entry(struct ctl_dir *dir,
+void ctl_table_first_entry(struct ctl_dir *dir,
 	struct ctl_table_header **phead, struct ctl_table **pentry)
 {
 	struct ctl_table_header *head = NULL;
@@ -370,7 +370,7 @@ static void first_entry(struct ctl_dir *dir,
 	struct ctl_node *ctl_node;
 
 	spin_lock(&sysctl_lock);
-	ctl_node = first_usable_entry(rb_first(&dir->root));
+	ctl_node = ctl_table_first_usable_entry(rb_first(&dir->root));
 	spin_unlock(&sysctl_lock);
 	if (ctl_node) {
 		head = ctl_node->header;
@@ -380,7 +380,7 @@ static void first_entry(struct ctl_dir *dir,
 	*pentry = entry;
 }
 
-static void next_entry(struct ctl_table_header **phead, struct ctl_table **pentry)
+void ctl_table_next_entry(struct ctl_table_header **phead, struct ctl_table **pentry)
 {
 	struct ctl_table_header *head = *phead;
 	struct ctl_table *entry = *pentry;
@@ -389,7 +389,7 @@ static void next_entry(struct ctl_table_header **phead, struct ctl_table **pentr
 	spin_lock(&sysctl_lock);
 	unuse_table(head);
 
-	ctl_node = first_usable_entry(rb_next(&ctl_node->node));
+	ctl_node = ctl_table_first_usable_entry(rb_next(&ctl_node->node));
 	spin_unlock(&sysctl_lock);
 	head = NULL;
 	if (ctl_node) {
@@ -774,7 +774,7 @@ static int proc_sys_readdir(struct file *file, struct dir_context *ctx)
 
 	pos = 2;
 
-	for (first_entry(ctl_dir, &h, &entry); h; next_entry(&h, &entry)) {
+	for (ctl_table_first_entry(ctl_dir, &h, &entry); h; ctl_table_next_entry(&h, &entry)) {
 		if (!scan(h, entry, &pos, file, ctx)) {
 			sysctl_head_finish(h);
 			break;
@@ -930,13 +930,13 @@ static const struct dentry_operations proc_sys_dentry_operations = {
 	.d_compare	= proc_sys_compare,
 };
 
-static struct ctl_dir *find_subdir(struct ctl_dir *dir,
+struct ctl_dir *find_subdir(struct ctl_dir *dir,
 				   const char *name, int namelen)
 {
 	struct ctl_table_header *head;
 	struct ctl_table *entry;
 
-	entry = find_entry(&head, dir, name, namelen);
+	entry = ctl_table_find_entry(&head, dir, name, namelen);
 	if (!entry)
 		return ERR_PTR(-ENOENT);
 	if (!S_ISDIR(entry->mode))
@@ -1032,13 +1032,13 @@ failed:
 	return subdir;
 }
 
-static struct ctl_dir *xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir)
+struct ctl_dir *ctl_table_xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir)
 {
 	struct ctl_dir *parent;
 	const char *procname;
 	if (!dir->header.parent)
 		return &set->dir;
-	parent = xlate_dir(set, dir->header.parent);
+	parent = ctl_table_xlate_dir(set, dir->header.parent);
 	if (IS_ERR(parent))
 		return parent;
 	procname = dir->header.ctl_table[0].procname;
@@ -1059,13 +1059,13 @@ static int sysctl_follow_link(struct ctl_table_header **phead,
 	spin_lock(&sysctl_lock);
 	root = (*pentry)->data;
 	set = lookup_header_set(root);
-	dir = xlate_dir(set, (*phead)->parent);
+	dir = ctl_table_xlate_dir(set, (*phead)->parent);
 	if (IS_ERR(dir))
 		ret = PTR_ERR(dir);
 	else {
 		const char *procname = (*pentry)->procname;
 		head = NULL;
-		entry = find_entry(&head, dir, procname, strlen(procname));
+		entry = ctl_table_find_entry(&head, dir, procname, strlen(procname));
 		ret = -ENOENT;
 		if (entry && use_table(head)) {
 			unuse_table(*phead);
@@ -1194,7 +1194,7 @@ static bool get_links(struct ctl_dir *dir,
 	/* Are there links available for every entry in table? */
 	for (entry = table; entry->procname; entry++) {
 		const char *procname = entry->procname;
-		link = find_entry(&head, dir, procname, strlen(procname));
+		link = ctl_table_find_entry(&head, dir, procname, strlen(procname));
 		if (!link)
 			return false;
 		if (S_ISDIR(link->mode) && S_ISDIR(entry->mode))
@@ -1207,7 +1207,7 @@ static bool get_links(struct ctl_dir *dir,
 	/* The checks passed.  Increase the registration count on the links */
 	for (entry = table; entry->procname; entry++) {
 		const char *procname = entry->procname;
-		link = find_entry(&head, dir, procname, strlen(procname));
+		link = ctl_table_find_entry(&head, dir, procname, strlen(procname));
 		head->nreg++;
 	}
 	return true;
@@ -1223,7 +1223,7 @@ static int insert_links(struct ctl_table_header *head)
 	if (head->set == root_set)
 		return 0;
 
-	core_parent = xlate_dir(root_set, head->parent);
+	core_parent = ctl_table_xlate_dir(root_set, head->parent);
 	if (IS_ERR(core_parent))
 		return 0;
 
@@ -1604,7 +1604,7 @@ static void put_links(struct ctl_table_header *header)
 	if (header->set == root_set)
 		return;
 
-	core_parent = xlate_dir(root_set, parent);
+	core_parent = ctl_table_xlate_dir(root_set, parent);
 	if (IS_ERR(core_parent))
 		return;
 
@@ -1613,7 +1613,7 @@ static void put_links(struct ctl_table_header *header)
 		struct ctl_table *link;
 		const char *name = entry->procname;
 
-		link = find_entry(&link_head, core_parent, name, strlen(name));
+		link = ctl_table_find_entry(&link_head, core_parent, name, strlen(name));
 		if (link &&
 		    ((S_ISDIR(link->mode) && S_ISDIR(entry->mode)) ||
 		     (S_ISLNK(link->mode) && (link->data == root)))) {

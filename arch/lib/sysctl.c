@@ -182,29 +182,89 @@ struct ctl_dir *ctl_table_xlate_dir(struct ctl_table_set *set, struct ctl_dir *d
 static void iterate_table_recursive(const struct SimSysIterator *iter,
 				    struct ctl_table_header *head)
 {
+	struct ctl_table *entry;
 
+	for (entry = head->ctl_table; entry->procname; entry++) {
+		bool may_read = (head->ctl_table->mode & MAY_READ);
+		bool may_write = (head->ctl_table->mode & MAY_WRITE);
+		int flags = 0;
+
+		flags |= may_read ? SIM_SYS_FILE_READ : 0;
+		flags |= may_write ? SIM_SYS_FILE_WRITE : 0;
+		iter->report_file(iter, entry->procname, flags,
+				  (struct SimSysFile *)entry);
+	}
 }
 
 
 static void iterate_recursive(const struct SimSysIterator *iter,
 			      struct ctl_table_header *head)
 {
-	
+	struct ctl_table_header *h = NULL;
+	struct ctl_table *entry;
+	struct ctl_dir *ctl_dir;
+
+	ctl_dir = container_of(head, struct ctl_dir, header);
+	for (ctl_table_first_entry(ctl_dir, &h, &entry); h;
+	     ctl_table_next_entry(&h, &entry)) {
+		struct ctl_dir *dir;
+		int ret;
+		const char *procname;
+
+		/* copy from sysctl_follow_link () */
+		if (S_ISLNK(entry->mode)) {
+			dir = ctl_table_xlate_dir(&init_net.sysctls, h->parent);
+			if (IS_ERR(dir)) {
+				ret = PTR_ERR(dir);
+				//continue;
+			} else {
+				procname = entry->procname;
+				h = NULL;
+				entry =
+					ctl_table_find_entry(&h, dir, procname,
+							     strlen(procname));
+				ret = -ENOENT;
+			}
+		}
+
+		if (S_ISDIR(entry->mode)) {
+			iter->report_start_dir(iter, entry->procname);
+			iterate_recursive(iter, h);
+			iter->report_end_dir(iter);
+		} else
+			iterate_table_recursive(iter, h);
+	}
+
 }
 
 
 void lib_sys_iterate_files(const struct SimSysIterator *iter)
 {
-
+	struct ctl_table_header *root =
+		&sysctl_table_root.default_set.dir.header;
+	
+	iterate_recursive(iter, root);
 }
 
 int lib_sys_file_read(const struct SimSysFile *file, char *buffer, int size,
 		      int offset)
 {
+	struct ctl_table *table = (struct ctl_table *)file;
+	loff_t ppos = offset;
+	size_t result = size;
+	int error;
 
+	error = table->proc_handler(table, 0, buffer, &result, &ppos);
+	return result;
 }
 int lib_sys_file_write(const struct SimSysFile *file, const char *buffer,
 		       int size, int offset)
 {
+	struct ctl_table *table = (struct ctl_table *)file;
+	loff_t ppos = offset;
+	size_t result = size;
+	int error;
 
+	error = table->proc_handler(table, 1, (char *)buffer, &result, &ppos);
+	return result;
 }
