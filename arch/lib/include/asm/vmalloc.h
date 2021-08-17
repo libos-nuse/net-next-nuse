@@ -1,0 +1,4 @@
+#ifndef _ASM_SIM_PGTABLE_AREAS_H
+#define _ASM_SIM_PGTABLE_AREAS_H
+
+#endif /* _ASM_SIIM_PGTABLE_AREAS_H */

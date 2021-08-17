@@ -177,7 +177,7 @@ extern void cleanup_module(void);
 #ifdef MODULE
 #define MODULE_FILE
 #else
-#define MODULE_FILE	MODULE_INFO(file, KBUILD_MODFILE);
+#define MODULE_FILE	MODULE_INFO(file, KBUILD_MODNAME);
 #endif
 
 /*

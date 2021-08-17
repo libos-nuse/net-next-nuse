@@ -12,9 +12,79 @@
 #include <linux/page-flags.h>
 #include <linux/types.h>
 #include <linux/slab.h>
+#include <mm/slab.h>
 #include <linux/slib_def.h>
 
 /* glues */
+struct list_head slab_caches;
+struct kmem_cache *kmem_cache;
+
+static unsigned int calculate_alignment(slab_flags_t flags,
+		unsigned int align, unsigned int size)
+{
+	/*
+	 * If the user wants hardware cache aligned objects then follow that
+	 * suggestion if the object is sufficiently large.
+	 *
+	 * The hardware cache alignment cannot override the specified
+	 * alignment though. If that is greater then use it.
+	 */
+	if (flags & SLAB_HWCACHE_ALIGN) {
+		unsigned int ralign;
+
+		ralign = cache_line_size();
+		while (size <= ralign / 2)
+			ralign /= 2;
+		align = max(align, ralign);
+	}
+
+	if (align < ARCH_SLAB_MINALIGN)
+		align = ARCH_SLAB_MINALIGN;
+
+	return ALIGN(align, sizeof(void *));
+}
+
+
+static struct kmem_cache *create_cache(const char *name,
+		unsigned int object_size, unsigned int align,
+		slab_flags_t flags, unsigned int useroffset,
+		unsigned int usersize, void (*ctor)(void *),
+		struct kmem_cache *root_cache)
+{
+	struct kmem_cache *s;
+	int err;
+
+	if (WARN_ON(useroffset + usersize > object_size))
+		useroffset = usersize = 0;
+
+	err = -ENOMEM;
+	s = kmem_cache_zalloc(kmem_cache, GFP_KERNEL);
+	if (!s)
+		goto out;
+
+	s->name = name;
+	s->size = s->object_size = object_size;
+	s->align = align;
+	s->ctor = ctor;
+	s->useroffset = useroffset;
+	s->usersize = usersize;
+
+	err = __kmem_cache_create(s, flags);
+	if (err)
+		goto out_free_cache;
+
+	s->refcount = 1;
+	list_add(&s->list, &slab_caches);
+out:
+	if (err)
+		return ERR_PTR(err);
+	return s;
+
+out_free_cache:
+	kmem_cache_free(kmem_cache, s);
+	goto out;
+}
+
 struct kmem_cache *files_cachep;
 
 void kfree(const void *p)
@@ -36,15 +106,17 @@ size_t ksize(const void *p)
 }
 void *__kmalloc(size_t size, gfp_t flags)
 {
-	void *p = lib_malloc(size + sizeof(size));
+	void *p = lib_malloc(size + sizeof(size));	
 	unsigned long start;
 
-	if (!p)
+	if (!p){
 		return NULL;
+	}
 
-	if (p != 0 && (flags & __GFP_ZERO))
-		lib_memset(p, 0, size + sizeof(size));
-	lib_memcpy(p, &size, sizeof(size));
+	if (p != 0 && (flags & __GFP_ZERO)){
+		lib_memset(p, 0, size + sizeof(size));		
+	}
+	lib_memcpy(p, &size, sizeof(size));	
 	start = (unsigned long)p;
 	return (void *)(start + sizeof(size));
 }
@@ -71,19 +143,27 @@ void *krealloc(const void *p, size_t new_size, gfp_t flags)
 }
 
 struct kmem_cache *
-kmem_cache_create(const char *name, size_t size, size_t align,
-		  unsigned long flags, void (*ctor)(void *))
-{
+kmem_cache_create(const char *name, unsigned int size,
+			unsigned int align, slab_flags_t flags,
+			void (*ctor)(void *))
+{	
 	struct kmem_cache *cache = kmalloc(sizeof(struct kmem_cache), flags);
 
 	if (!cache)
 		return NULL;
 	cache->name = name;
-	cache->size = size;
+	cache->size = size;	
 	cache->align = align;
 	cache->flags = flags;
 	cache->ctor = ctor;
 	return cache;
+}
+
+int __kmem_cache_create(struct kmem_cache * cachep, slab_flags_t flags)
+{
+	struct kmem_cache *cache = kmalloc(sizeof(struct kmem_cache), flags);
+	cache->flags = flags;
+	return kmem_cache;
 }
 void kmem_cache_destroy(struct kmem_cache *cache)
 {
@@ -98,13 +178,13 @@ const char *kmem_cache_name(struct kmem_cache *cache)
 	return cache->name;
 }
 void *kmem_cache_alloc(struct kmem_cache *cache, gfp_t flags)
-{
-	void *p = kmalloc(cache->size, flags);
-
+{		
+	void *p = kmalloc(cache->size, flags);	
 	if (p == 0)
 		return NULL;
 	if (cache->ctor)
 		(cache->ctor)(p);
+
 	return p;
 
 }
@@ -114,8 +194,8 @@ void kmem_cache_free(struct kmem_cache *cache, void *p)
 }
 
 struct page *
-__alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
-		       struct zonelist *zonelist, nodemask_t *nodemask)
+__alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
+							nodemask_t *nodemask)
 {
 	void *p;
 	struct page *page;
@@ -144,7 +224,7 @@ void __free_pages(struct page *page, unsigned int order)
 	lib_free(page);
 }
 
-void put_page(struct page *page)
+void __put_page(struct page *page)
 {
 	if (atomic_dec_and_test(&page->_refcount))
 		lib_free(page);
@@ -176,7 +256,7 @@ void *vmalloc(unsigned long size)
 {
 	return lib_malloc(size);
 }
-void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot)
+void *__vmalloc(unsigned long size, gfp_t gfp_mask)
 {
 	return kmalloc(size, gfp_mask);
 }
@@ -209,3 +289,36 @@ void *__alloc_bootmem_nopanic(unsigned long size,
 {
 	return kzalloc(size, GFP_KERNEL);
 }
+
+void * __init memblock_alloc_try_nid(
+			phys_addr_t size, phys_addr_t align,
+			phys_addr_t min_addr, phys_addr_t max_addr,
+			int nid)
+{
+	return kzalloc(size, GFP_KERNEL);
+}
+
+struct kmem_cache *
+kmem_cache_create_usercopy(const char *name,
+		  unsigned int size, unsigned int align,
+		  slab_flags_t flags,
+		  unsigned int useroffset, unsigned int usersize,
+		  void (*ctor)(void *))
+{
+	struct kmem_cache *cache = kmalloc(sizeof(struct kmem_cache), flags);
+
+	if (!cache)
+		return NULL;
+	cache->name = name;
+	cache->size = size;
+	cache->align = align;
+	cache->flags = flags;
+	cache->ctor = ctor;
+	return cache;
+}
+
+int kmem_cache_sanity_check(const char *name, unsigned int size)
+{
+	return 0;
+}
+

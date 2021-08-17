@@ -156,6 +156,7 @@ static struct ucounts *get_ucounts(struct user_namespace *ns, kuid_t uid)
 		ucounts = NULL;
 	else
 		ucounts->count += 1;
+	ucounts->ns->ucount_max[UCOUNT_MNT_NAMESPACES] = 100; // 100 is a hack, could be any number (possibly)
 	spin_unlock_irq(&ucounts_lock);
 	return ucounts;
 }

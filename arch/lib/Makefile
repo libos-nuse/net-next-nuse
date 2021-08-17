@@ -30,7 +30,7 @@ lib.c lib-device.c lib-socket.c random.c softirq.c time.c \
 timer.c hrtimer.c sched.c workqueue.c \
 print.c tasklet.c tasklet-hrtimer.c \
 glue.c fs.c sysctl.c proc.c sysfs.c \
-capability.c pid.c modules.c filemap.c vmscan.c
+capability.c pid.c modules.c filemap.c vmscan.c lkl_sysctl.c
 
 LIB_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(LIB_SRC))))
 LIB_DEPS=$(addprefix $(ARCH_DIR)/.,$(addsuffix .o.cmd,$(basename $(LIB_SRC))))
@@ -88,33 +88,35 @@ all-obj-for-clean:=
 all: library modules
 
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ kernel/time/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/ init/
+dirs=kernel/ kernel/time/ kernel/rcu/ kernel/locking/ kernel/bpf/ mm/ fs/ fs/proc/ fs/sysfs/ fs/kernfs/ fs/ramfs/ security/ crypto/ lib/ drivers/base/ drivers/net/ net/ init/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
 comma= ,
 kernel/_to_keep=notifier.o params.o sysctl.o \
-rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o
+rwsem.o semaphore.o kfifo.o cred.o user.o groups.o ksysfs.o ucount.o utsname.o task_work.o
 kernel/time/_to_keep=time.o timekeeping.o jiffies.o clocksource.o ntp.o
 kernel/rcu_to_keep=rcu/srcu.o rcu/pdate.o rcu/tiny.o
 kernel/locking_to_keep=locking/mutex.o
 kernel/bpf_to_keep=bpf/core.o
-mm/_to_keep=util.o list_lru.o slib.o swap.o
+mm/_to_keep=util.o list_lru.o slib.o shmem.o filemap.o workingset.o readahead.o
 crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
-crc32c_generic.o rng.o
-drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o syscore.o
-drivers/net/_to_keep=loopback.o
-lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
+crc32c_generic.o rng.o md5.o
+drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o map.o syscore.o swnode.o property.o
+drivers/net/_to_keep=loopback.o 
+lib/_to_keep=klist.o kobject.o kref.o hweight.o math/int_sqrt.o checksum.o \
 find_last_bit.o find_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
-rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
-div64.o dynamic_queue_limits.o md5.o kstrtox.o iovec.o lockref.o crc32.o \
-rhashtable.o iov_iter.o cmdline.o kobject_uevent.o once.o uuid.o
+rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o generic-radix-tree.o \
+math/div64.o dynamic_queue_limits.o kstrtox.o iovec.o lockref.o crc32.o xarray.o errseq.o llist.o \
+rhashtable.o iov_iter.o cmdline.o kobject_uevent.o once.o radix-tree.o usercopy.o refcount.o siphash.o win_minmax.o
 fs/_to_keep=read_write.o libfs.o namei.o filesystems.o file.o file_table.o \
-dcache.o inode.o pipe.o char_dev.o splice.o no-block.o seq_file.o super.o \
-fcntl.o coredump.o
-fs/proc/_to_keep=proc_sysctl.o proc_net.o root.o generic.o inode.o
-init/_to_keep=version.o
+dcache.o inode.o pipe.o char_dev.o splice.o no-block.o seq_file.o super.o proc_namespace.o\
+fcntl.o d_path.o coredump.o fs_parser.o namespace.o fs_context.o nsfs.o fsopen.o open.o read_write.o fs_struct.o
+fs/proc/_to_keep=proc_sysctl.o proc_net.o root.o generic.o inode.o util.o base.o fd.o namespaces.o array.o task_nommu.o self.o thread_self.o
+fs/sysfs/_to_keep=mount.o
+fs/ramfs/_to_keep=inode.o
+init/_to_keep=version.o do_mounts.o
 
 quiet_cmd_objsmk = OBJS-MK   $@
       cmd_objsmk = \
@@ -171,7 +173,7 @@ export OBJS KERNEL_LIB COV covl_yes covl_no
 
 # objcopy trick is taken from rumpkernel
 GCCSYMBOLS=__umoddi3|__udivdi3
-EXP_SYMRENAME=rump|RUMP|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__gcov|_end|_GLOBAL_OFFSET_TABLE|${GCCSYMBOLS}'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
+EXP_SYMRENAME=rump|RUMP|lib_|g_imported|g_kernel|__initcall_start|__initcall_end|__start_early_lsm_info|__end_early_lsm_info|__start_lsm_info|__end_lsm_info|__gcov|_end|_GLOBAL_OFFSET_TABLE|${GCCSYMBOLS}'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}}
 
 quiet_cmd_cc = CC      $@
       cmd_cc = 	mkdir -p $(dir $@);	\

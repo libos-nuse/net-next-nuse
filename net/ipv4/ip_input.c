@@ -440,8 +440,10 @@ static struct sk_buff *ip_rcv_core(struct sk_buff *skb, struct net *net)
 	/* When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
 	 */
-	if (skb->pkt_type == PACKET_OTHERHOST)
+	if (skb->pkt_type == PACKET_OTHERHOST){
+		printk("Drop at %d",__LINE__);
 		goto drop;
+	}
 
 	__IP_UPD_PO_STATS(net, IPSTATS_MIB_IN, skb->len);
 
@@ -451,8 +453,10 @@ static struct sk_buff *ip_rcv_core(struct sk_buff *skb, struct net *net)
 		goto out;
 	}
 
-	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
+	if (!pskb_may_pull(skb, sizeof(struct iphdr))){
+		printk("Drop at %d",__LINE__);
 		goto inhdr_error;
+	}
 
 	iph = ip_hdr(skb);
 
@@ -467,8 +471,10 @@ static struct sk_buff *ip_rcv_core(struct sk_buff *skb, struct net *net)
 	 *	4.	Doesn't have a bogus length
 	 */
 
-	if (iph->ihl < 5 || iph->version != 4)
+	if (iph->ihl < 5 || iph->version != 4){
+		printk("Drop at %d",__LINE__);
 		goto inhdr_error;
+	}
 
 	BUILD_BUG_ON(IPSTATS_MIB_ECT1PKTS != IPSTATS_MIB_NOECTPKTS + INET_ECN_ECT_1);
 	BUILD_BUG_ON(IPSTATS_MIB_ECT0PKTS != IPSTATS_MIB_NOECTPKTS + INET_ECN_ECT_0);
@@ -477,26 +483,34 @@ static struct sk_buff *ip_rcv_core(struct sk_buff *skb, struct net *net)
 		       IPSTATS_MIB_NOECTPKTS + (iph->tos & INET_ECN_MASK),
 		       max_t(unsigned short, 1, skb_shinfo(skb)->gso_segs));
 
-	if (!pskb_may_pull(skb, iph->ihl*4))
+	if (!pskb_may_pull(skb, iph->ihl*4)){
+		printk("Drop at %d",__LINE__);
 		goto inhdr_error;
+	}
 
 	iph = ip_hdr(skb);
 
-	if (unlikely(ip_fast_csum((u8 *)iph, iph->ihl)))
+	if (unlikely(ip_fast_csum((u8 *)iph, iph->ihl))){
+		printk("Drop at %d",__LINE__);
 		goto csum_error;
+	}
 
 	len = ntohs(iph->tot_len);
 	if (skb->len < len) {
+		printk("Drop at %d",__LINE__);
 		__IP_INC_STATS(net, IPSTATS_MIB_INTRUNCATEDPKTS);
 		goto drop;
-	} else if (len < (iph->ihl*4))
+	} else if (len < (iph->ihl*4)){
+		printk("Drop at %d",__LINE__);
 		goto inhdr_error;
+	}
 
 	/* Our transport medium may have padded the buffer out. Now we know it
 	 * is IP we can trim to the true length of the frame.
 	 * Note this now means skb->len holds ntohs(iph->tot_len).
 	 */
 	if (pskb_trim_rcsum(skb, len)) {
+		printk("Drop at %d",__LINE__);
 		__IP_INC_STATS(net, IPSTATS_MIB_INDISCARDS);
 		goto drop;
 	}
@@ -519,6 +533,7 @@ csum_error:
 inhdr_error:
 	__IP_INC_STATS(net, IPSTATS_MIB_INHDRERRORS);
 drop:
+	printk("Drop at %d",__LINE__);
 	kfree_skb(skb);
 out:
 	return NULL;

@@ -91,12 +91,14 @@ int sched_rt_handler(struct ctl_table *table, int write,
 	return 0;
 }
 
+//int sysctl_overcommit_memory = OVERCOMMIT_GUESS;
+//int sysctl_overcommit_ratio = 50;
 int sysctl_panic_on_oom = 0;
 int sysctl_oom_dump_tasks = 0;
 int sysctl_oom_kill_allocating_task = 0;
 int sysctl_nr_trim_pages = 0;
 int sysctl_drop_caches = 0;
-int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES - 1] = { 32 };
+int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES] = { 32 };
 unsigned int sysctl_sched_child_runs_first = 0;
 unsigned int sysctl_sched_compat_yield = 0;
 unsigned int sysctl_sched_rt_period = 1000000;
@@ -120,6 +122,7 @@ DEFINE_RATELIMIT_STATE(printk_ratelimit_state, 5 * HZ, 10);
 int pid_max = PID_MAX_DEFAULT;
 int pid_max_min = RESERVED_PIDS + 1;
 int pid_max_max = PID_MAX_LIMIT;
+int min_free_kbytes = 1024;
 int max_threads = 100;
 int laptop_mode = 0;
 
@@ -140,12 +143,15 @@ int vm_swappiness = 60;
 int nr_pdflush_threads = 0;
 unsigned long scan_unevictable_pages = 0;
 int suid_dumpable = 0;
+int page_cluster = 0;
 int block_dump = 0;
 int C_A_D = 0;
 #include <linux/nsproxy.h>
 struct nsproxy init_nsproxy;
 #include <linux/reboot.h>
 char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
+//unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
+//unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 
 int pdflush_proc_obsolete(struct ctl_table *table, int write,
 			  void __user *buffer, size_t *lenp, loff_t *ppos)
@@ -176,89 +182,29 @@ struct ctl_dir *ctl_table_xlate_dir(struct ctl_table_set *set, struct ctl_dir *d
 static void iterate_table_recursive(const struct SimSysIterator *iter,
 				    struct ctl_table_header *head)
 {
-	struct ctl_table *entry;
 
-	for (entry = head->ctl_table; entry->procname; entry++) {
-		bool may_read = (head->ctl_table->mode & MAY_READ);
-		bool may_write = (head->ctl_table->mode & MAY_WRITE);
-		int flags = 0;
-
-		flags |= may_read ? SIM_SYS_FILE_READ : 0;
-		flags |= may_write ? SIM_SYS_FILE_WRITE : 0;
-		iter->report_file(iter, entry->procname, flags,
-				  (struct SimSysFile *)entry);
-	}
 }
 
 
 static void iterate_recursive(const struct SimSysIterator *iter,
 			      struct ctl_table_header *head)
 {
-	struct ctl_table_header *h = NULL;
-	struct ctl_table *entry;
-	struct ctl_dir *ctl_dir;
-
-	ctl_dir = container_of(head, struct ctl_dir, header);
-	for (ctl_table_first_entry(ctl_dir, &h, &entry); h;
-	     ctl_table_next_entry(&h, &entry)) {
-		struct ctl_dir *dir;
-		int ret;
-		const char *procname;
-
-		/* copy from sysctl_follow_link () */
-		if (S_ISLNK(entry->mode)) {
-			dir = ctl_table_xlate_dir(&init_net.sysctls, h->parent);
-			if (IS_ERR(dir)) {
-				ret = PTR_ERR(dir);
-				lib_assert(false);
-			} else {
-				procname = entry->procname;
-				h = NULL;
-				entry =
-					ctl_table_find_entry(&h, dir, procname,
-							     strlen(procname));
-				ret = -ENOENT;
-			}
-		}
-
-		if (S_ISDIR(entry->mode)) {
-			iter->report_start_dir(iter, entry->procname);
-			iterate_recursive(iter, h);
-			iter->report_end_dir(iter);
-		} else
-			iterate_table_recursive(iter, h);
-	}
-
+	
 }
 
 
 void lib_sys_iterate_files(const struct SimSysIterator *iter)
 {
-	struct ctl_table_header *root =
-		&sysctl_table_root.default_set.dir.header;
 
-	iterate_recursive(iter, root);
 }
 
 int lib_sys_file_read(const struct SimSysFile *file, char *buffer, int size,
 		      int offset)
 {
-	struct ctl_table *table = (struct ctl_table *)file;
-	loff_t ppos = offset;
-	size_t result = size;
-	int error;
 
-	error = table->proc_handler(table, 0, buffer, &result, &ppos);
-	return result;
 }
 int lib_sys_file_write(const struct SimSysFile *file, const char *buffer,
 		       int size, int offset)
 {
-	struct ctl_table *table = (struct ctl_table *)file;
-	loff_t ppos = offset;
-	size_t result = size;
-	int error;
 
-	error = table->proc_handler(table, 1, (char *)buffer, &result, &ppos);
-	return result;
 }

@@ -21,15 +21,6 @@ static inline void atomic64_sub(long i, atomic64_t *v)
 {
 	v->counter -= i;
 }
-static inline void atomic64_inc(atomic64_t *v)
-{
-	v->counter++;
-}
-int atomic64_sub_and_test(long i, atomic64_t *v);
-#define atomic64_dec(v)			atomic64_sub(1LL, (v))
-int atomic64_dec_and_test(atomic64_t *v);
-int atomic64_inc_and_test(atomic64_t *v);
-int atomic64_add_negative(long i, atomic64_t *v);
 static inline long atomic64_add_return(long i, atomic64_t *v)
 {
 	v->counter += i;
@@ -54,7 +45,6 @@ static void atomic64_xor(long i, atomic64_t *v)
 	v->counter ^= i;
 }
 
-long atomic64_sub_return(long i, atomic64_t *v);
 #define atomic64_inc_return(v)  (atomic64_add_return(1, (v)))
 #define atomic64_dec_return(v)  (atomic64_sub_return(1, (v)))
 static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)
@@ -66,10 +56,59 @@ static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)
 		v->counter = new;
 	return val;
 }
-long atomic64_xchg(atomic64_t *v, long new);
-int atomic64_add_unless(atomic64_t *v, long a, long u);
-int atomic64_inc_is_not_zero(atomic64_t *v);
-#define atomic64_inc_not_zero(v) 	atomic64_add_unless((v), 1LL, 0LL)
+
+static __always_inline s64
+atomic64_fetch_add(s64 i, atomic64_t *v)
+{	
+	atomic64_add(i,v);	
+	return v->counter;
+}
+
+static __always_inline s64
+atomic64_fetch_sub(s64 i, atomic64_t *v)
+{	
+	atomic64_sub(i,v);	
+	return v->counter;
+}
+
+static __always_inline s64
+atomic64_fetch_and(s64 i, atomic64_t *v)
+{		
+	atomic64_and(i,v);
+	return  v->counter;
+}
+
+static __always_inline s64
+atomic64_fetch_or(s64 i, atomic64_t *v)
+{		
+	atomic64_or(i,v);
+	return  v->counter;
+}
+
+static __always_inline s64
+atomic64_fetch_xor(s64 i, atomic64_t *v)
+{		
+	atomic64_xor(i,v);
+	return  v->counter;
+}
+
+static __always_inline s64
+atomic64_sub_return(s64 i, atomic64_t *v)
+{		
+	atomic64_sub(i,v);
+	return v->counter;
+}
+
+static __always_inline s64
+atomic64_xchg(atomic64_t *v, s64 i)
+{
+	s64 ret;
+	ret = v->counter;
+	v->counter = i;
+	return ret;
+}
+
+
 
 #include <asm-generic/atomic.h>
 

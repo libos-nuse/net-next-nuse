@@ -872,7 +872,7 @@ static int proc_taint(struct ctl_table *table, int write,
 		 * false positives due to userspace input, bail out
 		 * before setting the requested taint flags.
 		 */
-		if (panic_on_taint_nousertaint && (tmptaint & panic_on_taint))
+		if (panic_on_taint_nousertaint && (tmptaint & false))
 			return -EINVAL;
 
 		/*

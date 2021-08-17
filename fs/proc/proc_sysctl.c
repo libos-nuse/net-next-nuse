@@ -66,7 +66,7 @@ static struct ctl_table root_table[] = {
 	},
 	{ }
 };
-static struct ctl_table_root sysctl_table_root = {
+struct ctl_table_root sysctl_table_root = {
 	.default_set.dir.header = {
 		{{.count = 1,
 		  .nreg = 1,

@@ -11,32 +11,32 @@
 
 #include "sim-assert.h"
 
-__cacheline_aligned_in_smp DEFINE_SEQLOCK(mount_lock);
+//__cacheline_aligned_in_smp DEFINE_SEQLOCK(mount_lock);
 unsigned int dirtytime_expire_interval;
 
-void __init mnt_init(void)
+/*void __init mnt_init(void)
 {
 }
 
-/* Implementation taken from vfs_kern_mount from linux/namespace.c */
+
 struct vfsmount *kern_mount_data(struct file_system_type *type, void *data)
 {
-	static struct mount local_mnt;
+	static struct mount local_mnt;	
 	static int count = 0;
 	struct mount *mnt = &local_mnt;
 	struct dentry *root = 0;
 
-	/* XXX */
+	
 	if (count != 0) return &local_mnt.mnt;
 	count++;
 
 	memset(mnt, 0, sizeof(struct mount));
 	if (!type)
 		return ERR_PTR(-ENODEV);
-	int flags = MS_KERNMOUNT;
+	int flags = SB_KERNMOUNT;
 	char *name = (char *)type->name;
 
-	if (flags & MS_KERNMOUNT)
+	if (flags & SB_KERNMOUNT)
 		mnt->mnt.mnt_flags = MNT_INTERNAL;
 
 	root = type->mount(type, flags, name, data);
@@ -47,11 +47,17 @@ struct vfsmount *kern_mount_data(struct file_system_type *type, void *data)
 	mnt->mnt.mnt_sb = root->d_sb;
 	mnt->mnt_mountpoint = mnt->mnt.mnt_root;
 	mnt->mnt_parent = mnt;
-	/* DCE is monothreaded , so we do not care of lock here */
+	
 	list_add_tail(&mnt->mnt_instance, &root->d_sb->s_mounts);
 
 	return &mnt->mnt;
 }
+
+struct vfsmount *kern_mount(struct file_system_type *type)
+{
+	return kern_mount_data(type,NULL);
+}*/
+
 void inode_wait_for_writeback(struct inode *inode)
 {
 }

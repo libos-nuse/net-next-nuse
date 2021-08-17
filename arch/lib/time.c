@@ -1,11 +1,3 @@
-/*
- * glue code for library version of Linux kernel
- * Copyright (c) 2015 INRIA, Hajime Tazaki
- *
- * Author: Mathieu Lacage <mathieu.lacage@gmail.com>
- *         Hajime Tazaki <tazaki@sfc.wide.ad.jp>
- */
-
 #include <linux/time.h>
 #include <linux/errno.h>
 #include <linux/timex.h>
@@ -16,11 +8,11 @@
 unsigned long volatile jiffies = INITIAL_JIFFIES;
 u64 jiffies_64 = INITIAL_JIFFIES;
 
-struct timespec xtime;
-seqlock_t xtime_lock;
+struct timespec64 xtime;
+//seqlock_t xtime_lock;
 /* accessed from wrap_clock from do_sys_settimeofday.
    We don't call the latter so we should never access this variable. */
-struct timespec wall_to_monotonic;
+struct timespec64 wall_to_monotonic;
 
 uint64_t ns_to_jiffies(uint64_t ns)
 {

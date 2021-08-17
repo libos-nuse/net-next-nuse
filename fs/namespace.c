@@ -3078,7 +3078,7 @@ static void shrink_submounts(struct mount *mnt)
 	}
 }
 
-static void *copy_mount_options(const void __user * data)
+void *copy_mount_options(const void __user * data)
 {
 	char *copy;
 	unsigned left, offset;
@@ -3787,6 +3787,9 @@ out0:
 	return error;
 }
 
+extern struct path def_root;
+extern struct mnt_namespace *def_mnt_ns;
+
 static void __init init_mount_tree(void)
 {
 	struct vfsmount *mnt;
@@ -3806,15 +3809,22 @@ static void __init init_mount_tree(void)
 	ns->root = m;
 	ns->mounts = 1;
 	list_add(&m->mnt_list, &ns->list);
-	init_task.nsproxy->mnt_ns = ns;
+	//init_task.nsproxy->mnt_ns = ns;
+	current->nsproxy->mnt_ns = ns;
+
 	get_mnt_ns(ns);
 
 	root.mnt = mnt;
 	root.dentry = mnt->mnt_root;
 	mnt->mnt_flags |= MNT_LOCKED;
 
-	set_fs_pwd(current->fs, &root);
-	set_fs_root(current->fs, &root);
+	def_root = root;	
+	def_mnt_ns = ns;
+
+	//set_fs_pwd(current->fs, &root);
+	current->fs->pwd = root;
+	current->fs->root = root;	
+	//set_fs_root(current->fs, &root);
 }
 
 void __init mnt_init(void)

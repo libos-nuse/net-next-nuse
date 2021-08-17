@@ -85,7 +85,7 @@ static void copy_fdtable(struct fdtable *nfdt, struct fdtable *ofdt)
 	copy_fd_bitmaps(nfdt, ofdt, ofdt->max_fds);
 }
 
-static struct fdtable * alloc_fdtable(unsigned int nr)
+struct fdtable * alloc_fdtable(unsigned int nr)
 {
 	struct fdtable *fdt;
 	void *data;

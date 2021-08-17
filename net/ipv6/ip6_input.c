@@ -151,6 +151,7 @@ static struct sk_buff *ip6_rcv_core(struct sk_buff *skb, struct net_device *dev,
 
 	if (skb->pkt_type == PACKET_OTHERHOST) {
 		kfree_skb(skb);
+		printk("Drop at ip6 %d",__LINE__);
 		return NULL;
 	}
 
@@ -268,6 +269,7 @@ static struct sk_buff *ip6_rcv_core(struct sk_buff *skb, struct net_device *dev,
 		if (ipv6_parse_hopopts(skb) < 0) {
 			__IP6_INC_STATS(net, idev, IPSTATS_MIB_INHDRERRORS);
 			rcu_read_unlock();
+			printk("Drop at ip6 %d",__LINE__);
 			return NULL;
 		}
 	}
@@ -282,6 +284,7 @@ static struct sk_buff *ip6_rcv_core(struct sk_buff *skb, struct net_device *dev,
 err:
 	__IP6_INC_STATS(net, idev, IPSTATS_MIB_INHDRERRORS);
 drop:
+	printk("Drop at ip6 %d",__LINE__);
 	rcu_read_unlock();
 	kfree_skb(skb);
 	return NULL;

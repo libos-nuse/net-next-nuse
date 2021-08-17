@@ -70,6 +70,8 @@ struct SimExported {
 			int size, int offset);
 	int (*sys_file_write)(const struct SimSysFile *file,
 			const char *buffer, int size, int offset);
+	int (*lkl_sysctl)(const char *path, const char *value);
+	int (*lkl_sysctl_get)(const char *path, char *buffer, int size);
 };
 
 struct SimImported {

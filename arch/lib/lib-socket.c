@@ -14,11 +14,17 @@
 #include <linux/netdevice.h>
 #include <linux/poll.h>
 #include <linux/wait.h>
+#include <linux/kthread.h>
 #include <net/sock.h>
 #include <net/tcp_states.h>
 #include <net/inet_connection_sock.h>
 
+#define READ 0
+#define WRITE 1
+
 struct SimSocket {};
+struct  socket;
+
 
 static struct iovec *copy_iovec(const struct iovec *input, int len)
 {
@@ -31,32 +37,31 @@ static struct iovec *copy_iovec(const struct iovec *input, int len)
 	return output;
 }
 
-int lib_sock_socket(int domain, int type, int protocol,
-		    struct SimSocket **socket)
+int lib_sock_socket (int domain, int type, int protocol, struct SimSocket **socket)
 {
-	struct socket **kernel_socket = (struct socket **)socket;
-	int flags;
+  printk("Domain : %d",domain);
+  struct socket **kernel_socket = (struct socket **)socket;
+  int flags;  
 
-	/* from net/socket.c */
-	flags = type & ~SOCK_TYPE_MASK;
+  flags = type & ~SOCK_TYPE_MASK;
 	if (flags & ~(SOCK_CLOEXEC | SOCK_NONBLOCK))
 		return -EINVAL;
 	type &= SOCK_TYPE_MASK;
-
-	int retval = sock_create(domain, type, protocol, kernel_socket);
-	/* XXX: SCTP code never look at flags args, but file flags instead. */
-	struct file *fp = lib_malloc(sizeof(struct file));
-	(*kernel_socket)->file = fp;
-	fp->f_cred = lib_malloc(sizeof(struct cred));
-	return retval;
+  
+  int retval = sock_create(domain, type, protocol, kernel_socket);
+  struct file *fp = lib_malloc(sizeof(struct file));
+  (*kernel_socket)->file = fp;
+  fp->f_cred = lib_malloc(sizeof(struct cred));
+  return retval;
 }
-int lib_sock_close(struct SimSocket *socket)
+
+int lib_sock_close (struct SimSocket *socket)
 {
-	struct socket *kernel_socket = (struct socket *)socket;
-
-	sock_release(kernel_socket);
-	return 0;
+  struct socket *kernel_socket = (struct socket *)socket;
+  sock_release(kernel_socket);
+  return 0;
 }
+
 static size_t iov_size(const struct user_msghdr *msg)
 {
 	size_t i;
@@ -66,9 +71,8 @@ static size_t iov_size(const struct user_msghdr *msg)
 		size += msg->msg_iov[i].iov_len;
 	return size;
 }
-ssize_t lib_sock_recvmsg(struct SimSocket *socket,
-			struct user_msghdr *msg,
-			int flags)
+
+ssize_t lib_sock_recvmsg (struct SimSocket *socket, struct user_msghdr *msg, int flags)
 {
 	struct socket *kernel_socket = (struct socket *)socket;
 	struct msghdr msg_sys;
@@ -85,7 +89,7 @@ ssize_t lib_sock_recvmsg(struct SimSocket *socket,
 	iov_iter_init(&msg_sys.msg_iter, READ,
 		msg->msg_iov, msg->msg_iovlen, iov_size(msg));
 
-	retval = sock_recvmsg(kernel_socket, &msg_sys, flags);
+	retval = sock_recvmsg(kernel_socket, &msg_sys , flags);
 
 	msg->msg_name = msg_sys.msg_name;
 	msg->msg_namelen = msg_sys.msg_namelen;
@@ -93,11 +97,11 @@ ssize_t lib_sock_recvmsg(struct SimSocket *socket,
 	msg->msg_controllen = user_cmsghlen - msg_sys.msg_controllen;
 	return retval;
 }
-ssize_t lib_sock_sendmsg(struct SimSocket *socket,
-			const struct user_msghdr *msg,
-			int flags)
+
+
+ssize_t lib_sock_sendmsg (struct SimSocket *socket, const struct user_msghdr *msg, int flags)
 {
-	struct socket *kernel_socket = (struct socket *)socket;
+struct socket *kernel_socket = (struct socket *)socket;
 	struct iovec *kernel_iov = copy_iovec(msg->msg_iov, msg->msg_iovlen);
 	struct msghdr msg_sys;
 	int retval;
@@ -111,93 +115,100 @@ ssize_t lib_sock_sendmsg(struct SimSocket *socket,
 	iov_iter_init(&msg_sys.msg_iter, WRITE,
 		kernel_iov, msg->msg_iovlen, iov_size(msg));
 
-	retval = sock_sendmsg(kernel_socket, &msg_sys);
+	retval = sock_sendmsg(kernel_socket, &msg_sys);    
 	lib_free(kernel_iov);
 	return retval;
 }
-int lib_sock_getsockname(struct SimSocket *socket, struct sockaddr *name,
-			 int *namelen)
-{
-	struct socket *sock = (struct socket *)socket;
-	int retval = sock->ops->getname(sock, name, namelen, 0);
 
-	return retval;
+int lib_sock_getsockname (struct SimSocket *socket, struct sockaddr *name, int *namelen)
+{
+  struct socket *kernel_socket = (struct socket *)socket;
+  int error = kernel_socket->ops->getname(kernel_socket, name, 0);
+  return error;
 }
-int lib_sock_getpeername(struct SimSocket *socket, struct sockaddr *name,
-			 int *namelen)
-{
-	struct socket *sock = (struct socket *)socket;
-	int retval = sock->ops->getname(sock, name, namelen, 1);
 
-	return retval;
+int lib_sock_getpeername (struct SimSocket *socket, struct sockaddr *name, int *namelen)
+{
+  struct socket *kernel_socket = (struct socket *)socket;
+  int error = kernel_socket->ops->getname(kernel_socket, name, 1);
+
+  return error;
 }
-int lib_sock_bind(struct SimSocket *socket, const struct sockaddr *name,
-		  int namelen)
-{
-	struct socket *sock = (struct socket *)socket;
-	struct sockaddr_storage address;
 
-	memcpy(&address, name, namelen);
-	int retval =
-		sock->ops->bind(sock, (struct sockaddr *)&address, namelen);
-	return retval;
+int lib_sock_bind (struct SimSocket *socket, const struct sockaddr *name, int namelen)
+{
+  struct socket * kernel_socket = (struct socket *)socket;
+  struct sockaddr_storage address;
+
+  memcpy(&address, name, namelen);
+  int error = kernel_socket->ops->bind(kernel_socket, (struct sockaddr *)&address, namelen);
+  return error;
 }
-int lib_sock_connect(struct SimSocket *socket, const struct sockaddr *name,
-		     int namelen, int flags)
-{
-	struct socket *sock = (struct socket *)socket;
-	struct sockaddr_storage address;
 
-	memcpy(&address, name, namelen);
-	/* XXX: SCTP code never look at flags args, but file flags instead. */
-	sock->file->f_flags = flags;
-	int retval = sock->ops->connect(sock, (struct sockaddr *)&address,
-					namelen, flags);
-	return retval;
+int lib_sock_connect (struct SimSocket *socket, const struct sockaddr *name, int namelen, int flags)
+{
+  struct socket *kernel_socket = (struct socket *)socket;
+  printk("Sock addr : %s",name->sa_data);
+  printk("Sock family : %s",name->sa_family);
+  printk("Working on socket with domain : %d",kernel_socket->sk->sk_protocol);
+  struct sockaddr_storage address;
+
+  //move_addr_to_kernel(name, namelen, &address);
+  memcpy(&address, name, namelen);
+
+  //kernel_socket->file->f_flags = kernel_socket->file->f_flags | flags;
+  kernel_socket->file->f_flags = flags;
+  int retval = kernel_socket->ops->connect(kernel_socket, (struct sockaddr *)&address,
+          namelen,  flags);
+  return retval;
 }
-int lib_sock_listen(struct SimSocket *socket, int backlog)
-{
-	struct socket *sock = (struct socket *)socket;
-	int retval = sock->ops->listen(sock, backlog);
 
-	return retval;
+int lib_sock_listen (struct SimSocket *socket, int backlog)
+{
+  struct socket * kernel_socket = (struct socket *)socket;
+  int error = kernel_socket->ops->listen(kernel_socket, backlog);
+  return error;
 }
-int lib_sock_shutdown(struct SimSocket *socket, int how)
-{
-	struct socket *sock = (struct socket *)socket;
-	int retval = sock->ops->shutdown(sock, how);
 
-	return retval;
+int lib_sock_shutdown (struct SimSocket *socket, int how)
+{
+  struct socket *kernel_socket = (struct socket *)socket;
+  int retval = kernel_socket->ops->shutdown(kernel_socket, how);
+  return retval;
 }
-int lib_sock_accept(struct SimSocket *socket, struct SimSocket **new_socket,
-		    int flags)
+
+int lib_sock_accept (struct SimSocket *socket, struct SimSocket **new_socket, int flags)
 {
-	struct socket *sock, *newsock;
-	int err;
+  struct socket *sock, *newsock;
+  int err;
 
-	sock = (struct socket *)socket;
+  sock = (struct socket *)socket;
 
-	/* the fields do not matter here. If we could, */
-	/* we would call sock_alloc but it's not exported. */
-	err = sock_create_lite(0, 0, 0, &newsock);
-	if (err < 0)
-		return err;
-	newsock->type = sock->type;
-	newsock->ops = sock->ops;
+  /* the fields do not matter here. If we could, */
+  /* we would call sock_alloc but it's not exported. */
+  err = sock_create_lite(0, 0, 0, &newsock);
+  if (err < 0)
+    return err;
+  newsock->type = sock->type;
+  newsock->ops = sock->ops;
 
-	err = sock->ops->accept(sock, newsock, flags);
-	if (err < 0) {
-		sock_release(newsock);
-		return err;
-	}
-	*new_socket = (struct SimSocket *)newsock;
-	return 0;
+  err = sock->ops->accept(sock, newsock, flags, false);
+  if (err < 0) {
+    sock_release(newsock);
+    return err;
+  }
+  *new_socket = (struct SimSocket *)newsock;
+  return 0;
 }
-int lib_sock_ioctl(struct SimSocket *socket, int request, char *argp)
+
+int lib_sock_ioctl (struct SimSocket *socket, int request, char *argp)
 {
-	struct socket *sock = (struct socket *)socket;
+  struct socket *sock = (struct socket *)socket;
 	struct sock *sk;
 	struct net *net;
+  void __user *arg = (void __user *)argp;
+  struct ifreq ifr;
+	bool need_copyout;
 	int err;
 
 	sk = sock->sk;
@@ -209,57 +220,42 @@ int lib_sock_ioctl(struct SimSocket *socket, int request, char *argp)
 	 * If this ioctl is unknown try to hand it down
 	 * to the NIC driver.
 	 */
+  if (copy_from_user(&ifr, arg, sizeof(struct ifreq)))
+			return -EFAULT;
+
 	if (err == -ENOIOCTLCMD)
-		err = dev_ioctl(net, request, argp);
-	return err;
+		err = dev_ioctl(net,request,&ifr,&need_copyout);
+  
+	return err;  
 }
-int lib_sock_setsockopt(struct SimSocket *socket, int level, int optname,
-			const void *optval, int optlen)
+
+int lib_sock_setsockopt (struct SimSocket *socket, int level, int optname, const void *optval, int optlen)
 {
-	struct socket *sock = (struct socket *)socket;
-	char *coptval = (char *)optval;
-	int err;
+  struct socket *kernel_socket = (struct socket *)socket;
+  char *coptval = (char *)optval;
+  int error;
 
-	if (level == SOL_SOCKET)
-		err = sock_setsockopt(sock, level, optname, coptval, optlen);
-	else
-		err = sock->ops->setsockopt(sock, level, optname, coptval,
-					    optlen);
-	return err;
+  if (level == SOL_SOCKET)
+    error = sock_setsockopt(kernel_socket, level, optname, USER_SOCKPTR(coptval), optlen);
+  else
+	error = kernel_socket->ops->setsockopt(kernel_socket, level, optname, USER_SOCKPTR(coptval), optlen);
+
+  return error;
 }
-int lib_sock_getsockopt(struct SimSocket *socket, int level, int optname,
-			void *optval, int *optlen)
+
+int lib_sock_getsockopt (struct SimSocket *socket, int level, int optname, void *optval, int *optlen)
 {
-	struct socket *sock = (struct socket *)socket;
-	int err;
+  struct socket *kernel_socket = (struct socket *)socket;
+  int error;
+	
+  if(level == SOL_SOCKET)
+  	error = sock_getsockopt(kernel_socket, level, optname, optval, optlen);
+  else
+	error = kernel_socket->ops->getsockopt(kernel_socket, level, optname, optval, optlen);
 
-	if (level == SOL_SOCKET)
-		err = sock_getsockopt(sock, level, optname, optval, optlen);
-	else
-		err =
-			sock->ops->getsockopt(sock, level, optname, optval,
-					      optlen);
-	return err;
+  return error;
 }
 
-/**
- * Struct used to pass pool table context between DCE and Kernel and back from
- * Kernel to DCE
- *
- * When calling sock_poll we provide in ret field the wanted eventmask, and in
- * the opaque field the DCE poll table
- *
- * if a corresponding event occurs later, the PollEvent will be called by kernel
- * with the DCE poll table in context variable, then we will able to wake up the
- * thread blocked in poll call.
- *
- * Back from sock_poll method the kernel change ret field with the response from
- * poll return of the corresponding kernel socket, and in opaque field there is
- * a reference to the kernel poll table we will use this reference to remove us
- * from the file wait queue when ending the DCE poll call or when ending the DCE
- * process which is currently polling.
- *
- */
 struct poll_table_ref {
 	int ret;
 	void *opaque;
@@ -268,13 +264,13 @@ struct poll_table_ref {
 /* Because the poll main loop code is in NS3/DCE we have only on entry
    in our kernel poll table */
 struct lib_ptable_entry {
-	wait_queue_t wait;
+	wait_queue_entry_t wait;
 	wait_queue_head_t *wait_address;
 	int eventMask;  /* Poll wanted event mask. */
 	void *opaque;   /* Pointeur to DCE poll table */
 };
 
-static int lib_pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
+static int lib_pollwake(wait_queue_entry_t *wait, unsigned mode, int sync, void *key)
 {
 	struct lib_ptable_entry *entry =
 		(struct lib_ptable_entry *)wait->private;
@@ -364,7 +360,5 @@ void lib_sock_pollfreewait(void *polltable)
 	}
 	lib_free(ptable);
 }
-
-
 
 

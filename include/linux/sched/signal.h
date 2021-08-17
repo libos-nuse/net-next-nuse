@@ -473,21 +473,18 @@ static inline void clear_tsk_restore_sigmask(struct task_struct *task)
 }
 static inline void clear_restore_sigmask(void)
 {
-	current->restore_sigmask = false;
+	
 }
 static inline bool test_restore_sigmask(void)
 {
-	return current->restore_sigmask;
+	
 }
 static inline bool test_tsk_restore_sigmask(struct task_struct *task)
 {
-	return task->restore_sigmask;
+	return true;
 }
 static inline bool test_and_clear_restore_sigmask(void)
 {
-	if (!current->restore_sigmask)
-		return false;
-	current->restore_sigmask = false;
 	return true;
 }
 #endif
