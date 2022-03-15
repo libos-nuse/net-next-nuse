@@ -15,7 +15,7 @@ include $(srctree)/scripts/Kbuild.include
 
 # targets
 LIBOS_TOOLS=$(ARCH_DIR)/tools
-LIBOS_GIT_REPO=git://github.com/libos-nuse/linux-libos-tools
+LIBOS_GIT_REPO=https://github.com/libos-nuse/linux-libos-tools
 KERNEL_LIB=liblinux-$(KERNELVERSION).so
 
 ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
