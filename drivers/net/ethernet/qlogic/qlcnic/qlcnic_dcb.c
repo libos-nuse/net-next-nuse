@@ -1,8 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * QLogic qlcnic NIC Driver
  * Copyright (c)  2009-2013 QLogic Corporation
- *
- * See LICENSE.qlcnic for copyright and licensing details.
  */
 
 #include <linux/types.h>
@@ -167,7 +166,7 @@ struct qlcnic_dcb_cfg {
 	u32 version;
 };
 
-static struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
+static const struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
 	.init_dcbnl_ops		= __qlcnic_init_dcbnl_ops,
 	.free			= __qlcnic_dcb_free,
 	.attach			= __qlcnic_dcb_attach,
@@ -180,7 +179,7 @@ static struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
 	.aen_handler		= qlcnic_83xx_dcb_aen_handler,
 };
 
-static struct qlcnic_dcb_ops qlcnic_82xx_dcb_ops = {
+static const struct qlcnic_dcb_ops qlcnic_82xx_dcb_ops = {
 	.init_dcbnl_ops		= __qlcnic_init_dcbnl_ops,
 	.free			= __qlcnic_dcb_free,
 	.attach			= __qlcnic_dcb_attach,
@@ -883,7 +882,7 @@ static u8 qlcnic_dcb_get_capability(struct net_device *netdev, int capid,
 	struct qlcnic_adapter *adapter = netdev_priv(netdev);
 
 	if (!test_bit(QLCNIC_DCB_STATE, &adapter->dcb->state))
-		return 0;
+		return 1;
 
 	switch (capid) {
 	case DCB_CAP_ATTR_PG:

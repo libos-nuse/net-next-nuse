@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/fs/ocfs2/ioctl.c
  *
@@ -86,7 +87,7 @@ static int ocfs2_set_inode_attr(struct inode *inode, unsigned flags,
 	unsigned oldflags;
 	int status;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	status = ocfs2_inode_lock(inode, &bh, 1);
 	if (status < 0) {
@@ -105,16 +106,9 @@ static int ocfs2_set_inode_attr(struct inode *inode, unsigned flags,
 	flags = flags & mask;
 	flags |= oldflags & ~mask;
 
-	/*
-	 * The IMMUTABLE and APPEND_ONLY flags can only be changed by
-	 * the relevant capability.
-	 */
-	status = -EPERM;
-	if ((oldflags & OCFS2_IMMUTABLE_FL) || ((flags ^ oldflags) &
-		(OCFS2_APPEND_FL | OCFS2_IMMUTABLE_FL))) {
-		if (!capable(CAP_LINUX_IMMUTABLE))
-			goto bail_unlock;
-	}
+	status = vfs_ioc_setflags_prepare(inode, oldflags, flags);
+	if (status)
+		goto bail_unlock;
 
 	handle = ocfs2_start_trans(osb, OCFS2_INODE_UPDATE_CREDITS);
 	if (IS_ERR(handle)) {
@@ -135,7 +129,7 @@ static int ocfs2_set_inode_attr(struct inode *inode, unsigned flags,
 bail_unlock:
 	ocfs2_inode_unlock(inode, 1);
 bail:
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 
 	brelse(bh);
 
@@ -287,9 +281,9 @@ static int ocfs2_info_scan_inode_alloc(struct ocfs2_super *osb,
 	struct ocfs2_dinode *dinode_alloc = NULL;
 
 	if (inode_alloc)
-		mutex_lock(&inode_alloc->i_mutex);
+		inode_lock(inode_alloc);
 
-	if (o2info_coherent(&fi->ifi_req)) {
+	if (inode_alloc && o2info_coherent(&fi->ifi_req)) {
 		status = ocfs2_inode_lock(inode_alloc, &bh, 0);
 		if (status < 0) {
 			mlog_errno(status);
@@ -317,7 +311,7 @@ bail:
 		ocfs2_inode_unlock(inode_alloc, 0);
 
 	if (inode_alloc)
-		mutex_unlock(&inode_alloc->i_mutex);
+		inode_unlock(inode_alloc);
 
 	brelse(bh);
 
@@ -401,7 +395,7 @@ out_err:
 static void o2ffg_update_histogram(struct ocfs2_info_free_chunk_list *hist,
 				   unsigned int chunksize)
 {
-	int index;
+	u32 index;
 
 	index = __ilog2_u32(chunksize);
 	if (index >= OCFS2_INFO_MAX_HIST)
@@ -547,7 +541,7 @@ static int ocfs2_info_freefrag_scan_bitmap(struct ocfs2_super *osb,
 	struct ocfs2_dinode *gb_dinode = NULL;
 
 	if (gb_inode)
-		mutex_lock(&gb_inode->i_mutex);
+		inode_lock(gb_inode);
 
 	if (o2info_coherent(&ffg->iff_req)) {
 		status = ocfs2_inode_lock(gb_inode, &bh, 0);
@@ -604,11 +598,9 @@ bail:
 		ocfs2_inode_unlock(gb_inode, 0);
 
 	if (gb_inode)
-		mutex_unlock(&gb_inode->i_mutex);
+		inode_unlock(gb_inode);
 
-	if (gb_inode)
-		iput(gb_inode);
-
+	iput(gb_inode);
 	brelse(bh);
 
 	return status;
@@ -993,6 +985,7 @@ long ocfs2_compat_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			return -EFAULT;
 
 		return ocfs2_info_handle(inode, &info, 1);
+	case FITRIM:
 	case OCFS2_IOC_MOVE_EXT:
 		break;
 	default:

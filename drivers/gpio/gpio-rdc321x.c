@@ -1,23 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * RDC321x GPIO driver
  *
  * Copyright (C) 2008, Volker Weiss <dev@tintuc.de>
  * Copyright (C) 2007-2010 Florian Fainelli <florian@openwrt.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -25,7 +11,7 @@
 #include <linux/spinlock.h>
 #include <linux/platform_device.h>
 #include <linux/pci.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/mfd/rdc321x.h>
 #include <linux/slab.h>
 
@@ -47,7 +33,7 @@ static int rdc_gpio_get_value(struct gpio_chip *chip, unsigned gpio)
 	u32 value = 0;
 	int reg;
 
-	gpch = container_of(chip, struct rdc321x_gpio, chip);
+	gpch = gpiochip_get_data(chip);
 	reg = gpio < 32 ? gpch->reg1_data_base : gpch->reg2_data_base;
 
 	spin_lock(&gpch->lock);
@@ -65,7 +51,7 @@ static void rdc_gpio_set_value_impl(struct gpio_chip *chip,
 	struct rdc321x_gpio *gpch;
 	int reg = (gpio < 32) ? 0 : 1;
 
-	gpch = container_of(chip, struct rdc321x_gpio, chip);
+	gpch = gpiochip_get_data(chip);
 
 	if (value)
 		gpch->data_reg[reg] |= 1 << (gpio & 0x1f);
@@ -83,7 +69,7 @@ static void rdc_gpio_set_value(struct gpio_chip *chip,
 {
 	struct rdc321x_gpio *gpch;
 
-	gpch = container_of(chip, struct rdc321x_gpio, chip);
+	gpch = gpiochip_get_data(chip);
 	spin_lock(&gpch->lock);
 	rdc_gpio_set_value_impl(chip, gpio, value);
 	spin_unlock(&gpch->lock);
@@ -96,7 +82,7 @@ static int rdc_gpio_config(struct gpio_chip *chip,
 	int err;
 	u32 reg;
 
-	gpch = container_of(chip, struct rdc321x_gpio, chip);
+	gpch = gpiochip_get_data(chip);
 
 	spin_lock(&gpch->lock);
 	err = pci_read_config_dword(gpch->sb_pdev, gpio < 32 ?
@@ -194,23 +180,13 @@ static int rdc321x_gpio_probe(struct platform_device *pdev)
 
 	dev_info(&pdev->dev, "registering %d GPIOs\n",
 					rdc321x_gpio_dev->chip.ngpio);
-	return gpiochip_add(&rdc321x_gpio_dev->chip);
-}
-
-static int rdc321x_gpio_remove(struct platform_device *pdev)
-{
-	struct rdc321x_gpio *rdc321x_gpio_dev = platform_get_drvdata(pdev);
-
-	gpiochip_remove(&rdc321x_gpio_dev->chip);
-
-	return 0;
+	return devm_gpiochip_add_data(&pdev->dev, &rdc321x_gpio_dev->chip,
+				      rdc321x_gpio_dev);
 }
 
 static struct platform_driver rdc321x_gpio_driver = {
 	.driver.name	= "rdc321x-gpio",
-	.driver.owner	= THIS_MODULE,
 	.probe		= rdc321x_gpio_probe,
-	.remove		= rdc321x_gpio_remove,
 };
 
 module_platform_driver(rdc321x_gpio_driver);

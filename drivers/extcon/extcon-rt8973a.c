@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * extcon-rt8973a.c - Richtek RT8973A extcon driver to support USB switches
  *
  * Copyright (c) 2014 Samsung Electronics Co., Ltd
  * Author: Chanwoo Choi <cw00.choi@samsung.com>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/err.h>
@@ -20,7 +16,7 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
-#include <linux/extcon.h>
+#include <linux/extcon-provider.h>
 
 #include "extcon-rt8973a.h"
 
@@ -93,6 +89,7 @@ static struct reg_data rt8973a_reg_data[] = {
 static const unsigned int rt8973a_extcon_cable[] = {
 	EXTCON_USB,
 	EXTCON_USB_HOST,
+	EXTCON_CHG_USB_SDP,
 	EXTCON_CHG_USB_DCP,
 	EXTCON_JIG,
 	EXTCON_NONE,
@@ -141,8 +138,10 @@ enum rt8973a_muic_acc_type {
 	RT8973A_MUIC_ADC_UNKNOWN_ACC_5,
 	RT8973A_MUIC_ADC_OPEN = 0x1f,
 
-	/* The below accessories has same ADC value (0x1f).
-	   So, Device type1 is used to separate specific accessory. */
+	/*
+	 * The below accessories has same ADC value (0x1f).
+	 * So, Device type1 is used to separate specific accessory.
+	 */
 					/* |---------|--ADC| */
 					/* |    [7:5]|[4:0]| */
 	RT8973A_MUIC_ADC_USB = 0x3f,	/* |      001|11111| */
@@ -397,7 +396,10 @@ static int rt8973a_muic_cable_handler(struct rt8973a_muic_info *info,
 		return ret;
 
 	/* Change the state of external accessory */
-	extcon_set_cable_state_(info->edev, id, attached);
+	extcon_set_state_sync(info->edev, id, attached);
+	if (id == EXTCON_USB)
+		extcon_set_state_sync(info->edev, EXTCON_CHG_USB_SDP,
+					attached);
 
 	return 0;
 }
@@ -531,7 +533,7 @@ static void rt8973a_init_dev_type(struct rt8973a_muic_info *info)
 		regmap_update_bits(info->regmap, reg, mask, val);
 	}
 
-	/* Check whether RT8973A is auto swithcing mode or not */
+	/* Check whether RT8973A is auto switching mode or not */
 	ret = regmap_read(info->regmap, RT8973A_REG_CONTROL1, &data);
 	if (ret) {
 		dev_err(info->dev,
@@ -603,7 +605,7 @@ static int rt8973a_muic_i2c_probe(struct i2c_client *i2c,
 
 		ret = devm_request_threaded_irq(info->dev, virq, NULL,
 						rt8973a_muic_irq_handler,
-						IRQF_NO_SUSPEND,
+						IRQF_NO_SUSPEND | IRQF_ONESHOT,
 						muic_irq->name, info);
 		if (ret) {
 			dev_err(info->dev,
@@ -663,7 +665,7 @@ MODULE_DEVICE_TABLE(of, rt8973a_dt_match);
 #ifdef CONFIG_PM_SLEEP
 static int rt8973a_muic_suspend(struct device *dev)
 {
-	struct i2c_client *i2c = container_of(dev, struct i2c_client, dev);
+	struct i2c_client *i2c = to_i2c_client(dev);
 	struct rt8973a_muic_info *info = i2c_get_clientdata(i2c);
 
 	enable_irq_wake(info->irq);
@@ -673,7 +675,7 @@ static int rt8973a_muic_suspend(struct device *dev)
 
 static int rt8973a_muic_resume(struct device *dev)
 {
-	struct i2c_client *i2c = container_of(dev, struct i2c_client, dev);
+	struct i2c_client *i2c = to_i2c_client(dev);
 	struct rt8973a_muic_info *info = i2c_get_clientdata(i2c);
 
 	disable_irq_wake(info->irq);

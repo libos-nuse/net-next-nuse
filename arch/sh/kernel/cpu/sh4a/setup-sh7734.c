@@ -1,14 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * arch/sh/kernel/cpu/sh4a/setup-sh7734.c
-
+ *
  * SH7734 Setup
  *
  * Copyright (C) 2011,2012 Nobuhiro Iwamatsu <nobuhiro.iwamatsu.yj@renesas.com>
  * Copyright (C) 2011,2012 Renesas Solutions Corp.
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file "COPYING" in the main directory of this archive
- * for more details.
  */
 
 #include <linux/platform_device.h>
@@ -21,14 +18,14 @@
 #include <linux/io.h>
 #include <asm/clock.h>
 #include <asm/irq.h>
+#include <asm/platform_early.h>
 #include <cpu/sh7734.h>
 
 /* SCIF */
 static struct plat_sci_port scif0_platform_data = {
-	.flags          = UPF_BOOT_AUTOCONF,
-	.scscr          = SCSCR_RE | SCSCR_TE | SCSCR_REIE,
+	.scscr          = SCSCR_REIE,
 	.type           = PORT_SCIF,
-	.regtype        = SCIx_SH4_SCIF_REGTYPE,
+	.regtype        = SCIx_SH4_SCIF_BRG_REGTYPE,
 };
 
 static struct resource scif0_resources[] = {
@@ -47,10 +44,9 @@ static struct platform_device scif0_device = {
 };
 
 static struct plat_sci_port scif1_platform_data = {
-	.flags          = UPF_BOOT_AUTOCONF,
-	.scscr          = SCSCR_RE | SCSCR_TE | SCSCR_REIE,
+	.scscr          = SCSCR_REIE,
 	.type           = PORT_SCIF,
-	.regtype        = SCIx_SH4_SCIF_REGTYPE,
+	.regtype        = SCIx_SH4_SCIF_BRG_REGTYPE,
 };
 
 static struct resource scif1_resources[] = {
@@ -69,10 +65,9 @@ static struct platform_device scif1_device = {
 };
 
 static struct plat_sci_port scif2_platform_data = {
-	.flags          = UPF_BOOT_AUTOCONF,
-	.scscr          = SCSCR_RE | SCSCR_TE | SCSCR_REIE,
+	.scscr          = SCSCR_REIE,
 	.type           = PORT_SCIF,
-	.regtype        = SCIx_SH4_SCIF_REGTYPE,
+	.regtype        = SCIx_SH4_SCIF_BRG_REGTYPE,
 };
 
 static struct resource scif2_resources[] = {
@@ -91,10 +86,9 @@ static struct platform_device scif2_device = {
 };
 
 static struct plat_sci_port scif3_platform_data = {
-	.flags          = UPF_BOOT_AUTOCONF,
-	.scscr          = SCSCR_RE | SCSCR_TE | SCSCR_REIE | SCSCR_TOIE,
+	.scscr          = SCSCR_REIE | SCSCR_TOIE,
 	.type           = PORT_SCIF,
-	.regtype        = SCIx_SH4_SCIF_REGTYPE,
+	.regtype        = SCIx_SH4_SCIF_BRG_REGTYPE,
 };
 
 static struct resource scif3_resources[] = {
@@ -113,10 +107,9 @@ static struct platform_device scif3_device = {
 };
 
 static struct plat_sci_port scif4_platform_data = {
-	.flags          = UPF_BOOT_AUTOCONF,
-	.scscr          = SCSCR_RE | SCSCR_TE | SCSCR_REIE,
+	.scscr          = SCSCR_REIE,
 	.type           = PORT_SCIF,
-	.regtype        = SCIx_SH4_SCIF_REGTYPE,
+	.regtype        = SCIx_SH4_SCIF_BRG_REGTYPE,
 };
 
 static struct resource scif4_resources[] = {
@@ -135,10 +128,9 @@ static struct platform_device scif4_device = {
 };
 
 static struct plat_sci_port scif5_platform_data = {
-	.flags          = UPF_BOOT_AUTOCONF,
-	.scscr          = SCSCR_RE | SCSCR_TE | SCSCR_REIE,
+	.scscr          = SCSCR_REIE,
 	.type           = PORT_SCIF,
-	.regtype		= SCIx_SH4_SCIF_REGTYPE,
+	.regtype	= SCIx_SH4_SCIF_BRG_REGTYPE,
 };
 
 static struct resource scif5_resources[] = {
@@ -289,7 +281,7 @@ static struct platform_device *sh7734_early_devices[] __initdata = {
 
 void __init plat_early_device_setup(void)
 {
-	early_platform_add_devices(sh7734_early_devices,
+	sh_early_platform_add_devices(sh7734_early_devices,
 		ARRAY_SIZE(sh7734_early_devices));
 }
 

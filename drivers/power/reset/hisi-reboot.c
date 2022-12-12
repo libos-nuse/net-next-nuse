@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Hisilicon SoC reset code
  *
@@ -5,10 +6,6 @@
  * Copyright (c) 2014 Linaro Ltd.
  *
  * Author: Haojian Zhuang <haojian.zhuang@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -53,13 +50,16 @@ static int hisi_reboot_probe(struct platform_device *pdev)
 
 	if (of_property_read_u32(np, "reboot-offset", &reboot_offset) < 0) {
 		pr_err("failed to find reboot-offset property\n");
+		iounmap(base);
 		return -EINVAL;
 	}
 
 	err = register_restart_handler(&hisi_restart_nb);
-	if (err)
+	if (err) {
 		dev_err(&pdev->dev, "cannot register restart handler (err=%d)\n",
 			err);
+		iounmap(base);
+	}
 
 	return err;
 }

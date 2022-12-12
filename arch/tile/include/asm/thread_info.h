@@ -78,7 +78,7 @@ struct thread_info {
 
 #ifndef __ASSEMBLY__
 
-void arch_release_thread_info(struct thread_info *info);
+void arch_release_thread_stack(unsigned long *stack);
 
 /* How to get the thread information struct from C. */
 register unsigned long stack_pointer __asm__("sp");
@@ -140,10 +140,14 @@ extern void _cpu_idle(void);
 #define _TIF_POLLING_NRFLAG	(1<<TIF_POLLING_NRFLAG)
 #define _TIF_NOHZ		(1<<TIF_NOHZ)
 
+/* Work to do as we loop to exit to user space. */
+#define _TIF_WORK_MASK \
+	(_TIF_SIGPENDING | _TIF_NEED_RESCHED | \
+	 _TIF_ASYNC_TLB | _TIF_NOTIFY_RESUME)
+
 /* Work to do on any return to user space. */
 #define _TIF_ALLWORK_MASK \
-	(_TIF_SIGPENDING | _TIF_NEED_RESCHED | _TIF_SINGLESTEP | \
-	 _TIF_ASYNC_TLB | _TIF_NOTIFY_RESUME | _TIF_NOHZ)
+	(_TIF_WORK_MASK | _TIF_SINGLESTEP | _TIF_NOHZ)
 
 /* Work to do at syscall entry. */
 #define _TIF_SYSCALL_ENTRY_WORK \

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * arch/sh/kernel/smp.c
  *
@@ -5,10 +6,6 @@
  *
  * Copyright (C) 2002 - 2010 Paul Mundt
  * Copyright (C) 2006 - 2007 Akio Idehara
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file "COPYING" in the main directory of this archive
- * for more details.
  */
 #include <linux/err.h>
 #include <linux/cache.h>
@@ -20,8 +17,10 @@
 #include <linux/module.h>
 #include <linux/cpu.h>
 #include <linux/interrupt.h>
-#include <linux/sched.h>
+#include <linux/sched/mm.h>
+#include <linux/sched/hotplug.h>
 #include <linux/atomic.h>
+#include <linux/clockchips.h>
 #include <asm/processor.h>
 #include <asm/mmu_context.h>
 #include <asm/smp.h>
@@ -141,16 +140,13 @@ int __cpu_disable(void)
 	migrate_irqs();
 
 	/*
-	 * Stop the local timer for this CPU.
-	 */
-	local_timer_stop(cpu);
-
-	/*
 	 * Flush user cache and TLB mappings, and then remove this CPU
 	 * from the vm mask set of all processes.
 	 */
 	flush_cache_all();
+#ifdef CONFIG_MMU
 	local_flush_tlb_all();
+#endif
 
 	clear_tasks_mm_cpumask(cpu);
 
@@ -180,11 +176,13 @@ asmlinkage void start_secondary(void)
 	struct mm_struct *mm = &init_mm;
 
 	enable_mmu();
-	atomic_inc(&mm->mm_count);
-	atomic_inc(&mm->mm_users);
+	mmgrab(mm);
+	mmget(mm);
 	current->active_mm = mm;
+#ifdef CONFIG_MMU
 	enter_lazy_tlb(mm, current);
 	local_flush_tlb_all();
+#endif
 
 	per_cpu_trap_init();
 
@@ -194,8 +192,6 @@ asmlinkage void start_secondary(void)
 
 	local_irq_enable();
 
-	/* Enable local timers */
-	local_timer_setup(cpu);
 	calibrate_delay();
 
 	smp_store_cpu_info(cpu);
@@ -203,7 +199,7 @@ asmlinkage void start_secondary(void)
 	set_cpu_online(cpu, true);
 	per_cpu(cpu_state, cpu) = CPU_ONLINE;
 
-	cpu_startup_entry(CPUHP_ONLINE);
+	cpu_startup_entry(CPUHP_AP_ONLINE_IDLE);
 }
 
 extern struct {
@@ -285,7 +281,8 @@ void arch_send_call_function_single_ipi(int cpu)
 	mp_ops->send_ipi(cpu, SMP_MSG_FUNCTION_SINGLE);
 }
 
-void smp_timer_broadcast(const struct cpumask *mask)
+#ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
+void tick_broadcast(const struct cpumask *mask)
 {
 	int cpu;
 
@@ -296,9 +293,10 @@ void smp_timer_broadcast(const struct cpumask *mask)
 static void ipi_timer(void)
 {
 	irq_enter();
-	local_timer_interrupt();
+	tick_receive_broadcast();
 	irq_exit();
 }
+#endif
 
 void smp_message_recv(unsigned int msg)
 {
@@ -312,9 +310,11 @@ void smp_message_recv(unsigned int msg)
 	case SMP_MSG_FUNCTION_SINGLE:
 		generic_smp_call_function_single_interrupt();
 		break;
+#ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
 	case SMP_MSG_TIMER:
 		ipi_timer();
 		break;
+#endif
 	default:
 		printk(KERN_WARNING "SMP %d: %s(): unknown IPI %d\n",
 		       smp_processor_id(), __func__, msg);
@@ -327,6 +327,8 @@ int setup_profiling_timer(unsigned int multiplier)
 {
 	return 0;
 }
+
+#ifdef CONFIG_MMU
 
 static void flush_tlb_all_ipi(void *info)
 {
@@ -467,3 +469,5 @@ void flush_tlb_one(unsigned long asid, unsigned long vaddr)
 	smp_call_function(flush_tlb_one_ipi, (void *)&fd, 1);
 	local_flush_tlb_one(asid, vaddr);
 }
+
+#endif

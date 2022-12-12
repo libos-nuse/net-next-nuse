@@ -1,29 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Texas Instruments
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/pinctrl/pinmux.h>
-#include <linux/pinctrl/consumer.h>
-#include <linux/backlight.h>
 #include <linux/gpio/consumer.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/platform_device.h>
+
 #include <video/display_timing.h>
 #include <video/of_display_timing.h>
 #include <video/videomode.h>
 
+#include <drm/drm_atomic_state_helper.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_modeset_helper_vtables.h>
+#include <drm/drm_probe_helper.h>
+#include <drm/drm_simple_kms_helper.h>
+
 #include "tilcdc_drv.h"
+#include "tilcdc_panel.h"
 
 struct panel_module {
 	struct tilcdc_module base;
@@ -45,14 +41,6 @@ struct panel_encoder {
 };
 #define to_panel_encoder(x) container_of(x, struct panel_encoder, base)
 
-
-static void panel_encoder_destroy(struct drm_encoder *encoder)
-{
-	struct panel_encoder *panel_encoder = to_panel_encoder(encoder);
-	drm_encoder_cleanup(encoder);
-	kfree(panel_encoder);
-}
-
 static void panel_encoder_dpms(struct drm_encoder *encoder, int mode)
 {
 	struct panel_encoder *panel_encoder = to_panel_encoder(encoder);
@@ -70,19 +58,9 @@ static void panel_encoder_dpms(struct drm_encoder *encoder, int mode)
 					 mode == DRM_MODE_DPMS_ON ? 1 : 0);
 }
 
-static bool panel_encoder_mode_fixup(struct drm_encoder *encoder,
-		const struct drm_display_mode *mode,
-		struct drm_display_mode *adjusted_mode)
-{
-	/* nothing needed */
-	return true;
-}
-
 static void panel_encoder_prepare(struct drm_encoder *encoder)
 {
-	struct panel_encoder *panel_encoder = to_panel_encoder(encoder);
 	panel_encoder_dpms(encoder, DRM_MODE_DPMS_OFF);
-	tilcdc_crtc_set_panel_info(encoder->crtc, panel_encoder->mod->info);
 }
 
 static void panel_encoder_commit(struct drm_encoder *encoder)
@@ -97,13 +75,8 @@ static void panel_encoder_mode_set(struct drm_encoder *encoder,
 	/* nothing needed */
 }
 
-static const struct drm_encoder_funcs panel_encoder_funcs = {
-		.destroy        = panel_encoder_destroy,
-};
-
 static const struct drm_encoder_helper_funcs panel_encoder_helper_funcs = {
 		.dpms           = panel_encoder_dpms,
-		.mode_fixup     = panel_encoder_mode_fixup,
 		.prepare        = panel_encoder_prepare,
 		.commit         = panel_encoder_commit,
 		.mode_set       = panel_encoder_mode_set,
@@ -116,19 +89,17 @@ static struct drm_encoder *panel_encoder_create(struct drm_device *dev,
 	struct drm_encoder *encoder;
 	int ret;
 
-	panel_encoder = kzalloc(sizeof(*panel_encoder), GFP_KERNEL);
-	if (!panel_encoder) {
-		dev_err(dev->dev, "allocation failed\n");
+	panel_encoder = devm_kzalloc(dev->dev, sizeof(*panel_encoder),
+				     GFP_KERNEL);
+	if (!panel_encoder)
 		return NULL;
-	}
 
 	panel_encoder->mod = mod;
 
 	encoder = &panel_encoder->base;
 	encoder->possible_crtcs = 1;
 
-	ret = drm_encoder_init(dev, encoder, &panel_encoder_funcs,
-			DRM_MODE_ENCODER_LVDS);
+	ret = drm_simple_encoder_init(dev, encoder, DRM_MODE_ENCODER_LVDS);
 	if (ret < 0)
 		goto fail;
 
@@ -137,7 +108,7 @@ static struct drm_encoder *panel_encoder_create(struct drm_device *dev,
 	return encoder;
 
 fail:
-	panel_encoder_destroy(encoder);
+	drm_encoder_cleanup(encoder);
 	return NULL;
 }
 
@@ -156,17 +127,8 @@ struct panel_connector {
 
 static void panel_connector_destroy(struct drm_connector *connector)
 {
-	struct panel_connector *panel_connector = to_panel_connector(connector);
 	drm_connector_unregister(connector);
 	drm_connector_cleanup(connector);
-	kfree(panel_connector);
-}
-
-static enum drm_connector_status panel_connector_detect(
-		struct drm_connector *connector,
-		bool force)
-{
-	return connector_status_connected;
 }
 
 static int panel_connector_get_modes(struct drm_connector *connector)
@@ -177,10 +139,14 @@ static int panel_connector_get_modes(struct drm_connector *connector)
 	int i;
 
 	for (i = 0; i < timings->num_timings; i++) {
-		struct drm_display_mode *mode = drm_mode_create(dev);
+		struct drm_display_mode *mode;
 		struct videomode vm;
 
 		if (videomode_from_timings(timings, &vm, i))
+			break;
+
+		mode = drm_mode_create(dev);
+		if (!mode)
 			break;
 
 		drm_display_mode_from_videomode(&vm, mode);
@@ -197,14 +163,6 @@ static int panel_connector_get_modes(struct drm_connector *connector)
 	return i;
 }
 
-static int panel_connector_mode_valid(struct drm_connector *connector,
-		  struct drm_display_mode *mode)
-{
-	struct tilcdc_drm_private *priv = connector->dev->dev_private;
-	/* our only constraints are what the crtc can generate: */
-	return tilcdc_crtc_mode_valid(priv->crtc, mode);
-}
-
 static struct drm_encoder *panel_connector_best_encoder(
 		struct drm_connector *connector)
 {
@@ -214,14 +172,14 @@ static struct drm_encoder *panel_connector_best_encoder(
 
 static const struct drm_connector_funcs panel_connector_funcs = {
 	.destroy            = panel_connector_destroy,
-	.dpms               = drm_helper_connector_dpms,
-	.detect             = panel_connector_detect,
 	.fill_modes         = drm_helper_probe_single_connector_modes,
+	.reset              = drm_atomic_helper_connector_reset,
+	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
 
 static const struct drm_connector_helper_funcs panel_connector_helper_funcs = {
 	.get_modes          = panel_connector_get_modes,
-	.mode_valid         = panel_connector_mode_valid,
 	.best_encoder       = panel_connector_best_encoder,
 };
 
@@ -232,11 +190,10 @@ static struct drm_connector *panel_connector_create(struct drm_device *dev,
 	struct drm_connector *connector;
 	int ret;
 
-	panel_connector = kzalloc(sizeof(*panel_connector), GFP_KERNEL);
-	if (!panel_connector) {
-		dev_err(dev->dev, "allocation failed\n");
+	panel_connector = devm_kzalloc(dev->dev, sizeof(*panel_connector),
+				       GFP_KERNEL);
+	if (!panel_connector)
 		return NULL;
-	}
 
 	panel_connector->encoder = encoder;
 	panel_connector->mod = mod;
@@ -250,11 +207,9 @@ static struct drm_connector *panel_connector_create(struct drm_device *dev,
 	connector->interlace_allowed = 0;
 	connector->doublescan_allowed = 0;
 
-	ret = drm_mode_connector_attach_encoder(connector, encoder);
+	ret = drm_connector_attach_encoder(connector, encoder);
 	if (ret)
 		goto fail;
-
-	drm_connector_register(connector);
 
 	return connector;
 
@@ -284,6 +239,9 @@ static int panel_modeset_init(struct tilcdc_module *mod, struct drm_device *dev)
 
 	priv->encoders[priv->num_encoders++] = encoder;
 	priv->connectors[priv->num_connectors++] = connector;
+
+	tilcdc_crtc_set_panel_info(priv->crtc,
+				   to_panel_encoder(encoder)->mod->info);
 
 	return 0;
 }
@@ -315,11 +273,8 @@ static struct tilcdc_panel_info *of_get_panel_info(struct device_node *np)
 	}
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
-	if (!info) {
-		pr_err("%s: allocation failed\n", __func__);
-		of_node_put(info_np);
-		return NULL;
-	}
+	if (!info)
+		goto put_node;
 
 	ret |= of_property_read_u32(info_np, "ac-bias", &info->ac_bias);
 	ret |= of_property_read_u32(info_np, "ac-bias-intrpt", &info->ac_bias_intrpt);
@@ -338,17 +293,18 @@ static struct tilcdc_panel_info *of_get_panel_info(struct device_node *np)
 	if (ret) {
 		pr_err("%s: error reading panel-info properties\n", __func__);
 		kfree(info);
-		of_node_put(info_np);
-		return NULL;
+		info = NULL;
 	}
-	of_node_put(info_np);
 
+put_node:
+	of_node_put(info_np);
 	return info;
 }
 
 static int panel_probe(struct platform_device *pdev)
 {
-	struct device_node *bl_node, *node = pdev->dev.of_node;
+	struct device_node *node = pdev->dev.of_node;
+	struct backlight_device *backlight;
 	struct panel_module *panel_mod;
 	struct tilcdc_module *mod;
 	struct pinctrl *pinctrl;
@@ -364,16 +320,10 @@ static int panel_probe(struct platform_device *pdev)
 	if (!panel_mod)
 		return -ENOMEM;
 
-	bl_node = of_parse_phandle(node, "backlight", 0);
-	if (bl_node) {
-		panel_mod->backlight = of_find_backlight_by_node(bl_node);
-		of_node_put(bl_node);
-
-		if (!panel_mod->backlight)
-			return -EPROBE_DEFER;
-
-		dev_info(&pdev->dev, "found backlight\n");
-	}
+	backlight = devm_of_find_backlight(&pdev->dev);
+	if (IS_ERR(backlight))
+		return PTR_ERR(backlight);
+	panel_mod->backlight = backlight;
 
 	panel_mod->enable_gpio = devm_gpiod_get_optional(&pdev->dev, "enable",
 							 GPIOD_OUT_LOW);
@@ -409,8 +359,6 @@ static int panel_probe(struct platform_device *pdev)
 		goto fail_timings;
 	}
 
-	mod->preferred_bpp = panel_mod->info->bpp;
-
 	return 0;
 
 fail_timings:
@@ -442,17 +390,17 @@ static int panel_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct of_device_id panel_of_match[] = {
+static const struct of_device_id panel_of_match[] = {
 		{ .compatible = "ti,tilcdc,panel", },
 		{ },
 };
 
-struct platform_driver panel_driver = {
+static struct platform_driver panel_driver = {
 	.probe = panel_probe,
 	.remove = panel_remove,
 	.driver = {
 		.owner = THIS_MODULE,
-		.name = "panel",
+		.name = "tilcdc-panel",
 		.of_match_table = panel_of_match,
 	},
 };

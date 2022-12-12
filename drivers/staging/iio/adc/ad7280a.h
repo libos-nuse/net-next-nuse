@@ -1,9 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * AD7280A Lithium Ion Battery Monitoring System
  *
  * Copyright 2011 Analog Devices Inc.
- *
- * Licensed under the GPL-2.
  */
 
 #ifndef IIO_ADC_AD7280_H_
@@ -29,10 +28,10 @@
 #define AD7280A_ALERT_REMOVE_AUX4_AUX5		BIT(1)
 
 struct ad7280_platform_data {
-	unsigned acquisition_time;
-	unsigned conversion_averaging;
-	unsigned chain_last_alert_ignore;
-	bool thermistor_term_en;
+	unsigned int		acquisition_time;
+	unsigned int		conversion_averaging;
+	unsigned int		chain_last_alert_ignore;
+	bool			thermistor_term_en;
 };
 
 #endif /* IIO_ADC_AD7280_H_ */

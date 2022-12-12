@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AD7298 SPI ADC driver
  *
  * Copyright 2011 Analog Devices Inc.
- *
- * Licensed under the GPL-2.
  */
 
 #include <linux/device.h>
@@ -99,9 +98,9 @@ static const struct iio_chan_spec ad7298_channels[] = {
 	IIO_CHAN_SOFT_TIMESTAMP(8),
 };
 
-/**
+/*
  * ad7298_update_scan_mode() setup the spi transfer buffer for the new scan mask
- **/
+ */
 static int ad7298_update_scan_mode(struct iio_dev *indio_dev,
 	const unsigned long *active_scan_mask)
 {
@@ -145,12 +144,12 @@ static int ad7298_update_scan_mode(struct iio_dev *indio_dev,
 	return 0;
 }
 
-/**
+/*
  * ad7298_trigger_handler() bh of trigger launched polling to ring buffer
  *
  * Currently there is no option in this driver to disable the saving of
  * timestamps within the ring.
- **/
+ */
 static irqreturn_t ad7298_trigger_handler(int irq, void *p)
 {
 	struct iio_poll_func *pf = p;
@@ -163,7 +162,7 @@ static irqreturn_t ad7298_trigger_handler(int irq, void *p)
 		goto done;
 
 	iio_push_to_buffers_with_timestamp(indio_dev, st->rx_buf,
-		iio_get_time_ns());
+		iio_get_time_ns(indio_dev));
 
 done:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -239,16 +238,16 @@ static int ad7298_read_raw(struct iio_dev *indio_dev,
 
 	switch (m) {
 	case IIO_CHAN_INFO_RAW:
-		mutex_lock(&indio_dev->mlock);
-		if (indio_dev->currentmode == INDIO_BUFFER_TRIGGERED) {
-			ret = -EBUSY;
-		} else {
-			if (chan->address == AD7298_CH_TEMP)
-				ret = ad7298_scan_temp(st, val);
-			else
-				ret = ad7298_scan_direct(st, chan->address);
-		}
-		mutex_unlock(&indio_dev->mlock);
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret)
+			return ret;
+
+		if (chan->address == AD7298_CH_TEMP)
+			ret = ad7298_scan_temp(st, val);
+		else
+			ret = ad7298_scan_direct(st, chan->address);
+
+		iio_device_release_direct_mode(indio_dev);
 
 		if (ret < 0)
 			return ret;
@@ -280,7 +279,6 @@ static int ad7298_read_raw(struct iio_dev *indio_dev,
 static const struct iio_info ad7298_info = {
 	.read_raw = &ad7298_read_raw,
 	.update_scan_mode = ad7298_update_scan_mode,
-	.driver_module = THIS_MODULE,
 };
 
 static int ad7298_probe(struct spi_device *spi)
@@ -314,7 +312,6 @@ static int ad7298_probe(struct spi_device *spi)
 	st->spi = spi;
 
 	indio_dev->name = spi_get_device_id(spi)->name;
-	indio_dev->dev.parent = &spi->dev;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = ad7298_channels;
 	indio_dev->num_channels = ARRAY_SIZE(ad7298_channels);
@@ -385,6 +382,6 @@ static struct spi_driver ad7298_driver = {
 };
 module_spi_driver(ad7298_driver);
 
-MODULE_AUTHOR("Michael Hennerich <hennerich@blackfin.uclinux.org>");
+MODULE_AUTHOR("Michael Hennerich <michael.hennerich@analog.com>");
 MODULE_DESCRIPTION("Analog Devices AD7298 ADC");
 MODULE_LICENSE("GPL v2");

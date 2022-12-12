@@ -380,9 +380,8 @@ static void bfin_mac_adjust_link(struct net_device *dev)
 static int mii_probe(struct net_device *dev, int phy_mode)
 {
 	struct bfin_mac_local *lp = netdev_priv(dev);
-	struct phy_device *phydev = NULL;
+	struct phy_device *phydev;
 	unsigned short sysctl;
-	int i;
 	u32 sclk, mdc_div;
 
 	/* Enable PHY output early */
@@ -396,18 +395,7 @@ static int mii_probe(struct net_device *dev, int phy_mode)
 	sysctl = (sysctl & ~MDCDIV) | SET_MDCDIV(mdc_div);
 	bfin_write_EMAC_SYSCTL(sysctl);
 
-	/* search for connected PHY device */
-	for (i = 0; i < PHY_MAX_ADDR; ++i) {
-		struct phy_device *const tmp_phydev = lp->mii_bus->phy_map[i];
-
-		if (!tmp_phydev)
-			continue; /* no PHY here... */
-
-		phydev = tmp_phydev;
-		break; /* found it */
-	}
-
-	/* now we are supposed to have a proper phydev, to attach to... */
+	phydev = phy_find_first(lp->mii_bus);
 	if (!phydev) {
 		netdev_err(dev, "no phy device found\n");
 		return -ENODEV;
@@ -419,7 +407,7 @@ static int mii_probe(struct net_device *dev, int phy_mode)
 		return -EINVAL;
 	}
 
-	phydev = phy_connect(dev, dev_name(&phydev->dev),
+	phydev = phy_connect(dev, phydev_name(phydev),
 			     &bfin_mac_adjust_link, phy_mode);
 
 	if (IS_ERR(phydev)) {
@@ -444,10 +432,8 @@ static int mii_probe(struct net_device *dev, int phy_mode)
 	lp->old_duplex = -1;
 	lp->phydev = phydev;
 
-	pr_info("attached PHY driver [%s] "
-	        "(mii_bus:phy_addr=%s, irq=%d, mdc_clk=%dHz(mdc_div=%d)@sclk=%dMHz)\n",
-	        phydev->drv->name, dev_name(&phydev->dev), phydev->irq,
-	        MDC_CLK, mdc_div, sclk/1000000);
+	phy_attached_print(phydev, "mdc_clk=%dHz(mdc_div=%d)@sclk=%dMHz)\n",
+			   MDC_CLK, mdc_div, sclk / 1000000);
 
 	return 0;
 }
@@ -1444,7 +1430,7 @@ static void bfin_mac_timeout(struct net_device *dev)
 	bfin_mac_enable(lp->phydev);
 
 	/* We can accept TX packets again */
-	dev->trans_start = jiffies; /* prevent tx timeout */
+	netif_trans_update(dev); /* prevent tx timeout */
 }
 
 static void bfin_mac_multicast_hash(struct net_device *dev)
@@ -1840,12 +1826,6 @@ static int bfin_mii_bus_probe(struct platform_device *pdev)
 
 	snprintf(miibus->id, MII_BUS_ID_SIZE, "%s-%x",
 		pdev->name, pdev->id);
-	miibus->irq = kmalloc(sizeof(int)*PHY_MAX_ADDR, GFP_KERNEL);
-	if (!miibus->irq)
-		goto out_err_irq_alloc;
-
-	for (i = rc; i < PHY_MAX_ADDR; ++i)
-		miibus->irq[i] = PHY_POLL;
 
 	rc = clamp(mii_bus_pd->phydev_number, 0, PHY_MAX_ADDR);
 	if (rc != mii_bus_pd->phydev_number)
@@ -1864,14 +1844,12 @@ static int bfin_mii_bus_probe(struct platform_device *pdev)
 	rc = mdiobus_register(miibus);
 	if (rc) {
 		dev_err(&pdev->dev, "Cannot register MDIO bus!\n");
-		goto out_err_mdiobus_register;
+		goto out_err_irq_alloc;
 	}
 
 	platform_set_drvdata(pdev, miibus);
 	return 0;
 
-out_err_mdiobus_register:
-	kfree(miibus->irq);
 out_err_irq_alloc:
 	mdiobus_free(miibus);
 out_err_alloc:
@@ -1887,7 +1865,6 @@ static int bfin_mii_bus_remove(struct platform_device *pdev)
 		dev_get_platdata(&pdev->dev);
 
 	mdiobus_unregister(miibus);
-	kfree(miibus->irq);
 	mdiobus_free(miibus);
 	peripheral_free_list(mii_bus_pd->mac_peripherals);
 

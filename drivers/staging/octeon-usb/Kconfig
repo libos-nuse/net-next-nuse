@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 config OCTEON_USB
 	tristate "Cavium Networks Octeon USB support"
 	depends on CAVIUM_OCTEON_SOC && USB
@@ -6,5 +7,5 @@ config OCTEON_USB
 	  Networks' products in the Octeon family.
 
 	  To compile this driver as a module, choose M here. The module
-	  will be called octeon-usb.
+	  will be called octeon-hcd.
 

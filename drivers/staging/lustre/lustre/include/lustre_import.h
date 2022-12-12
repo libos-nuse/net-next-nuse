@@ -109,7 +109,7 @@ static inline char *ptlrpc_import_state_name(enum lustre_imp_state state)
 		"RECOVER", "FULL", "EVICTED",
 	};
 
-	LASSERT (state <= LUSTRE_IMP_EVICTED);
+	LASSERT(state <= LUSTRE_IMP_EVICTED);
 	return import_state_names[state];
 }
 
@@ -292,7 +292,8 @@ struct obd_import {
 				  /* need IR MNE swab */
 				  imp_need_mne_swab:1,
 				  /* import must be reconnected instead of
-				   * chose new connection */
+				   * chosing new connection
+				   */
 				  imp_force_reconnect:1,
 				  /* import has tried to connect with server */
 				  imp_connect_tried:1;

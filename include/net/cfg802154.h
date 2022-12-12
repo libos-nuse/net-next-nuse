@@ -1,14 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2007, 2008, 2009 Siemens AG
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * Written by:
  * Dmitry Eremin-Solenikov <dbaryshkov@gmail.com>
@@ -219,8 +211,21 @@ struct wpan_phy {
 
 	struct device dev;
 
-	char priv[0] __aligned(NETDEV_ALIGN);
+	/* the network namespace this phy lives in currently */
+	possible_net_t _net;
+
+	char priv[] __aligned(NETDEV_ALIGN);
 };
+
+static inline struct net *wpan_phy_net(struct wpan_phy *wpan_phy)
+{
+	return read_pnet(&wpan_phy->_net);
+}
+
+static inline void wpan_phy_net_set(struct wpan_phy *wpan_phy, struct net *net)
+{
+	write_pnet(&wpan_phy->_net, net);
+}
 
 struct ieee802154_addr {
 	u8 mode;

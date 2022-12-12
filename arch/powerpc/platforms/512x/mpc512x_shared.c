@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2007,2008 Freescale Semiconductor, Inc. All rights reserved.
  *
@@ -5,11 +6,6 @@
  *
  * Description:
  * MPC512x Shared code
- *
- * This is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -47,7 +43,7 @@ static void __init mpc512x_restart_init(void)
 	of_node_put(np);
 }
 
-void mpc512x_restart(char *cmd)
+void __noreturn mpc512x_restart(char *cmd)
 {
 	if (reset_module_base) {
 		/* Enable software reset "RSTE" */
@@ -188,7 +184,7 @@ static struct fsl_diu_shared_fb __attribute__ ((__aligned__(8))) diu_shared_fb;
 static inline void mpc512x_free_bootmem(struct page *page)
 {
 	BUG_ON(PageTail(page));
-	BUG_ON(atomic_read(&page->_count) > 1);
+	BUG_ON(page_ref_count(page) > 1);
 	free_reserved_page(page);
 }
 
@@ -387,8 +383,8 @@ static unsigned int __init get_fifo_size(struct device_node *np,
 	if (fp)
 		return *fp;
 
-	pr_warning("no %s property in %s node, defaulting to %d\n",
-		   prop_name, np->full_name, DEFAULT_FIFO_SIZE);
+	pr_warn("no %s property in %pOF node, defaulting to %d\n",
+		prop_name, np, DEFAULT_FIFO_SIZE);
 
 	return DEFAULT_FIFO_SIZE;
 }
@@ -426,15 +422,15 @@ static void __init mpc512x_psc_fifo_init(void)
 
 		psc = of_iomap(np, 0);
 		if (!psc) {
-			pr_err("%s: Can't map %s device\n",
-				__func__, np->full_name);
+			pr_err("%s: Can't map %pOF device\n",
+				__func__, np);
 			continue;
 		}
 
 		/* FIFO space is 4KiB, check if requested size is available */
 		if ((fifobase + tx_fifo_size + rx_fifo_size) > 0x1000) {
-			pr_err("%s: no fifo space available for %s\n",
-				__func__, np->full_name);
+			pr_err("%s: no fifo space available for %pOF\n",
+				__func__, np);
 			iounmap(psc);
 			/*
 			 * chances are that another device requests less

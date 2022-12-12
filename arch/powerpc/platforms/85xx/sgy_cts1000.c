@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Servergy CTS-1000 Setup
  *
  * Maintained by Ben Collins <ben.c@servergy.com>
  *
  * Copyright 2012 by Servergy, Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/platform_device.h>
@@ -38,18 +34,18 @@ static void gpio_halt_wfn(struct work_struct *work)
 }
 static DECLARE_WORK(gpio_halt_wq, gpio_halt_wfn);
 
-static void gpio_halt_cb(void)
+static void __noreturn gpio_halt_cb(void)
 {
 	enum of_gpio_flags flags;
 	int trigger, gpio;
 
 	if (!halt_node)
-		return;
+		panic("No reset GPIO information was provided in DT\n");
 
 	gpio = of_get_gpio_flags(halt_node, 0, &flags);
 
 	if (!gpio_is_valid(gpio))
-		return;
+		panic("Provided GPIO is invalid\n");
 
 	trigger = (flags == OF_GPIO_ACTIVE_LOW);
 
@@ -57,6 +53,8 @@ static void gpio_halt_cb(void)
 
 	/* Probably wont return */
 	gpio_set_value(gpio, trigger);
+
+	panic("Halt failed\n");
 }
 
 /* This IRQ means someone pressed the power button and it is waiting for us

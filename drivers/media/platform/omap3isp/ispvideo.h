@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * ispvideo.h
  *
@@ -7,10 +8,6 @@
  *
  * Contacts: Laurent Pinchart <laurent.pinchart@ideasonboard.com>
  *	     Sakari Ailus <sakari.ailus@iki.fi>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef OMAP3_ISP_VIDEO_H
@@ -80,7 +77,7 @@ enum isp_pipeline_state {
  * struct isp_pipeline - An ISP hardware pipeline
  * @field: The field being processed by the pipeline
  * @error: A hardware error occurred during capture
- * @entities: Bitmask of entities in the pipeline (indexed by entity ID)
+ * @ent_enum: Entities in the pipeline
  */
 struct isp_pipeline {
 	struct media_pipeline pipe;
@@ -89,7 +86,7 @@ struct isp_pipeline {
 	enum isp_pipeline_stream_state stream_state;
 	struct isp_video *input;
 	struct isp_video *output;
-	u32 entities;
+	struct media_entity_enum ent_enum;
 	unsigned long l3_ick;
 	unsigned int max_rate;
 	enum v4l2_field field;
@@ -171,7 +168,6 @@ struct isp_video {
 	bool error;
 
 	/* Video buffers queue */
-	void *alloc_ctx;
 	struct vb2_queue *queue;
 	struct mutex queue_lock;	/* protects the queue */
 	spinlock_t irqlock;		/* protects dmaqueue */

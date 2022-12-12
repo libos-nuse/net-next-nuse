@@ -1,20 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/media/i2c/lm3560.c
- * General device driver for TI lm3560, FLASH LED Driver
+ * General device driver for TI lm3559, lm3560, FLASH LED Driver
  *
  * Copyright (C) 2013 Texas Instruments
  *
  * Contact: Daniel Jeong <gshark.jeong@gmail.com>
  *			Ldd-Mlp <ldd-mlp@list.ti.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 
 #include <linux/delay.h>
@@ -24,7 +16,7 @@
 #include <linux/mutex.h>
 #include <linux/regmap.h>
 #include <linux/videodev2.h>
-#include <media/lm3560.h>
+#include <media/i2c/lm3560.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 
@@ -50,11 +42,12 @@ enum led_enable {
 /**
  * struct lm3560_flash
  *
+ * @dev: pointer to &struct device
  * @pdata: platform data
  * @regmap: reg. map for i2c
  * @lock: muxtex for serial access.
  * @led_mode: V4L2 LED mode
- * @ctrls_led: V4L2 contols
+ * @ctrls_led: V4L2 controls
  * @subdev_led: V4L2 subdev
  */
 struct lm3560_flash {
@@ -361,14 +354,15 @@ static int lm3560_subdev_init(struct lm3560_flash *flash,
 
 	v4l2_i2c_subdev_init(&flash->subdev_led[led_no], client, &lm3560_ops);
 	flash->subdev_led[led_no].flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
-	strcpy(flash->subdev_led[led_no].name, led_name);
+	strscpy(flash->subdev_led[led_no].name, led_name,
+		sizeof(flash->subdev_led[led_no].name));
 	rval = lm3560_init_controls(flash, led_no);
 	if (rval)
 		goto err_out;
-	rval = media_entity_init(&flash->subdev_led[led_no].entity, 0, NULL, 0);
+	rval = media_entity_pads_init(&flash->subdev_led[led_no].entity, 0, NULL);
 	if (rval < 0)
 		goto err_out;
-	flash->subdev_led[led_no].entity.type = MEDIA_ENT_T_V4L2_SUBDEV_FLASH;
+	flash->subdev_led[led_no].entity.function = MEDIA_ENT_F_FLASH;
 
 	return rval;
 
@@ -464,6 +458,7 @@ static int lm3560_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id lm3560_id_table[] = {
+	{LM3559_NAME, 0},
 	{LM3560_NAME, 0},
 	{}
 };

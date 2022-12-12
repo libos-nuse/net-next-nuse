@@ -1,32 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /**************************************************************************
  * Copyright (c) 2011, Intel Corporation.
  * All Rights Reserved.
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
- *
  **************************************************************************/
 
 #include <linux/backlight.h>
-#include <drm/drmP.h>
+
 #include <drm/drm.h>
-#include <drm/gma_drm.h>
-#include "psb_drv.h"
-#include "psb_reg.h"
-#include "psb_intel_reg.h"
+
+#include "gma_device.h"
 #include "intel_bios.h"
 #include "psb_device.h"
-#include "gma_device.h"
+#include "psb_drv.h"
+#include "psb_intel_reg.h"
+#include "psb_reg.h"
 
 static int psb_output_init(struct drm_device *dev)
 {
@@ -181,7 +169,7 @@ static int psb_save_display_registers(struct drm_device *dev)
 {
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	struct drm_crtc *crtc;
-	struct drm_connector *connector;
+	struct gma_connector *connector;
 	struct psb_state *regs = &dev_priv->regs.psb;
 
 	/* Display arbitration control + watermarks */
@@ -198,12 +186,12 @@ static int psb_save_display_registers(struct drm_device *dev)
 	drm_modeset_lock_all(dev);
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
 		if (drm_helper_crtc_in_use(crtc))
-			crtc->funcs->save(crtc);
+			dev_priv->ops->save_crtc(crtc);
 	}
 
-	list_for_each_entry(connector, &dev->mode_config.connector_list, head)
-		if (connector->funcs->save)
-			connector->funcs->save(connector);
+	list_for_each_entry(connector, &dev->mode_config.connector_list, base.head)
+		if (connector->save)
+			connector->save(&connector->base);
 
 	drm_modeset_unlock_all(dev);
 	return 0;
@@ -219,7 +207,7 @@ static int psb_restore_display_registers(struct drm_device *dev)
 {
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	struct drm_crtc *crtc;
-	struct drm_connector *connector;
+	struct gma_connector *connector;
 	struct psb_state *regs = &dev_priv->regs.psb;
 
 	/* Display arbitration + watermarks */
@@ -238,11 +226,11 @@ static int psb_restore_display_registers(struct drm_device *dev)
 	drm_modeset_lock_all(dev);
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head)
 		if (drm_helper_crtc_in_use(crtc))
-			crtc->funcs->restore(crtc);
+			dev_priv->ops->restore_crtc(crtc);
 
-	list_for_each_entry(connector, &dev->mode_config.connector_list, head)
-		if (connector->funcs->restore)
-			connector->funcs->restore(connector);
+	list_for_each_entry(connector, &dev->mode_config.connector_list, base.head)
+		if (connector->restore)
+			connector->restore(&connector->base);
 
 	drm_modeset_unlock_all(dev);
 	return 0;
@@ -354,6 +342,8 @@ const struct psb_ops psb_chip_ops = {
 	.init_pm = psb_init_pm,
 	.save_regs = psb_save_display_registers,
 	.restore_regs = psb_restore_display_registers,
+	.save_crtc = gma_crtc_save,
+	.restore_crtc = gma_crtc_restore,
 	.power_down = psb_power_down,
 	.power_up = psb_power_up,
 };

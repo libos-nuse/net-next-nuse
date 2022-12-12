@@ -1,16 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * (c) Copyright 2002-2010, Ralink Technology, Inc.
  * Copyright (C) 2014 Felix Fietkau <nbd@openwrt.org>
  * Copyright (C) 2015 Jakub Kicinski <kubakici@wp.pl>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include "mt7601u.h"
@@ -41,11 +33,12 @@ mt7601u_rf_wr(struct mt7601u_dev *dev, u8 bank, u8 offset, u8 value)
 		goto out;
 	}
 
-	mt7601u_wr(dev, MT_RF_CSR_CFG, MT76_SET(MT_RF_CSR_CFG_DATA, value) |
-				       MT76_SET(MT_RF_CSR_CFG_REG_BANK, bank) |
-				       MT76_SET(MT_RF_CSR_CFG_REG_ID, offset) |
-				       MT_RF_CSR_CFG_WR |
-				       MT_RF_CSR_CFG_KICK);
+	mt7601u_wr(dev, MT_RF_CSR_CFG,
+		   FIELD_PREP(MT_RF_CSR_CFG_DATA, value) |
+		   FIELD_PREP(MT_RF_CSR_CFG_REG_BANK, bank) |
+		   FIELD_PREP(MT_RF_CSR_CFG_REG_ID, offset) |
+		   MT_RF_CSR_CFG_WR |
+		   MT_RF_CSR_CFG_KICK);
 	trace_rf_write(dev, bank, offset, value);
 out:
 	mutex_unlock(&dev->reg_atomic_mutex);
@@ -74,17 +67,18 @@ mt7601u_rf_rr(struct mt7601u_dev *dev, u8 bank, u8 offset)
 	if (!mt76_poll(dev, MT_RF_CSR_CFG, MT_RF_CSR_CFG_KICK, 0, 100))
 		goto out;
 
-	mt7601u_wr(dev, MT_RF_CSR_CFG, MT76_SET(MT_RF_CSR_CFG_REG_BANK, bank) |
-				       MT76_SET(MT_RF_CSR_CFG_REG_ID, offset) |
-				       MT_RF_CSR_CFG_KICK);
+	mt7601u_wr(dev, MT_RF_CSR_CFG,
+		   FIELD_PREP(MT_RF_CSR_CFG_REG_BANK, bank) |
+		   FIELD_PREP(MT_RF_CSR_CFG_REG_ID, offset) |
+		   MT_RF_CSR_CFG_KICK);
 
 	if (!mt76_poll(dev, MT_RF_CSR_CFG, MT_RF_CSR_CFG_KICK, 0, 100))
 		goto out;
 
 	val = mt7601u_rr(dev, MT_RF_CSR_CFG);
-	if (MT76_GET(MT_RF_CSR_CFG_REG_ID, val) == offset &&
-	    MT76_GET(MT_RF_CSR_CFG_REG_BANK, val) == bank) {
-		ret = MT76_GET(MT_RF_CSR_CFG_DATA, val);
+	if (FIELD_GET(MT_RF_CSR_CFG_REG_ID, val) == offset &&
+	    FIELD_GET(MT_RF_CSR_CFG_REG_BANK, val) == bank) {
+		ret = FIELD_GET(MT_RF_CSR_CFG_DATA, val);
 		trace_rf_read(dev, bank, offset, ret);
 	}
 out:
@@ -139,8 +133,8 @@ static void mt7601u_bbp_wr(struct mt7601u_dev *dev, u8 offset, u8 val)
 	}
 
 	mt7601u_wr(dev, MT_BBP_CSR_CFG,
-		   MT76_SET(MT_BBP_CSR_CFG_VAL, val) |
-		   MT76_SET(MT_BBP_CSR_CFG_REG_NUM, offset) |
+		   FIELD_PREP(MT_BBP_CSR_CFG_VAL, val) |
+		   FIELD_PREP(MT_BBP_CSR_CFG_REG_NUM, offset) |
 		   MT_BBP_CSR_CFG_RW_MODE | MT_BBP_CSR_CFG_BUSY);
 	trace_bbp_write(dev, offset, val);
 out:
@@ -163,7 +157,7 @@ static int mt7601u_bbp_rr(struct mt7601u_dev *dev, u8 offset)
 		goto out;
 
 	mt7601u_wr(dev, MT_BBP_CSR_CFG,
-		   MT76_SET(MT_BBP_CSR_CFG_REG_NUM, offset) |
+		   FIELD_PREP(MT_BBP_CSR_CFG_REG_NUM, offset) |
 		   MT_BBP_CSR_CFG_RW_MODE | MT_BBP_CSR_CFG_BUSY |
 		   MT_BBP_CSR_CFG_READ);
 
@@ -171,8 +165,8 @@ static int mt7601u_bbp_rr(struct mt7601u_dev *dev, u8 offset)
 		goto out;
 
 	val = mt7601u_rr(dev, MT_BBP_CSR_CFG);
-	if (MT76_GET(MT_BBP_CSR_CFG_REG_NUM, val) == offset) {
-		ret = MT76_GET(MT_BBP_CSR_CFG_VAL, val);
+	if (FIELD_GET(MT_BBP_CSR_CFG_REG_NUM, val) == offset) {
+		ret = FIELD_GET(MT_BBP_CSR_CFG_VAL, val);
 		trace_bbp_read(dev, offset, ret);
 	}
 out:
@@ -219,7 +213,7 @@ int mt7601u_wait_bbp_ready(struct mt7601u_dev *dev)
 
 	do {
 		val = mt7601u_bbp_rr(dev, MT_BBP_REG_VERSION);
-		if (val && ~val)
+		if (val && val != 0xff)
 			break;
 	} while (--i);
 
@@ -249,9 +243,9 @@ int mt7601u_phy_get_rssi(struct mt7601u_dev *dev,
 			/* bw40 */ { -2, 16, 34 }
 		}
 	};
-	int bw = MT76_GET(MT_RXWI_RATE_BW, rate);
-	int aux_lna = MT76_GET(MT_RXWI_ANT_AUX_LNA, rxwi->ant);
-	int lna_id = MT76_GET(MT_RXWI_GAIN_RSSI_LNA_ID, rxwi->gain);
+	int bw = FIELD_GET(MT_RXWI_RATE_BW, rate);
+	int aux_lna = FIELD_GET(MT_RXWI_ANT_AUX_LNA, rxwi->ant);
+	int lna_id = FIELD_GET(MT_RXWI_GAIN_RSSI_LNA_ID, rxwi->gain);
 	int val;
 
 	if (lna_id) /* LNA id can be 0, 2, 3. */
@@ -259,7 +253,7 @@ int mt7601u_phy_get_rssi(struct mt7601u_dev *dev,
 
 	val = 8;
 	val -= lna[aux_lna][bw][lna_id];
-	val -= MT76_GET(MT_RXWI_GAIN_RSSI_VAL, rxwi->gain);
+	val -= FIELD_GET(MT_RXWI_GAIN_RSSI_VAL, rxwi->gain);
 	val -= dev->ee->lna_gain;
 	val -= dev->ee->rssi_offset[0];
 
@@ -793,6 +787,7 @@ mt7601u_phy_rf_pa_mode_val(struct mt7601u_dev *dev, int phy_mode, int tx_rate)
 	switch (phy_mode) {
 	case MT_PHY_TYPE_OFDM:
 		tx_rate += 4;
+		fallthrough;
 	case MT_PHY_TYPE_CCK:
 		reg = dev->rf_pa_mode[0];
 		break;
@@ -939,7 +934,7 @@ static int mt7601u_tssi_cal(struct mt7601u_dev *dev)
 	dev_dbg(dev->dev, "final diff: %08x\n", diff_pwr);
 
 	val = mt7601u_rr(dev, MT_TX_ALC_CFG_1);
-	curr_pwr = s6_to_int(MT76_GET(MT_TX_ALC_CFG_1_TEMP_COMP, val));
+	curr_pwr = s6_to_int(FIELD_GET(MT_TX_ALC_CFG_1_TEMP_COMP, val));
 	diff_pwr += curr_pwr;
 	val = (val & ~MT_TX_ALC_CFG_1_TEMP_COMP) | int_to_s6(diff_pwr);
 	mt7601u_wr(dev, MT_TX_ALC_CFG_1, val);
@@ -972,6 +967,7 @@ void mt7601u_agc_restore(struct mt7601u_dev *dev)
 static void mt7601u_agc_tune(struct mt7601u_dev *dev)
 {
 	u8 val = mt7601u_agc_default(dev);
+	long avg_rssi;
 
 	if (test_bit(MT7601U_STATE_SCANNING, &dev->state))
 		return;
@@ -981,11 +977,16 @@ static void mt7601u_agc_tune(struct mt7601u_dev *dev)
 	 *	 Rssi updates are only on beacons and U2M so should work...
 	 */
 	spin_lock_bh(&dev->con_mon_lock);
-	if (dev->avg_rssi <= -70)
-		val -= 0x20;
-	else if (dev->avg_rssi <= -60)
-		val -= 0x10;
+	avg_rssi = ewma_rssi_read(&dev->avg_rssi);
 	spin_unlock_bh(&dev->con_mon_lock);
+	if (avg_rssi == 0)
+		return;
+
+	avg_rssi = -avg_rssi;
+	if (avg_rssi <= -70)
+		val -= 0x20;
+	else if (avg_rssi <= -60)
+		val -= 0x10;
 
 	if (val != mt7601u_bbp_rr(dev, 66))
 		mt7601u_bbp_wr(dev, 66, val);
@@ -1099,7 +1100,7 @@ void mt7601u_phy_con_cal_onoff(struct mt7601u_dev *dev,
 	/* Start/stop collecting beacon data */
 	spin_lock_bh(&dev->con_mon_lock);
 	ether_addr_copy(dev->ap_bssid, info->bssid);
-	dev->avg_rssi = 0;
+	ewma_rssi_init(&dev->avg_rssi);
 	dev->bcn_freq_off = MT_FREQ_OFFSET_INVALID;
 	spin_unlock_bh(&dev->con_mon_lock);
 
@@ -1209,7 +1210,7 @@ void mt7601u_set_rx_path(struct mt7601u_dev *dev, u8 path)
 /**
  * mt7601u_set_tx_dac - set which tx DAC to use
  * @dev:	pointer to adapter structure
- * @path:	DAC index, values are 0-based
+ * @dac:	DAC index, values are 0-based
  */
 void mt7601u_set_tx_dac(struct mt7601u_dev *dev, u8 dac)
 {

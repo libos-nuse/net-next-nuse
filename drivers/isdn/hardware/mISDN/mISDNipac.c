@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * isac.c   ISAC specific routines
  *
  * Author       Karsten Keil <keil@isdn4linux.de>
  *
  * Copyright 2009  by Karsten Keil <keil@isdn4linux.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  */
 
 #include <linux/irqreturn.h>
@@ -80,6 +67,7 @@ isac_ph_state_bh(struct dchannel *dch)
 		l1_event(dch->l1, HW_DEACT_CNF);
 		break;
 	case ISAC_IND_DR:
+	case ISAC_IND_DR6:
 		dch->state = 3;
 		l1_event(dch->l1, HW_DEACT_IND);
 		break;
@@ -112,7 +100,7 @@ isac_ph_state_bh(struct dchannel *dch)
 	pr_debug("%s: TE newstate %x\n", isac->name, dch->state);
 }
 
-void
+static void
 isac_empty_fifo(struct isac_hw *isac, int count)
 {
 	u8 *ptr;
@@ -171,7 +159,6 @@ isac_fill_fifo(struct isac_hw *isac)
 		pr_debug("%s: %s dbusytimer running\n", isac->name, __func__);
 		del_timer(&isac->dch.timer);
 	}
-	init_timer(&isac->dch.timer);
 	isac->dch.timer.expires = jiffies + ((DBUSY_TIMER_VALUE * HZ)/1000);
 	add_timer(&isac->dch.timer);
 	if (isac->dch.debug & DEBUG_HW_DFIFO) {
@@ -203,8 +190,7 @@ isac_rme_irq(struct isac_hw *isac)
 #endif
 		}
 		WriteISAC(isac, ISAC_CMDR, 0x80);
-		if (isac->dch.rx_skb)
-			dev_kfree_skb(isac->dch.rx_skb);
+		dev_kfree_skb(isac->dch.rx_skb);
 		isac->dch.rx_skb = NULL;
 	} else {
 		count = ReadISAC(isac, ISAC_RBCL) & 0x1f;
@@ -223,8 +209,7 @@ isac_xpr_irq(struct isac_hw *isac)
 	if (isac->dch.tx_skb && isac->dch.tx_idx < isac->dch.tx_skb->len) {
 		isac_fill_fifo(isac);
 	} else {
-		if (isac->dch.tx_skb)
-			dev_kfree_skb(isac->dch.tx_skb);
+		dev_kfree_skb(isac->dch.tx_skb);
 		if (get_next_dframe(&isac->dch))
 			isac_fill_fifo(isac);
 	}
@@ -363,8 +348,8 @@ afterMONR1:
 			WriteISAC(isac, ISAC_MOCR, isac->mocr);
 			if (isac->mon_txc && (isac->mon_txp >= isac->mon_txc)) {
 				if (isac->monitor)
-					ret = isac->monitor(isac->dch.hw,
-							    MONITOR_TX_0, NULL, 0);
+					isac->monitor(isac->dch.hw,
+						      MONITOR_TX_0, NULL, 0);
 			}
 			kfree(isac->mon_tx);
 			isac->mon_tx = NULL;
@@ -374,8 +359,8 @@ afterMONR1:
 		}
 		if (isac->mon_txc && (isac->mon_txp >= isac->mon_txc)) {
 			if (isac->monitor)
-				ret = isac->monitor(isac->dch.hw,
-						    MONITOR_TX_0, NULL, 0);
+				isac->monitor(isac->dch.hw,
+					      MONITOR_TX_0, NULL, 0);
 			kfree(isac->mon_tx);
 			isac->mon_tx = NULL;
 			isac->mon_txc = 0;
@@ -396,8 +381,8 @@ AfterMOX0:
 			WriteISAC(isac, ISAC_MOCR, isac->mocr);
 			if (isac->mon_txc && (isac->mon_txp >= isac->mon_txc)) {
 				if (isac->monitor)
-					ret = isac->monitor(isac->dch.hw,
-							    MONITOR_TX_1, NULL, 0);
+					isac->monitor(isac->dch.hw,
+						      MONITOR_TX_1, NULL, 0);
 			}
 			kfree(isac->mon_tx);
 			isac->mon_tx = NULL;
@@ -407,8 +392,8 @@ AfterMOX0:
 		}
 		if (isac->mon_txc && (isac->mon_txp >= isac->mon_txc)) {
 			if (isac->monitor)
-				ret = isac->monitor(isac->dch.hw,
-						    MONITOR_TX_1, NULL, 0);
+				isac->monitor(isac->dch.hw,
+					      MONITOR_TX_1, NULL, 0);
 			kfree(isac->mon_tx);
 			isac->mon_tx = NULL;
 			isac->mon_txc = 0;
@@ -477,8 +462,7 @@ isacsx_rme_irq(struct isac_hw *isac)
 			isac->dch.err_crc++;
 #endif
 		WriteISAC(isac, ISACX_CMDRD, ISACX_CMDRD_RMC);
-		if (isac->dch.rx_skb)
-			dev_kfree_skb(isac->dch.rx_skb);
+		dev_kfree_skb(isac->dch.rx_skb);
 		isac->dch.rx_skb = NULL;
 	} else {
 		count = ReadISAC(isac, ISACX_RBCLD) & 0x1f;
@@ -660,6 +644,7 @@ isac_l1cmd(struct dchannel *dch, u32 cmd)
 		spin_lock_irqsave(isac->hwlock, flags);
 		if ((isac->state == ISAC_IND_EI) ||
 		    (isac->state == ISAC_IND_DR) ||
+		    (isac->state == ISAC_IND_DR6) ||
 		    (isac->state == ISAC_IND_RS))
 			ph_command(isac, ISAC_CMD_TIM);
 		else
@@ -709,7 +694,7 @@ isac_release(struct isac_hw *isac)
 {
 	if (isac->type & IPAC_TYPE_ISACX)
 		WriteISAC(isac, ISACX_MASK, 0xff);
-	else
+	else if (isac->type != 0)
 		WriteISAC(isac, ISAC_MASK, 0xff);
 	if (isac->dch.timer.function != NULL) {
 		del_timer(&isac->dch.timer);
@@ -725,8 +710,9 @@ isac_release(struct isac_hw *isac)
 }
 
 static void
-dbusy_timer_handler(struct isac_hw *isac)
+dbusy_timer_handler(struct timer_list *t)
 {
+	struct isac_hw *isac = from_timer(isac, t, dch.timer);
 	int rbch, star;
 	u_long flags;
 
@@ -794,9 +780,7 @@ isac_init(struct isac_hw *isac)
 	}
 	isac->mon_tx = NULL;
 	isac->mon_rx = NULL;
-	isac->dch.timer.function = (void *) dbusy_timer_handler;
-	isac->dch.timer.data = (long)isac;
-	init_timer(&isac->dch.timer);
+	timer_setup(&isac->dch.timer, dbusy_timer_handler, 0);
 	isac->mocr = 0xaa;
 	if (isac->type & IPAC_TYPE_ISACX) {
 		/* Disable all IRQ */
@@ -952,8 +936,8 @@ hscx_empty_fifo(struct hscx_hw *hscx, u8 count)
 		hscx_cmdr(hscx, 0x80); /* RMC */
 		if (hscx->bch.rx_skb)
 			skb_trim(hscx->bch.rx_skb, 0);
-		pr_warning("%s.B%d: No bufferspace for %d bytes\n",
-			   hscx->ip->name, hscx->bch.nr, count);
+		pr_warn("%s.B%d: No bufferspace for %d bytes\n",
+			hscx->ip->name, hscx->bch.nr, count);
 		return;
 	}
 	p = skb_put(hscx->bch.rx_skb, count);
@@ -1025,8 +1009,7 @@ hscx_xpr(struct hscx_hw *hx)
 	if (hx->bch.tx_skb && hx->bch.tx_idx < hx->bch.tx_skb->len) {
 		hscx_fill_fifo(hx);
 	} else {
-		if (hx->bch.tx_skb)
-			dev_kfree_skb(hx->bch.tx_skb);
+		dev_kfree_skb(hx->bch.tx_skb);
 		if (get_next_bframe(&hx->bch)) {
 			hscx_fill_fifo(hx);
 			test_and_clear_bit(FLG_TX_EMPTY, &hx->bch.Flags);
@@ -1623,7 +1606,7 @@ mISDNipac_init(struct ipac_hw *ipac, void *hw)
 		ipac->hscx[i].bch.hw = hw;
 		ipac->hscx[i].ip = ipac;
 		/* default values for IOM time slots
-		 * can be overwriten by card */
+		 * can be overwritten by card */
 		ipac->hscx[i].slot = (i == 0) ? 0x2f : 0x03;
 	}
 

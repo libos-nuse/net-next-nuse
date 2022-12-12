@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/linkage.h>
@@ -16,7 +13,7 @@
 #define SHIFT r2
 #endif
 
-ENTRY(memcmp)
+ENTRY_CFI(memcmp)
 	or	r12,r0,r1
 	asl_s	r12,r12,30
 	sub	r3,r2,1
@@ -149,4 +146,4 @@ ENTRY(memcmp)
 .Lnil:
 	j_s.d	[blink]
 	mov	r0,0
-END(memcmp)
+END_CFI(memcmp)

@@ -1,28 +1,27 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_PARISC_FTRACE_H
 #define _ASM_PARISC_FTRACE_H
 
 #ifndef __ASSEMBLY__
 extern void mcount(void);
 
-/*
- * Stack of return addresses for functions of a thread.
- * Used in struct thread_info
- */
-struct ftrace_ret_stack {
-	unsigned long ret;
-	unsigned long func;
-	unsigned long long calltime;
-};
-
-/*
- * Primary handler of a function return.
- * It relays on ftrace_return_to_handler.
- * Defined in entry.S
- */
-extern void return_to_handler(void);
-
+#define MCOUNT_ADDR		((unsigned long)mcount)
+#define MCOUNT_INSN_SIZE	4
+#define CC_USING_NOP_MCOUNT
+#define ARCH_SUPPORTS_FTRACE_OPS 1
+extern unsigned long sys_call_table[];
 
 extern unsigned long return_address(unsigned int);
+
+#ifdef CONFIG_DYNAMIC_FTRACE
+extern void ftrace_caller(void);
+
+struct dyn_arch_ftrace {
+};
+
+unsigned long ftrace_call_adjust(unsigned long addr);
+
+#endif
 
 #define ftrace_return_address(n) return_address(n)
 

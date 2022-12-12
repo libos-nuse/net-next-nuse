@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Dump R4x00 TLB for debugging purposes.
  *
@@ -9,8 +10,8 @@
 
 #include <asm/hazards.h>
 #include <asm/mipsregs.h>
+#include <asm/mmu_context.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
 #include <asm/tlbdebug.h>
 
 void dump_tlb_regs(void)
@@ -19,6 +20,8 @@ void dump_tlb_regs(void)
 
 	pr_info("Index    : %0x\n", read_c0_index());
 	pr_info("PageMask : %0x\n", read_c0_pagemask());
+	if (cpu_has_guestid)
+		pr_info("GuestCtl1: %0x\n", read_c0_guestctl1());
 	pr_info("EntryHi  : %0*lx\n", field, read_c0_entryhi());
 	pr_info("EntryLo0 : %0*lx\n", field, read_c0_entrylo0());
 	pr_info("EntryLo1 : %0*lx\n", field, read_c0_entrylo1());
@@ -70,9 +73,13 @@ static inline const char *msk2str(unsigned int mask)
 
 static void dump_tlb(int first, int last)
 {
-	unsigned long s_entryhi, entryhi, asid;
+	unsigned long s_entryhi, entryhi, asid, mmid;
 	unsigned long long entrylo0, entrylo1, pa;
-	unsigned int s_index, s_pagemask, pagemask, c0, c1, i;
+	unsigned int s_index, s_pagemask, s_guestctl1 = 0;
+	unsigned int pagemask, guestctl1 = 0, c0, c1, i;
+	unsigned long asidmask = cpu_asid_mask(&current_cpu_data);
+	int asidwidth = DIV_ROUND_UP(ilog2(asidmask) + 1, 4);
+	unsigned long s_mmid;
 #ifdef CONFIG_32BIT
 	bool xpa = cpu_has_xpa && (read_c0_pagegrain() & PG_ELPA);
 	int pwidth = xpa ? 11 : 8;
@@ -86,7 +93,14 @@ static void dump_tlb(int first, int last)
 	s_pagemask = read_c0_pagemask();
 	s_entryhi = read_c0_entryhi();
 	s_index = read_c0_index();
-	asid = s_entryhi & 0xff;
+
+	if (cpu_has_mmid)
+		asid = s_mmid = read_c0_memorymapid();
+	else
+		asid = s_entryhi & asidmask;
+
+	if (cpu_has_guestid)
+		s_guestctl1 = read_c0_guestctl1();
 
 	for (i = first; i <= last; i++) {
 		write_c0_index(i);
@@ -97,6 +111,14 @@ static void dump_tlb(int first, int last)
 		entryhi	 = read_c0_entryhi();
 		entrylo0 = read_c0_entrylo0();
 		entrylo1 = read_c0_entrylo1();
+
+		if (cpu_has_mmid)
+			mmid = read_c0_memorymapid();
+		else
+			mmid = entryhi & asidmask;
+
+		if (cpu_has_guestid)
+			guestctl1 = read_c0_guestctl1();
 
 		/* EHINV bit marks entire entry as invalid */
 		if (cpu_has_tlbinv && entryhi & MIPS_ENTRYHI_EHINV)
@@ -114,8 +136,7 @@ static void dump_tlb(int first, int last)
 		 * leave only a single G bit set after a machine check exception
 		 * due to duplicate TLB entry.
 		 */
-		if (!((entrylo0 | entrylo1) & ENTRYLO_G) &&
-		    (entryhi & 0xff) != asid)
+		if (!((entrylo0 | entrylo1) & ENTRYLO_G) && (mmid != asid))
 			continue;
 
 		/*
@@ -126,44 +147,50 @@ static void dump_tlb(int first, int last)
 		c0 = (entrylo0 & ENTRYLO_C) >> ENTRYLO_C_SHIFT;
 		c1 = (entrylo1 & ENTRYLO_C) >> ENTRYLO_C_SHIFT;
 
-		printk("va=%0*lx asid=%02lx\n",
-		       vwidth, (entryhi & ~0x1fffUL),
-		       entryhi & 0xff);
+		pr_cont("va=%0*lx asid=%0*lx",
+			vwidth, (entryhi & ~0x1fffUL),
+			asidwidth, mmid);
+		if (cpu_has_guestid)
+			pr_cont(" gid=%02lx",
+				(guestctl1 & MIPS_GCTL1_RID)
+					>> MIPS_GCTL1_RID_SHIFT);
 		/* RI/XI are in awkward places, so mask them off separately */
 		pa = entrylo0 & ~(MIPS_ENTRYLO_RI | MIPS_ENTRYLO_XI);
 		if (xpa)
 			pa |= (unsigned long long)readx_c0_entrylo0() << 30;
 		pa = (pa << 6) & PAGE_MASK;
-		printk("\t[");
+		pr_cont("\n\t[");
 		if (cpu_has_rixi)
-			printk("ri=%d xi=%d ",
-			       (entrylo0 & MIPS_ENTRYLO_RI) ? 1 : 0,
-			       (entrylo0 & MIPS_ENTRYLO_XI) ? 1 : 0);
-		printk("pa=%0*llx c=%d d=%d v=%d g=%d] [",
-		       pwidth, pa, c0,
-		       (entrylo0 & ENTRYLO_D) ? 1 : 0,
-		       (entrylo0 & ENTRYLO_V) ? 1 : 0,
-		       (entrylo0 & ENTRYLO_G) ? 1 : 0);
+			pr_cont("ri=%d xi=%d ",
+				(entrylo0 & MIPS_ENTRYLO_RI) ? 1 : 0,
+				(entrylo0 & MIPS_ENTRYLO_XI) ? 1 : 0);
+		pr_cont("pa=%0*llx c=%d d=%d v=%d g=%d] [",
+			pwidth, pa, c0,
+			(entrylo0 & ENTRYLO_D) ? 1 : 0,
+			(entrylo0 & ENTRYLO_V) ? 1 : 0,
+			(entrylo0 & ENTRYLO_G) ? 1 : 0);
 		/* RI/XI are in awkward places, so mask them off separately */
 		pa = entrylo1 & ~(MIPS_ENTRYLO_RI | MIPS_ENTRYLO_XI);
 		if (xpa)
 			pa |= (unsigned long long)readx_c0_entrylo1() << 30;
 		pa = (pa << 6) & PAGE_MASK;
 		if (cpu_has_rixi)
-			printk("ri=%d xi=%d ",
-			       (entrylo1 & MIPS_ENTRYLO_RI) ? 1 : 0,
-			       (entrylo1 & MIPS_ENTRYLO_XI) ? 1 : 0);
-		printk("pa=%0*llx c=%d d=%d v=%d g=%d]\n",
-		       pwidth, pa, c1,
-		       (entrylo1 & ENTRYLO_D) ? 1 : 0,
-		       (entrylo1 & ENTRYLO_V) ? 1 : 0,
-		       (entrylo1 & ENTRYLO_G) ? 1 : 0);
+			pr_cont("ri=%d xi=%d ",
+				(entrylo1 & MIPS_ENTRYLO_RI) ? 1 : 0,
+				(entrylo1 & MIPS_ENTRYLO_XI) ? 1 : 0);
+		pr_cont("pa=%0*llx c=%d d=%d v=%d g=%d]\n",
+			pwidth, pa, c1,
+			(entrylo1 & ENTRYLO_D) ? 1 : 0,
+			(entrylo1 & ENTRYLO_V) ? 1 : 0,
+			(entrylo1 & ENTRYLO_G) ? 1 : 0);
 	}
 	printk("\n");
 
 	write_c0_entryhi(s_entryhi);
 	write_c0_index(s_index);
 	write_c0_pagemask(s_pagemask);
+	if (cpu_has_guestid)
+		write_c0_guestctl1(s_guestctl1);
 }
 
 void dump_tlb_all(void)

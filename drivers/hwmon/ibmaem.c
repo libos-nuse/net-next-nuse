@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * A hwmon driver for the IBM System Director Active Energy Manager (AEM)
  * temperature/power/energy sensors and capping functionality.
  * Copyright (C) 2008 IBM
  *
  * Author: Darrick J. Wong <darrick.wong@oracle.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -101,7 +88,7 @@ static struct platform_driver aem_driver = {
 struct aem_ipmi_data {
 	struct completion	read_complete;
 	struct ipmi_addr	address;
-	ipmi_user_t		user;
+	struct ipmi_user	*user;
 	int			interface;
 
 	struct kernel_ipmi_msg	tx_message;
@@ -232,7 +219,7 @@ struct aem_read_sensor_req {
 
 struct aem_read_sensor_resp {
 	struct aem_iana_id	id;
-	u8			bytes[0];
+	u8			bytes[];
 } __packed;
 
 /* Data structures to talk to the IPMI layer */
@@ -813,25 +800,24 @@ static void aem_bmc_gone(int iface)
 /* sysfs support functions */
 
 /* AEM device name */
-static ssize_t show_name(struct device *dev, struct device_attribute *devattr,
+static ssize_t name_show(struct device *dev, struct device_attribute *devattr,
 			 char *buf)
 {
 	struct aem_data *data = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%s%d\n", DRVNAME, data->ver_major);
 }
-static SENSOR_DEVICE_ATTR(name, S_IRUGO, show_name, NULL, 0);
+static SENSOR_DEVICE_ATTR_RO(name, name, 0);
 
 /* AEM device version */
-static ssize_t show_version(struct device *dev,
-			    struct device_attribute *devattr,
-			    char *buf)
+static ssize_t version_show(struct device *dev,
+			    struct device_attribute *devattr, char *buf)
 {
 	struct aem_data *data = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%d.%d\n", data->ver_major, data->ver_minor);
 }
-static SENSOR_DEVICE_ATTR(version, S_IRUGO, show_version, NULL, 0);
+static SENSOR_DEVICE_ATTR_RO(version, version, 0);
 
 /* Display power use */
 static ssize_t aem_show_power(struct device *dev,
@@ -920,8 +906,8 @@ static ssize_t aem_set_power_period(struct device *dev,
 
 /* Discover sensors on an AEM device */
 static int aem_register_sensors(struct aem_data *data,
-				struct aem_ro_sensor_template *ro,
-				struct aem_rw_sensor_template *rw)
+				const struct aem_ro_sensor_template *ro,
+				const struct aem_rw_sensor_template *rw)
 {
 	struct device *dev = &data->pdev->dev;
 	struct sensor_device_attribute *sensors = data->sensors;
@@ -931,7 +917,7 @@ static int aem_register_sensors(struct aem_data *data,
 	while (ro->label) {
 		sysfs_attr_init(&sensors->dev_attr.attr);
 		sensors->dev_attr.attr.name = ro->label;
-		sensors->dev_attr.attr.mode = S_IRUGO;
+		sensors->dev_attr.attr.mode = 0444;
 		sensors->dev_attr.show = ro->show;
 		sensors->index = ro->index;
 
@@ -948,7 +934,7 @@ static int aem_register_sensors(struct aem_data *data,
 	while (rw->label) {
 		sysfs_attr_init(&sensors->dev_attr.attr);
 		sensors->dev_attr.attr.name = rw->label;
-		sensors->dev_attr.attr.mode = S_IRUGO | S_IWUSR;
+		sensors->dev_attr.attr.mode = 0644;
 		sensors->dev_attr.show = rw->show;
 		sensors->dev_attr.store = rw->set;
 		sensors->index = rw->index;
@@ -1020,19 +1006,19 @@ static void aem_remove_sensors(struct aem_data *data)
 /* Sensor probe functions */
 
 /* Description of AEM1 sensors */
-static struct aem_ro_sensor_template aem1_ro_sensors[] = {
+static const struct aem_ro_sensor_template aem1_ro_sensors[] = {
 {"energy1_input",  aem_show_energy, 0},
 {"power1_average", aem_show_power,  0},
 {NULL,		   NULL,	    0},
 };
 
-static struct aem_rw_sensor_template aem1_rw_sensors[] = {
+static const struct aem_rw_sensor_template aem1_rw_sensors[] = {
 {"power1_average_interval", aem_show_power_period, aem_set_power_period, 0},
 {NULL,			    NULL,                  NULL,                 0},
 };
 
 /* Description of AEM2 sensors */
-static struct aem_ro_sensor_template aem2_ro_sensors[] = {
+static const struct aem_ro_sensor_template aem2_ro_sensors[] = {
 {"energy1_input",	  aem_show_energy,	0},
 {"energy2_input",	  aem_show_energy,	1},
 {"power1_average",	  aem_show_power,	0},
@@ -1050,7 +1036,7 @@ static struct aem_ro_sensor_template aem2_ro_sensors[] = {
 {NULL,                    NULL,                 0},
 };
 
-static struct aem_rw_sensor_template aem2_rw_sensors[] = {
+static const struct aem_rw_sensor_template aem2_rw_sensors[] = {
 {"power1_average_interval", aem_show_power_period, aem_set_power_period, 0},
 {"power2_average_interval", aem_show_power_period, aem_set_power_period, 1},
 {NULL,			    NULL,                  NULL,                 0},

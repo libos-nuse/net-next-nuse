@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * File: drivers/input/keyboard/adp5588_keys.c
  * Description:  keypad driver for ADP5588 and ADP5587
@@ -5,7 +6,6 @@
  * Bugs: Enter bugs at http://blackfin.uclinux.org/
  *
  * Copyright (C) 2008-2010 Analog Devices Inc.
- * Licensed under the GPL-2 or later.
  */
 
 #include <linux/module.h>
@@ -20,7 +20,7 @@
 #include <linux/gpio.h>
 #include <linux/slab.h>
 
-#include <linux/i2c/adp5588.h>
+#include <linux/platform_data/adp5588.h>
 
 /* Key Event Register xy */
 #define KEY_EV_PRESSED		(1 << 7)
@@ -73,7 +73,7 @@ static int adp5588_write(struct i2c_client *client, u8 reg, u8 val)
 #ifdef CONFIG_GPIOLIB
 static int adp5588_gpio_get_value(struct gpio_chip *chip, unsigned off)
 {
-	struct adp5588_kpad *kpad = container_of(chip, struct adp5588_kpad, gc);
+	struct adp5588_kpad *kpad = gpiochip_get_data(chip);
 	unsigned int bank = ADP5588_BANK(kpad->gpiomap[off]);
 	unsigned int bit = ADP5588_BIT(kpad->gpiomap[off]);
 	int val;
@@ -93,7 +93,7 @@ static int adp5588_gpio_get_value(struct gpio_chip *chip, unsigned off)
 static void adp5588_gpio_set_value(struct gpio_chip *chip,
 				   unsigned off, int val)
 {
-	struct adp5588_kpad *kpad = container_of(chip, struct adp5588_kpad, gc);
+	struct adp5588_kpad *kpad = gpiochip_get_data(chip);
 	unsigned int bank = ADP5588_BANK(kpad->gpiomap[off]);
 	unsigned int bit = ADP5588_BIT(kpad->gpiomap[off]);
 
@@ -112,7 +112,7 @@ static void adp5588_gpio_set_value(struct gpio_chip *chip,
 
 static int adp5588_gpio_direction_input(struct gpio_chip *chip, unsigned off)
 {
-	struct adp5588_kpad *kpad = container_of(chip, struct adp5588_kpad, gc);
+	struct adp5588_kpad *kpad = gpiochip_get_data(chip);
 	unsigned int bank = ADP5588_BANK(kpad->gpiomap[off]);
 	unsigned int bit = ADP5588_BIT(kpad->gpiomap[off]);
 	int ret;
@@ -130,7 +130,7 @@ static int adp5588_gpio_direction_input(struct gpio_chip *chip, unsigned off)
 static int adp5588_gpio_direction_output(struct gpio_chip *chip,
 					 unsigned off, int val)
 {
-	struct adp5588_kpad *kpad = container_of(chip, struct adp5588_kpad, gc);
+	struct adp5588_kpad *kpad = gpiochip_get_data(chip);
 	unsigned int bank = ADP5588_BANK(kpad->gpiomap[off]);
 	unsigned int bit = ADP5588_BIT(kpad->gpiomap[off]);
 	int ret;
@@ -210,7 +210,7 @@ static int adp5588_gpio_add(struct adp5588_kpad *kpad)
 
 	mutex_init(&kpad->gpio_lock);
 
-	error = gpiochip_add(&kpad->gc);
+	error = gpiochip_add_data(&kpad->gc, kpad);
 	if (error) {
 		dev_err(dev, "gpiochip_add failed, err: %d\n", error);
 		return error;

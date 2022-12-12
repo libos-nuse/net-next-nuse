@@ -127,7 +127,7 @@ struct moxart_desc {
 	unsigned int			dma_cycles;
 	struct virt_dma_desc		vd;
 	uint8_t				es;
-	struct moxart_sg		sg[0];
+	struct moxart_sg		sg[];
 };
 
 struct moxart_chan {
@@ -148,6 +148,7 @@ struct moxart_chan {
 struct moxart_dmadev {
 	struct dma_device		dma_slave;
 	struct moxart_chan		slave_chans[APB_DMA_MAX_CHANNEL];
+	unsigned int			irq;
 };
 
 struct moxart_filter_data {
@@ -308,7 +309,7 @@ static struct dma_async_tx_descriptor *moxart_prep_slave_sg(
 		return NULL;
 	}
 
-	d = kzalloc(sizeof(*d) + sg_len * sizeof(d->sg[0]), GFP_ATOMIC);
+	d = kzalloc(struct_size(d, sg, sg_len), GFP_ATOMIC);
 	if (!d)
 		return NULL;
 
@@ -567,20 +568,18 @@ static int moxart_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct device_node *node = dev->of_node;
 	struct resource *res;
-	static void __iomem *dma_base_addr;
+	void __iomem *dma_base_addr;
 	int ret, i;
 	unsigned int irq;
 	struct moxart_chan *ch;
 	struct moxart_dmadev *mdc;
 
 	mdc = devm_kzalloc(dev, sizeof(*mdc), GFP_KERNEL);
-	if (!mdc) {
-		dev_err(dev, "can't allocate DMA container\n");
+	if (!mdc)
 		return -ENOMEM;
-	}
 
 	irq = irq_of_parse_and_map(node, 0);
-	if (irq == NO_IRQ) {
+	if (!irq) {
 		dev_err(dev, "no IRQ resource\n");
 		return -EINVAL;
 	}
@@ -617,6 +616,7 @@ static int moxart_probe(struct platform_device *pdev)
 		dev_err(dev, "devm_request_irq failed\n");
 		return ret;
 	}
+	mdc->irq = irq;
 
 	ret = dma_async_device_register(&mdc->dma_slave);
 	if (ret) {
@@ -639,6 +639,8 @@ static int moxart_probe(struct platform_device *pdev)
 static int moxart_remove(struct platform_device *pdev)
 {
 	struct moxart_dmadev *m = platform_get_drvdata(pdev);
+
+	devm_free_irq(&pdev->dev, m->irq, m);
 
 	dma_async_device_unregister(&m->dma_slave);
 

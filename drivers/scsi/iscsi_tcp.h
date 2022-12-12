@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * iSCSI Initiator TCP Transport
  * Copyright (C) 2004 Dmitry Yusupov
@@ -5,16 +6,6 @@
  * Copyright (C) 2005 - 2006 Mike Christie
  * Copyright (C) 2006 Red Hat, Inc.  All rights reserved.
  * maintained by open-iscsi@googlegroups.com
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published
- * by the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * General Public License for more details.
  *
  * See the file COPYING included with this distribution for more details.
  */
@@ -45,8 +36,8 @@ struct iscsi_sw_tcp_conn {
 	void			(*old_write_space)(struct sock *);
 
 	/* data and header digests */
-	struct hash_desc	tx_hash;	/* CRC32C (Tx) */
-	struct hash_desc	rx_hash;	/* CRC32C (Rx) */
+	struct ahash_request	*tx_hash;	/* CRC32C (Tx) */
+	struct ahash_request	*rx_hash;	/* CRC32C (Rx) */
 
 	/* MIB custom statistics */
 	uint32_t		sendpage_failures_cnt;

@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013, The Linux Foundation. All rights reserved.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -183,8 +175,6 @@ static const char * const mmcc_xo_dsibyte_hdmi_edp_gpll0[] = {
 	"dsi0pllbyte",
 	"dsi1pllbyte",
 };
-
-#define F(f, s, h, m, n) { (f), (s), (2 * (h) - 1), (m), (n) }
 
 static struct clk_pll mmpll0 = {
 	.l_reg = 0x0004,
@@ -458,18 +448,6 @@ static struct clk_rcg2 mdp_clk_src = {
 		.name = "mdp_clk_src",
 		.parent_names = mmcc_xo_mmpll0_dsi_hdmi_gpll0,
 		.num_parents = 6,
-		.ops = &clk_rcg2_ops,
-	},
-};
-
-static struct clk_rcg2 gfx3d_clk_src = {
-	.cmd_rcgr = 0x4000,
-	.hid_width = 5,
-	.parent_map = mmcc_xo_mmpll0_1_2_gpll0_map,
-	.clkr.hw.init = &(struct clk_init_data){
-		.name = "gfx3d_clk_src",
-		.parent_names = mmcc_xo_mmpll0_1_2_gpll0,
-		.num_parents = 5,
 		.ops = &clk_rcg2_ops,
 	},
 };
@@ -2400,6 +2378,7 @@ static struct gdsc oxilicx_gdsc = {
 	.pd = {
 		.name = "oxilicx",
 	},
+	.parent = &oxili_gdsc.pd,
 	.pwrsts = PWRSTS_OFF_ON,
 };
 
@@ -2420,7 +2399,6 @@ static struct clk_regmap *mmcc_msm8974_clocks[] = {
 	[VFE0_CLK_SRC] = &vfe0_clk_src.clkr,
 	[VFE1_CLK_SRC] = &vfe1_clk_src.clkr,
 	[MDP_CLK_SRC] = &mdp_clk_src.clkr,
-	[GFX3D_CLK_SRC] = &gfx3d_clk_src.clkr,
 	[JPEG0_CLK_SRC] = &jpeg0_clk_src.clkr,
 	[JPEG1_CLK_SRC] = &jpeg1_clk_src.clkr,
 	[JPEG2_CLK_SRC] = &jpeg2_clk_src.clkr,
@@ -2615,7 +2593,6 @@ MODULE_DEVICE_TABLE(of, mmcc_msm8974_match_table);
 static int mmcc_msm8974_probe(struct platform_device *pdev)
 {
 	struct regmap *regmap;
-	int ret;
 
 	regmap = qcom_cc_map(pdev, &mmcc_msm8974_desc);
 	if (IS_ERR(regmap))
@@ -2624,22 +2601,11 @@ static int mmcc_msm8974_probe(struct platform_device *pdev)
 	clk_pll_configure_sr_hpm_lp(&mmpll1, regmap, &mmpll1_config, true);
 	clk_pll_configure_sr_hpm_lp(&mmpll3, regmap, &mmpll3_config, false);
 
-	ret = qcom_cc_really_probe(pdev, &mmcc_msm8974_desc, regmap);
-	if (ret)
-		return ret;
-
-	return pm_genpd_add_subdomain(&oxili_gdsc.pd, &oxilicx_gdsc.pd);
-}
-
-static int mmcc_msm8974_remove(struct platform_device *pdev)
-{
-	pm_genpd_remove_subdomain(&oxili_gdsc.pd, &oxilicx_gdsc.pd);
-	return 0;
+	return qcom_cc_really_probe(pdev, &mmcc_msm8974_desc, regmap);
 }
 
 static struct platform_driver mmcc_msm8974_driver = {
 	.probe		= mmcc_msm8974_probe,
-	.remove		= mmcc_msm8974_remove,
 	.driver		= {
 		.name	= "mmcc-msm8974",
 		.of_match_table = mmcc_msm8974_match_table,

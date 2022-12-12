@@ -20,7 +20,7 @@ static int reiserfs_dir_fsync(struct file *filp, loff_t start, loff_t end,
 const struct file_operations reiserfs_dir_operations = {
 	.llseek = generic_file_llseek,
 	.read = generic_read_dir,
-	.iterate = reiserfs_readdir,
+	.iterate_shared = reiserfs_readdir,
 	.fsync = reiserfs_dir_fsync,
 	.unlocked_ioctl = reiserfs_ioctl,
 #ifdef CONFIG_COMPAT
@@ -34,15 +34,15 @@ static int reiserfs_dir_fsync(struct file *filp, loff_t start, loff_t end,
 	struct inode *inode = filp->f_mapping->host;
 	int err;
 
-	err = filemap_write_and_wait_range(inode->i_mapping, start, end);
+	err = file_write_and_wait_range(filp, start, end);
 	if (err)
 		return err;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 	reiserfs_write_lock(inode->i_sb);
 	err = reiserfs_commit_for_inode(inode);
 	reiserfs_write_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	if (err < 0)
 		return err;
 	return 0;
@@ -289,7 +289,7 @@ void make_empty_dir_item_v1(char *body, __le32 dirid, __le32 objid,
 
 	/* direntry header of "." */
 	put_deh_offset(dot, DOT_OFFSET);
-	/* these two are from make_le_item_head, and are are LE */
+	/* these two are from make_le_item_head, and are LE */
 	dot->deh_dir_id = dirid;
 	dot->deh_objectid = objid;
 	dot->deh_state = 0;	/* Endian safe if 0 */
@@ -299,7 +299,7 @@ void make_empty_dir_item_v1(char *body, __le32 dirid, __le32 objid,
 	/* direntry header of ".." */
 	put_deh_offset(dotdot, DOT_DOT_OFFSET);
 	/* key of ".." for the root directory */
-	/* these two are from the inode, and are are LE */
+	/* these two are from the inode, and are LE */
 	dotdot->deh_dir_id = par_dirid;
 	dotdot->deh_objectid = par_objid;
 	dotdot->deh_state = 0;	/* Endian safe if 0 */
@@ -323,7 +323,7 @@ void make_empty_dir_item(char *body, __le32 dirid, __le32 objid,
 
 	/* direntry header of "." */
 	put_deh_offset(dot, DOT_OFFSET);
-	/* these two are from make_le_item_head, and are are LE */
+	/* these two are from make_le_item_head, and are LE */
 	dot->deh_dir_id = dirid;
 	dot->deh_objectid = objid;
 	dot->deh_state = 0;	/* Endian safe if 0 */
@@ -333,7 +333,7 @@ void make_empty_dir_item(char *body, __le32 dirid, __le32 objid,
 	/* direntry header of ".." */
 	put_deh_offset(dotdot, DOT_DOT_OFFSET);
 	/* key of ".." for the root directory */
-	/* these two are from the inode, and are are LE */
+	/* these two are from the inode, and are LE */
 	dotdot->deh_dir_id = par_dirid;
 	dotdot->deh_objectid = par_objid;
 	dotdot->deh_state = 0;	/* Endian safe if 0 */

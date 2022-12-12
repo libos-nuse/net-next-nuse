@@ -1,7 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) ST-Ericsson SA 2010
  *
- * License Terms: GNU General Public License v2
  * Author: Srinidhi Kasagar <srinidhi.kasagar@stericsson.com>
  */
 #ifndef MFD_AB8500_H
@@ -62,6 +62,8 @@ enum ab8500_version {
 #define AB8500_PROD_TEST	0x13
 #define AB8500_STE_TEST		0x14
 #define AB8500_OTP_EMUL		0x15
+
+#define AB8500_DEBUG_FIELD_LAST	0x16
 
 /*
  * Interrupts

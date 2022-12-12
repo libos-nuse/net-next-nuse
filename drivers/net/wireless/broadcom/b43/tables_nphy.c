@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
 
   Broadcom B43 wireless driver
@@ -6,20 +7,6 @@
   Copyright (c) 2008 Michael Buesch <m@bues.ch>
   Copyright (c) 2010 Rafał Miłecki <zajec5@gmail.com>
 
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; see the file COPYING.  If not, write to
-  the Free Software Foundation, Inc., 51 Franklin Steet, Fifth Floor,
-  Boston, MA 02110-1301, USA.
 
 */
 
@@ -3502,7 +3489,7 @@ static void b43_nphy_tables_init_rev7_volatile(struct b43_wldev *dev)
 		{ 0x2, 0x18, 0x2 }, /* Core 1 */
 	};
 
-	if (b43_current_band(dev->wl) == IEEE80211_BAND_5GHZ)
+	if (b43_current_band(dev->wl) == NL80211_BAND_5GHZ)
 		antswlut = sprom->fem.ghz5.antswlut;
 	else
 		antswlut = sprom->fem.ghz2.antswlut;
@@ -3566,7 +3553,7 @@ static void b43_nphy_tables_init_rev3(struct b43_wldev *dev)
 	struct ssb_sprom *sprom = dev->dev->bus_sprom;
 	u8 antswlut;
 
-	if (b43_current_band(dev->wl) == IEEE80211_BAND_5GHZ)
+	if (b43_current_band(dev->wl) == NL80211_BAND_5GHZ)
 		antswlut = sprom->fem.ghz5.antswlut;
 	else
 		antswlut = sprom->fem.ghz2.antswlut;
@@ -3633,7 +3620,7 @@ static void b43_nphy_tables_init_rev0(struct b43_wldev *dev)
 	ntab_upload(dev, B43_NTAB_C1_LOFEEDTH, b43_ntab_loftlt1);
 }
 
-/* http://bcm-v4.sipsolutions.net/802.11/PHY/N/InitTables */
+/* https://bcm-v4.sipsolutions.net/802.11/PHY/N/InitTables */
 void b43_nphy_tables_init(struct b43_wldev *dev)
 {
 	if (dev->phy.rev >= 16)
@@ -3646,12 +3633,12 @@ void b43_nphy_tables_init(struct b43_wldev *dev)
 		b43_nphy_tables_init_rev0(dev);
 }
 
-/* http://bcm-v4.sipsolutions.net/802.11/PHY/N/GetIpaGainTbl */
+/* https://bcm-v4.sipsolutions.net/802.11/PHY/N/GetIpaGainTbl */
 static const u32 *b43_nphy_get_ipa_gain_table(struct b43_wldev *dev)
 {
 	struct b43_phy *phy = &dev->phy;
 
-	if (b43_current_band(dev->wl) == IEEE80211_BAND_2GHZ) {
+	if (b43_current_band(dev->wl) == NL80211_BAND_2GHZ) {
 		switch (phy->rev) {
 		case 17:
 			if (phy->radio_rev == 14)
@@ -3698,17 +3685,17 @@ static const u32 *b43_nphy_get_ipa_gain_table(struct b43_wldev *dev)
 const u32 *b43_nphy_get_tx_gain_table(struct b43_wldev *dev)
 {
 	struct b43_phy *phy = &dev->phy;
-	enum ieee80211_band band = b43_current_band(dev->wl);
+	enum nl80211_band band = b43_current_band(dev->wl);
 	struct ssb_sprom *sprom = dev->dev->bus_sprom;
 
 	if (dev->phy.rev < 3)
 		return b43_ntab_tx_gain_rev0_1_2;
 
 	/* rev 3+ */
-	if ((dev->phy.n->ipa2g_on && band == IEEE80211_BAND_2GHZ) ||
-	    (dev->phy.n->ipa5g_on && band == IEEE80211_BAND_5GHZ)) {
+	if ((dev->phy.n->ipa2g_on && band == NL80211_BAND_2GHZ) ||
+	    (dev->phy.n->ipa5g_on && band == NL80211_BAND_5GHZ)) {
 		return b43_nphy_get_ipa_gain_table(dev);
-	} else if (b43_current_band(dev->wl) == IEEE80211_BAND_5GHZ) {
+	} else if (b43_current_band(dev->wl) == NL80211_BAND_5GHZ) {
 		switch (phy->rev) {
 		case 6:
 		case 5:
@@ -3730,7 +3717,7 @@ const u32 *b43_nphy_get_tx_gain_table(struct b43_wldev *dev)
 		case 5:
 			if (sprom->fem.ghz2.extpa_gain == 3)
 				return b43_ntab_tx_gain_epa_rev3_hi_pwr_2g;
-			/* fall through */
+			fallthrough;
 		case 4:
 		case 3:
 			return b43_ntab_tx_gain_epa_rev3_2g;
@@ -3746,7 +3733,7 @@ const s16 *b43_ntab_get_rf_pwr_offset_table(struct b43_wldev *dev)
 {
 	struct b43_phy *phy = &dev->phy;
 
-	if (b43_current_band(dev->wl) == IEEE80211_BAND_2GHZ) {
+	if (b43_current_band(dev->wl) == NL80211_BAND_2GHZ) {
 		switch (phy->rev) {
 		case 17:
 			if (phy->radio_rev == 14)

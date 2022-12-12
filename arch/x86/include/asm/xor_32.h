@@ -1,17 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef _ASM_X86_XOR_32_H
 #define _ASM_X86_XOR_32_H
 
 /*
  * Optimized RAID-5 checksumming functions for MMX.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * You should have received a copy of the GNU General Public License
- * (for example /usr/src/linux/COPYING); if not, write to the Free
- * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 /*
@@ -550,10 +542,10 @@ static struct xor_block_template xor_block_pIII_sse = {
 #define XOR_TRY_TEMPLATES				\
 do {							\
 	AVX_XOR_SPEED;					\
-	if (cpu_has_xmm) {				\
+	if (boot_cpu_has(X86_FEATURE_XMM)) {				\
 		xor_speed(&xor_block_pIII_sse);		\
 		xor_speed(&xor_block_sse_pf64);		\
-	} else if (cpu_has_mmx) {			\
+	} else if (boot_cpu_has(X86_FEATURE_MMX)) {	\
 		xor_speed(&xor_block_pII_mmx);		\
 		xor_speed(&xor_block_p5_mmx);		\
 	} else {					\

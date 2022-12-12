@@ -1,23 +1,165 @@
-#include <linux/module.h>
-#include <linux/spinlock.h>
-#include <linux/sort.h>
-#include <asm/uaccess.h>
+// SPDX-License-Identifier: GPL-2.0-only
+#include <linux/extable.h>
+#include <linux/uaccess.h>
+#include <linux/sched/debug.h>
+#include <xen/xen.h>
 
-static inline unsigned long
-ex_insn_addr(const struct exception_table_entry *x)
-{
-	return (unsigned long)&x->insn + x->insn;
-}
+#include <asm/fpu/internal.h>
+#include <asm/sev-es.h>
+#include <asm/traps.h>
+#include <asm/kdebug.h>
+
+typedef bool (*ex_handler_t)(const struct exception_table_entry *,
+			    struct pt_regs *, int, unsigned long,
+			    unsigned long);
+
 static inline unsigned long
 ex_fixup_addr(const struct exception_table_entry *x)
 {
 	return (unsigned long)&x->fixup + x->fixup;
 }
-
-int fixup_exception(struct pt_regs *regs)
+static inline ex_handler_t
+ex_fixup_handler(const struct exception_table_entry *x)
 {
-	const struct exception_table_entry *fixup;
-	unsigned long new_ip;
+	return (ex_handler_t)((unsigned long)&x->handler + x->handler);
+}
+
+__visible bool ex_handler_default(const struct exception_table_entry *fixup,
+				  struct pt_regs *regs, int trapnr,
+				  unsigned long error_code,
+				  unsigned long fault_addr)
+{
+	regs->ip = ex_fixup_addr(fixup);
+	return true;
+}
+EXPORT_SYMBOL(ex_handler_default);
+
+__visible bool ex_handler_fault(const struct exception_table_entry *fixup,
+				struct pt_regs *regs, int trapnr,
+				unsigned long error_code,
+				unsigned long fault_addr)
+{
+	regs->ip = ex_fixup_addr(fixup);
+	regs->ax = trapnr;
+	return true;
+}
+EXPORT_SYMBOL_GPL(ex_handler_fault);
+
+/*
+ * Handler for when we fail to restore a task's FPU state.  We should never get
+ * here because the FPU state of a task using the FPU (task->thread.fpu.state)
+ * should always be valid.  However, past bugs have allowed userspace to set
+ * reserved bits in the XSAVE area using PTRACE_SETREGSET or sys_rt_sigreturn().
+ * These caused XRSTOR to fail when switching to the task, leaking the FPU
+ * registers of the task previously executing on the CPU.  Mitigate this class
+ * of vulnerability by restoring from the initial state (essentially, zeroing
+ * out all the FPU registers) if we can't restore from the task's FPU state.
+ */
+__visible bool ex_handler_fprestore(const struct exception_table_entry *fixup,
+				    struct pt_regs *regs, int trapnr,
+				    unsigned long error_code,
+				    unsigned long fault_addr)
+{
+	regs->ip = ex_fixup_addr(fixup);
+
+	WARN_ONCE(1, "Bad FPU state detected at %pB, reinitializing FPU registers.",
+		  (void *)instruction_pointer(regs));
+
+	__copy_kernel_to_fpregs(&init_fpstate, -1);
+	return true;
+}
+EXPORT_SYMBOL_GPL(ex_handler_fprestore);
+
+__visible bool ex_handler_uaccess(const struct exception_table_entry *fixup,
+				  struct pt_regs *regs, int trapnr,
+				  unsigned long error_code,
+				  unsigned long fault_addr)
+{
+	WARN_ONCE(trapnr == X86_TRAP_GP, "General protection fault in user access. Non-canonical address?");
+	regs->ip = ex_fixup_addr(fixup);
+	return true;
+}
+EXPORT_SYMBOL(ex_handler_uaccess);
+
+__visible bool ex_handler_copy(const struct exception_table_entry *fixup,
+			       struct pt_regs *regs, int trapnr,
+			       unsigned long error_code,
+			       unsigned long fault_addr)
+{
+	WARN_ONCE(trapnr == X86_TRAP_GP, "General protection fault in user access. Non-canonical address?");
+	regs->ip = ex_fixup_addr(fixup);
+	regs->ax = trapnr;
+	return true;
+}
+EXPORT_SYMBOL(ex_handler_copy);
+
+__visible bool ex_handler_rdmsr_unsafe(const struct exception_table_entry *fixup,
+				       struct pt_regs *regs, int trapnr,
+				       unsigned long error_code,
+				       unsigned long fault_addr)
+{
+	if (pr_warn_once("unchecked MSR access error: RDMSR from 0x%x at rIP: 0x%lx (%pS)\n",
+			 (unsigned int)regs->cx, regs->ip, (void *)regs->ip))
+		show_stack_regs(regs);
+
+	/* Pretend that the read succeeded and returned 0. */
+	regs->ip = ex_fixup_addr(fixup);
+	regs->ax = 0;
+	regs->dx = 0;
+	return true;
+}
+EXPORT_SYMBOL(ex_handler_rdmsr_unsafe);
+
+__visible bool ex_handler_wrmsr_unsafe(const struct exception_table_entry *fixup,
+				       struct pt_regs *regs, int trapnr,
+				       unsigned long error_code,
+				       unsigned long fault_addr)
+{
+	if (pr_warn_once("unchecked MSR access error: WRMSR to 0x%x (tried to write 0x%08x%08x) at rIP: 0x%lx (%pS)\n",
+			 (unsigned int)regs->cx, (unsigned int)regs->dx,
+			 (unsigned int)regs->ax,  regs->ip, (void *)regs->ip))
+		show_stack_regs(regs);
+
+	/* Pretend that the write succeeded. */
+	regs->ip = ex_fixup_addr(fixup);
+	return true;
+}
+EXPORT_SYMBOL(ex_handler_wrmsr_unsafe);
+
+__visible bool ex_handler_clear_fs(const struct exception_table_entry *fixup,
+				   struct pt_regs *regs, int trapnr,
+				   unsigned long error_code,
+				   unsigned long fault_addr)
+{
+	if (static_cpu_has(X86_BUG_NULL_SEG))
+		asm volatile ("mov %0, %%fs" : : "rm" (__USER_DS));
+	asm volatile ("mov %0, %%fs" : : "rm" (0));
+	return ex_handler_default(fixup, regs, trapnr, error_code, fault_addr);
+}
+EXPORT_SYMBOL(ex_handler_clear_fs);
+
+enum handler_type ex_get_fault_handler_type(unsigned long ip)
+{
+	const struct exception_table_entry *e;
+	ex_handler_t handler;
+
+	e = search_exception_tables(ip);
+	if (!e)
+		return EX_HANDLER_NONE;
+	handler = ex_fixup_handler(e);
+	if (handler == ex_handler_fault)
+		return EX_HANDLER_FAULT;
+	else if (handler == ex_handler_uaccess || handler == ex_handler_copy)
+		return EX_HANDLER_UACCESS;
+	else
+		return EX_HANDLER_OTHER;
+}
+
+int fixup_exception(struct pt_regs *regs, int trapnr, unsigned long error_code,
+		    unsigned long fault_addr)
+{
+	const struct exception_table_entry *e;
+	ex_handler_t handler;
 
 #ifdef CONFIG_PNPBIOS
 	if (unlikely(SEGMENT_IS_PNP_CODE(regs->cs))) {
@@ -33,137 +175,74 @@ int fixup_exception(struct pt_regs *regs)
 	}
 #endif
 
-	fixup = search_exception_tables(regs->ip);
-	if (fixup) {
-		new_ip = ex_fixup_addr(fixup);
+	e = search_exception_tables(regs->ip);
+	if (!e)
+		return 0;
 
-		if (fixup->fixup - fixup->insn >= 0x7ffffff0 - 4) {
-			/* Special hack for uaccess_err */
-			current_thread_info()->uaccess_err = 1;
-			new_ip -= 0x7ffffff0;
-		}
-		regs->ip = new_ip;
-		return 1;
-	}
-
-	return 0;
+	handler = ex_fixup_handler(e);
+	return handler(e, regs, trapnr, error_code, fault_addr);
 }
+
+extern unsigned int early_recursion_flag;
 
 /* Restricted version used during very early boot */
-int __init early_fixup_exception(unsigned long *ip)
+void __init early_fixup_exception(struct pt_regs *regs, int trapnr)
 {
-	const struct exception_table_entry *fixup;
-	unsigned long new_ip;
+	/* Ignore early NMIs. */
+	if (trapnr == X86_TRAP_NMI)
+		return;
 
-	fixup = search_exception_tables(*ip);
-	if (fixup) {
-		new_ip = ex_fixup_addr(fixup);
-
-		if (fixup->fixup - fixup->insn >= 0x7ffffff0 - 4) {
-			/* uaccess handling not supported during early boot */
-			return 0;
-		}
-
-		*ip = new_ip;
-		return 1;
-	}
-
-	return 0;
-}
-
-/*
- * Search one exception table for an entry corresponding to the
- * given instruction address, and return the address of the entry,
- * or NULL if none is found.
- * We use a binary search, and thus we assume that the table is
- * already sorted.
- */
-const struct exception_table_entry *
-search_extable(const struct exception_table_entry *first,
-	       const struct exception_table_entry *last,
-	       unsigned long value)
-{
-	while (first <= last) {
-		const struct exception_table_entry *mid;
-		unsigned long addr;
-
-		mid = ((last - first) >> 1) + first;
-		addr = ex_insn_addr(mid);
-		if (addr < value)
-			first = mid + 1;
-		else if (addr > value)
-			last = mid - 1;
-		else
-			return mid;
-        }
-        return NULL;
-}
-
-/*
- * The exception table needs to be sorted so that the binary
- * search that we use to find entries in it works properly.
- * This is used both for the kernel exception table and for
- * the exception tables of modules that get loaded.
- *
- */
-static int cmp_ex(const void *a, const void *b)
-{
-	const struct exception_table_entry *x = a, *y = b;
+	if (early_recursion_flag > 2)
+		goto halt_loop;
 
 	/*
-	 * This value will always end up fittin in an int, because on
-	 * both i386 and x86-64 the kernel symbol-reachable address
-	 * space is < 2 GiB.
-	 *
-	 * This compare is only valid after normalization.
+	 * Old CPUs leave the high bits of CS on the stack
+	 * undefined.  I'm not sure which CPUs do this, but at least
+	 * the 486 DX works this way.
+	 * Xen pv domains are not using the default __KERNEL_CS.
 	 */
-	return x->insn - y->insn;
-}
+	if (!xen_pv_domain() && regs->cs != __KERNEL_CS)
+		goto fail;
 
-void sort_extable(struct exception_table_entry *start,
-		  struct exception_table_entry *finish)
-{
-	struct exception_table_entry *p;
-	int i;
+	/*
+	 * The full exception fixup machinery is available as soon as
+	 * the early IDT is loaded.  This means that it is the
+	 * responsibility of extable users to either function correctly
+	 * when handlers are invoked early or to simply avoid causing
+	 * exceptions before they're ready to handle them.
+	 *
+	 * This is better than filtering which handlers can be used,
+	 * because refusing to call a handler here is guaranteed to
+	 * result in a hard-to-debug panic.
+	 *
+	 * Keep in mind that not all vectors actually get here.  Early
+	 * page faults, for example, are special.
+	 */
+	if (fixup_exception(regs, trapnr, regs->orig_ax, 0))
+		return;
 
-	/* Convert all entries to being relative to the start of the section */
-	i = 0;
-	for (p = start; p < finish; p++) {
-		p->insn += i;
-		i += 4;
-		p->fixup += i;
-		i += 4;
+	if (trapnr == X86_TRAP_UD) {
+		if (report_bug(regs->ip, regs) == BUG_TRAP_TYPE_WARN) {
+			/* Skip the ud2. */
+			regs->ip += LEN_UD2;
+			return;
+		}
+
+		/*
+		 * If this was a BUG and report_bug returns or if this
+		 * was just a normal #UD, we want to continue onward and
+		 * crash.
+		 */
 	}
 
-	sort(start, finish - start, sizeof(struct exception_table_entry),
-	     cmp_ex, NULL);
+fail:
+	early_printk("PANIC: early exception 0x%02x IP %lx:%lx error %lx cr2 0x%lx\n",
+		     (unsigned)trapnr, (unsigned long)regs->cs, regs->ip,
+		     regs->orig_ax, read_cr2());
 
-	/* Denormalize all entries */
-	i = 0;
-	for (p = start; p < finish; p++) {
-		p->insn -= i;
-		i += 4;
-		p->fixup -= i;
-		i += 4;
-	}
-}
+	show_regs(regs);
 
-#ifdef CONFIG_MODULES
-/*
- * If the exception table is sorted, any referring to the module init
- * will be at the beginning or the end.
- */
-void trim_init_extable(struct module *m)
-{
-	/*trim the beginning*/
-	while (m->num_exentries &&
-	       within_module_init(ex_insn_addr(&m->extable[0]), m)) {
-		m->extable++;
-		m->num_exentries--;
-	}
-	/*trim the end*/
-	while (m->num_exentries &&
-	       within_module_init(ex_insn_addr(&m->extable[m->num_exentries-1]), m))
-		m->num_exentries--;
+halt_loop:
+	while (true)
+		halt();
 }
-#endif /* CONFIG_MODULES */

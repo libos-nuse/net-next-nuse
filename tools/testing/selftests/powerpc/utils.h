@@ -6,8 +6,12 @@
 #ifndef _SELFTESTS_POWERPC_UTILS_H
 #define _SELFTESTS_POWERPC_UTILS_H
 
+#define __cacheline_aligned __attribute__((aligned(128)))
+
 #include <stdint.h>
 #include <stdbool.h>
+#include <linux/auxvec.h>
+#include "reg.h"
 
 /* Avoid headaches with PRI?64 - just use %ll? always */
 typedef unsigned long long u64;
@@ -21,6 +25,12 @@ typedef uint8_t u8;
 
 int test_harness(int (test_function)(void), char *name);
 extern void *get_auxv_entry(int type);
+int pick_online_cpu(void);
+
+static inline bool have_hwcap2(unsigned long ftr2)
+{
+	return ((unsigned long)get_auxv_entry(AT_HWCAP2) & ftr2) == ftr2;
+}
 
 /* Yes, this is evil */
 #define FAIL_IF(x)						\
@@ -46,5 +56,10 @@ do {								\
 
 #define _str(s) #s
 #define str(s) _str(s)
+
+/* POWER9 feature */
+#ifndef PPC_FEATURE2_ARCH_3_00
+#define PPC_FEATURE2_ARCH_3_00 0x00800000
+#endif
 
 #endif /* _SELFTESTS_POWERPC_UTILS_H */

@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Atmel MultiMedia Card Interface driver
  *
  * Copyright (C) 2004-2008 Atmel Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/blkdev.h>
 #include <linux/clk.h>
@@ -29,7 +26,6 @@
 #include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/types.h>
-#include <linux/platform_data/mmc-atmel-mci.h>
 
 #include <linux/mmc/host.h>
 #include <linux/mmc/sdio.h>
@@ -44,8 +40,136 @@
 #include <asm/io.h>
 #include <asm/unaligned.h>
 
-#include "atmel-mci-regs.h"
+/*
+ * Superset of MCI IP registers integrated in Atmel AT91 Processor
+ * Registers and bitfields marked with [2] are only available in MCI2
+ */
 
+/* MCI Register Definitions */
+#define	ATMCI_CR			0x0000	/* Control */
+#define		ATMCI_CR_MCIEN			BIT(0)		/* MCI Enable */
+#define		ATMCI_CR_MCIDIS			BIT(1)		/* MCI Disable */
+#define		ATMCI_CR_PWSEN			BIT(2)		/* Power Save Enable */
+#define		ATMCI_CR_PWSDIS			BIT(3)		/* Power Save Disable */
+#define		ATMCI_CR_SWRST			BIT(7)		/* Software Reset */
+#define	ATMCI_MR			0x0004	/* Mode */
+#define		ATMCI_MR_CLKDIV(x)		((x) <<  0)	/* Clock Divider */
+#define		ATMCI_MR_PWSDIV(x)		((x) <<  8)	/* Power Saving Divider */
+#define		ATMCI_MR_RDPROOF		BIT(11)		/* Read Proof */
+#define		ATMCI_MR_WRPROOF		BIT(12)		/* Write Proof */
+#define		ATMCI_MR_PDCFBYTE		BIT(13)		/* Force Byte Transfer */
+#define		ATMCI_MR_PDCPADV		BIT(14)		/* Padding Value */
+#define		ATMCI_MR_PDCMODE		BIT(15)		/* PDC-oriented Mode */
+#define		ATMCI_MR_CLKODD(x)		((x) << 16)	/* LSB of Clock Divider */
+#define	ATMCI_DTOR			0x0008	/* Data Timeout */
+#define		ATMCI_DTOCYC(x)			((x) <<  0)	/* Data Timeout Cycles */
+#define		ATMCI_DTOMUL(x)			((x) <<  4)	/* Data Timeout Multiplier */
+#define	ATMCI_SDCR			0x000c	/* SD Card / SDIO */
+#define		ATMCI_SDCSEL_SLOT_A		(0 <<  0)	/* Select SD slot A */
+#define		ATMCI_SDCSEL_SLOT_B		(1 <<  0)	/* Select SD slot A */
+#define		ATMCI_SDCSEL_MASK		(3 <<  0)
+#define		ATMCI_SDCBUS_1BIT		(0 <<  6)	/* 1-bit data bus */
+#define		ATMCI_SDCBUS_4BIT		(2 <<  6)	/* 4-bit data bus */
+#define		ATMCI_SDCBUS_8BIT		(3 <<  6)	/* 8-bit data bus[2] */
+#define		ATMCI_SDCBUS_MASK		(3 <<  6)
+#define	ATMCI_ARGR			0x0010	/* Command Argument */
+#define	ATMCI_CMDR			0x0014	/* Command */
+#define		ATMCI_CMDR_CMDNB(x)		((x) <<  0)	/* Command Opcode */
+#define		ATMCI_CMDR_RSPTYP_NONE		(0 <<  6)	/* No response */
+#define		ATMCI_CMDR_RSPTYP_48BIT		(1 <<  6)	/* 48-bit response */
+#define		ATMCI_CMDR_RSPTYP_136BIT	(2 <<  6)	/* 136-bit response */
+#define		ATMCI_CMDR_SPCMD_INIT		(1 <<  8)	/* Initialization command */
+#define		ATMCI_CMDR_SPCMD_SYNC		(2 <<  8)	/* Synchronized command */
+#define		ATMCI_CMDR_SPCMD_INT		(4 <<  8)	/* Interrupt command */
+#define		ATMCI_CMDR_SPCMD_INTRESP	(5 <<  8)	/* Interrupt response */
+#define		ATMCI_CMDR_OPDCMD		(1 << 11)	/* Open Drain */
+#define		ATMCI_CMDR_MAXLAT_5CYC		(0 << 12)	/* Max latency 5 cycles */
+#define		ATMCI_CMDR_MAXLAT_64CYC		(1 << 12)	/* Max latency 64 cycles */
+#define		ATMCI_CMDR_START_XFER		(1 << 16)	/* Start data transfer */
+#define		ATMCI_CMDR_STOP_XFER		(2 << 16)	/* Stop data transfer */
+#define		ATMCI_CMDR_TRDIR_WRITE		(0 << 18)	/* Write data */
+#define		ATMCI_CMDR_TRDIR_READ		(1 << 18)	/* Read data */
+#define		ATMCI_CMDR_BLOCK		(0 << 19)	/* Single-block transfer */
+#define		ATMCI_CMDR_MULTI_BLOCK		(1 << 19)	/* Multi-block transfer */
+#define		ATMCI_CMDR_STREAM		(2 << 19)	/* MMC Stream transfer */
+#define		ATMCI_CMDR_SDIO_BYTE		(4 << 19)	/* SDIO Byte transfer */
+#define		ATMCI_CMDR_SDIO_BLOCK		(5 << 19)	/* SDIO Block transfer */
+#define		ATMCI_CMDR_SDIO_SUSPEND		(1 << 24)	/* SDIO Suspend Command */
+#define		ATMCI_CMDR_SDIO_RESUME		(2 << 24)	/* SDIO Resume Command */
+#define	ATMCI_BLKR			0x0018	/* Block */
+#define		ATMCI_BCNT(x)			((x) <<  0)	/* Data Block Count */
+#define		ATMCI_BLKLEN(x)			((x) << 16)	/* Data Block Length */
+#define	ATMCI_CSTOR			0x001c	/* Completion Signal Timeout[2] */
+#define		ATMCI_CSTOCYC(x)		((x) <<  0)	/* CST cycles */
+#define		ATMCI_CSTOMUL(x)		((x) <<  4)	/* CST multiplier */
+#define	ATMCI_RSPR			0x0020	/* Response 0 */
+#define	ATMCI_RSPR1			0x0024	/* Response 1 */
+#define	ATMCI_RSPR2			0x0028	/* Response 2 */
+#define	ATMCI_RSPR3			0x002c	/* Response 3 */
+#define	ATMCI_RDR			0x0030	/* Receive Data */
+#define	ATMCI_TDR			0x0034	/* Transmit Data */
+#define	ATMCI_SR			0x0040	/* Status */
+#define	ATMCI_IER			0x0044	/* Interrupt Enable */
+#define	ATMCI_IDR			0x0048	/* Interrupt Disable */
+#define	ATMCI_IMR			0x004c	/* Interrupt Mask */
+#define		ATMCI_CMDRDY			BIT(0)		/* Command Ready */
+#define		ATMCI_RXRDY			BIT(1)		/* Receiver Ready */
+#define		ATMCI_TXRDY			BIT(2)		/* Transmitter Ready */
+#define		ATMCI_BLKE			BIT(3)		/* Data Block Ended */
+#define		ATMCI_DTIP			BIT(4)		/* Data Transfer In Progress */
+#define		ATMCI_NOTBUSY			BIT(5)		/* Data Not Busy */
+#define		ATMCI_ENDRX			BIT(6)		/* End of RX Buffer */
+#define		ATMCI_ENDTX			BIT(7)		/* End of TX Buffer */
+#define		ATMCI_SDIOIRQA			BIT(8)		/* SDIO IRQ in slot A */
+#define		ATMCI_SDIOIRQB			BIT(9)		/* SDIO IRQ in slot B */
+#define		ATMCI_SDIOWAIT			BIT(12)		/* SDIO Read Wait Operation Status */
+#define		ATMCI_CSRCV			BIT(13)		/* CE-ATA Completion Signal Received */
+#define		ATMCI_RXBUFF			BIT(14)		/* RX Buffer Full */
+#define		ATMCI_TXBUFE			BIT(15)		/* TX Buffer Empty */
+#define		ATMCI_RINDE			BIT(16)		/* Response Index Error */
+#define		ATMCI_RDIRE			BIT(17)		/* Response Direction Error */
+#define		ATMCI_RCRCE			BIT(18)		/* Response CRC Error */
+#define		ATMCI_RENDE			BIT(19)		/* Response End Bit Error */
+#define		ATMCI_RTOE			BIT(20)		/* Response Time-Out Error */
+#define		ATMCI_DCRCE			BIT(21)		/* Data CRC Error */
+#define		ATMCI_DTOE			BIT(22)		/* Data Time-Out Error */
+#define		ATMCI_CSTOE			BIT(23)		/* Completion Signal Time-out Error */
+#define		ATMCI_BLKOVRE			BIT(24)		/* DMA Block Overrun Error */
+#define		ATMCI_DMADONE			BIT(25)		/* DMA Transfer Done */
+#define		ATMCI_FIFOEMPTY			BIT(26)		/* FIFO Empty Flag */
+#define		ATMCI_XFRDONE			BIT(27)		/* Transfer Done Flag */
+#define		ATMCI_ACKRCV			BIT(28)		/* Boot Operation Acknowledge Received */
+#define		ATMCI_ACKRCVE			BIT(29)		/* Boot Operation Acknowledge Error */
+#define		ATMCI_OVRE			BIT(30)		/* RX Overrun Error */
+#define		ATMCI_UNRE			BIT(31)		/* TX Underrun Error */
+#define	ATMCI_DMA			0x0050	/* DMA Configuration[2] */
+#define		ATMCI_DMA_OFFSET(x)		((x) <<  0)	/* DMA Write Buffer Offset */
+#define		ATMCI_DMA_CHKSIZE(x)		((x) <<  4)	/* DMA Channel Read and Write Chunk Size */
+#define		ATMCI_DMAEN			BIT(8)	/* DMA Hardware Handshaking Enable */
+#define	ATMCI_CFG			0x0054	/* Configuration[2] */
+#define		ATMCI_CFG_FIFOMODE_1DATA	BIT(0)		/* MCI Internal FIFO control mode */
+#define		ATMCI_CFG_FERRCTRL_COR		BIT(4)		/* Flow Error flag reset control mode */
+#define		ATMCI_CFG_HSMODE		BIT(8)		/* High Speed Mode */
+#define		ATMCI_CFG_LSYNC			BIT(12)		/* Synchronize on the last block */
+#define	ATMCI_WPMR			0x00e4	/* Write Protection Mode[2] */
+#define		ATMCI_WP_EN			BIT(0)		/* WP Enable */
+#define		ATMCI_WP_KEY			(0x4d4349 << 8)	/* WP Key */
+#define	ATMCI_WPSR			0x00e8	/* Write Protection Status[2] */
+#define		ATMCI_GET_WP_VS(x)		((x) & 0x0f)
+#define		ATMCI_GET_WP_VSRC(x)		(((x) >> 8) & 0xffff)
+#define	ATMCI_VERSION			0x00FC  /* Version */
+#define	ATMCI_FIFO_APERTURE		0x0200	/* FIFO Aperture[2] */
+
+/* This is not including the FIFO Aperture on MCI2 */
+#define	ATMCI_REGS_SIZE		0x100
+
+/* Register access macros */
+#define	atmci_readl(port, reg)				\
+	__raw_readl((port)->regs + reg)
+#define	atmci_writel(port, reg, value)			\
+	__raw_writel((value), (port)->regs + reg)
+
+#define ATMCI_CMD_TIMEOUT_MS	2000
 #define AUTOSUSPEND_DELAY	50
 
 #define ATMCI_DATA_ERROR_FLAGS	(ATMCI_DCRCE | ATMCI_DTOE | ATMCI_OVRE | ATMCI_UNRE)
@@ -101,12 +225,13 @@ struct atmel_mci_dma {
  * @lock: Spinlock protecting the queue and associated data.
  * @regs: Pointer to MMIO registers.
  * @sg: Scatterlist entry currently being processed by PIO or PDC code.
+ * @sg_len: Size of the scatterlist
  * @pio_offset: Offset into the current scatterlist entry.
  * @buffer: Buffer used if we don't have the r/w proof capability. We
  *      don't have the time to switch pdc buffers so we have to use only
  *      one buffer for the full transaction.
  * @buf_size: size of the buffer.
- * @phys_buf_addr: buffer address needed for pdc.
+ * @buf_phys_addr: buffer address needed for pdc.
  * @cur_slot: The slot which is currently using the controller.
  * @mrq: The request currently being processed on @cur_slot,
  *	or NULL if the controller is idle.
@@ -116,6 +241,7 @@ struct atmel_mci_dma {
  * @data_size: just data->blocks * data->blksz.
  * @dma: DMA client state.
  * @data_chan: DMA channel being used for the current data transfer.
+ * @dma_conf: Configuration for the DMA slave
  * @cmd_status: Snapshot of SR taken upon completion of the current
  *	command. Only valid when EVENT_CMD_COMPLETE is pending.
  * @data_status: Snapshot of SR taken upon completion of the current
@@ -320,18 +446,7 @@ static int atmci_req_show(struct seq_file *s, void *v)
 	return 0;
 }
 
-static int atmci_req_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, atmci_req_show, inode->i_private);
-}
-
-static const struct file_operations atmci_req_fops = {
-	.owner		= THIS_MODULE,
-	.open		= atmci_req_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(atmci_req);
 
 static void atmci_show_status_reg(struct seq_file *s,
 		const char *regname, u32 value)
@@ -457,59 +572,25 @@ static int atmci_regs_show(struct seq_file *s, void *v)
 	return ret;
 }
 
-static int atmci_regs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, atmci_regs_show, inode->i_private);
-}
-
-static const struct file_operations atmci_regs_fops = {
-	.owner		= THIS_MODULE,
-	.open		= atmci_regs_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(atmci_regs);
 
 static void atmci_init_debugfs(struct atmel_mci_slot *slot)
 {
 	struct mmc_host		*mmc = slot->mmc;
 	struct atmel_mci	*host = slot->host;
 	struct dentry		*root;
-	struct dentry		*node;
 
 	root = mmc->debugfs_root;
 	if (!root)
 		return;
 
-	node = debugfs_create_file("regs", S_IRUSR, root, host,
-			&atmci_regs_fops);
-	if (IS_ERR(node))
-		return;
-	if (!node)
-		goto err;
-
-	node = debugfs_create_file("req", S_IRUSR, root, slot, &atmci_req_fops);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_u32("state", S_IRUSR, root, (u32 *)&host->state);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_x32("pending_events", S_IRUSR, root,
-				     (u32 *)&host->pending_events);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_x32("completed_events", S_IRUSR, root,
-				     (u32 *)&host->completed_events);
-	if (!node)
-		goto err;
-
-	return;
-
-err:
-	dev_err(&mmc->class_dev, "failed to initialize debugfs for slot\n");
+	debugfs_create_file("regs", S_IRUSR, root, host, &atmci_regs_fops);
+	debugfs_create_file("req", S_IRUSR, root, slot, &atmci_req_fops);
+	debugfs_create_u32("state", S_IRUSR, root, &host->state);
+	debugfs_create_xul("pending_events", S_IRUSR, root,
+			   &host->pending_events);
+	debugfs_create_xul("completed_events", S_IRUSR, root,
+			   &host->completed_events);
 }
 
 #if defined(CONFIG_OF)
@@ -534,21 +615,20 @@ atmci_of_init(struct platform_device *pdev)
 	}
 
 	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
-	if (!pdata) {
-		dev_err(&pdev->dev, "could not allocate memory for pdata\n");
+	if (!pdata)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	for_each_child_of_node(np, cnp) {
 		if (of_property_read_u32(cnp, "reg", &slot_id)) {
-			dev_warn(&pdev->dev, "reg property is missing for %s\n",
-				 cnp->full_name);
+			dev_warn(&pdev->dev, "reg property is missing for %pOF\n",
+				 cnp);
 			continue;
 		}
 
 		if (slot_id >= ATMCI_MAX_NR_SLOTS) {
 			dev_warn(&pdev->dev, "can't have more than %d slots\n",
 			         ATMCI_MAX_NR_SLOTS);
+			of_node_put(cnp);
 			break;
 		}
 
@@ -584,11 +664,34 @@ static inline unsigned int atmci_get_version(struct atmel_mci *host)
 	return atmci_readl(host, ATMCI_VERSION) & 0x00000fff;
 }
 
-static void atmci_timeout_timer(unsigned long data)
+/*
+ * Fix sconfig's burst size according to atmel MCI. We need to convert them as:
+ * 1 -> 0, 4 -> 1, 8 -> 2, 16 -> 3.
+ * With version 0x600, we need to convert them as: 1 -> 0, 2 -> 1, 4 -> 2,
+ * 8 -> 3, 16 -> 4.
+ *
+ * This can be done by finding most significant bit set.
+ */
+static inline unsigned int atmci_convert_chksize(struct atmel_mci *host,
+						 unsigned int maxburst)
+{
+	unsigned int version = atmci_get_version(host);
+	unsigned int offset = 2;
+
+	if (version >= 0x600)
+		offset = 1;
+
+	if (maxburst > 1)
+		return fls(maxburst) - offset;
+	else
+		return 0;
+}
+
+static void atmci_timeout_timer(struct timer_list *t)
 {
 	struct atmel_mci *host;
 
-	host = (struct atmel_mci *)data;
+	host = from_timer(host, t, timer);
 
 	dev_dbg(&host->pdev->dev, "software timeout\n");
 
@@ -692,9 +795,7 @@ static u32 atmci_prepare_command(struct mmc_host *mmc,
 		if (cmd->opcode == SD_IO_RW_EXTENDED) {
 			cmdr |= ATMCI_CMDR_SDIO_BLOCK;
 		} else {
-			if (data->flags & MMC_DATA_STREAM)
-				cmdr |= ATMCI_CMDR_STREAM;
-			else if (data->blocks > 1)
+			if (data->blocks > 1)
 				cmdr |= ATMCI_CMDR_MULTI_BLOCK;
 			else
 				cmdr |= ATMCI_CMDR_BLOCK;
@@ -710,6 +811,9 @@ static u32 atmci_prepare_command(struct mmc_host *mmc,
 static void atmci_send_command(struct atmel_mci *host,
 		struct mmc_command *cmd, u32 cmd_flags)
 {
+	unsigned int timeout_ms = cmd->busy_timeout ? cmd->busy_timeout :
+		ATMCI_CMD_TIMEOUT_MS;
+
 	WARN_ON(host->cmd);
 	host->cmd = cmd;
 
@@ -719,6 +823,8 @@ static void atmci_send_command(struct atmel_mci *host,
 
 	atmci_writel(host, ATMCI_ARGR, cmd->arg);
 	atmci_writel(host, ATMCI_CMDR, cmd_flags);
+
+	mod_timer(&host->timer, jiffies + msecs_to_jiffies(timeout_ms));
 }
 
 static void atmci_send_stop_cmd(struct atmel_mci *host, struct mmc_data *data)
@@ -800,8 +906,7 @@ static void atmci_pdc_cleanup(struct atmel_mci *host)
 	if (data)
 		dma_unmap_sg(&host->pdev->dev,
 				data->sg, data->sg_len,
-				((data->flags & MMC_DATA_WRITE)
-				 ? DMA_TO_DEVICE : DMA_FROM_DEVICE));
+				mmc_get_dma_dir(data));
 }
 
 /*
@@ -839,8 +944,7 @@ static void atmci_dma_cleanup(struct atmel_mci *host)
 	if (data)
 		dma_unmap_sg(host->dma.chan->device->dev,
 				data->sg, data->sg_len,
-				((data->flags & MMC_DATA_WRITE)
-				 ? DMA_TO_DEVICE : DMA_FROM_DEVICE));
+				mmc_get_dma_dir(data));
 }
 
 /*
@@ -940,8 +1044,6 @@ static u32
 atmci_prepare_data_pdc(struct atmel_mci *host, struct mmc_data *data)
 {
 	u32 iflags, tmp;
-	unsigned int sg_len;
-	enum dma_data_direction dir;
 	int i;
 
 	data->error = -EINPROGRESS;
@@ -953,13 +1055,10 @@ atmci_prepare_data_pdc(struct atmel_mci *host, struct mmc_data *data)
 	/* Enable pdc mode */
 	atmci_writel(host, ATMCI_MR, host->mode_reg | ATMCI_MR_PDCMODE);
 
-	if (data->flags & MMC_DATA_READ) {
-		dir = DMA_FROM_DEVICE;
+	if (data->flags & MMC_DATA_READ)
 		iflags |= ATMCI_ENDRX | ATMCI_RXBUFF;
-	} else {
-		dir = DMA_TO_DEVICE;
+	else
 		iflags |= ATMCI_ENDTX | ATMCI_TXBUFE | ATMCI_BLKE;
-	}
 
 	/* Set BLKLEN */
 	tmp = atmci_readl(host, ATMCI_MR);
@@ -969,7 +1068,8 @@ atmci_prepare_data_pdc(struct atmel_mci *host, struct mmc_data *data)
 
 	/* Configure PDC */
 	host->data_size = data->blocks * data->blksz;
-	sg_len = dma_map_sg(&host->pdev->dev, data->sg, data->sg_len, dir);
+	dma_map_sg(&host->pdev->dev, data->sg, data->sg_len,
+		   mmc_get_dma_dir(data));
 
 	if ((!host->caps.has_rwproof)
 	    && (host->data->flags & MMC_DATA_WRITE)) {
@@ -981,9 +1081,8 @@ atmci_prepare_data_pdc(struct atmel_mci *host, struct mmc_data *data)
 	}
 
 	if (host->data_size)
-		atmci_pdc_set_both_buf(host,
-			((dir == DMA_FROM_DEVICE) ? XFER_RECEIVE : XFER_TRANSMIT));
-
+		atmci_pdc_set_both_buf(host, data->flags & MMC_DATA_READ ?
+				       XFER_RECEIVE : XFER_TRANSMIT);
 	return iflags;
 }
 
@@ -994,7 +1093,6 @@ atmci_prepare_data_dma(struct atmel_mci *host, struct mmc_data *data)
 	struct dma_async_tx_descriptor	*desc;
 	struct scatterlist		*sg;
 	unsigned int			i;
-	enum dma_data_direction		direction;
 	enum dma_transfer_direction	slave_dirn;
 	unsigned int			sglen;
 	u32				maxburst;
@@ -1032,13 +1130,13 @@ atmci_prepare_data_dma(struct atmel_mci *host, struct mmc_data *data)
 		return -ENODEV;
 
 	if (data->flags & MMC_DATA_READ) {
-		direction = DMA_FROM_DEVICE;
 		host->dma_conf.direction = slave_dirn = DMA_DEV_TO_MEM;
-		maxburst = atmci_convert_chksize(host->dma_conf.src_maxburst);
+		maxburst = atmci_convert_chksize(host,
+						 host->dma_conf.src_maxburst);
 	} else {
-		direction = DMA_TO_DEVICE;
 		host->dma_conf.direction = slave_dirn = DMA_MEM_TO_DEV;
-		maxburst = atmci_convert_chksize(host->dma_conf.dst_maxburst);
+		maxburst = atmci_convert_chksize(host,
+						 host->dma_conf.dst_maxburst);
 	}
 
 	if (host->caps.has_dma_conf_reg)
@@ -1046,7 +1144,7 @@ atmci_prepare_data_dma(struct atmel_mci *host, struct mmc_data *data)
 			ATMCI_DMAEN);
 
 	sglen = dma_map_sg(chan->device->dev, data->sg,
-			data->sg_len, direction);
+			data->sg_len, mmc_get_dma_dir(data));
 
 	dmaengine_slave_config(chan, &host->dma_conf);
 	desc = dmaengine_prep_slave_sg(chan,
@@ -1061,7 +1159,8 @@ atmci_prepare_data_dma(struct atmel_mci *host, struct mmc_data *data)
 
 	return iflags;
 unmap_exit:
-	dma_unmap_sg(chan->device->dev, data->sg, data->sg_len, direction);
+	dma_unmap_sg(chan->device->dev, data->sg, data->sg_len,
+		     mmc_get_dma_dir(data));
 	return -ENOMEM;
 }
 
@@ -1213,10 +1312,7 @@ static void atmci_start_request(struct atmel_mci *host,
 		host->stop_cmdr |= ATMCI_CMDR_STOP_XFER;
 		if (!(data->flags & MMC_DATA_WRITE))
 			host->stop_cmdr |= ATMCI_CMDR_TRDIR_READ;
-		if (data->flags & MMC_DATA_STREAM)
-			host->stop_cmdr |= ATMCI_CMDR_STREAM;
-		else
-			host->stop_cmdr |= ATMCI_CMDR_MULTI_BLOCK;
+		host->stop_cmdr |= ATMCI_CMDR_MULTI_BLOCK;
 	}
 
 	/*
@@ -1226,8 +1322,6 @@ static void atmci_start_request(struct atmel_mci *host,
 	 * prepared yet.)
 	 */
 	atmci_writel(host, ATMCI_IER, iflags);
-
-	mod_timer(&host->timer, jiffies +  msecs_to_jiffies(2000));
 }
 
 static void atmci_queue_request(struct atmel_mci *host,
@@ -1256,8 +1350,6 @@ static void atmci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 
 	WARN_ON(slot->mrq);
 	dev_dbg(&host->pdev->dev, "MRQ: cmd %u\n", mrq->cmd->opcode);
-
-	pm_runtime_get_sync(&host->pdev->dev);
 
 	/*
 	 * We may "know" the card is gone even though there's still an
@@ -1289,8 +1381,6 @@ static void atmci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	struct atmel_mci	*host = slot->host;
 	unsigned int		i;
 
-	pm_runtime_get_sync(&host->pdev->dev);
-
 	slot->sdc_reg &= ~ATMCI_SDCBUS_MASK;
 	switch (ios->bus_width) {
 	case MMC_BUS_WIDTH_1:
@@ -1298,6 +1388,9 @@ static void atmci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		break;
 	case MMC_BUS_WIDTH_4:
 		slot->sdc_reg |= ATMCI_SDCBUS_4BIT;
+		break;
+	case MMC_BUS_WIDTH_8:
+		slot->sdc_reg |= ATMCI_SDCBUS_8BIT;
 		break;
 	}
 
@@ -1408,23 +1501,8 @@ static void atmci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 			mmc_regulator_set_ocr(mmc, mmc->supply.vmmc, ios->vdd);
 		break;
 	default:
-		/*
-		 * TODO: None of the currently available AVR32-based
-		 * boards allow MMC power to be turned off. Implement
-		 * power control when this can be tested properly.
-		 *
-		 * We also need to hook this into the clock management
-		 * somehow so that newly inserted cards aren't
-		 * subjected to a fast clock before we have a chance
-		 * to figure out what the maximum rate is. Currently,
-		 * there's no way to avoid this, and there never will
-		 * be for boards that don't support power control.
-		 */
 		break;
 	}
-
-	pm_runtime_mark_last_busy(&host->pdev->dev);
-	pm_runtime_put_autosuspend(&host->pdev->dev);
 }
 
 static int atmci_get_ro(struct mmc_host *mmc)
@@ -1485,6 +1563,8 @@ static void atmci_request_end(struct atmel_mci *host, struct mmc_request *mrq)
 
 	WARN_ON(host->cmd || host->data);
 
+	del_timer(&host->timer);
+
 	/*
 	 * Update the MMC clock rate if necessary. This may be
 	 * necessary if set_ios() is called when a different slot is
@@ -1511,14 +1591,9 @@ static void atmci_request_end(struct atmel_mci *host, struct mmc_request *mrq)
 		host->state = STATE_IDLE;
 	}
 
-	del_timer(&host->timer);
-
 	spin_unlock(&host->lock);
 	mmc_request_done(prev_mmc, mrq);
 	spin_lock(&host->lock);
-
-	pm_runtime_mark_last_busy(&host->pdev->dev);
-	pm_runtime_put_autosuspend(&host->pdev->dev);
 }
 
 static void atmci_command_complete(struct atmel_mci *host,
@@ -1547,9 +1622,9 @@ static void atmci_command_complete(struct atmel_mci *host,
 		cmd->error = 0;
 }
 
-static void atmci_detect_change(unsigned long data)
+static void atmci_detect_change(struct timer_list *t)
 {
-	struct atmel_mci_slot	*slot = (struct atmel_mci_slot *)data;
+	struct atmel_mci_slot	*slot = from_timer(slot, t, detect_timer);
 	bool			present;
 	bool			present_old;
 
@@ -1840,20 +1915,20 @@ static void atmci_tasklet_func(unsigned long priv)
 			}
 
 			atmci_request_end(host, host->mrq);
-			state = STATE_IDLE;
+			goto unlock; /* atmci_request_end() sets host->state */
 			break;
 		}
 	} while (state != prev_state);
 
 	host->state = state;
 
+unlock:
 	spin_unlock(&host->lock);
 }
 
 static void atmci_read_data_pio(struct atmel_mci *host)
 {
 	struct scatterlist	*sg = host->sg;
-	void			*buf = sg_virt(sg);
 	unsigned int		offset = host->pio_offset;
 	struct mmc_data		*data = host->data;
 	u32			value;
@@ -1863,7 +1938,7 @@ static void atmci_read_data_pio(struct atmel_mci *host)
 	do {
 		value = atmci_readl(host, ATMCI_RDR);
 		if (likely(offset + 4 <= sg->length)) {
-			put_unaligned(value, (u32 *)(buf + offset));
+			sg_pcopy_from_buffer(sg, 1, &value, sizeof(u32), offset);
 
 			offset += 4;
 			nbytes += 4;
@@ -1876,11 +1951,11 @@ static void atmci_read_data_pio(struct atmel_mci *host)
 					goto done;
 
 				offset = 0;
-				buf = sg_virt(sg);
 			}
 		} else {
 			unsigned int remaining = sg->length - offset;
-			memcpy(buf + offset, &value, remaining);
+
+			sg_pcopy_from_buffer(sg, 1, &value, remaining, offset);
 			nbytes += remaining;
 
 			flush_dcache_page(sg_page(sg));
@@ -1890,8 +1965,8 @@ static void atmci_read_data_pio(struct atmel_mci *host)
 				goto done;
 
 			offset = 4 - remaining;
-			buf = sg_virt(sg);
-			memcpy(buf, (u8 *)&value + remaining, offset);
+			sg_pcopy_from_buffer(sg, 1, (u8 *)&value + remaining,
+					offset, 0);
 			nbytes += offset;
 		}
 
@@ -1921,7 +1996,6 @@ done:
 static void atmci_write_data_pio(struct atmel_mci *host)
 {
 	struct scatterlist	*sg = host->sg;
-	void			*buf = sg_virt(sg);
 	unsigned int		offset = host->pio_offset;
 	struct mmc_data		*data = host->data;
 	u32			value;
@@ -1930,7 +2004,7 @@ static void atmci_write_data_pio(struct atmel_mci *host)
 
 	do {
 		if (likely(offset + 4 <= sg->length)) {
-			value = get_unaligned((u32 *)(buf + offset));
+			sg_pcopy_to_buffer(sg, 1, &value, sizeof(u32), offset);
 			atmci_writel(host, ATMCI_TDR, value);
 
 			offset += 4;
@@ -1942,13 +2016,12 @@ static void atmci_write_data_pio(struct atmel_mci *host)
 					goto done;
 
 				offset = 0;
-				buf = sg_virt(sg);
 			}
 		} else {
 			unsigned int remaining = sg->length - offset;
 
 			value = 0;
-			memcpy(&value, buf + offset, remaining);
+			sg_pcopy_to_buffer(sg, 1, &value, remaining, offset);
 			nbytes += remaining;
 
 			host->sg = sg = sg_next(sg);
@@ -1959,8 +2032,8 @@ static void atmci_write_data_pio(struct atmel_mci *host)
 			}
 
 			offset = 4 - remaining;
-			buf = sg_virt(sg);
-			memcpy((u8 *)&value + remaining, buf, offset);
+			sg_pcopy_to_buffer(sg, 1, (u8 *)&value + remaining,
+					offset, 0);
 			atmci_writel(host, ATMCI_TDR, value);
 			nbytes += offset;
 		}
@@ -2184,8 +2257,11 @@ static int atmci_init_slot(struct atmel_mci *host,
 	 * use only one bit for data to prevent fifo underruns and overruns
 	 * which will corrupt data.
 	 */
-	if ((slot_data->bus_width >= 4) && host->caps.has_rwproof)
+	if ((slot_data->bus_width >= 4) && host->caps.has_rwproof) {
 		mmc->caps |= MMC_CAP_4_BIT_DATA;
+		if (slot_data->bus_width >= 8)
+			mmc->caps |= MMC_CAP_8_BIT_DATA;
+	}
 
 	if (atmci_get_version(host) < 0x200) {
 		mmc->max_segs = 256;
@@ -2235,8 +2311,7 @@ static int atmci_init_slot(struct atmel_mci *host,
 	if (gpio_is_valid(slot->detect_pin)) {
 		int ret;
 
-		setup_timer(&slot->detect_timer, atmci_detect_change,
-				(unsigned long)slot);
+		timer_setup(&slot->detect_timer, atmci_detect_change, 0);
 
 		ret = request_irq(gpio_to_irq(slot->detect_pin),
 				atmci_detect_interrupt,
@@ -2278,8 +2353,24 @@ static void atmci_cleanup_slot(struct atmel_mci_slot *slot,
 
 static int atmci_configure_dma(struct atmel_mci *host)
 {
-	host->dma.chan = dma_request_slave_channel_reason(&host->pdev->dev,
-							"rxtx");
+	host->dma.chan = dma_request_chan(&host->pdev->dev, "rxtx");
+
+	if (PTR_ERR(host->dma.chan) == -ENODEV) {
+		struct mci_platform_data *pdata = host->pdev->dev.platform_data;
+		dma_cap_mask_t mask;
+
+		if (!pdata || !pdata->dma_filter)
+			return -ENODEV;
+
+		dma_cap_zero(mask);
+		dma_cap_set(DMA_SLAVE, mask);
+
+		host->dma.chan = dma_request_channel(mask, pdata->dma_filter,
+						     pdata->dma_slave);
+		if (!host->dma.chan)
+			host->dma.chan = ERR_PTR(-ENODEV);
+	}
+
 	if (IS_ERR(host->dma.chan))
 		return PTR_ERR(host->dma.chan);
 
@@ -2311,7 +2402,7 @@ static void atmci_get_cap(struct atmel_mci *host)
 			"version: 0x%x\n", version);
 
 	host->caps.has_dma_conf_reg = 0;
-	host->caps.has_pdc = ATMCI_PDC_CONNECTED;
+	host->caps.has_pdc = 1;
 	host->caps.has_cfg_reg = 0;
 	host->caps.has_cstor_reg = 0;
 	host->caps.has_highspeed = 0;
@@ -2327,6 +2418,7 @@ static void atmci_get_cap(struct atmel_mci *host)
 	case 0x600:
 	case 0x500:
 		host->caps.has_odd_clk_div = 1;
+		fallthrough;
 	case 0x400:
 	case 0x300:
 		host->caps.has_dma_conf_reg = 1;
@@ -2334,13 +2426,16 @@ static void atmci_get_cap(struct atmel_mci *host)
 		host->caps.has_cfg_reg = 1;
 		host->caps.has_cstor_reg = 1;
 		host->caps.has_highspeed = 1;
+		fallthrough;
 	case 0x200:
 		host->caps.has_rwproof = 1;
 		host->caps.need_blksz_mul_4 = 0;
 		host->caps.need_notbusy_for_read_ops = 1;
+		fallthrough;
 	case 0x100:
 		host->caps.has_bad_data_ordering = 0;
 		host->caps.need_reset_after_xfer = 0;
+		fallthrough;
 	case 0x0:
 		break;
 	default:
@@ -2432,7 +2527,7 @@ static int atmci_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, host);
 
-	setup_timer(&host->timer, atmci_timeout_timer, (unsigned long)host);
+	timer_setup(&host->timer, atmci_timeout_timer, 0);
 
 	pm_runtime_get_noresume(&pdev->dev);
 	pm_runtime_set_active(&pdev->dev);
@@ -2556,7 +2651,7 @@ static int atmci_runtime_resume(struct device *dev)
 {
 	struct atmel_mci *host = dev_get_drvdata(dev);
 
-	pinctrl_pm_select_default_state(dev);
+	pinctrl_select_default_state(dev);
 
 	return clk_prepare_enable(host->mck);
 }
@@ -2573,6 +2668,7 @@ static struct platform_driver atmci_driver = {
 	.remove		= atmci_remove,
 	.driver		= {
 		.name		= "atmel_mci",
+		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table	= of_match_ptr(atmci_dt_ids),
 		.pm		= &atmci_dev_pm_ops,
 	},

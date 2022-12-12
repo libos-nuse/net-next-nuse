@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2003 Ken Chen <kenneth.w.chen@intel.com>
  * Copyright (C) 2003 Asit Mallick <asit.k.mallick@intel.com>
- * Copyright (C) 2005 Christoph Lameter <clameter@sgi.com>
+ * Copyright (C) 2005 Christoph Lameter <cl@linux.com>
  *
  * Based on asm-i386/rwsem.h and other architecture implementation.
  *
@@ -49,8 +49,8 @@ __down_read (struct rw_semaphore *sem)
 /*
  * lock for writing
  */
-static inline void
-__down_write (struct rw_semaphore *sem)
+static inline long
+___down_write (struct rw_semaphore *sem)
 {
 	long old, new;
 
@@ -59,8 +59,24 @@ __down_write (struct rw_semaphore *sem)
 		new = old + RWSEM_ACTIVE_WRITE_BIAS;
 	} while (cmpxchg_acq(&sem->count, old, new) != old);
 
-	if (old != 0)
+	return old;
+}
+
+static inline void
+__down_write (struct rw_semaphore *sem)
+{
+	if (___down_write(sem))
 		rwsem_down_write_failed(sem);
+}
+
+static inline int
+__down_write_killable (struct rw_semaphore *sem)
+{
+	if (___down_write(sem))
+		if (IS_ERR(rwsem_down_write_failed_killable(sem)))
+			return -EINTR;
+
+	return 0;
 }
 
 /*

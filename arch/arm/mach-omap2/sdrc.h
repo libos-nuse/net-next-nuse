@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef __ARCH_ARM_MACH_OMAP2_SDRC_H
 #define __ARCH_ARM_MACH_OMAP2_SDRC_H
 
@@ -10,10 +11,6 @@
  * Paul Walmsley
  * Tony Lindgren
  * Richard Woodruff
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #undef DEBUG
 
@@ -175,8 +172,8 @@ u32 omap2xxx_sdrc_reprogram(u32 level, u32 force);
  * don't adjust it down as your clock period increases the refresh interval
  * will not be met. Setting all parameters for complete worst case may work,
  * but may cut memory performance by 2x. Due to errata the DLLs need to be
- * unlocked and their value needs run time calibration.	A dynamic call is
- * need for that as no single right value exists acorss production samples.
+ * unlocked and their value needs run time calibration. A dynamic call is
+ * need for that as no single right value exists across production samples.
  *
  * Only the FULL speed values are given. Current code is such that rate
  * changes must be made at DPLLoutx2. The actual value adjustment for low

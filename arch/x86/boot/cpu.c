@@ -1,10 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* -*- linux-c -*- ------------------------------------------------------- *
  *
  *   Copyright (C) 1991, 1992 Linus Torvalds
  *   Copyright 2007-2008 rPath, Inc. - All Rights Reserved
- *
- *   This file is part of the Linux kernel, and is made available under
- *   the terms of the GNU General Public License version 2.
  *
  * ----------------------------------------------------------------------- */
 
@@ -92,6 +90,8 @@ int validate_cpu(void)
 		     "not present on the CPU:\n");
 		show_cap_strs(err_flags);
 		putchar('\n');
+		return -1;
+	} else if (check_knl_erratum()) {
 		return -1;
 	} else {
 		return 0;

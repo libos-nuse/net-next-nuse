@@ -27,7 +27,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright (c) 2012, Intel Corporation.
+ * Copyright (c) 2012, 2015, Intel Corporation.
  */
 /*
  * This file is part of Lustre, http://www.lustre.org/
@@ -129,7 +129,8 @@ int lov_adjust_kms(struct obd_export *exp, struct lov_stripe_md *lsm,
 			       "stripe %d KMS %sing %llu->%llu\n",
 			       stripe, kms > loi->loi_kms ? "increase":"shrink",
 			       loi->loi_kms, kms);
-			loi_kms_set(loi, loi->loi_lvb.lvb_size = kms);
+			loi->loi_lvb.lvb_size = kms;
+			loi_kms_set(loi, loi->loi_lvb.lvb_size);
 		}
 		return 0;
 	}
@@ -153,6 +154,7 @@ void lov_merge_attrs(struct obdo *tgt, struct obdo *src, u64 valid,
 	valid &= src->o_valid;
 
 	if (*set) {
+		tgt->o_valid &= valid;
 		if (valid & OBD_MD_FLSIZE) {
 			/* this handles sparse files properly */
 			u64 lov_size;
@@ -171,12 +173,22 @@ void lov_merge_attrs(struct obdo *tgt, struct obdo *src, u64 valid,
 			tgt->o_mtime = src->o_mtime;
 		if (valid & OBD_MD_FLDATAVERSION)
 			tgt->o_data_version += src->o_data_version;
+
+		/* handle flags */
+		if (valid & OBD_MD_FLFLAGS)
+			tgt->o_flags &= src->o_flags;
+		else
+			tgt->o_flags = 0;
 	} else {
 		memcpy(tgt, src, sizeof(*tgt));
 		tgt->o_oi = lsm->lsm_oi;
+		tgt->o_valid = valid;
 		if (valid & OBD_MD_FLSIZE)
 			tgt->o_size = lov_stripe_size(lsm, src->o_size,
 						      stripeno);
+		tgt->o_flags = 0;
+		if (valid & OBD_MD_FLFLAGS)
+			tgt->o_flags = src->o_flags;
 	}
 
 	/* data_version needs to be valid on all stripes to be correct! */

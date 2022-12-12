@@ -27,7 +27,7 @@
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright (c) 2011, 2012, Intel Corporation.
+ * Copyright (c) 2011, 2015, Intel Corporation.
  */
 /*
  * This file is part of Lustre, http://www.lustre.org/
@@ -163,8 +163,6 @@ void ptlrpcd_wake(struct ptlrpc_request *req)
 {
 	struct ptlrpc_request_set *rq_set = req->rq_set;
 
-	LASSERT(rq_set != NULL);
-
 	wake_up(&rq_set->set_waitq);
 }
 EXPORT_SYMBOL(ptlrpcd_wake);
@@ -176,7 +174,7 @@ ptlrpcd_select_pc(struct ptlrpc_request *req)
 	int		cpt;
 	int		idx;
 
-	if (req != NULL && req->rq_send_state != LUSTRE_IMP_FULL)
+	if (req && req->rq_send_state != LUSTRE_IMP_FULL)
 		return &ptlrpcd_rcv;
 
 	cpt = cfs_cpt_current(cfs_cpt_table, 1);
@@ -209,11 +207,10 @@ static int ptlrpcd_steal_rqset(struct ptlrpc_request_set *des,
 	if (likely(!list_empty(&src->set_new_requests))) {
 		list_for_each_safe(pos, tmp, &src->set_new_requests) {
 			req = list_entry(pos, struct ptlrpc_request,
-					     rq_set_chain);
+					 rq_set_chain);
 			req->rq_set = des;
 		}
-		list_splice_init(&src->set_new_requests,
-				     &des->set_requests);
+		list_splice_init(&src->set_new_requests, &des->set_requests);
 		rc = atomic_read(&src->set_new_count);
 		atomic_add(rc, &des->set_remaining);
 		atomic_set(&src->set_new_count, 0);
@@ -240,10 +237,11 @@ void ptlrpcd_add_req(struct ptlrpc_request *req)
 
 		req->rq_invalid_rqset = 0;
 		spin_unlock(&req->rq_lock);
-		l_wait_event(req->rq_set_waitq, (req->rq_set == NULL), &lwi);
+		l_wait_event(req->rq_set_waitq, !req->rq_set, &lwi);
 	} else if (req->rq_set) {
 		/* If we have a valid "rq_set", just reuse it to avoid double
-		 * linked. */
+		 * linked.
+		 */
 		LASSERT(req->rq_phase == RQ_PHASE_NEW);
 		LASSERT(req->rq_send_state == LUSTRE_IMP_REPLAY);
 
@@ -286,9 +284,9 @@ static int ptlrpcd_check(struct lu_env *env, struct ptlrpcd_ctl *pc)
 		spin_lock(&set->set_new_req_lock);
 		if (likely(!list_empty(&set->set_new_requests))) {
 			list_splice_init(&set->set_new_requests,
-					     &set->set_requests);
+					 &set->set_requests);
 			atomic_add(atomic_read(&set->set_new_count),
-				       &set->set_remaining);
+				   &set->set_remaining);
 			atomic_set(&set->set_new_count, 0);
 			/*
 			 * Need to calculate its timeout.
@@ -321,7 +319,8 @@ static int ptlrpcd_check(struct lu_env *env, struct ptlrpcd_ctl *pc)
 		rc |= ptlrpc_check_set(env, set);
 
 	/* NB: ptlrpc_check_set has already moved completed request at the
-	 * head of seq::set_requests */
+	 * head of seq::set_requests
+	 */
 	list_for_each_safe(pos, tmp, &set->set_requests) {
 		req = list_entry(pos, struct ptlrpc_request, rq_set_chain);
 		if (req->rq_phase != RQ_PHASE_COMPLETE)
@@ -339,7 +338,8 @@ static int ptlrpcd_check(struct lu_env *env, struct ptlrpcd_ctl *pc)
 		rc = atomic_read(&set->set_new_count);
 
 		/* If we have nothing to do, check whether we can take some
-		 * work from our partner threads. */
+		 * work from our partner threads.
+		 */
 		if (rc == 0 && pc->pc_npartners > 0) {
 			struct ptlrpcd_ctl *partner;
 			struct ptlrpc_request_set *ps;
@@ -349,12 +349,12 @@ static int ptlrpcd_check(struct lu_env *env, struct ptlrpcd_ctl *pc)
 				partner = pc->pc_partners[pc->pc_cursor++];
 				if (pc->pc_cursor >= pc->pc_npartners)
 					pc->pc_cursor = 0;
-				if (partner == NULL)
+				if (!partner)
 					continue;
 
 				spin_lock(&partner->pc_lock);
 				ps = partner->pc_set;
-				if (ps == NULL) {
+				if (!ps) {
 					spin_unlock(&partner->pc_lock);
 					continue;
 				}
@@ -387,7 +387,8 @@ static int ptlrpcd(void *arg)
 {
 	struct ptlrpcd_ctl *pc = arg;
 	struct ptlrpc_request_set *set;
-	struct lu_env env = { .le_ses = NULL };
+	struct lu_context ses = { 0 };
+	struct lu_env env = { .le_ses = &ses };
 	int rc = 0;
 	int exit = 0;
 
@@ -416,6 +417,13 @@ static int ptlrpcd(void *arg)
 	 */
 	rc = lu_context_init(&env.le_ctx,
 			     LCT_CL_THREAD|LCT_REMEMBER|LCT_NOREF);
+	if (rc == 0) {
+		rc = lu_context_init(env.le_ses,
+				     LCT_SESSION | LCT_REMEMBER | LCT_NOREF);
+		if (rc != 0)
+			lu_context_fini(&env.le_ctx);
+	}
+
 	if (rc != 0)
 		goto failed;
 
@@ -436,9 +444,10 @@ static int ptlrpcd(void *arg)
 				  ptlrpc_expired_set, set);
 
 		lu_context_enter(&env.le_ctx);
-		l_wait_event(set->set_waitq,
-			     ptlrpcd_check(&env, pc), &lwi);
+		lu_context_enter(env.le_ses);
+		l_wait_event(set->set_waitq, ptlrpcd_check(&env, pc), &lwi);
 		lu_context_exit(&env.le_ctx);
+		lu_context_exit(env.le_ses);
 
 		/*
 		 * Abort inflight rpcs for forced stop case.
@@ -461,6 +470,7 @@ static int ptlrpcd(void *arg)
 	if (!list_empty(&set->set_requests))
 		ptlrpc_set_wait(set);
 	lu_context_fini(&env.le_ctx);
+	lu_context_fini(env.le_ses);
 
 	complete(&pc->pc_finishing);
 
@@ -579,7 +589,7 @@ int ptlrpcd_start(struct ptlrpcd_ctl *pc)
 	return 0;
 
 out_set:
-	if (pc->pc_set != NULL) {
+	if (pc->pc_set) {
 		struct ptlrpc_request_set *set = pc->pc_set;
 
 		spin_lock(&pc->pc_lock);
@@ -630,7 +640,7 @@ void ptlrpcd_free(struct ptlrpcd_ctl *pc)
 
 out:
 	if (pc->pc_npartners > 0) {
-		LASSERT(pc->pc_partners != NULL);
+		LASSERT(pc->pc_partners);
 
 		kfree(pc->pc_partners);
 		pc->pc_partners = NULL;
@@ -644,7 +654,7 @@ static void ptlrpcd_fini(void)
 	int i;
 	int j;
 
-	if (ptlrpcds != NULL) {
+	if (ptlrpcds) {
 		for (i = 0; i < ptlrpcds_num; i++) {
 			if (!ptlrpcds[i])
 				break;
@@ -899,8 +909,11 @@ int ptlrpcd_addref(void)
 	int rc = 0;
 
 	mutex_lock(&ptlrpcd_mutex);
-	if (++ptlrpcd_users == 1)
+	if (++ptlrpcd_users == 1) {
 		rc = ptlrpcd_init();
+		if (rc < 0)
+			ptlrpcd_users--;
+	}
 	mutex_unlock(&ptlrpcd_mutex);
 	return rc;
 }

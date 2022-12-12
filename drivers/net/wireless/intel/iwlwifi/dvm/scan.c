@@ -1,28 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
  *
- * GPL LICENSE SUMMARY
- *
  * Copyright(c) 2008 - 2014 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110,
- * USA
- *
- * The full GNU General Public License is included in this distribution
- * in the file called COPYING.
+ * Copyright(c) 2018        Intel Corporation
  *
  * Contact Information:
- *  Intel Linux Wireless <ilw@linux.intel.com>
+ *  Intel Linux Wireless <linuxwifi@intel.com>
  * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
  *****************************************************************************/
 #include <linux/slab.h>
@@ -94,10 +77,14 @@ static int iwl_send_scan_abort(struct iwl_priv *priv)
 
 static void iwl_complete_scan(struct iwl_priv *priv, bool aborted)
 {
+	struct cfg80211_scan_info info = {
+		.aborted = aborted,
+	};
+
 	/* check if scan was requested from mac80211 */
 	if (priv->scan_request) {
 		IWL_DEBUG_SCAN(priv, "Complete scan in mac80211\n");
-		ieee80211_scan_completed(priv->hw, aborted);
+		ieee80211_scan_completed(priv->hw, &info);
 	}
 
 	priv->scan_type = IWL_SCAN_NORMAL;
@@ -199,7 +186,7 @@ static void iwl_do_scan_abort(struct iwl_priv *priv)
 		IWL_DEBUG_SCAN(priv, "Successfully send scan abort\n");
 }
 
-/**
+/*
  * iwl_scan_cancel - Cancel any currently executing HW scan
  */
 int iwl_scan_cancel(struct iwl_priv *priv)
@@ -209,10 +196,9 @@ int iwl_scan_cancel(struct iwl_priv *priv)
 	return 0;
 }
 
-/**
+/*
  * iwl_scan_cancel_timeout - Cancel any currently executing HW scan
  * @ms: amount of time to wait (in milliseconds) for scan to abort
- *
  */
 void iwl_scan_cancel_timeout(struct iwl_priv *priv, unsigned long ms)
 {
@@ -312,7 +298,7 @@ static void iwl_rx_scan_complete_notif(struct iwl_priv *priv,
 		       scan_notif->tsf_high, scan_notif->status);
 
 	IWL_DEBUG_SCAN(priv, "Scan on %sGHz took %dms\n",
-		       (priv->scan_band == IEEE80211_BAND_2GHZ) ? "2.4" : "5.2",
+		       (priv->scan_band == NL80211_BAND_2GHZ) ? "2.4" : "5.2",
 		       jiffies_to_msecs(jiffies - priv->scan_start));
 
 	/*
@@ -362,9 +348,9 @@ void iwl_setup_rx_scan_handlers(struct iwl_priv *priv)
 }
 
 static u16 iwl_get_active_dwell_time(struct iwl_priv *priv,
-				     enum ieee80211_band band, u8 n_probes)
+				     enum nl80211_band band, u8 n_probes)
 {
-	if (band == IEEE80211_BAND_5GHZ)
+	if (band == NL80211_BAND_5GHZ)
 		return IWL_ACTIVE_DWELL_TIME_52 +
 			IWL_ACTIVE_DWELL_FACTOR_52GHZ * (n_probes + 1);
 	else
@@ -419,7 +405,7 @@ static u16 iwl_limit_dwell(struct iwl_priv *priv, u16 dwell_time)
 		limit = (limits[1] * 98) / 100 - IWL_CHANNEL_TUNE_TIME * 2;
 		limit /= 2;
 		dwell_time = min(limit, dwell_time);
-		/* fall through to limit further */
+		/* fall through */
 	case 1:
 		limit = (limits[0] * 98) / 100 - IWL_CHANNEL_TUNE_TIME * 2;
 		limit /= n_active;
@@ -431,9 +417,9 @@ static u16 iwl_limit_dwell(struct iwl_priv *priv, u16 dwell_time)
 }
 
 static u16 iwl_get_passive_dwell_time(struct iwl_priv *priv,
-				      enum ieee80211_band band)
+				      enum nl80211_band band)
 {
-	u16 passive = (band == IEEE80211_BAND_2GHZ) ?
+	u16 passive = (band == NL80211_BAND_2GHZ) ?
 	    IWL_PASSIVE_DWELL_BASE + IWL_PASSIVE_DWELL_TIME_24 :
 	    IWL_PASSIVE_DWELL_BASE + IWL_PASSIVE_DWELL_TIME_52;
 
@@ -442,7 +428,7 @@ static u16 iwl_get_passive_dwell_time(struct iwl_priv *priv,
 
 /* Return valid, unused, channel for a passive scan to reset the RF */
 static u8 iwl_get_single_channel_number(struct iwl_priv *priv,
-					enum ieee80211_band band)
+					enum nl80211_band band)
 {
 	struct ieee80211_supported_band *sband = priv->hw->wiphy->bands[band];
 	struct iwl_rxon_context *ctx;
@@ -470,7 +456,7 @@ static u8 iwl_get_single_channel_number(struct iwl_priv *priv,
 
 static int iwl_get_channel_for_reset_scan(struct iwl_priv *priv,
 					  struct ieee80211_vif *vif,
-					  enum ieee80211_band band,
+					  enum nl80211_band band,
 					  struct iwl_scan_channel *scan_ch)
 {
 	const struct ieee80211_supported_band *sband;
@@ -492,7 +478,7 @@ static int iwl_get_channel_for_reset_scan(struct iwl_priv *priv,
 			cpu_to_le16(IWL_RADIO_RESET_DWELL_TIME);
 		/* Set txpower levels to defaults */
 		scan_ch->dsp_atten = 110;
-		if (band == IEEE80211_BAND_5GHZ)
+		if (band == NL80211_BAND_5GHZ)
 			scan_ch->tx_gain = ((1 << 5) | (3 << 3)) | 3;
 		else
 			scan_ch->tx_gain = ((1 << 5) | (5 << 3));
@@ -505,7 +491,7 @@ static int iwl_get_channel_for_reset_scan(struct iwl_priv *priv,
 
 static int iwl_get_channels_for_scan(struct iwl_priv *priv,
 				     struct ieee80211_vif *vif,
-				     enum ieee80211_band band,
+				     enum nl80211_band band,
 				     u8 is_active, u8 n_probes,
 				     struct iwl_scan_channel *scan_ch)
 {
@@ -553,7 +539,7 @@ static int iwl_get_channels_for_scan(struct iwl_priv *priv,
 		 * power level:
 		 * scan_ch->tx_gain = ((1 << 5) | (2 << 3)) | 3;
 		 */
-		if (band == IEEE80211_BAND_5GHZ)
+		if (band == NL80211_BAND_5GHZ)
 			scan_ch->tx_gain = ((1 << 5) | (3 << 3)) | 3;
 		else
 			scan_ch->tx_gain = ((1 << 5) | (5 << 3));
@@ -573,10 +559,9 @@ static int iwl_get_channels_for_scan(struct iwl_priv *priv,
 	return added;
 }
 
-/**
+/*
  * iwl_fill_probe_req - fill in all required fields and IE for probe request
  */
-
 static u16 iwl_fill_probe_req(struct ieee80211_mgmt *frame, const u8 *ta,
 			      const u8 *ies, int ie_len, const u8 *ssid,
 			      u8 ssid_len, int left)
@@ -636,7 +621,7 @@ static int iwlagn_request_scan(struct iwl_priv *priv, struct ieee80211_vif *vif)
 	u32 rate_flags = 0;
 	u16 cmd_len = 0;
 	u16 rx_chain = 0;
-	enum ieee80211_band band;
+	enum nl80211_band band;
 	u8 n_probes = 0;
 	u8 rx_ant = priv->nvm_data->valid_rx_ant;
 	u8 rate;
@@ -750,7 +735,7 @@ static int iwlagn_request_scan(struct iwl_priv *priv, struct ieee80211_vif *vif)
 	scan->tx_cmd.stop_time.life_time = TX_CMD_LIFE_TIME_INFINITE;
 
 	switch (priv->scan_band) {
-	case IEEE80211_BAND_2GHZ:
+	case NL80211_BAND_2GHZ:
 		scan->flags = RXON_FLG_BAND_24G_MSK | RXON_FLG_AUTO_DETECT_MSK;
 		chan_mod = le32_to_cpu(
 			priv->contexts[IWL_RXON_CTX_BSS].active.flags &
@@ -771,7 +756,7 @@ static int iwlagn_request_scan(struct iwl_priv *priv, struct ieee80211_vif *vif)
 		    priv->lib->bt_params->advanced_bt_coexist)
 			scan->tx_cmd.tx_flags |= TX_CMD_FLG_IGNORE_BT;
 		break;
-	case IEEE80211_BAND_5GHZ:
+	case NL80211_BAND_5GHZ:
 		rate = IWL_RATE_6M_PLCP;
 		break;
 	default:
@@ -809,7 +794,7 @@ static int iwlagn_request_scan(struct iwl_priv *priv, struct ieee80211_vif *vif)
 
 	band = priv->scan_band;
 
-	if (band == IEEE80211_BAND_2GHZ &&
+	if (band == NL80211_BAND_2GHZ &&
 	    priv->lib->bt_params &&
 	    priv->lib->bt_params->advanced_bt_coexist) {
 		/* transmit 2.4 GHz probes only on first antenna */
@@ -925,16 +910,16 @@ static int iwlagn_request_scan(struct iwl_priv *priv, struct ieee80211_vif *vif)
 void iwl_init_scan_params(struct iwl_priv *priv)
 {
 	u8 ant_idx = fls(priv->nvm_data->valid_tx_ant) - 1;
-	if (!priv->scan_tx_ant[IEEE80211_BAND_5GHZ])
-		priv->scan_tx_ant[IEEE80211_BAND_5GHZ] = ant_idx;
-	if (!priv->scan_tx_ant[IEEE80211_BAND_2GHZ])
-		priv->scan_tx_ant[IEEE80211_BAND_2GHZ] = ant_idx;
+	if (!priv->scan_tx_ant[NL80211_BAND_5GHZ])
+		priv->scan_tx_ant[NL80211_BAND_5GHZ] = ant_idx;
+	if (!priv->scan_tx_ant[NL80211_BAND_2GHZ])
+		priv->scan_tx_ant[NL80211_BAND_2GHZ] = ant_idx;
 }
 
 int __must_check iwl_scan_initiate(struct iwl_priv *priv,
 				   struct ieee80211_vif *vif,
 				   enum iwl_scan_type scan_type,
-				   enum ieee80211_band band)
+				   enum nl80211_band band)
 {
 	int ret;
 

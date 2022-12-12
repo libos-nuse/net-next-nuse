@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  MAX732x I2C Port Expander with 8/16 I/O
  *
@@ -7,10 +8,6 @@
  *  Copyright (C) 2015 Linus Walleij <linus.walleij@linaro.org>
  *
  *  Derived from drivers/gpio/pca953x.c
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; version 2 of the License.
  */
 
 #include <linux/module.h>
@@ -20,7 +17,7 @@
 #include <linux/gpio/driver.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
-#include <linux/i2c/max732x.h>
+#include <linux/platform_data/max732x.h>
 #include <linux/of.h>
 
 
@@ -158,11 +155,6 @@ struct max732x_chip {
 #endif
 };
 
-static inline struct max732x_chip *to_max732x(struct gpio_chip *gc)
-{
-	return container_of(gc, struct max732x_chip, gpio_chip);
-}
-
 static int max732x_writeb(struct max732x_chip *chip, int group_a, uint8_t val)
 {
 	struct i2c_client *client;
@@ -201,21 +193,21 @@ static inline int is_group_a(struct max732x_chip *chip, unsigned off)
 
 static int max732x_gpio_get_value(struct gpio_chip *gc, unsigned off)
 {
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 	uint8_t reg_val;
 	int ret;
 
 	ret = max732x_readb(chip, is_group_a(chip, off), &reg_val);
 	if (ret < 0)
-		return 0;
+		return ret;
 
-	return reg_val & (1u << (off & 0x7));
+	return !!(reg_val & (1u << (off & 0x7)));
 }
 
 static void max732x_gpio_set_mask(struct gpio_chip *gc, unsigned off, int mask,
 				  int val)
 {
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 	uint8_t reg_out;
 	int ret;
 
@@ -259,7 +251,7 @@ static void max732x_gpio_set_multiple(struct gpio_chip *gc,
 
 static int max732x_gpio_direction_input(struct gpio_chip *gc, unsigned off)
 {
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 	unsigned int mask = 1u << off;
 
 	if ((mask & chip->dir_input) == 0) {
@@ -281,7 +273,7 @@ static int max732x_gpio_direction_input(struct gpio_chip *gc, unsigned off)
 static int max732x_gpio_direction_output(struct gpio_chip *gc,
 		unsigned off, int val)
 {
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 	unsigned int mask = 1u << off;
 
 	if ((mask & chip->dir_output) == 0) {
@@ -356,7 +348,7 @@ static void max732x_irq_update_mask(struct max732x_chip *chip)
 static void max732x_irq_mask(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 
 	chip->irq_mask_cur &= ~(1 << d->hwirq);
 }
@@ -364,7 +356,7 @@ static void max732x_irq_mask(struct irq_data *d)
 static void max732x_irq_unmask(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 
 	chip->irq_mask_cur |= 1 << d->hwirq;
 }
@@ -372,7 +364,7 @@ static void max732x_irq_unmask(struct irq_data *d)
 static void max732x_irq_bus_lock(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 
 	mutex_lock(&chip->irq_lock);
 	chip->irq_mask_cur = chip->irq_mask;
@@ -381,7 +373,7 @@ static void max732x_irq_bus_lock(struct irq_data *d)
 static void max732x_irq_bus_sync_unlock(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 	uint16_t new_irqs;
 	uint16_t level;
 
@@ -400,7 +392,7 @@ static void max732x_irq_bus_sync_unlock(struct irq_data *d)
 static int max732x_irq_set_type(struct irq_data *d, unsigned int type)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct max732x_chip *chip = to_max732x(gc);
+	struct max732x_chip *chip = gpiochip_get_data(gc);
 	uint16_t off = d->hwirq;
 	uint16_t mask = 1 << off;
 
@@ -491,7 +483,7 @@ static irqreturn_t max732x_irq_handler(int irq, void *devid)
 
 	do {
 		level = __ffs(pending);
-		handle_nested_irq(irq_find_mapping(chip->gpio_chip.irqdomain,
+		handle_nested_irq(irq_find_mapping(chip->gpio_chip.irq.domain,
 						   level));
 
 		pending &= ~(1 << level);
@@ -511,6 +503,8 @@ static int max732x_irq_setup(struct max732x_chip *chip,
 
 	if (((pdata && pdata->irq_base) || client->irq)
 			&& has_irq != INT_NONE) {
+		struct gpio_irq_chip *girq;
+
 		if (pdata)
 			irq_base = pdata->irq_base;
 		chip->irq_features = has_irq;
@@ -525,20 +519,17 @@ static int max732x_irq_setup(struct max732x_chip *chip,
 				client->irq);
 			return ret;
 		}
-		ret =  gpiochip_irqchip_add(&chip->gpio_chip,
-					    &max732x_irq_chip,
-					    irq_base,
-					    handle_simple_irq,
-					    IRQ_TYPE_NONE);
-		if (ret) {
-			dev_err(&client->dev,
-				"could not connect irqchip to gpiochip\n");
-			return ret;
-		}
-		gpiochip_set_chained_irqchip(&chip->gpio_chip,
-					     &max732x_irq_chip,
-					     client->irq,
-					     NULL);
+
+		girq = &chip->gpio_chip.irq;
+		girq->chip = &max732x_irq_chip;
+		/* This will let us handle the parent IRQ in the driver */
+		girq->parent_handler = NULL;
+		girq->num_parents = 0;
+		girq->parents = NULL;
+		girq->default_type = IRQ_TYPE_NONE;
+		girq->handler = handle_simple_irq;
+		girq->threaded = true;
+		girq->first = irq_base; /* FIXME: get rid of this */
 	}
 
 	return 0;
@@ -603,7 +594,7 @@ static int max732x_setup_gpio(struct max732x_chip *chip,
 	gc->base = gpio_start;
 	gc->ngpio = port;
 	gc->label = chip->client->name;
-	gc->dev = &chip->client->dev;
+	gc->parent = &chip->client->dev;
 	gc->owner = THIS_MODULE;
 
 	return port;
@@ -649,7 +640,7 @@ static int max732x_probe(struct i2c_client *client,
 	chip->client = client;
 
 	nr_port = max732x_setup_gpio(chip, id, pdata->gpio_base);
-	chip->gpio_chip.dev = &client->dev;
+	chip->gpio_chip.parent = &client->dev;
 
 	addr_a = (client->addr & 0x0f) | 0x60;
 	addr_b = (client->addr & 0x0f) | 0x50;
@@ -658,53 +649,61 @@ static int max732x_probe(struct i2c_client *client,
 	case 0x60:
 		chip->client_group_a = client;
 		if (nr_port > 8) {
-			c = i2c_new_dummy(client->adapter, addr_b);
+			c = devm_i2c_new_dummy_device(&client->dev,
+						      client->adapter, addr_b);
+			if (IS_ERR(c)) {
+				dev_err(&client->dev,
+					"Failed to allocate I2C device\n");
+				return PTR_ERR(c);
+			}
 			chip->client_group_b = chip->client_dummy = c;
 		}
 		break;
 	case 0x50:
 		chip->client_group_b = client;
 		if (nr_port > 8) {
-			c = i2c_new_dummy(client->adapter, addr_a);
+			c = devm_i2c_new_dummy_device(&client->dev,
+						      client->adapter, addr_a);
+			if (IS_ERR(c)) {
+				dev_err(&client->dev,
+					"Failed to allocate I2C device\n");
+				return PTR_ERR(c);
+			}
 			chip->client_group_a = chip->client_dummy = c;
 		}
 		break;
 	default:
 		dev_err(&client->dev, "invalid I2C address specified %02x\n",
 				client->addr);
-		ret = -EINVAL;
-		goto out_failed;
+		return -EINVAL;
 	}
 
 	if (nr_port > 8 && !chip->client_dummy) {
 		dev_err(&client->dev,
 			"Failed to allocate second group I2C device\n");
-		ret = -ENODEV;
-		goto out_failed;
+		return -ENODEV;
 	}
 
 	mutex_init(&chip->lock);
 
 	ret = max732x_readb(chip, is_group_a(chip, 0), &chip->reg_out[0]);
 	if (ret)
-		goto out_failed;
+		return ret;
 	if (nr_port > 8) {
 		ret = max732x_readb(chip, is_group_a(chip, 8), &chip->reg_out[1]);
 		if (ret)
-			goto out_failed;
+			return ret;
 	}
-
-	ret = gpiochip_add(&chip->gpio_chip);
-	if (ret)
-		goto out_failed;
 
 	ret = max732x_irq_setup(chip, id);
-	if (ret) {
-		gpiochip_remove(&chip->gpio_chip);
-		goto out_failed;
-	}
+	if (ret)
+		return ret;
 
-	if (pdata && pdata->setup) {
+	ret = devm_gpiochip_add_data(&client->dev, &chip->gpio_chip, chip);
+	if (ret)
+		return ret;
+
+	if (pdata->setup) {
 		ret = pdata->setup(client, chip->gpio_chip.base,
 				chip->gpio_chip.ngpio, pdata->context);
 		if (ret < 0)
@@ -713,11 +712,6 @@ static int max732x_probe(struct i2c_client *client,
 
 	i2c_set_clientdata(client, chip);
 	return 0;
-
-out_failed:
-	if (chip->client_dummy)
-		i2c_unregister_device(chip->client_dummy);
-	return ret;
 }
 
 static int max732x_remove(struct i2c_client *client)
@@ -737,19 +731,12 @@ static int max732x_remove(struct i2c_client *client)
 		}
 	}
 
-	gpiochip_remove(&chip->gpio_chip);
-
-	/* unregister any dummy i2c_client */
-	if (chip->client_dummy)
-		i2c_unregister_device(chip->client_dummy);
-
 	return 0;
 }
 
 static struct i2c_driver max732x_driver = {
 	.driver = {
 		.name		= "max732x",
-		.owner		= THIS_MODULE,
 		.of_match_table	= of_match_ptr(max732x_of_table),
 	},
 	.probe		= max732x_probe,

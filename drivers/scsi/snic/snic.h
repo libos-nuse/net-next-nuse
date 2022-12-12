@@ -95,6 +95,8 @@
 #define SNIC_DEV_RST_NOTSUP		BIT(25)
 #define SNIC_SCSI_CLEANUP		BIT(26)
 #define SNIC_HOST_RESET_ISSUED		BIT(27)
+#define SNIC_HOST_RESET_CMD_TERM	\
+	(SNIC_DEV_RST_NOTSUP | SNIC_SCSI_CLEANUP | SNIC_HOST_RESET_ISSUED)
 
 #define SNIC_ABTS_TIMEOUT		30000		/* msec */
 #define SNIC_LUN_RESET_TIMEOUT		30000		/* msec */
@@ -216,9 +218,10 @@ enum snic_msix_intr_index {
 	SNIC_MSIX_INTR_MAX,
 };
 
+#define SNIC_INTRHDLR_NAMSZ	(2 * IFNAMSIZ)
 struct snic_msix_entry {
 	int requested;
-	char devname[IFNAMSIZ];
+	char devname[SNIC_INTRHDLR_NAMSZ];
 	irqreturn_t (*isr)(int, void *);
 	void *devid;
 };
@@ -296,7 +299,6 @@ struct snic {
 
 	/* pci related */
 	struct pci_dev *pdev;
-	struct msix_entry msix_entry[SNIC_MSIX_INTR_MAX];
 	struct snic_msix_entry msix[SNIC_MSIX_INTR_MAX];
 
 	/* io related info */
@@ -397,7 +399,7 @@ void snic_handle_link_event(struct snic *);
 void snic_handle_link(struct work_struct *);
 
 int snic_queue_exch_ver_req(struct snic *);
-int snic_io_exch_ver_cmpl_handler(struct snic *, struct snic_fw_req *);
+void snic_io_exch_ver_cmpl_handler(struct snic *, struct snic_fw_req *);
 
 int snic_queue_wq_desc(struct snic *, void *os_buf, u16 len);
 

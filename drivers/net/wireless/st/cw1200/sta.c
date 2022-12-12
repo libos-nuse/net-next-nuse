@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Mac80211 STA API for ST-Ericsson CW1200 drivers
  *
  * Copyright (c) 2010, ST-Ericsson
  * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/vmalloc.h>
@@ -198,7 +195,7 @@ void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 
 		priv->bss_loss_state++;
 
-		skb = ieee80211_nullfunc_get(priv->hw, priv->vif);
+		skb = ieee80211_nullfunc_get(priv->hw, priv->vif, false);
 		WARN_ON(!skb);
 		if (skb)
 			cw1200_tx(priv->hw, NULL, skb);
@@ -873,12 +870,6 @@ int cw1200_set_rts_threshold(struct ieee80211_hw *hw, u32 value)
 	else
 		val32 = 0; /* disabled */
 
-	if (priv->mode == NL80211_IFTYPE_UNSPECIFIED) {
-		/* device is down, can _not_ set threshold */
-		ret = -ENODEV;
-		goto out;
-	}
-
 	if (priv->rts_threshold == value)
 		goto out;
 
@@ -1025,7 +1016,7 @@ void cw1200_event_handler(struct work_struct *work)
 				NL80211_CQM_RSSI_THRESHOLD_EVENT_LOW :
 				NL80211_CQM_RSSI_THRESHOLD_EVENT_HIGH;
 			pr_debug("[CQM] RSSI event: %d.\n", rcpi_rssi);
-			ieee80211_cqm_rssi_notify(priv->vif, cqm_evt,
+			ieee80211_cqm_rssi_notify(priv->vif, cqm_evt, rcpi_rssi,
 						  GFP_KERNEL);
 			break;
 		}
@@ -1129,7 +1120,7 @@ int cw1200_setup_mac(struct cw1200_common *priv)
 	 *
 	 * NOTE2: RSSI based reports have been switched to RCPI, since
 	 * FW has a bug and RSSI reported values are not stable,
-	 * what can leads to signal level oscilations in user-end applications
+	 * what can lead to signal level oscilations in user-end applications
 	 */
 	struct wsm_rcpi_rssi_threshold threshold = {
 		.rssiRcpiMode = WSM_RCPI_RSSI_THRESHOLD_ENABLE |
@@ -1284,7 +1275,7 @@ static void cw1200_do_join(struct cw1200_common *priv)
 	join.dtim_period = priv->join_dtim_period;
 
 	join.channel_number = priv->channel->hw_value;
-	join.band = (priv->channel->band == IEEE80211_BAND_5GHZ) ?
+	join.band = (priv->channel->band == NL80211_BAND_5GHZ) ?
 		WSM_PHY_BAND_5G : WSM_PHY_BAND_2_4G;
 
 	memcpy(join.bssid, bssid, sizeof(join.bssid));
@@ -1468,7 +1459,7 @@ int cw1200_enable_listening(struct cw1200_common *priv)
 	};
 
 	if (priv->channel) {
-		start.band = priv->channel->band == IEEE80211_BAND_5GHZ ?
+		start.band = priv->channel->band == NL80211_BAND_5GHZ ?
 			     WSM_PHY_BAND_5G : WSM_PHY_BAND_2_4G;
 		start.channel_number = priv->channel->hw_value;
 	} else {
@@ -2118,10 +2109,9 @@ void cw1200_multicast_stop_work(struct work_struct *work)
 	}
 }
 
-void cw1200_mcast_timeout(unsigned long arg)
+void cw1200_mcast_timeout(struct timer_list *t)
 {
-	struct cw1200_common *priv =
-		(struct cw1200_common *)arg;
+	struct cw1200_common *priv = from_timer(priv, t, mcast_timeout);
 
 	wiphy_warn(priv->hw->wiphy,
 		   "Multicast delivery timeout.\n");
@@ -2135,9 +2125,7 @@ void cw1200_mcast_timeout(unsigned long arg)
 
 int cw1200_ampdu_action(struct ieee80211_hw *hw,
 			struct ieee80211_vif *vif,
-			enum ieee80211_ampdu_mlme_action action,
-			struct ieee80211_sta *sta, u16 tid, u16 *ssn,
-			u8 buf_size, bool amsdu)
+			struct ieee80211_ampdu_params *params)
 {
 	/* Aggregation is implemented fully in firmware,
 	 * including block ack negotiation. Do not allow
@@ -2274,7 +2262,7 @@ static int cw1200_upload_null(struct cw1200_common *priv)
 		.rate = 0xFF,
 	};
 
-	frame.skb = ieee80211_nullfunc_get(priv->hw, priv->vif);
+	frame.skb = ieee80211_nullfunc_get(priv->hw, priv->vif, false);
 	if (!frame.skb)
 		return -ENOMEM;
 
@@ -2323,7 +2311,7 @@ static int cw1200_start_ap(struct cw1200_common *priv)
 	struct wsm_start start = {
 		.mode = priv->vif->p2p ?
 				WSM_START_MODE_P2P_GO : WSM_START_MODE_AP,
-		.band = (priv->channel->band == IEEE80211_BAND_5GHZ) ?
+		.band = (priv->channel->band == NL80211_BAND_5GHZ) ?
 				WSM_PHY_BAND_5G : WSM_PHY_BAND_2_4G,
 		.channel_number = priv->channel->hw_value,
 		.beacon_interval = conf->beacon_int,

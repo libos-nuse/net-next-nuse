@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2014 Linaro Ltd.
  * Copyright (C) 2014 ZTE Corporation.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk-provider.h>
@@ -234,8 +231,7 @@ static void __init zx296702_top_clocks_init(struct device_node *np)
 	WARN_ON(!topcrm_base);
 
 	clk[ZX296702_OSC] =
-		clk_register_fixed_rate(NULL, "osc", NULL, CLK_IS_ROOT,
-				30000000);
+		clk_register_fixed_rate(NULL, "osc", NULL, 0, 30000000);
 	clk[ZX296702_PLL_A9] =
 		clk_register_zx_pll("pll_a9", "osc", 0, topcrm_base
 				+ 0x01c, pll_a9_config,

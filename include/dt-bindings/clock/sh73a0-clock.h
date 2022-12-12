@@ -1,10 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright 2014 Ulrich Hecht
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef __DT_BINDINGS_CLOCK_SH73A0_H__
@@ -28,7 +24,8 @@
 #define SH73A0_CLK_HP		14
 
 /* MSTP0 */
-#define SH73A0_CLK_IIC2	1
+#define SH73A0_CLK_IIC2		1
+#define SH73A0_CLK_MSIOF0	0
 
 /* MSTP1 */
 #define SH73A0_CLK_CEU1		29
@@ -45,8 +42,11 @@
 #define SH73A0_CLK_SCIFA7	19
 #define SH73A0_CLK_SY_DMAC	18
 #define SH73A0_CLK_MP_DMAC	17
+#define SH73A0_CLK_MSIOF3	15
+#define SH73A0_CLK_MSIOF1	8
 #define SH73A0_CLK_SCIFA5	7
 #define SH73A0_CLK_SCIFB	6
+#define SH73A0_CLK_MSIOF2	5
 #define SH73A0_CLK_SCIFA0	4
 #define SH73A0_CLK_SCIFA1	3
 #define SH73A0_CLK_SCIFA2	2

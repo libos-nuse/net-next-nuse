@@ -1,11 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  *
  * Copyright (C) 2008-2009 Gabor Juhos <juhosg@openwrt.org>
  * Copyright (C) 2008 Imre Kaloz <kaloz@openwrt.org>
- * Copyright (C) 2013 John Crispin <blogic@openwrt.org>
+ * Copyright (C) 2013 John Crispin <john@phrozen.org>
  */
 
 #include <linux/pm.h>
@@ -61,7 +59,7 @@ static int ralink_reset_device(struct reset_controller_dev *rcdev,
 	return ralink_deassert_device(rcdev, id);
 }
 
-static struct reset_control_ops reset_ops = {
+static const struct reset_control_ops reset_ops = {
 	.reset = ralink_reset_device,
 	.assert = ralink_assert_device,
 	.deassert = ralink_deassert_device,
@@ -96,16 +94,9 @@ static void ralink_restart(char *command)
 	unreachable();
 }
 
-static void ralink_halt(void)
-{
-	local_irq_disable();
-	unreachable();
-}
-
 static int __init mips_reboot_setup(void)
 {
 	_machine_restart = ralink_restart;
-	_machine_halt = ralink_halt;
 
 	return 0;
 }

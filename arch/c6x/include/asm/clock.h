@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * TI C64X clock definitions
  *
@@ -8,10 +9,6 @@
  *
  * Copyright (C) 2006-2007 Texas Instruments.
  * Copyright (C) 2008-2009 Deep Root Systems, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _ASM_C6X_CLOCK_H
@@ -101,7 +98,7 @@ struct clk {
 #define CLK_PLL			BIT(2) /* PLL-derived clock */
 #define PRE_PLL			BIT(3) /* source is before PLL mult/div */
 #define FIXED_DIV_PLL		BIT(4) /* fixed divisor from PLL */
-#define FIXED_RATE_PLL		BIT(5) /* fixed ouput rate PLL */
+#define FIXED_RATE_PLL		BIT(5) /* fixed output rate PLL */
 
 #define MAX_PLL_SYSCLKS 16
 

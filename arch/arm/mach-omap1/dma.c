@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OMAP1/OMAP7xx - specific DMA driver
  *
@@ -9,13 +10,9 @@
  * OMAP2/3 support Copyright (C) 2004-2007 Texas Instruments, Inc.
  * Some functions based on earlier dma-omap.c Copyright (C) 2001 RidgeRun, Inc.
  *
- * Copyright (C) 2010 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2010 Texas Instruments Incorporated - https://www.ti.com/
  * Converted DMA library into platform driver
  *                   - G, Manjunath Kondaiah <manjugk@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/err.h>
@@ -25,13 +22,13 @@
 #include <linux/device.h>
 #include <linux/io.h>
 #include <linux/dma-mapping.h>
+#include <linux/dmaengine.h>
 #include <linux/omap-dma.h>
 #include <mach/tc.h>
 
 #include "soc.h"
 
 #define OMAP1_DMA_BASE			(0xfffed800)
-#define OMAP1_LOGICAL_DMA_CH_COUNT	17
 
 static u32 enable_1510_mode;
 
@@ -240,7 +237,6 @@ static void omap1_show_dma_caps(void)
 		w |= 1 << 3;
 		dma_write(w, GSCR, 0);
 	}
-	return;
 }
 
 static unsigned configure_dma_errata(void)
@@ -263,6 +259,42 @@ static const struct platform_device_info omap_dma_dev_info = {
 	.dma_mask = DMA_BIT_MASK(32),
 	.res = res,
 	.num_res = 1,
+};
+
+/* OMAP730, OMAP850 */
+static const struct dma_slave_map omap7xx_sdma_map[] = {
+	{ "omap-mcbsp.1", "tx", SDMA_FILTER_PARAM(8) },
+	{ "omap-mcbsp.1", "rx", SDMA_FILTER_PARAM(9) },
+	{ "omap-mcbsp.2", "tx", SDMA_FILTER_PARAM(10) },
+	{ "omap-mcbsp.2", "rx", SDMA_FILTER_PARAM(11) },
+	{ "mmci-omap.0", "tx", SDMA_FILTER_PARAM(21) },
+	{ "mmci-omap.0", "rx", SDMA_FILTER_PARAM(22) },
+	{ "omap_udc", "rx0", SDMA_FILTER_PARAM(26) },
+	{ "omap_udc", "rx1", SDMA_FILTER_PARAM(27) },
+	{ "omap_udc", "rx2", SDMA_FILTER_PARAM(28) },
+	{ "omap_udc", "tx0", SDMA_FILTER_PARAM(29) },
+	{ "omap_udc", "tx1", SDMA_FILTER_PARAM(30) },
+	{ "omap_udc", "tx2", SDMA_FILTER_PARAM(31) },
+};
+
+/* OMAP1510, OMAP1610*/
+static const struct dma_slave_map omap1xxx_sdma_map[] = {
+	{ "omap-mcbsp.1", "tx", SDMA_FILTER_PARAM(8) },
+	{ "omap-mcbsp.1", "rx", SDMA_FILTER_PARAM(9) },
+	{ "omap-mcbsp.3", "tx", SDMA_FILTER_PARAM(10) },
+	{ "omap-mcbsp.3", "rx", SDMA_FILTER_PARAM(11) },
+	{ "omap-mcbsp.2", "tx", SDMA_FILTER_PARAM(16) },
+	{ "omap-mcbsp.2", "rx", SDMA_FILTER_PARAM(17) },
+	{ "mmci-omap.0", "tx", SDMA_FILTER_PARAM(21) },
+	{ "mmci-omap.0", "rx", SDMA_FILTER_PARAM(22) },
+	{ "omap_udc", "rx0", SDMA_FILTER_PARAM(26) },
+	{ "omap_udc", "rx1", SDMA_FILTER_PARAM(27) },
+	{ "omap_udc", "rx2", SDMA_FILTER_PARAM(28) },
+	{ "omap_udc", "tx0", SDMA_FILTER_PARAM(29) },
+	{ "omap_udc", "tx1", SDMA_FILTER_PARAM(30) },
+	{ "omap_udc", "tx2", SDMA_FILTER_PARAM(31) },
+	{ "mmci-omap.1", "tx", SDMA_FILTER_PARAM(54) },
+	{ "mmci-omap.1", "rx", SDMA_FILTER_PARAM(55) },
 };
 
 static struct omap_system_dma_plat_info dma_plat_info __initdata = {
@@ -303,15 +335,11 @@ static int __init omap1_system_dma_init(void)
 		goto exit_iounmap;
 	}
 
-	d = kzalloc(sizeof(struct omap_dma_dev_attr), GFP_KERNEL);
+	d = kzalloc(sizeof(*d), GFP_KERNEL);
 	if (!d) {
-		dev_err(&pdev->dev, "%s: Unable to allocate 'd' for %s\n",
-			__func__, pdev->name);
 		ret = -ENOMEM;
 		goto exit_iounmap;
 	}
-
-	d->lch_count		= OMAP1_LOGICAL_DMA_CH_COUNT;
 
 	/* Valid attributes for omap1 plus processors */
 	if (cpu_is_omap15xx())
@@ -329,18 +357,27 @@ static int __init omap1_system_dma_init(void)
 	d->dev_caps		|= CLEAR_CSR_ON_READ;
 	d->dev_caps		|= IS_WORD_16;
 
-	if (cpu_is_omap15xx())
-		d->chan_count = 9;
-	else if (cpu_is_omap16xx() || cpu_is_omap7xx()) {
-		if (!(d->dev_caps & ENABLE_1510_MODE))
-			d->chan_count = 16;
+	/* available logical channels */
+	if (cpu_is_omap15xx()) {
+		d->lch_count = 9;
+	} else {
+		if (d->dev_caps & ENABLE_1510_MODE)
+			d->lch_count = 9;
 		else
-			d->chan_count = 9;
+			d->lch_count = 16;
 	}
 
 	p = dma_plat_info;
 	p.dma_attr = d;
 	p.errata = configure_dma_errata();
+
+	if (cpu_is_omap7xx()) {
+		p.slave_map = omap7xx_sdma_map;
+		p.slavecnt = ARRAY_SIZE(omap7xx_sdma_map);
+	} else {
+		p.slave_map = omap1xxx_sdma_map;
+		p.slavecnt = ARRAY_SIZE(omap1xxx_sdma_map);
+	}
 
 	ret = platform_device_add_data(pdev, &p, sizeof(p));
 	if (ret) {

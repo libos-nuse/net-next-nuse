@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * PowerNV LED Driver
  *
@@ -5,11 +6,6 @@
  *
  * Author: Vasant Hegde <hegdevasant@linux.vnet.ibm.com>
  * Author: Anshuman Khandual <khandual@linux.vnet.ibm.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/leds.h>
@@ -77,7 +73,7 @@ static int powernv_get_led_type(const char *led_type_desc)
  * This function is called from work queue task context when ever it gets
  * scheduled. This function can sleep at opal_async_wait_response call.
  */
-static void powernv_led_set(struct powernv_led_data *powernv_led,
+static int powernv_led_set(struct powernv_led_data *powernv_led,
 			    enum led_brightness value)
 {
 	int rc, token;
@@ -99,7 +95,7 @@ static void powernv_led_set(struct powernv_led_data *powernv_led,
 		if (token != -ERESTARTSYS)
 			dev_err(dev, "%s: Couldn't get OPAL async token\n",
 				__func__);
-		return;
+		return token;
 	}
 
 	rc = opal_leds_set_ind(token, powernv_led->loc_code,
@@ -118,13 +114,14 @@ static void powernv_led_set(struct powernv_led_data *powernv_led,
 		goto out_token;
 	}
 
-	rc = be64_to_cpu(msg.params[1]);
+	rc = opal_get_async_rc(msg);
 	if (rc != OPAL_SUCCESS)
 		dev_err(dev, "%s : OAPL async call returned failed [rc=%d]\n",
 			__func__, rc);
 
 out_token:
 	opal_async_release_token(token);
+	return rc;
 }
 
 /*
@@ -173,20 +170,23 @@ static enum led_brightness powernv_led_get(struct powernv_led_data *powernv_led)
  * LED classdev 'brightness_get' function. This schedules work
  * to update LED state.
  */
-static void powernv_brightness_set(struct led_classdev *led_cdev,
+static int powernv_brightness_set(struct led_classdev *led_cdev,
 				   enum led_brightness value)
 {
 	struct powernv_led_data *powernv_led =
 		container_of(led_cdev, struct powernv_led_data, cdev);
 	struct powernv_led_common *powernv_led_common = powernv_led->common;
+	int rc;
 
 	/* Do not modify LED in unload path */
 	if (powernv_led_common->led_disabled)
-		return;
+		return 0;
 
 	mutex_lock(&powernv_led_common->lock);
-	powernv_led_set(powernv_led, value);
+	rc = powernv_led_set(powernv_led, value);
 	mutex_unlock(&powernv_led_common->lock);
+
+	return rc;
 }
 
 /* LED classdev 'brightness_get' function */
@@ -220,14 +220,10 @@ static int powernv_led_create(struct device *dev,
 	powernv_led->cdev.name = devm_kasprintf(dev, GFP_KERNEL, "%s:%s",
 						powernv_led->loc_code,
 						led_type_desc);
-	if (!powernv_led->cdev.name) {
-		dev_err(dev,
-			"%s: Memory allocation failed for classdev name\n",
-			__func__);
+	if (!powernv_led->cdev.name)
 		return -ENOMEM;
-	}
 
-	powernv_led->cdev.brightness_set = powernv_brightness_set;
+	powernv_led->cdev.brightness_set_blocking = powernv_brightness_set;
 	powernv_led->cdev.brightness_get = powernv_brightness_get;
 	powernv_led->cdev.brightness = LED_OFF;
 	powernv_led->cdev.max_brightness = LED_FULL;
@@ -254,10 +250,8 @@ static int powernv_led_classdev(struct platform_device *pdev,
 	struct powernv_led_data *powernv_led;
 	struct device *dev = &pdev->dev;
 
-	for_each_child_of_node(led_node, np) {
+	for_each_available_child_of_node(led_node, np) {
 		p = of_find_property(np, "led-types", NULL);
-		if (!p)
-			continue;
 
 		while ((cur = of_prop_next_string(p, cur)) != NULL) {
 			powernv_led = devm_kzalloc(dev, sizeof(*powernv_led),
@@ -287,6 +281,7 @@ static int powernv_led_probe(struct platform_device *pdev)
 	struct device_node *led_node;
 	struct powernv_led_common *powernv_led_common;
 	struct device *dev = &pdev->dev;
+	int rc;
 
 	led_node = of_find_node_by_path("/ibm,opal/leds");
 	if (!led_node) {
@@ -297,15 +292,20 @@ static int powernv_led_probe(struct platform_device *pdev)
 
 	powernv_led_common = devm_kzalloc(dev, sizeof(*powernv_led_common),
 					  GFP_KERNEL);
-	if (!powernv_led_common)
-		return -ENOMEM;
+	if (!powernv_led_common) {
+		rc = -ENOMEM;
+		goto out;
+	}
 
 	mutex_init(&powernv_led_common->lock);
 	powernv_led_common->max_led_type = cpu_to_be64(OPAL_SLOT_LED_TYPE_MAX);
 
 	platform_set_drvdata(pdev, powernv_led_common);
 
-	return powernv_led_classdev(pdev, led_node, powernv_led_common);
+	rc = powernv_led_classdev(pdev, led_node, powernv_led_common);
+out:
+	of_node_put(led_node);
+	return rc;
 }
 
 /* Platform driver remove */

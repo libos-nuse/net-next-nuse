@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 /* 
  * Copyright (C) 2000 - 2007 Jeff Dike (jdike@{addtoit,linux.intel}.com)
- * Licensed under the GPL
  */
 
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/task.h>
+#include <linux/sched/mm.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
 #include <linux/oom.h>
@@ -12,6 +14,7 @@
 #include <skas.h>
 
 void (*pm_power_off)(void);
+EXPORT_SYMBOL(pm_power_off);
 
 static void kill_off_processes(void)
 {

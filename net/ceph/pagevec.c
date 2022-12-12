@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/ceph/ceph_debug.h>
 
 #include <linux/module.h>
@@ -8,39 +9,6 @@
 #include <linux/writeback.h>
 
 #include <linux/ceph/libceph.h>
-
-/*
- * build a vector of user pages
- */
-struct page **ceph_get_direct_page_vector(const void __user *data,
-					  int num_pages, bool write_page)
-{
-	struct page **pages;
-	int got = 0;
-	int rc = 0;
-
-	pages = kmalloc(sizeof(*pages) * num_pages, GFP_NOFS);
-	if (!pages)
-		return ERR_PTR(-ENOMEM);
-
-	while (got < num_pages) {
-		rc = get_user_pages_unlocked(current, current->mm,
-		    (unsigned long)data + ((unsigned long)got * PAGE_SIZE),
-		    num_pages - got, write_page, 0, pages + got);
-		if (rc < 0)
-			break;
-		BUG_ON(rc == 0);
-		got += rc;
-	}
-	if (rc < 0)
-		goto fail;
-	return pages;
-
-fail:
-	ceph_put_page_vector(pages, got, false);
-	return ERR_PTR(rc);
-}
-EXPORT_SYMBOL(ceph_get_direct_page_vector);
 
 void ceph_put_page_vector(struct page **pages, int num_pages, bool dirty)
 {
@@ -73,7 +41,7 @@ struct page **ceph_alloc_page_vector(int num_pages, gfp_t flags)
 	struct page **pages;
 	int i;
 
-	pages = kmalloc(sizeof(*pages) * num_pages, flags);
+	pages = kmalloc_array(num_pages, sizeof(*pages), flags);
 	if (!pages)
 		return ERR_PTR(-ENOMEM);
 	for (i = 0; i < num_pages; i++) {
@@ -95,19 +63,19 @@ int ceph_copy_user_to_page_vector(struct page **pages,
 					 loff_t off, size_t len)
 {
 	int i = 0;
-	int po = off & ~PAGE_CACHE_MASK;
+	int po = off & ~PAGE_MASK;
 	int left = len;
 	int l, bad;
 
 	while (left > 0) {
-		l = min_t(int, PAGE_CACHE_SIZE-po, left);
+		l = min_t(int, PAGE_SIZE-po, left);
 		bad = copy_from_user(page_address(pages[i]) + po, data, l);
 		if (bad == l)
 			return -EFAULT;
 		data += l - bad;
 		left -= l - bad;
 		po += l - bad;
-		if (po == PAGE_CACHE_SIZE) {
+		if (po == PAGE_SIZE) {
 			po = 0;
 			i++;
 		}
@@ -121,17 +89,17 @@ void ceph_copy_to_page_vector(struct page **pages,
 				    loff_t off, size_t len)
 {
 	int i = 0;
-	size_t po = off & ~PAGE_CACHE_MASK;
+	size_t po = off & ~PAGE_MASK;
 	size_t left = len;
 
 	while (left > 0) {
-		size_t l = min_t(size_t, PAGE_CACHE_SIZE-po, left);
+		size_t l = min_t(size_t, PAGE_SIZE-po, left);
 
 		memcpy(page_address(pages[i]) + po, data, l);
 		data += l;
 		left -= l;
 		po += l;
-		if (po == PAGE_CACHE_SIZE) {
+		if (po == PAGE_SIZE) {
 			po = 0;
 			i++;
 		}
@@ -144,17 +112,17 @@ void ceph_copy_from_page_vector(struct page **pages,
 				    loff_t off, size_t len)
 {
 	int i = 0;
-	size_t po = off & ~PAGE_CACHE_MASK;
+	size_t po = off & ~PAGE_MASK;
 	size_t left = len;
 
 	while (left > 0) {
-		size_t l = min_t(size_t, PAGE_CACHE_SIZE-po, left);
+		size_t l = min_t(size_t, PAGE_SIZE-po, left);
 
 		memcpy(data, page_address(pages[i]) + po, l);
 		data += l;
 		left -= l;
 		po += l;
-		if (po == PAGE_CACHE_SIZE) {
+		if (po == PAGE_SIZE) {
 			po = 0;
 			i++;
 		}
@@ -168,25 +136,25 @@ EXPORT_SYMBOL(ceph_copy_from_page_vector);
  */
 void ceph_zero_page_vector_range(int off, int len, struct page **pages)
 {
-	int i = off >> PAGE_CACHE_SHIFT;
+	int i = off >> PAGE_SHIFT;
 
-	off &= ~PAGE_CACHE_MASK;
+	off &= ~PAGE_MASK;
 
 	dout("zero_page_vector_page %u~%u\n", off, len);
 
 	/* leading partial page? */
 	if (off) {
-		int end = min((int)PAGE_CACHE_SIZE, off + len);
+		int end = min((int)PAGE_SIZE, off + len);
 		dout("zeroing %d %p head from %d\n", i, pages[i],
 		     (int)off);
 		zero_user_segment(pages[i], off, end);
 		len -= (end - off);
 		i++;
 	}
-	while (len >= PAGE_CACHE_SIZE) {
+	while (len >= PAGE_SIZE) {
 		dout("zeroing %d %p len=%d\n", i, pages[i], len);
-		zero_user_segment(pages[i], 0, PAGE_CACHE_SIZE);
-		len -= PAGE_CACHE_SIZE;
+		zero_user_segment(pages[i], 0, PAGE_SIZE);
+		len -= PAGE_SIZE;
 		i++;
 	}
 	/* trailing partial page? */
@@ -196,4 +164,3 @@ void ceph_zero_page_vector_range(int off, int len, struct page **pages)
 	}
 }
 EXPORT_SYMBOL(ceph_zero_page_vector_range);
-

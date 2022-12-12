@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * arch/powerpc/platforms/83xx/mpc834x_itx.c
  *
  * MPC834x ITX board specific routines
  *
  * Maintainer: Kumar Gala <galak@kernel.crashing.org>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/stddef.h>
@@ -57,10 +53,7 @@ machine_device_initcall(mpc834x_itx, mpc834x_itx_declare_of_platform_devices);
  */
 static void __init mpc834x_itx_setup_arch(void)
 {
-	if (ppc_md.progress)
-		ppc_md.progress("mpc834x_itx_setup_arch()", 0);
-
-	mpc83xx_setup_pci();
+	mpc83xx_setup_arch();
 
 	mpc834x_usb_cfg();
 }
@@ -70,9 +63,7 @@ static void __init mpc834x_itx_setup_arch(void)
  */
 static int __init mpc834x_itx_probe(void)
 {
-        unsigned long root = of_get_flat_dt_root();
-
-        return of_flat_dt_is_compatible(root, "MPC834xMITX");
+	return of_machine_is_compatible("MPC834xMITX");
 }
 
 define_machine(mpc834x_itx) {

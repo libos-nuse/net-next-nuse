@@ -1,5 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0
 menuconfig ASYMMETRIC_KEY_TYPE
-	tristate "Asymmetric (public-key cryptographic) key type"
+	bool "Asymmetric (public-key cryptographic) key type"
 	depends on KEYS
 	help
 	  This option provides support for a key type that holds the data for
@@ -12,19 +13,26 @@ if ASYMMETRIC_KEY_TYPE
 config ASYMMETRIC_PUBLIC_KEY_SUBTYPE
 	tristate "Asymmetric public-key crypto algorithm subtype"
 	select MPILIB
-	select PUBLIC_KEY_ALGO_RSA
 	select CRYPTO_HASH_INFO
+	select CRYPTO_AKCIPHER
+	select CRYPTO_HASH
 	help
 	  This option provides support for asymmetric public key type handling.
 	  If signature generation and/or verification are to be used,
 	  appropriate hash algorithms (such as SHA-1) must be available.
 	  ENOPKG will be reported if the requisite algorithm is unavailable.
 
-config PUBLIC_KEY_ALGO_RSA
-	tristate "RSA public-key algorithm"
-	select MPILIB
+config ASYMMETRIC_TPM_KEY_SUBTYPE
+	tristate "Asymmetric TPM backed private key subtype"
+	depends on TCG_TPM
+	depends on TRUSTED_KEYS
+	select CRYPTO_HMAC
+	select CRYPTO_SHA1
+	select CRYPTO_HASH_INFO
 	help
-	  This option enables support for the RSA algorithm (PKCS#1, RFC3447).
+	  This option provides support for TPM backed private key type handling.
+	  Operations such as sign, verify, encrypt, decrypt are performed by
+	  the TPM after the private key is loaded.
 
 config X509_CERTIFICATE_PARSER
 	tristate "X.509 certificate parser"
@@ -36,9 +44,29 @@ config X509_CERTIFICATE_PARSER
 	  data and provides the ability to instantiate a crypto key from a
 	  public key packet found inside the certificate.
 
+config PKCS8_PRIVATE_KEY_PARSER
+	tristate "PKCS#8 private key parser"
+	depends on ASYMMETRIC_PUBLIC_KEY_SUBTYPE
+	select ASN1
+	select OID_REGISTRY
+	help
+	  This option provides support for parsing PKCS#8 format blobs for
+	  private key data and provides the ability to instantiate a crypto key
+	  from that data.
+
+config TPM_KEY_PARSER
+	tristate "TPM private key parser"
+	depends on ASYMMETRIC_TPM_KEY_SUBTYPE
+	select ASN1
+	help
+	  This option provides support for parsing TPM format blobs for
+	  private key data and provides the ability to instantiate a crypto key
+	  from that data.
+
 config PKCS7_MESSAGE_PARSER
 	tristate "PKCS#7 message parser"
 	depends on X509_CERTIFICATE_PARSER
+	select CRYPTO_HASH
 	select ASN1
 	select OID_REGISTRY
 	help
@@ -47,8 +75,7 @@ config PKCS7_MESSAGE_PARSER
 
 config PKCS7_TEST_KEY
 	tristate "PKCS#7 testing key type"
-	depends on PKCS7_MESSAGE_PARSER
-	select SYSTEM_TRUSTED_KEYRING
+	depends on SYSTEM_DATA_VERIFICATION
 	help
 	  This option provides a type of key that can be loaded up from a
 	  PKCS#7 message - provided the message is signed by a trusted key.  If
@@ -61,6 +88,8 @@ config PKCS7_TEST_KEY
 config SIGNED_PE_FILE_VERIFICATION
 	bool "Support for PE file signature verification"
 	depends on PKCS7_MESSAGE_PARSER=y
+	depends on SYSTEM_DATA_VERIFICATION
+	select CRYPTO_HASH
 	select ASN1
 	select OID_REGISTRY
 	help

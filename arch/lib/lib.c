@@ -12,9 +12,13 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/fs_struct.h>
+#include <linux/slab.h>
 #include <drivers/base/base.h>
 #include <linux/idr.h>
 #include <linux/rcupdate.h>
+#include <linux/init_task.h>
+#include <linux/fdtable.h>
 #include "sim-init.h"
 #include "sim.h"
 
@@ -124,8 +128,13 @@ FORWARDER4(lib_sys_file_read, nvoid, int, const struct SimSysFile *, char *,
 	   int, int);
 FORWARDER4(lib_sys_file_write, nvoid, int, const struct SimSysFile *,
 	   const char *, int, int);
+FORWARDER2(lkl_sysctl,nvoid,int,const char *, const char *);
+FORWARDER3(lkl_sysctl_get,nvoid,int,const char *, char *, int );
 
 struct SimKernel *g_kernel;
+
+struct kmem_cache * fs_cachep;
+extern struct kmem_cache *names_cachep,  *files_cachep;
 
 void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	      struct SimKernel *kernel)
@@ -166,28 +175,60 @@ void lib_init(struct SimExported *exported, const struct SimImported *imported,
 	exported->sys_file_write = lib_sys_file_write_forwarder;
 	exported->sys_file_read = lib_sys_file_read_forwarder;
 
+	exported->lkl_sysctl = lkl_sysctl_forwarder;
+	exported->lkl_sysctl_get = lkl_sysctl_get_forwarder;
+
 	pr_notice("%s", linux_banner);
+
+	files_cachep = kmem_cache_create("files_cache",
+			sizeof(struct files_struct), 0,
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT,
+			NULL);
+
+	fs_cachep = kmem_cache_create("fs_cache",
+			sizeof(struct fs_struct), 0,
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT,
+			NULL);
+
+	early_security_init();
+
+	vfs_caches_init_early();
 
 	rcu_init();
 
-	/* in drivers/base/core.c (called normally by drivers/base/init.c) */
-	devices_init();
-	buses_init();
-	timekeeping_init();
-	/* in lib/idr.c (called normally by init/main.c) */
-	idr_init_cache();
+	/* in drivers/base/core.c (called normally by drivers/base/init.c) */	
+	devices_init();	
+	buses_init();	
+
+	radix_tree_init();	
+
+	timekeeping_init();	
+
+	cred_init();
+	/* in lib/idr.c (called normally by init/main.c) */				
+	
+	uts_ns_init();
+
+	security_init();	
+
+	//proc_caches_init();
 	vfs_caches_init();
 
-	lib_proc_net_initialize();
+	//proc_init_kmemcache();	
+	//lib_proc_net_initialize();	
+	seq_file_init();
+
+	proc_root_init();
 
 	/* and, then, call the normal initcalls */
-	initcall_t *call;
-	extern initcall_t __initcall_start[], __initcall_end[];
+	
+	initcall_entry_t *call;
+	extern initcall_entry_t __initcall_start[], __initcall_end[];
 
 	call = __initcall_start;
-	do {
-		(*call)();
-		call++;
+	do {		
+		initcall_from_entry(call)();				
+		call++;		
 	} while (call < __initcall_end);
 
 	/* finally, put the system in RUNNING state. */
@@ -260,7 +301,7 @@ struct SimTask *lib_task_start(void (*callback) (void *), void *context)
 }
 void lib_task_wait(void)
 {
-	rcu_sched_qs();
+	rcu_qs();
 	g_imported.task_wait(g_kernel);
 	lib_update_jiffies();
 }

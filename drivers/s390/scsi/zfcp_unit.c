@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * zfcp device driver
  *
@@ -26,7 +27,8 @@ void zfcp_unit_scsi_scan(struct zfcp_unit *unit)
 	lun = scsilun_to_int((struct scsi_lun *) &unit->fcp_lun);
 
 	if (rport && rport->port_state == FC_PORTSTATE_ONLINE)
-		scsi_scan_target(&rport->dev, 0, rport->scsi_target_id, lun, 1);
+		scsi_scan_target(&rport->dev, 0, rport->scsi_target_id, lun,
+				 SCSI_SCAN_MANUAL);
 }
 
 static void zfcp_unit_scsi_scan_work(struct work_struct *work)
@@ -122,7 +124,7 @@ int zfcp_unit_add(struct zfcp_port *port, u64 fcp_lun)
 	int retval = 0;
 
 	mutex_lock(&zfcp_sysfs_port_units_mutex);
-	if (atomic_read(&port->units) == -1) {
+	if (zfcp_sysfs_port_is_removing(port)) {
 		/* port is already gone */
 		retval = -ENODEV;
 		goto out;
@@ -166,8 +168,14 @@ int zfcp_unit_add(struct zfcp_port *port, u64 fcp_lun)
 	write_lock_irq(&port->unit_list_lock);
 	list_add_tail(&unit->list, &port->unit_list);
 	write_unlock_irq(&port->unit_list_lock);
+	/*
+	 * lock order: shost->scan_mutex before zfcp_sysfs_port_units_mutex
+	 * due to      zfcp_unit_scsi_scan() => zfcp_scsi_slave_alloc()
+	 */
+	mutex_unlock(&zfcp_sysfs_port_units_mutex);
 
 	zfcp_unit_scsi_scan(unit);
+	return retval;
 
 out:
 	mutex_unlock(&zfcp_sysfs_port_units_mutex);

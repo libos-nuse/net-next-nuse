@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Broadcom BCM63138 PMB initialization for secondary CPU(s)
  *
  * Copyright (C) 2015 Broadcom Corporation
  * Author: Florian Fainelli <f.fainelli@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 #include <linux/kernel.h>
 #include <linux/io.h>
@@ -92,7 +88,6 @@ static int bcm63xx_pmb_get_resources(struct device_node *dn,
 				     unsigned int *cpu,
 				     unsigned int *addr)
 {
-	struct device_node *pmb_dn;
 	struct of_phandle_args args;
 	int ret;
 
@@ -109,7 +104,6 @@ static int bcm63xx_pmb_get_resources(struct device_node *dn,
 		return ret;
 	}
 
-	pmb_dn = args.np;
 	if (args.args_count != 2) {
 		pr_err("reset-controller does not conform to reset-cells\n");
 		return -EINVAL;

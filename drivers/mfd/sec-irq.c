@@ -1,19 +1,12 @@
-/*
- * sec-irq.c
- *
- * Copyright (c) 2011-2014 Samsung Electronics Co., Ltd
- *              http://www.samsung.com
- *
- *  This program is free software; you can redistribute  it and/or modify it
- *  under  the terms of  the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the  License, or (at your
- *  option) any later version.
- *
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// Copyright (c) 2011-2014 Samsung Electronics Co., Ltd
+//              http://www.samsung.com
 
 #include <linux/device.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
+#include <linux/module.h>
 #include <linux/regmap.h>
 
 #include <linux/mfd/samsung/core.h>
@@ -407,6 +400,11 @@ static const struct regmap_irq_chip s2mps14_irq_chip = {
 	S2MPS1X_IRQ_CHIP_COMMON_DATA,
 };
 
+static const struct regmap_irq_chip s2mps15_irq_chip = {
+	.name = "s2mps15",
+	S2MPS1X_IRQ_CHIP_COMMON_DATA,
+};
+
 static const struct regmap_irq_chip s2mpu02_irq_chip = {
 	.name = "s2mpu02",
 	.irqs = s2mpu02_irqs,
@@ -457,6 +455,9 @@ int sec_irq_init(struct sec_pmic_dev *sec_pmic)
 	case S5M8767X:
 		sec_irq_chip = &s5m8767_irq_chip;
 		break;
+	case S2MPA01:
+		sec_irq_chip = &s2mps14_irq_chip;
+		break;
 	case S2MPS11X:
 		sec_irq_chip = &s2mps11_irq_chip;
 		break;
@@ -465,6 +466,9 @@ int sec_irq_init(struct sec_pmic_dev *sec_pmic)
 		break;
 	case S2MPS14X:
 		sec_irq_chip = &s2mps14_irq_chip;
+		break;
+	case S2MPS15X:
+		sec_irq_chip = &s2mps15_irq_chip;
 		break;
 	case S2MPU02:
 		sec_irq_chip = &s2mpu02_irq_chip;
@@ -475,10 +479,11 @@ int sec_irq_init(struct sec_pmic_dev *sec_pmic)
 		return -EINVAL;
 	}
 
-	ret = regmap_add_irq_chip(sec_pmic->regmap_pmic, sec_pmic->irq,
-			  IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-			  sec_pmic->irq_base, sec_irq_chip,
-			  &sec_pmic->irq_data);
+	ret = devm_regmap_add_irq_chip(sec_pmic->dev, sec_pmic->regmap_pmic,
+				       sec_pmic->irq,
+				       IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+				       sec_pmic->irq_base, sec_irq_chip,
+				       &sec_pmic->irq_data);
 	if (ret != 0) {
 		dev_err(sec_pmic->dev, "Failed to register IRQ chip: %d\n", ret);
 		return ret;
@@ -492,8 +497,10 @@ int sec_irq_init(struct sec_pmic_dev *sec_pmic)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(sec_irq_init);
 
-void sec_irq_exit(struct sec_pmic_dev *sec_pmic)
-{
-	regmap_del_irq_chip(sec_pmic->irq, sec_pmic->irq_data);
-}
+MODULE_AUTHOR("Sangbeom Kim <sbkim73@samsung.com>");
+MODULE_AUTHOR("Chanwoo Choi <cw00.choi@samsung.com>");
+MODULE_AUTHOR("Krzysztof Kozlowski <krzk@kernel.org>");
+MODULE_DESCRIPTION("Interrupt support for the S5M MFD");
+MODULE_LICENSE("GPL");

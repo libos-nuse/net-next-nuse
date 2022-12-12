@@ -1,8 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * QLogic iSCSI HBA Driver
  * Copyright (c)   2003-2013 QLogic Corporation
- *
- * See LICENSE.qla4xxx for copyright and licensing details.
  */
 
 #include <linux/ratelimit.h>
@@ -46,11 +45,13 @@ int qla4_83xx_rd_reg_indirect(struct scsi_qla_host *ha, uint32_t addr,
 
 	ret_val = qla4_83xx_set_win_base(ha, addr);
 
-	if (ret_val == QLA_SUCCESS)
+	if (ret_val == QLA_SUCCESS) {
 		*data = qla4_83xx_rd_reg(ha, QLA83XX_WILDCARD);
-	else
+	} else {
+		*data = 0xffffffff;
 		ql4_printk(KERN_ERR, ha, "%s: failed read of addr 0x%x!\n",
 			   __func__, addr);
+	}
 
 	return ret_val;
 }
@@ -1404,16 +1405,16 @@ exit_isp_reset:
 static void qla4_83xx_dump_pause_control_regs(struct scsi_qla_host *ha)
 {
 	u32 val = 0, val1 = 0;
-	int i, status = QLA_SUCCESS;
+	int i;
 
-	status = qla4_83xx_rd_reg_indirect(ha, QLA83XX_SRE_SHIM_CONTROL, &val);
+	qla4_83xx_rd_reg_indirect(ha, QLA83XX_SRE_SHIM_CONTROL, &val);
 	DEBUG2(ql4_printk(KERN_INFO, ha, "SRE-Shim Ctrl:0x%x\n", val));
 
 	/* Port 0 Rx Buffer Pause Threshold Registers. */
 	DEBUG2(ql4_printk(KERN_INFO, ha,
 		"Port 0 Rx Buffer Pause Threshold Registers[TC7..TC0]:"));
 	for (i = 0; i < 8; i++) {
-		status = qla4_83xx_rd_reg_indirect(ha,
+		qla4_83xx_rd_reg_indirect(ha,
 				QLA83XX_PORT0_RXB_PAUSE_THRS + (i * 0x4), &val);
 		DEBUG2(pr_info("0x%x ", val));
 	}
@@ -1424,7 +1425,7 @@ static void qla4_83xx_dump_pause_control_regs(struct scsi_qla_host *ha)
 	DEBUG2(ql4_printk(KERN_INFO, ha,
 		"Port 1 Rx Buffer Pause Threshold Registers[TC7..TC0]:"));
 	for (i = 0; i < 8; i++) {
-		status = qla4_83xx_rd_reg_indirect(ha,
+		qla4_83xx_rd_reg_indirect(ha,
 				QLA83XX_PORT1_RXB_PAUSE_THRS + (i * 0x4), &val);
 		DEBUG2(pr_info("0x%x  ", val));
 	}
@@ -1435,7 +1436,7 @@ static void qla4_83xx_dump_pause_control_regs(struct scsi_qla_host *ha)
 	DEBUG2(ql4_printk(KERN_INFO, ha,
 		"Port 0 RxB Traffic Class Max Cell Registers[3..0]:"));
 	for (i = 0; i < 4; i++) {
-		status = qla4_83xx_rd_reg_indirect(ha,
+		qla4_83xx_rd_reg_indirect(ha,
 			       QLA83XX_PORT0_RXB_TC_MAX_CELL + (i * 0x4), &val);
 		DEBUG2(pr_info("0x%x  ", val));
 	}
@@ -1446,7 +1447,7 @@ static void qla4_83xx_dump_pause_control_regs(struct scsi_qla_host *ha)
 	DEBUG2(ql4_printk(KERN_INFO, ha,
 		"Port 1 RxB Traffic Class Max Cell Registers[3..0]:"));
 	for (i = 0; i < 4; i++) {
-		status = qla4_83xx_rd_reg_indirect(ha,
+		qla4_83xx_rd_reg_indirect(ha,
 			       QLA83XX_PORT1_RXB_TC_MAX_CELL + (i * 0x4), &val);
 		DEBUG2(pr_info("0x%x  ", val));
 	}
@@ -1457,15 +1458,11 @@ static void qla4_83xx_dump_pause_control_regs(struct scsi_qla_host *ha)
 	DEBUG2(ql4_printk(KERN_INFO, ha,
 			  "Port 0 RxB Rx Traffic Class Stats [TC7..TC0]"));
 	for (i = 7; i >= 0; i--) {
-		status = qla4_83xx_rd_reg_indirect(ha,
-						   QLA83XX_PORT0_RXB_TC_STATS,
-						   &val);
+		qla4_83xx_rd_reg_indirect(ha, QLA83XX_PORT0_RXB_TC_STATS, &val);
 		val &= ~(0x7 << 29);    /* Reset bits 29 to 31 */
 		qla4_83xx_wr_reg_indirect(ha, QLA83XX_PORT0_RXB_TC_STATS,
 					  (val | (i << 29)));
-		status = qla4_83xx_rd_reg_indirect(ha,
-						   QLA83XX_PORT0_RXB_TC_STATS,
-						   &val);
+		qla4_83xx_rd_reg_indirect(ha, QLA83XX_PORT0_RXB_TC_STATS, &val);
 		DEBUG2(pr_info("0x%x  ", val));
 	}
 
@@ -1475,24 +1472,18 @@ static void qla4_83xx_dump_pause_control_regs(struct scsi_qla_host *ha)
 	DEBUG2(ql4_printk(KERN_INFO, ha,
 			  "Port 1 RxB Rx Traffic Class Stats [TC7..TC0]"));
 	for (i = 7; i >= 0; i--) {
-		status = qla4_83xx_rd_reg_indirect(ha,
-						   QLA83XX_PORT1_RXB_TC_STATS,
-						   &val);
+		qla4_83xx_rd_reg_indirect(ha, QLA83XX_PORT1_RXB_TC_STATS, &val);
 		val &= ~(0x7 << 29);    /* Reset bits 29 to 31 */
 		qla4_83xx_wr_reg_indirect(ha, QLA83XX_PORT1_RXB_TC_STATS,
 					  (val | (i << 29)));
-		status = qla4_83xx_rd_reg_indirect(ha,
-						   QLA83XX_PORT1_RXB_TC_STATS,
-						   &val);
+		qla4_83xx_rd_reg_indirect(ha, QLA83XX_PORT1_RXB_TC_STATS, &val);
 		DEBUG2(pr_info("0x%x  ", val));
 	}
 
 	DEBUG2(pr_info("\n"));
 
-	status = qla4_83xx_rd_reg_indirect(ha, QLA83XX_PORT2_IFB_PAUSE_THRS,
-					   &val);
-	status = qla4_83xx_rd_reg_indirect(ha, QLA83XX_PORT3_IFB_PAUSE_THRS,
-					   &val1);
+	qla4_83xx_rd_reg_indirect(ha, QLA83XX_PORT2_IFB_PAUSE_THRS, &val);
+	qla4_83xx_rd_reg_indirect(ha, QLA83XX_PORT3_IFB_PAUSE_THRS, &val1);
 
 	DEBUG2(ql4_printk(KERN_INFO, ha,
 			  "IFB-Pause Thresholds: Port 2:0x%x, Port 3:0x%x\n",

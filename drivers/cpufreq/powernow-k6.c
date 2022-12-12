@@ -1,12 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  This file was based upon code in Powertweak Linux (http://powertweak.sf.net)
  *  (C) 2000-2003  Dave Jones, Arjan van de Ven, Janne Pänkälä,
  *                 Dominik Brodowski.
  *
- *  Licensed under the terms of the GNU GPL License version 2.
- *
  *  BIG FAT DISCLAIMER: Work in progress code. Possibly *dangerous*
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -22,7 +23,6 @@
 #define POWERNOW_IOPORT 0xfff0          /* it doesn't matter where, as long
 					   as it is unused */
 
-#define PFX "powernow-k6: "
 static unsigned int                     busfreq;   /* FSB, in 10 kHz */
 static unsigned int                     max_multiplier;
 
@@ -141,7 +141,7 @@ static int powernow_k6_target(struct cpufreq_policy *policy,
 {
 
 	if (clock_ratio[best_i].driver_data > max_multiplier) {
-		printk(KERN_ERR PFX "invalid target frequency\n");
+		pr_err("invalid target frequency\n");
 		return -EINVAL;
 	}
 
@@ -175,13 +175,14 @@ static int powernow_k6_cpu_init(struct cpufreq_policy *policy)
 				max_multiplier = param_max_multiplier;
 				goto have_max_multiplier;
 			}
-		printk(KERN_ERR "powernow-k6: invalid max_multiplier parameter, valid parameters 20, 30, 35, 40, 45, 50, 55, 60\n");
+		pr_err("invalid max_multiplier parameter, valid parameters 20, 30, 35, 40, 45, 50, 55, 60\n");
 		return -EINVAL;
 	}
 
 	if (!max_multiplier) {
-		printk(KERN_WARNING "powernow-k6: unknown frequency %u, cannot determine current multiplier\n", khz);
-		printk(KERN_WARNING "powernow-k6: use module parameters max_multiplier and bus_frequency\n");
+		pr_warn("unknown frequency %u, cannot determine current multiplier\n",
+			khz);
+		pr_warn("use module parameters max_multiplier and bus_frequency\n");
 		return -EOPNOTSUPP;
 	}
 
@@ -193,7 +194,7 @@ have_max_multiplier:
 			busfreq = param_busfreq / 10;
 			goto have_busfreq;
 		}
-		printk(KERN_ERR "powernow-k6: invalid bus_frequency parameter, allowed range 50000 - 150000 kHz\n");
+		pr_err("invalid bus_frequency parameter, allowed range 50000 - 150000 kHz\n");
 		return -EINVAL;
 	}
 
@@ -212,8 +213,9 @@ have_busfreq:
 
 	/* cpuinfo and default policy values */
 	policy->cpuinfo.transition_latency = 500000;
+	policy->freq_table = clock_ratio;
 
-	return cpufreq_table_validate_and_show(policy, clock_ratio);
+	return 0;
 }
 
 
@@ -256,8 +258,8 @@ static struct cpufreq_driver powernow_k6_driver = {
 };
 
 static const struct x86_cpu_id powernow_k6_ids[] = {
-	{ X86_VENDOR_AMD, 5, 12 },
-	{ X86_VENDOR_AMD, 5, 13 },
+	X86_MATCH_VENDOR_FAM_MODEL(AMD, 5, 12, NULL),
+	X86_MATCH_VENDOR_FAM_MODEL(AMD, 5, 13, NULL),
 	{}
 };
 MODULE_DEVICE_TABLE(x86cpu, powernow_k6_ids);
@@ -275,7 +277,7 @@ static int __init powernow_k6_init(void)
 		return -ENODEV;
 
 	if (!request_region(POWERNOW_IOPORT, 16, "PowerNow!")) {
-		printk(KERN_INFO PFX "PowerNow IOPORT region already used.\n");
+		pr_info("PowerNow IOPORT region already used\n");
 		return -EIO;
 	}
 

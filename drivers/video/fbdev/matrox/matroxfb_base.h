@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
  * Hardware accelerated Matrox Millennium I, II, Mystique, G100, G200, G400 and G450
@@ -47,7 +48,6 @@
 
 #if defined(CONFIG_PPC_PMAC)
 #include <asm/prom.h>
-#include <asm/pci-bridge.h>
 #include "../macmodes.h"
 #endif
 
@@ -86,7 +86,7 @@
 #ifdef DEBUG
 #define dprintk(X...)	printk(X)
 #else
-#define dprintk(X...)
+#define dprintk(X...)	no_printk(X)
 #endif
 
 #ifndef PCI_SS_VENDOR_ID_SIEMENS_NIXDORF

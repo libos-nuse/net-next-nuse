@@ -1,22 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file is part of wl18xx
  *
  * Copyright (C) 2012 Texas Instruments. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include <linux/ieee80211.h>
@@ -110,7 +96,7 @@ static int wl18xx_scan_send(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 
 	/* TODO: per-band ies? */
 	if (cmd->active[0]) {
-		u8 band = IEEE80211_BAND_2GHZ;
+		u8 band = NL80211_BAND_2GHZ;
 		ret = wl12xx_cmd_build_probe_req(wl, wlvif,
 				 cmd->role_id, band,
 				 req->ssids ? req->ssids[0].ssid : NULL,
@@ -127,7 +113,7 @@ static int wl18xx_scan_send(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 	}
 
 	if (cmd->active[1] || cmd->dfs) {
-		u8 band = IEEE80211_BAND_5GHZ;
+		u8 band = NL80211_BAND_5GHZ;
 		ret = wl12xx_cmd_build_probe_req(wl, wlvif,
 				 cmd->role_id, band,
 				 req->ssids ? req->ssids[0].ssid : NULL,
@@ -253,7 +239,7 @@ int wl18xx_scan_sched_scan_config(struct wl1271 *wl,
 	cmd->terminate_on_report = 0;
 
 	if (cmd->active[0]) {
-		u8 band = IEEE80211_BAND_2GHZ;
+		u8 band = NL80211_BAND_2GHZ;
 		ret = wl12xx_cmd_build_probe_req(wl, wlvif,
 				 cmd->role_id, band,
 				 req->ssids ? req->ssids[0].ssid : NULL,
@@ -270,7 +256,7 @@ int wl18xx_scan_sched_scan_config(struct wl1271 *wl,
 	}
 
 	if (cmd->active[1] || cmd->dfs) {
-		u8 band = IEEE80211_BAND_5GHZ;
+		u8 band = NL80211_BAND_5GHZ;
 		ret = wl12xx_cmd_build_probe_req(wl, wlvif,
 				 cmd->role_id, band,
 				 req->ssids ? req->ssids[0].ssid : NULL,

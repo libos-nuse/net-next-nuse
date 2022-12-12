@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /**
  * eCryptfs: Linux filesystem encryption layer
  * This is where eCryptfs coordinates the symmetric encryption and
@@ -8,21 +9,6 @@
  * Copyright (C) 2001-2003 Stony Brook University
  * Copyright (C) 2004-2007 International Business Machines Corp.
  *   Author(s): Michael A. Halcrow <mahalcro@us.ibm.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
- * 02111-1307, USA.
  */
 
 #include <linux/pagemap.h>
@@ -30,9 +16,9 @@
 #include <linux/page-flags.h>
 #include <linux/mount.h>
 #include <linux/file.h>
-#include <linux/crypto.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
+#include <linux/xattr.h>
 #include <asm/unaligned.h>
 #include "ecryptfs_kernel.h"
 
@@ -123,7 +109,7 @@ ecryptfs_copy_up_encrypted_with_header(struct page *page,
 				       struct ecryptfs_crypt_stat *crypt_stat)
 {
 	loff_t extent_num_in_page = 0;
-	loff_t num_extents_per_page = (PAGE_CACHE_SIZE
+	loff_t num_extents_per_page = (PAGE_SIZE
 				       / crypt_stat->extent_size);
 	int rc = 0;
 
@@ -139,7 +125,7 @@ ecryptfs_copy_up_encrypted_with_header(struct page *page,
 			char *page_virt;
 
 			page_virt = kmap_atomic(page);
-			memset(page_virt, 0, PAGE_CACHE_SIZE);
+			memset(page_virt, 0, PAGE_SIZE);
 			/* TODO: Support more than one header extent */
 			if (view_extent_num == 0) {
 				size_t written;
@@ -165,8 +151,8 @@ ecryptfs_copy_up_encrypted_with_header(struct page *page,
 				 - crypt_stat->metadata_size);
 
 			rc = ecryptfs_read_lower_page_segment(
-				page, (lower_offset >> PAGE_CACHE_SHIFT),
-				(lower_offset & ~PAGE_CACHE_MASK),
+				page, (lower_offset >> PAGE_SHIFT),
+				(lower_offset & ~PAGE_MASK),
 				crypt_stat->extent_size, page->mapping->host);
 			if (rc) {
 				printk(KERN_ERR "%s: Error attempting to read "
@@ -199,7 +185,7 @@ static int ecryptfs_readpage(struct file *file, struct page *page)
 
 	if (!crypt_stat || !(crypt_stat->flags & ECRYPTFS_ENCRYPTED)) {
 		rc = ecryptfs_read_lower_page_segment(page, page->index, 0,
-						      PAGE_CACHE_SIZE,
+						      PAGE_SIZE,
 						      page->mapping->host);
 	} else if (crypt_stat->flags & ECRYPTFS_VIEW_AS_ENCRYPTED) {
 		if (crypt_stat->flags & ECRYPTFS_METADATA_IN_XATTR) {
@@ -216,7 +202,7 @@ static int ecryptfs_readpage(struct file *file, struct page *page)
 
 		} else {
 			rc = ecryptfs_read_lower_page_segment(
-				page, page->index, 0, PAGE_CACHE_SIZE,
+				page, page->index, 0, PAGE_SIZE,
 				page->mapping->host);
 			if (rc) {
 				printk(KERN_ERR "Error reading page; rc = "
@@ -251,12 +237,12 @@ static int fill_zeros_to_end_of_page(struct page *page, unsigned int to)
 	struct inode *inode = page->mapping->host;
 	int end_byte_in_page;
 
-	if ((i_size_read(inode) / PAGE_CACHE_SIZE) != page->index)
+	if ((i_size_read(inode) / PAGE_SIZE) != page->index)
 		goto out;
-	end_byte_in_page = i_size_read(inode) % PAGE_CACHE_SIZE;
+	end_byte_in_page = i_size_read(inode) % PAGE_SIZE;
 	if (to > end_byte_in_page)
 		end_byte_in_page = to;
-	zero_user_segment(page, end_byte_in_page, PAGE_CACHE_SIZE);
+	zero_user_segment(page, end_byte_in_page, PAGE_SIZE);
 out:
 	return 0;
 }
@@ -280,7 +266,7 @@ static int ecryptfs_write_begin(struct file *file,
 			loff_t pos, unsigned len, unsigned flags,
 			struct page **pagep, void **fsdata)
 {
-	pgoff_t index = pos >> PAGE_CACHE_SHIFT;
+	pgoff_t index = pos >> PAGE_SHIFT;
 	struct page *page;
 	loff_t prev_page_end_size;
 	int rc = 0;
@@ -290,14 +276,14 @@ static int ecryptfs_write_begin(struct file *file,
 		return -ENOMEM;
 	*pagep = page;
 
-	prev_page_end_size = ((loff_t)index << PAGE_CACHE_SHIFT);
+	prev_page_end_size = ((loff_t)index << PAGE_SHIFT);
 	if (!PageUptodate(page)) {
 		struct ecryptfs_crypt_stat *crypt_stat =
 			&ecryptfs_inode_to_private(mapping->host)->crypt_stat;
 
 		if (!(crypt_stat->flags & ECRYPTFS_ENCRYPTED)) {
 			rc = ecryptfs_read_lower_page_segment(
-				page, index, 0, PAGE_CACHE_SIZE, mapping->host);
+				page, index, 0, PAGE_SIZE, mapping->host);
 			if (rc) {
 				printk(KERN_ERR "%s: Error attempting to read "
 				       "lower page segment; rc = [%d]\n",
@@ -323,7 +309,7 @@ static int ecryptfs_write_begin(struct file *file,
 				SetPageUptodate(page);
 			} else {
 				rc = ecryptfs_read_lower_page_segment(
-					page, index, 0, PAGE_CACHE_SIZE,
+					page, index, 0, PAGE_SIZE,
 					mapping->host);
 				if (rc) {
 					printk(KERN_ERR "%s: Error reading "
@@ -337,9 +323,9 @@ static int ecryptfs_write_begin(struct file *file,
 		} else {
 			if (prev_page_end_size
 			    >= i_size_read(page->mapping->host)) {
-				zero_user(page, 0, PAGE_CACHE_SIZE);
+				zero_user(page, 0, PAGE_SIZE);
 				SetPageUptodate(page);
-			} else if (len < PAGE_CACHE_SIZE) {
+			} else if (len < PAGE_SIZE) {
 				rc = ecryptfs_decrypt_page(page);
 				if (rc) {
 					printk(KERN_ERR "%s: Error decrypting "
@@ -372,11 +358,11 @@ static int ecryptfs_write_begin(struct file *file,
 	 * of page?  Zero it out. */
 	if ((i_size_read(mapping->host) == prev_page_end_size)
 	    && (pos != 0))
-		zero_user(page, 0, PAGE_CACHE_SIZE);
+		zero_user(page, 0, PAGE_SIZE);
 out:
 	if (unlikely(rc)) {
 		unlock_page(page);
-		page_cache_release(page);
+		put_page(page);
 		*pagep = NULL;
 	}
 	return rc;
@@ -423,7 +409,7 @@ static int ecryptfs_write_inode_size_to_xattr(struct inode *ecryptfs_inode)
 	struct inode *lower_inode = d_inode(lower_dentry);
 	int rc;
 
-	if (!lower_inode->i_op->getxattr || !lower_inode->i_op->setxattr) {
+	if (!(lower_inode->i_opflags & IOP_XATTR)) {
 		printk(KERN_WARNING
 		       "No support for setting xattr in lower filesystem\n");
 		rc = -ENOSYS;
@@ -431,20 +417,18 @@ static int ecryptfs_write_inode_size_to_xattr(struct inode *ecryptfs_inode)
 	}
 	xattr_virt = kmem_cache_alloc(ecryptfs_xattr_cache, GFP_KERNEL);
 	if (!xattr_virt) {
-		printk(KERN_ERR "Out of memory whilst attempting to write "
-		       "inode size to xattr\n");
 		rc = -ENOMEM;
 		goto out;
 	}
-	mutex_lock(&lower_inode->i_mutex);
-	size = lower_inode->i_op->getxattr(lower_dentry, ECRYPTFS_XATTR_NAME,
-					   xattr_virt, PAGE_CACHE_SIZE);
+	inode_lock(lower_inode);
+	size = __vfs_getxattr(lower_dentry, lower_inode, ECRYPTFS_XATTR_NAME,
+			      xattr_virt, PAGE_SIZE);
 	if (size < 0)
 		size = 8;
 	put_unaligned_be64(i_size_read(ecryptfs_inode), xattr_virt);
-	rc = lower_inode->i_op->setxattr(lower_dentry, ECRYPTFS_XATTR_NAME,
-					 xattr_virt, size, 0);
-	mutex_unlock(&lower_inode->i_mutex);
+	rc = __vfs_setxattr(lower_dentry, lower_inode, ECRYPTFS_XATTR_NAME,
+			    xattr_virt, size, 0);
+	inode_unlock(lower_inode);
 	if (rc)
 		printk(KERN_ERR "Error whilst attempting to write inode size "
 		       "to lower file xattr; rc = [%d]\n", rc);
@@ -480,8 +464,8 @@ static int ecryptfs_write_end(struct file *file,
 			loff_t pos, unsigned len, unsigned copied,
 			struct page *page, void *fsdata)
 {
-	pgoff_t index = pos >> PAGE_CACHE_SHIFT;
-	unsigned from = pos & (PAGE_CACHE_SIZE - 1);
+	pgoff_t index = pos >> PAGE_SHIFT;
+	unsigned from = pos & (PAGE_SIZE - 1);
 	unsigned to = from + copied;
 	struct inode *ecryptfs_inode = mapping->host;
 	struct ecryptfs_crypt_stat *crypt_stat =
@@ -501,7 +485,7 @@ static int ecryptfs_write_end(struct file *file,
 		goto out;
 	}
 	if (!PageUptodate(page)) {
-		if (copied < PAGE_CACHE_SIZE) {
+		if (copied < PAGE_SIZE) {
 			rc = 0;
 			goto out;
 		}
@@ -534,22 +518,18 @@ static int ecryptfs_write_end(struct file *file,
 		rc = copied;
 out:
 	unlock_page(page);
-	page_cache_release(page);
+	put_page(page);
 	return rc;
 }
 
 static sector_t ecryptfs_bmap(struct address_space *mapping, sector_t block)
 {
-	int rc = 0;
-	struct inode *inode;
-	struct inode *lower_inode;
+	struct inode *lower_inode = ecryptfs_inode_to_lower(mapping->host);
+	int ret = bmap(lower_inode, &block);
 
-	inode = (struct inode *)mapping->host;
-	lower_inode = ecryptfs_inode_to_lower(inode);
-	if (lower_inode->i_mapping->a_ops->bmap)
-		rc = lower_inode->i_mapping->a_ops->bmap(lower_inode->i_mapping,
-							 block);
-	return rc;
+	if (ret)
+		return 0;
+	return block;
 }
 
 const struct address_space_operations ecryptfs_aops = {

@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Intel Reference Systems cplds
  *
  * Copyright (C) 2014 Robert Jarzmik
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
  * Cplds motherboard driver, supporting lubbock and mainstone SoC board.
  */
@@ -41,30 +37,35 @@ static irqreturn_t cplds_irq_handler(int in_irq, void *d)
 	unsigned long pending;
 	unsigned int bit;
 
-	pending = readl(fpga->base + FPGA_IRQ_SET_CLR) & fpga->irq_mask;
-	for_each_set_bit(bit, &pending, CPLDS_NB_IRQ)
-		generic_handle_irq(irq_find_mapping(fpga->irqdomain, bit));
+	do {
+		pending = readl(fpga->base + FPGA_IRQ_SET_CLR) & fpga->irq_mask;
+		for_each_set_bit(bit, &pending, CPLDS_NB_IRQ) {
+			generic_handle_irq(irq_find_mapping(fpga->irqdomain,
+							    bit));
+		}
+	} while (pending);
 
 	return IRQ_HANDLED;
 }
 
-static void cplds_irq_mask_ack(struct irq_data *d)
+static void cplds_irq_mask(struct irq_data *d)
 {
 	struct cplds *fpga = irq_data_get_irq_chip_data(d);
 	unsigned int cplds_irq = irqd_to_hwirq(d);
-	unsigned int set, bit = BIT(cplds_irq);
+	unsigned int bit = BIT(cplds_irq);
 
 	fpga->irq_mask &= ~bit;
 	writel(fpga->irq_mask, fpga->base + FPGA_IRQ_MASK_EN);
-	set = readl(fpga->base + FPGA_IRQ_SET_CLR);
-	writel(set & ~bit, fpga->base + FPGA_IRQ_SET_CLR);
 }
 
 static void cplds_irq_unmask(struct irq_data *d)
 {
 	struct cplds *fpga = irq_data_get_irq_chip_data(d);
 	unsigned int cplds_irq = irqd_to_hwirq(d);
-	unsigned int bit = BIT(cplds_irq);
+	unsigned int set, bit = BIT(cplds_irq);
+
+	set = readl(fpga->base + FPGA_IRQ_SET_CLR);
+	writel(set & ~bit, fpga->base + FPGA_IRQ_SET_CLR);
 
 	fpga->irq_mask |= bit;
 	writel(fpga->irq_mask, fpga->base + FPGA_IRQ_MASK_EN);
@@ -72,7 +73,8 @@ static void cplds_irq_unmask(struct irq_data *d)
 
 static struct irq_chip cplds_irq_chip = {
 	.name		= "pxa_cplds",
-	.irq_mask_ack	= cplds_irq_mask_ack,
+	.irq_ack	= cplds_irq_mask,
+	.irq_mask	= cplds_irq_mask,
 	.irq_unmask	= cplds_irq_unmask,
 	.flags		= IRQCHIP_MASK_ON_SUSPEND | IRQCHIP_SKIP_SET_WAKE,
 };
@@ -114,13 +116,9 @@ static int cplds_probe(struct platform_device *pdev)
 	if (!fpga)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
-	if (res) {
-		fpga->irq = (unsigned int)res->start;
-		irqflags = res->flags;
-	}
-	if (!fpga->irq)
-		return -ENODEV;
+	fpga->irq = platform_get_irq(pdev, 0);
+	if (fpga->irq <= 0)
+		return fpga->irq;
 
 	base_irq = platform_get_irq(pdev, 1);
 	if (base_irq < 0)
@@ -136,6 +134,7 @@ static int cplds_probe(struct platform_device *pdev)
 	writel(fpga->irq_mask, fpga->base + FPGA_IRQ_MASK_EN);
 	writel(0, fpga->base + FPGA_IRQ_SET_CLR);
 
+	irqflags = irq_get_trigger_type(fpga->irq);
 	ret = devm_request_irq(&pdev->dev, fpga->irq, cplds_irq_handler,
 			       irqflags, dev_name(&pdev->dev), fpga);
 	if (ret == -ENOSYS)

@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * arch/arm/mach-pxa/include/mach/pxa3xx-regs.h
  *
  * PXA3xx specific register definitions
  *
  * Copyright (C) 2007 Marvell International Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __ASM_ARCH_PXA3XX_REGS_H
@@ -18,7 +15,7 @@
 /*
  * Oscillator Configuration Register (OSCC)
  */
-#define OSCC           __REG(0x41350000)  /* Oscillator Configuration Register */
+#define OSCC           io_p2v(0x41350000)  /* Oscillator Configuration Register */
 
 #define OSCC_PEN       (1 << 11)       /* 13MHz POUT */
 

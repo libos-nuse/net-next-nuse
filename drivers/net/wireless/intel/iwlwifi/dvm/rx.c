@@ -1,28 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
  *
  * Copyright(c) 2003 - 2014 Intel Corporation. All rights reserved.
+ * Copyright(c) 2015 Intel Deutschland GmbH
+ * Copyright(c) 2018 Intel Corporation
  *
  * Portions of this file are derived from the ipw3945 project, as well
  * as portionhelp of the ieee80211 subsystem header files.
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- * The full GNU General Public License is included in this distribution in the
- * file called LICENSE.
- *
  * Contact Information:
- *  Intel Linux Wireless <ilw@linux.intel.com>
+ *  Intel Linux Wireless <linuxwifi@intel.com>
  * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
  *
  *****************************************************************************/
@@ -32,90 +19,12 @@
 #include <linux/sched.h>
 #include <net/mac80211.h>
 #include <asm/unaligned.h>
+
+#include "iwl-trans.h"
 #include "iwl-io.h"
 #include "dev.h"
 #include "calib.h"
 #include "agn.h"
-
-#define IWL_CMD_ENTRY(x) [x] = #x
-
-const char *const iwl_dvm_cmd_strings[REPLY_MAX + 1] = {
-	IWL_CMD_ENTRY(REPLY_ALIVE),
-	IWL_CMD_ENTRY(REPLY_ERROR),
-	IWL_CMD_ENTRY(REPLY_ECHO),
-	IWL_CMD_ENTRY(REPLY_RXON),
-	IWL_CMD_ENTRY(REPLY_RXON_ASSOC),
-	IWL_CMD_ENTRY(REPLY_QOS_PARAM),
-	IWL_CMD_ENTRY(REPLY_RXON_TIMING),
-	IWL_CMD_ENTRY(REPLY_ADD_STA),
-	IWL_CMD_ENTRY(REPLY_REMOVE_STA),
-	IWL_CMD_ENTRY(REPLY_REMOVE_ALL_STA),
-	IWL_CMD_ENTRY(REPLY_TXFIFO_FLUSH),
-	IWL_CMD_ENTRY(REPLY_WEPKEY),
-	IWL_CMD_ENTRY(REPLY_TX),
-	IWL_CMD_ENTRY(REPLY_LEDS_CMD),
-	IWL_CMD_ENTRY(REPLY_TX_LINK_QUALITY_CMD),
-	IWL_CMD_ENTRY(COEX_PRIORITY_TABLE_CMD),
-	IWL_CMD_ENTRY(COEX_MEDIUM_NOTIFICATION),
-	IWL_CMD_ENTRY(COEX_EVENT_CMD),
-	IWL_CMD_ENTRY(REPLY_QUIET_CMD),
-	IWL_CMD_ENTRY(REPLY_CHANNEL_SWITCH),
-	IWL_CMD_ENTRY(CHANNEL_SWITCH_NOTIFICATION),
-	IWL_CMD_ENTRY(REPLY_SPECTRUM_MEASUREMENT_CMD),
-	IWL_CMD_ENTRY(SPECTRUM_MEASURE_NOTIFICATION),
-	IWL_CMD_ENTRY(POWER_TABLE_CMD),
-	IWL_CMD_ENTRY(PM_SLEEP_NOTIFICATION),
-	IWL_CMD_ENTRY(PM_DEBUG_STATISTIC_NOTIFIC),
-	IWL_CMD_ENTRY(REPLY_SCAN_CMD),
-	IWL_CMD_ENTRY(REPLY_SCAN_ABORT_CMD),
-	IWL_CMD_ENTRY(SCAN_START_NOTIFICATION),
-	IWL_CMD_ENTRY(SCAN_RESULTS_NOTIFICATION),
-	IWL_CMD_ENTRY(SCAN_COMPLETE_NOTIFICATION),
-	IWL_CMD_ENTRY(BEACON_NOTIFICATION),
-	IWL_CMD_ENTRY(REPLY_TX_BEACON),
-	IWL_CMD_ENTRY(WHO_IS_AWAKE_NOTIFICATION),
-	IWL_CMD_ENTRY(QUIET_NOTIFICATION),
-	IWL_CMD_ENTRY(REPLY_TX_PWR_TABLE_CMD),
-	IWL_CMD_ENTRY(MEASURE_ABORT_NOTIFICATION),
-	IWL_CMD_ENTRY(REPLY_BT_CONFIG),
-	IWL_CMD_ENTRY(REPLY_STATISTICS_CMD),
-	IWL_CMD_ENTRY(STATISTICS_NOTIFICATION),
-	IWL_CMD_ENTRY(REPLY_CARD_STATE_CMD),
-	IWL_CMD_ENTRY(CARD_STATE_NOTIFICATION),
-	IWL_CMD_ENTRY(MISSED_BEACONS_NOTIFICATION),
-	IWL_CMD_ENTRY(REPLY_CT_KILL_CONFIG_CMD),
-	IWL_CMD_ENTRY(SENSITIVITY_CMD),
-	IWL_CMD_ENTRY(REPLY_PHY_CALIBRATION_CMD),
-	IWL_CMD_ENTRY(REPLY_RX_PHY_CMD),
-	IWL_CMD_ENTRY(REPLY_RX_MPDU_CMD),
-	IWL_CMD_ENTRY(REPLY_COMPRESSED_BA),
-	IWL_CMD_ENTRY(CALIBRATION_CFG_CMD),
-	IWL_CMD_ENTRY(CALIBRATION_RES_NOTIFICATION),
-	IWL_CMD_ENTRY(CALIBRATION_COMPLETE_NOTIFICATION),
-	IWL_CMD_ENTRY(REPLY_TX_POWER_DBM_CMD),
-	IWL_CMD_ENTRY(TEMPERATURE_NOTIFICATION),
-	IWL_CMD_ENTRY(TX_ANT_CONFIGURATION_CMD),
-	IWL_CMD_ENTRY(REPLY_BT_COEX_PROFILE_NOTIF),
-	IWL_CMD_ENTRY(REPLY_BT_COEX_PRIO_TABLE),
-	IWL_CMD_ENTRY(REPLY_BT_COEX_PROT_ENV),
-	IWL_CMD_ENTRY(REPLY_WIPAN_PARAMS),
-	IWL_CMD_ENTRY(REPLY_WIPAN_RXON),
-	IWL_CMD_ENTRY(REPLY_WIPAN_RXON_TIMING),
-	IWL_CMD_ENTRY(REPLY_WIPAN_RXON_ASSOC),
-	IWL_CMD_ENTRY(REPLY_WIPAN_QOS_PARAM),
-	IWL_CMD_ENTRY(REPLY_WIPAN_WEPKEY),
-	IWL_CMD_ENTRY(REPLY_WIPAN_P2P_CHANNEL_SWITCH),
-	IWL_CMD_ENTRY(REPLY_WIPAN_NOA_NOTIFICATION),
-	IWL_CMD_ENTRY(REPLY_WIPAN_DEACTIVATION_COMPLETE),
-	IWL_CMD_ENTRY(REPLY_WOWLAN_PATTERNS),
-	IWL_CMD_ENTRY(REPLY_WOWLAN_WAKEUP_FILTER),
-	IWL_CMD_ENTRY(REPLY_WOWLAN_TSC_RSC_PARAMS),
-	IWL_CMD_ENTRY(REPLY_WOWLAN_TKIP_PARAMS),
-	IWL_CMD_ENTRY(REPLY_WOWLAN_KEK_KCK_MATERIAL),
-	IWL_CMD_ENTRY(REPLY_WOWLAN_GET_STATUS),
-	IWL_CMD_ENTRY(REPLY_D3_CONFIG),
-};
-#undef IWL_CMD_ENTRY
 
 /******************************************************************************
  *
@@ -223,7 +132,7 @@ static void iwlagn_rx_beacon_notif(struct iwl_priv *priv,
 	priv->ibss_manager = le32_to_cpu(beacon->ibss_mgr_status);
 }
 
-/**
+/*
  * iwl_good_plcp_health - checks for plcp error.
  *
  * When the plcp error is exceeding the thresholds, reset the radio
@@ -673,7 +582,7 @@ static int iwlagn_set_decrypted_flag(struct iwl_priv *priv,
 		if ((decrypt_res & RX_RES_STATUS_DECRYPT_TYPE_MSK) ==
 		    RX_RES_STATUS_BAD_KEY_TTAK)
 			break;
-
+		/* fall through */
 	case RX_RES_STATUS_SEC_TYPE_WEP:
 		if ((decrypt_res & RX_RES_STATUS_DECRYPT_TYPE_MSK) ==
 		    RX_RES_STATUS_BAD_ICV_MIC) {
@@ -682,6 +591,7 @@ static int iwlagn_set_decrypted_flag(struct iwl_priv *priv,
 			IWL_DEBUG_RX(priv, "Packet destroyed\n");
 			return -1;
 		}
+		/* fall through */
 	case RX_RES_STATUS_SEC_TYPE_CCMP:
 		if ((decrypt_res & RX_RES_STATUS_DECRYPT_TYPE_MSK) ==
 		    RX_RES_STATUS_DECRYPT_OK) {
@@ -716,7 +626,7 @@ static void iwlagn_pass_packet_to_mac80211(struct iwl_priv *priv,
 	}
 
 	/* In case of HW accelerated crypto and bad decryption, drop */
-	if (!iwlwifi_mod_params.sw_crypto &&
+	if (!iwlwifi_mod_params.swcrypto &&
 	    iwlagn_set_decrypted_flag(priv, hdr, ampdu_status, stats))
 		return;
 
@@ -734,7 +644,7 @@ static void iwlagn_pass_packet_to_mac80211(struct iwl_priv *priv,
 	 */
 	hdrlen = (len <= skb_tailroom(skb)) ? len : sizeof(*hdr);
 
-	memcpy(skb_put(skb, hdrlen), hdr, hdrlen);
+	skb_put_data(skb, hdr, hdrlen);
 	fraglen = len - hdrlen;
 
 	if (fraglen) {
@@ -763,7 +673,7 @@ static void iwlagn_pass_packet_to_mac80211(struct iwl_priv *priv,
 
 	memcpy(IEEE80211_SKB_RXCB(skb), stats, sizeof(*stats));
 
-	ieee80211_rx_napi(priv->hw, skb, priv->napi);
+	ieee80211_rx_napi(priv->hw, NULL, skb, priv->napi);
 }
 
 static u32 iwlagn_translate_rx_status(struct iwl_priv *priv, u32 decrypt_in)
@@ -810,7 +720,7 @@ static u32 iwlagn_translate_rx_status(struct iwl_priv *priv, u32 decrypt_in)
 			decrypt_out |= RX_RES_STATUS_BAD_KEY_TTAK;
 			break;
 		}
-		/* fall through if TTAK OK */
+		/* fall through */
 	default:
 		if (!(decrypt_in & RX_MPDU_RES_STATUS_ICV_OK))
 			decrypt_out |= RX_RES_STATUS_BAD_ICV_MIC;
@@ -911,7 +821,7 @@ static void iwlagn_rx_reply_rx(struct iwl_priv *priv,
 	/* rx_status carries information about the packet to mac80211 */
 	rx_status.mactime = le64_to_cpu(phy_res->timestamp);
 	rx_status.band = (phy_res->phy_flags & RX_RES_PHY_FLAGS_BAND_24_MSK) ?
-				IEEE80211_BAND_2GHZ : IEEE80211_BAND_5GHZ;
+				NL80211_BAND_2GHZ : NL80211_BAND_5GHZ;
 	rx_status.freq =
 		ieee80211_channel_to_frequency(le16_to_cpu(phy_res->channel),
 					       rx_status.band);
@@ -950,7 +860,7 @@ static void iwlagn_rx_reply_rx(struct iwl_priv *priv,
 
 	/* set the preamble flag if appropriate */
 	if (phy_res->phy_flags & RX_RES_PHY_FLAGS_SHORT_PREAMBLE_MSK)
-		rx_status.flag |= RX_FLAG_SHORTPRE;
+		rx_status.enc_flags |= RX_ENC_FLAG_SHORTPRE;
 
 	if (phy_res->phy_flags & RX_RES_PHY_FLAGS_AGG_MSK) {
 		/*
@@ -964,13 +874,15 @@ static void iwlagn_rx_reply_rx(struct iwl_priv *priv,
 
 	/* Set up the HT phy flags */
 	if (rate_n_flags & RATE_MCS_HT_MSK)
-		rx_status.flag |= RX_FLAG_HT;
+		rx_status.encoding = RX_ENC_HT;
 	if (rate_n_flags & RATE_MCS_HT40_MSK)
-		rx_status.flag |= RX_FLAG_40MHZ;
+		rx_status.bw = RATE_INFO_BW_40;
+	else
+		rx_status.bw = RATE_INFO_BW_20;
 	if (rate_n_flags & RATE_MCS_SGI_MSK)
-		rx_status.flag |= RX_FLAG_SHORT_GI;
+		rx_status.enc_flags |= RX_ENC_FLAG_SHORT_GI;
 	if (rate_n_flags & RATE_MCS_GF_MSK)
-		rx_status.flag |= RX_FLAG_HT_GF;
+		rx_status.enc_flags |= RX_ENC_FLAG_HT_GF;
 
 	iwlagn_pass_packet_to_mac80211(priv, header, len, ampdu_status,
 				    rxb, &rx_status);
@@ -1017,7 +929,7 @@ static void iwlagn_rx_noa_notification(struct iwl_priv *priv,
 		kfree_rcu(old_data, rcu_head);
 }
 
-/**
+/*
  * iwl_setup_rx_handlers - Initialize Rx handler callbacks
  *
  * Setup the RX handlers for each of the reply types sent from the uCode
@@ -1095,7 +1007,9 @@ void iwl_rx_dispatch(struct iwl_op_mode *op_mode, struct napi_struct *napi,
 	} else {
 		/* No handling needed */
 		IWL_DEBUG_RX(priv, "No handler needed for %s, 0x%02x\n",
-			     iwl_dvm_get_cmd_string(pkt->hdr.cmd),
+			     iwl_get_cmd_string(priv->trans,
+						iwl_cmd_id(pkt->hdr.cmd,
+							   0, 0)),
 			     pkt->hdr.cmd);
 	}
 }

@@ -1,25 +1,5 @@
-/* Intel(R) Gigabit Ethernet Linux driver
- * Copyright(c) 2007-2014 Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, see <http://www.gnu.org/licenses/>.
- *
- * The full GNU General Public License is included in this distribution in
- * the file called "COPYING".
- *
- * Contact Information:
- * e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
- * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
- */
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Copyright(c) 2007 - 2018 Intel Corporation. */
 
 #ifndef _E1000_PHY_H_
 #define _E1000_PHY_H_
@@ -91,10 +71,10 @@ s32  igb_check_polarity_m88(struct e1000_hw *hw);
 
 #define I82580_ADDR_REG                   16
 #define I82580_CFG_REG                    22
-#define I82580_CFG_ASSERT_CRS_ON_TX       (1 << 15)
-#define I82580_CFG_ENABLE_DOWNSHIFT       (3 << 10) /* auto downshift 100/10 */
+#define I82580_CFG_ASSERT_CRS_ON_TX       BIT(15)
+#define I82580_CFG_ENABLE_DOWNSHIFT       (3u << 10) /* auto downshift 100/10 */
 #define I82580_CTRL_REG                   23
-#define I82580_CTRL_DOWNSHIFT_MASK        (7 << 10)
+#define I82580_CTRL_DOWNSHIFT_MASK        (7u << 10)
 
 /* 82580 specific PHY registers */
 #define I82580_PHY_CTRL_2            18

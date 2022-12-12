@@ -25,13 +25,16 @@
 #include <linux/version.h>
 
 #define N_DATA_REGS					8
-#define N_DATA_BYTES					(N_DATA_REGS * 4)
 
-/* BSC count register field definitions */
-#define BSC_CNT_REG1_MASK				0x0000003f
-#define BSC_CNT_REG1_SHIFT				0
-#define BSC_CNT_REG2_MASK				0x00000fc0
-#define BSC_CNT_REG2_SHIFT				6
+/*
+ * PER_I2C/BSC count register mask depends on 1 byte/4 byte data register
+ * size. Cable modem and DSL SoCs with Peripheral i2c cores use 1 byte per
+ * data register whereas STB SoCs use 4 byte per data register transfer,
+ * account for this difference in total count per transaction and mask to
+ * use.
+ */
+#define BSC_CNT_REG1_MASK(nb)	(nb == 1 ? GENMASK(3, 0) : GENMASK(5, 0))
+#define BSC_CNT_REG1_SHIFT	0
 
 /* BSC CTL register field definitions */
 #define BSC_CTL_REG_DTF_MASK				0x00000003
@@ -41,7 +44,7 @@
 #define BSC_CTL_REG_INT_EN_SHIFT			6
 #define BSC_CTL_REG_DIV_CLK_MASK			0x00000080
 
-/* BSC_IIC_ENABLE r/w enable and interrupt field defintions */
+/* BSC_IIC_ENABLE r/w enable and interrupt field definitions */
 #define BSC_IIC_EN_RESTART_MASK				0x00000040
 #define BSC_IIC_EN_NOSTART_MASK				0x00000020
 #define BSC_IIC_EN_NOSTOP_MASK				0x00000010
@@ -162,13 +165,12 @@ static const struct bsc_clk_param bsc_clk[] = {
 struct brcmstb_i2c_dev {
 	struct device *device;
 	void __iomem *base;
-	void __iomem *irq_base;
 	int irq;
 	struct bsc_regs *bsc_regmap;
 	struct i2c_adapter adapter;
 	struct completion done;
-	bool is_suspended;
 	u32 clk_freq_hz;
+	int data_regsz;
 };
 
 /* register accessors for both be and le cpu arch */
@@ -185,6 +187,16 @@ struct brcmstb_i2c_dev {
 
 #define bsc_writel(_dev, _val, _reg)					\
 	__bsc_writel(_val, _dev->base + offsetof(struct bsc_regs, _reg))
+
+static inline int brcmstb_i2c_get_xfersz(struct brcmstb_i2c_dev *dev)
+{
+	return (N_DATA_REGS * dev->data_regsz);
+}
+
+static inline int brcmstb_i2c_get_data_regsz(struct brcmstb_i2c_dev *dev)
+{
+	return dev->data_regsz;
+}
 
 static void brcmstb_i2c_enable_disable_irq(struct brcmstb_i2c_dev *dev,
 					   bool int_en)
@@ -214,7 +226,7 @@ static irqreturn_t brcmstb_i2c_isr(int irq, void *devid)
 		return IRQ_NONE;
 
 	brcmstb_i2c_enable_disable_irq(dev, INT_DISABLE);
-	complete_all(&dev->done);
+	complete(&dev->done);
 
 	dev_dbg(dev->device, "isr handled");
 	return IRQ_HANDLED;
@@ -304,7 +316,7 @@ static int brcmstb_send_i2c_cmd(struct brcmstb_i2c_dev *dev,
 		goto cmd_out;
 	}
 
-	if ((CMD_RD || CMD_WR) &&
+	if ((cmd == CMD_RD || cmd == CMD_WR) &&
 	    bsc_readl(dev, iic_enable) & BSC_IIC_EN_NOACK_MASK) {
 		rc = -EREMOTEIO;
 		dev_dbg(dev->device, "controller received NOACK intr for %s\n",
@@ -323,14 +335,15 @@ static int brcmstb_i2c_xfer_bsc_data(struct brcmstb_i2c_dev *dev,
 				     u8 *buf, unsigned int len,
 				     struct i2c_msg *pmsg)
 {
-	int cnt, byte, rc;
+	int cnt, byte, i, rc;
 	enum bsc_xfer_cmd cmd;
 	u32 ctl_reg;
 	struct bsc_regs *pi2creg = dev->bsc_regmap;
 	int no_ack = pmsg->flags & I2C_M_IGNORE_NAK;
+	int data_regsz = brcmstb_i2c_get_data_regsz(dev);
 
 	/* see if the transaction needs to check NACK conditions */
-	if (no_ack || len <= N_DATA_BYTES) {
+	if (no_ack) {
 		cmd = (pmsg->flags & I2C_M_RD) ? CMD_RD_NOACK
 			: CMD_WR_NOACK;
 		pi2creg->ctlhi_reg |= BSC_CTLHI_REG_IGNORE_ACK_MASK;
@@ -348,20 +361,22 @@ static int brcmstb_i2c_xfer_bsc_data(struct brcmstb_i2c_dev *dev,
 		pi2creg->ctl_reg = ctl_reg | DTF_RD_MASK;
 
 	/* set the read/write length */
-	bsc_writel(dev, BSC_CNT_REG1_MASK & (len << BSC_CNT_REG1_SHIFT),
-		   cnt_reg);
+	bsc_writel(dev, BSC_CNT_REG1_MASK(data_regsz) &
+		   (len << BSC_CNT_REG1_SHIFT), cnt_reg);
 
 	/* Write data into data_in register */
+
 	if (cmd == CMD_WR || cmd == CMD_WR_NOACK) {
-		for (cnt = 0; cnt < len; cnt += 4) {
+		for (cnt = 0, i = 0; cnt < len; cnt += data_regsz, i++) {
 			u32 word = 0;
 
-			for (byte = 0; byte < 4; byte++) {
-				word >>= 8;
+			for (byte = 0; byte < data_regsz; byte++) {
+				word >>= BITS_PER_BYTE;
 				if ((cnt + byte) < len)
-					word |= buf[cnt + byte] << 24;
+					word |= buf[cnt + byte] <<
+					(BITS_PER_BYTE * (data_regsz - 1));
 			}
-			bsc_writel(dev, word, data_in[cnt >> 2]);
+			bsc_writel(dev, word, data_in[i]);
 		}
 	}
 
@@ -373,14 +388,15 @@ static int brcmstb_i2c_xfer_bsc_data(struct brcmstb_i2c_dev *dev,
 		return rc;
 	}
 
+	/* Read data from data_out register */
 	if (cmd == CMD_RD || cmd == CMD_RD_NOACK) {
-		for (cnt = 0; cnt < len; cnt += 4) {
-			u32 data = bsc_readl(dev, data_out[cnt >> 2]);
+		for (cnt = 0, i = 0; cnt < len; cnt += data_regsz, i++) {
+			u32 data = bsc_readl(dev, data_out[i]);
 
-			for (byte = 0; byte < 4 &&
+			for (byte = 0; byte < data_regsz &&
 				     (byte + cnt) < len; byte++) {
 				buf[cnt + byte] = data & 0xff;
-				data >>= 8;
+				data >>= BITS_PER_BYTE;
 			}
 		}
 	}
@@ -427,9 +443,7 @@ static int brcmstb_i2c_do_addr(struct brcmstb_i2c_dev *dev,
 
 		}
 	} else {
-		addr = msg->addr << 1;
-		if (msg->flags & I2C_M_RD)
-			addr |= 1;
+		addr = i2c_8bit_addr_from_msg(msg);
 
 		bsc_writel(dev, addr, chip_address);
 	}
@@ -448,9 +462,8 @@ static int brcmstb_i2c_xfer(struct i2c_adapter *adapter,
 	int bytes_to_xfer;
 	u8 *tmp_buf;
 	int len = 0;
-
-	if (dev->is_suspended)
-		return -EBUSY;
+	int xfersz = brcmstb_i2c_get_xfersz(dev);
+	u32 cond, cond_per_msg;
 
 	/* Loop through all messages */
 	for (i = 0; i < num; i++) {
@@ -464,10 +477,11 @@ static int brcmstb_i2c_xfer(struct i2c_adapter *adapter,
 			pmsg->buf ? pmsg->buf[0] : '0', pmsg->len);
 
 		if (i < (num - 1) && (msgs[i + 1].flags & I2C_M_NOSTART))
-			brcmstb_set_i2c_start_stop(dev, ~(COND_START_STOP));
+			cond = ~COND_START_STOP;
 		else
-			brcmstb_set_i2c_start_stop(dev,
-						   COND_RESTART | COND_NOSTOP);
+			cond = COND_RESTART | COND_NOSTOP;
+
+		brcmstb_set_i2c_start_stop(dev, cond);
 
 		/* Send slave address */
 		if (!(pmsg->flags & I2C_M_NOSTART)) {
@@ -480,13 +494,24 @@ static int brcmstb_i2c_xfer(struct i2c_adapter *adapter,
 			}
 		}
 
+		cond_per_msg = cond;
+
 		/* Perform data transfer */
 		while (len) {
-			bytes_to_xfer = min(len, N_DATA_BYTES);
+			bytes_to_xfer = min(len, xfersz);
 
-			if (len <= N_DATA_BYTES && i == (num - 1))
-				brcmstb_set_i2c_start_stop(dev,
-							   ~(COND_START_STOP));
+			if (len <= xfersz) {
+				if (i == (num - 1))
+					cond_per_msg = cond_per_msg &
+						~(COND_RESTART | COND_NOSTOP);
+				else
+					cond_per_msg = cond;
+			} else {
+				cond_per_msg = (cond_per_msg & ~COND_RESTART) |
+					COND_NOSTOP;
+			}
+
+			brcmstb_set_i2c_start_stop(dev, cond_per_msg);
 
 			rc = brcmstb_i2c_xfer_bsc_data(dev, tmp_buf,
 						       bytes_to_xfer, pmsg);
@@ -495,6 +520,8 @@ static int brcmstb_i2c_xfer(struct i2c_adapter *adapter,
 
 			len -=  bytes_to_xfer;
 			tmp_buf += bytes_to_xfer;
+
+			cond_per_msg = COND_NOSTART | COND_NOSTOP;
 		}
 	}
 
@@ -542,11 +569,40 @@ static void brcmstb_i2c_set_bus_speed(struct brcmstb_i2c_dev *dev)
 
 static void brcmstb_i2c_set_bsc_reg_defaults(struct brcmstb_i2c_dev *dev)
 {
-	/* 4 byte data register */
-	dev->bsc_regmap->ctlhi_reg = BSC_CTLHI_REG_DATAREG_SIZE_MASK;
+	if (brcmstb_i2c_get_data_regsz(dev) == sizeof(u32))
+		/* set 4 byte data in/out xfers  */
+		dev->bsc_regmap->ctlhi_reg = BSC_CTLHI_REG_DATAREG_SIZE_MASK;
+	else
+		dev->bsc_regmap->ctlhi_reg &= ~BSC_CTLHI_REG_DATAREG_SIZE_MASK;
+
 	bsc_writel(dev, dev->bsc_regmap->ctlhi_reg, ctlhi_reg);
 	/* set bus speed */
 	brcmstb_i2c_set_bus_speed(dev);
+}
+
+#define AUTOI2C_CTRL0		0x26c
+#define AUTOI2C_CTRL0_RELEASE_BSC	BIT(1)
+
+static int bcm2711_release_bsc(struct brcmstb_i2c_dev *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev->device);
+	struct resource *iomem;
+	void __iomem *autoi2c;
+
+	/* Map hardware registers */
+	iomem = platform_get_resource_byname(pdev, IORESOURCE_MEM, "auto-i2c");
+	autoi2c = devm_ioremap_resource(&pdev->dev, iomem);
+	if (IS_ERR(autoi2c))
+		return PTR_ERR(autoi2c);
+
+	writel(AUTOI2C_CTRL0_RELEASE_BSC, autoi2c + AUTOI2C_CTRL0);
+	devm_iounmap(&pdev->dev, autoi2c);
+
+	/* We need to reset the controller after the release */
+	dev->bsc_regmap->iic_enable = 0;
+	bsc_writel(dev, dev->bsc_regmap->iic_enable, iic_enable);
+
+	return 0;
 }
 
 static int brcmstb_i2c_probe(struct platform_device *pdev)
@@ -562,8 +618,7 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 	if (!dev)
 		return -ENOMEM;
 
-	dev->bsc_regmap = devm_kzalloc(&pdev->dev, sizeof(struct bsc_regs *),
-				       GFP_KERNEL);
+	dev->bsc_regmap = devm_kzalloc(&pdev->dev, sizeof(*dev->bsc_regmap), GFP_KERNEL);
 	if (!dev->bsc_regmap)
 		return -ENOMEM;
 
@@ -579,26 +634,35 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 		goto probe_errorout;
 	}
 
+	if (of_device_is_compatible(dev->device->of_node,
+				    "brcm,bcm2711-hdmi-i2c")) {
+		rc = bcm2711_release_bsc(dev);
+		if (rc)
+			goto probe_errorout;
+	}
+
 	rc = of_property_read_string(dev->device->of_node, "interrupt-names",
 				     &int_name);
 	if (rc < 0)
 		int_name = NULL;
 
 	/* Get the interrupt number */
-	dev->irq = platform_get_irq(pdev, 0);
+	dev->irq = platform_get_irq_optional(pdev, 0);
 
 	/* disable the bsc interrupt line */
 	brcmstb_i2c_enable_disable_irq(dev, INT_DISABLE);
 
 	/* register the ISR handler */
-	rc = devm_request_irq(&pdev->dev, dev->irq, brcmstb_i2c_isr,
-			      IRQF_SHARED,
-			      int_name ? int_name : pdev->name,
-			      dev);
+	if (dev->irq >= 0) {
+		rc = devm_request_irq(&pdev->dev, dev->irq, brcmstb_i2c_isr,
+				      IRQF_SHARED,
+				      int_name ? int_name : pdev->name,
+				      dev);
 
-	if (rc) {
-		dev_dbg(dev->device, "falling back to polling mode");
-		dev->irq = -1;
+		if (rc) {
+			dev_dbg(dev->device, "falling back to polling mode");
+			dev->irq = -1;
+		}
 	}
 
 	if (of_property_read_u32(dev->device->of_node,
@@ -607,6 +671,13 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 			 bsc_clk[0].hz);
 		dev->clk_freq_hz = bsc_clk[0].hz;
 	}
+
+	/* set the data in/out register size for compatible SoCs */
+	if (of_device_is_compatible(dev->device->of_node,
+				    "brcmstb,brcmper-i2c"))
+		dev->data_regsz = sizeof(u8);
+	else
+		dev->data_regsz = sizeof(u32);
 
 	brcmstb_i2c_set_bsc_reg_defaults(dev);
 
@@ -621,10 +692,8 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 	adap->dev.parent = &pdev->dev;
 	adap->dev.of_node = pdev->dev.of_node;
 	rc = i2c_add_adapter(adap);
-	if (rc) {
-		dev_err(dev->device, "failed to add adapter\n");
+	if (rc)
 		goto probe_errorout;
-	}
 
 	dev_info(dev->device, "%s@%dhz registered in %s mode\n",
 		 int_name ? int_name : " ", dev->clk_freq_hz,
@@ -649,10 +718,7 @@ static int brcmstb_i2c_suspend(struct device *dev)
 {
 	struct brcmstb_i2c_dev *i2c_dev = dev_get_drvdata(dev);
 
-	i2c_lock_adapter(&i2c_dev->adapter);
-	i2c_dev->is_suspended = true;
-	i2c_unlock_adapter(&i2c_dev->adapter);
-
+	i2c_mark_adapter_suspended(&i2c_dev->adapter);
 	return 0;
 }
 
@@ -660,10 +726,8 @@ static int brcmstb_i2c_resume(struct device *dev)
 {
 	struct brcmstb_i2c_dev *i2c_dev = dev_get_drvdata(dev);
 
-	i2c_lock_adapter(&i2c_dev->adapter);
 	brcmstb_i2c_set_bsc_reg_defaults(i2c_dev);
-	i2c_dev->is_suspended = false;
-	i2c_unlock_adapter(&i2c_dev->adapter);
+	i2c_mark_adapter_resumed(&i2c_dev->adapter);
 
 	return 0;
 }
@@ -674,6 +738,8 @@ static SIMPLE_DEV_PM_OPS(brcmstb_i2c_pm, brcmstb_i2c_suspend,
 
 static const struct of_device_id brcmstb_i2c_of_match[] = {
 	{.compatible = "brcm,brcmstb-i2c"},
+	{.compatible = "brcm,brcmper-i2c"},
+	{.compatible = "brcm,bcm2711-hdmi-i2c"},
 	{},
 };
 MODULE_DEVICE_TABLE(of, brcmstb_i2c_of_match);

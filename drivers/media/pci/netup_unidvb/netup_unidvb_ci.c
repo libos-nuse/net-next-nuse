@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * netup_unidvb_ci.c
  *
@@ -6,16 +7,6 @@
  * Copyright (C) 2014 NetUP Inc.
  * Copyright (C) 2014 Sergey Kozlov <serjk@netup.ru>
  * Copyright (C) 2014 Abylay Ospan <aospan@netup.ru>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/init.h>
@@ -147,7 +138,7 @@ static int netup_unidvb_ci_read_attribute_mem(struct dvb_ca_en50221 *en50221,
 {
 	struct netup_ci_state *state = en50221->data;
 	struct netup_unidvb_dev *dev = state->dev;
-	u8 val = *((u8 __force *)state->membase8_io + addr);
+	u8 val = *((u8 __force *)state->membase8_config + addr);
 
 	dev_dbg(&dev->pci_dev->dev,
 		"%s(): addr=0x%x val=0x%x\n", __func__, addr, val);
@@ -162,7 +153,7 @@ static int netup_unidvb_ci_write_attribute_mem(struct dvb_ca_en50221 *en50221,
 
 	dev_dbg(&dev->pci_dev->dev,
 		"%s(): addr=0x%x data=0x%x\n", __func__, addr, data);
-	*((u8 __force *)state->membase8_io + addr) = data;
+	*((u8 __force *)state->membase8_config + addr) = data;
 	return 0;
 }
 

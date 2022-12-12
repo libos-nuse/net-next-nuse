@@ -1,7 +1,4 @@
-#if defined(CONFIG_SERIAL_EFM32_UART_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
-#define SUPPORT_SYSRQ
-#endif
-
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/io.h>
@@ -27,6 +24,7 @@
 #define UARTn_FRAME		0x04
 #define UARTn_FRAME_DATABITS__MASK	0x000f
 #define UARTn_FRAME_DATABITS(n)		((n) - 3)
+#define UARTn_FRAME_PARITY__MASK	0x0300
 #define UARTn_FRAME_PARITY_NONE		0x0000
 #define UARTn_FRAME_PARITY_EVEN		0x0200
 #define UARTn_FRAME_PARITY_ODD		0x0300
@@ -202,7 +200,7 @@ static void efm32_uart_rx_chars(struct efm32_uart_port *efm_port)
 		/*
 		 * This is a reserved bit and I only saw it read as 0. But to be
 		 * sure not to be confused too much by new devices adhere to the
-		 * warning in the reference manual that reserverd bits might
+		 * warning in the reference manual that reserved bits might
 		 * read as 1 in the future.
 		 */
 		rxdata &= ~SW_UARTn_RXDATAX_BERR;
@@ -487,7 +485,7 @@ static int efm32_uart_verify_port(struct uart_port *port,
 	return ret;
 }
 
-static struct uart_ops efm32_uart_pops = {
+static const struct uart_ops efm32_uart_pops = {
 	.tx_empty = efm32_uart_tx_empty,
 	.set_mctrl = efm32_uart_set_mctrl,
 	.get_mctrl = efm32_uart_get_mctrl,
@@ -572,12 +570,16 @@ static void efm32_uart_console_get_options(struct efm32_uart_port *efm_port,
 			16 * (4 + (clkdiv >> 6)));
 
 	frame = efm32_uart_read32(efm_port, UARTn_FRAME);
-	if (frame & UARTn_FRAME_PARITY_ODD)
+	switch (frame & UARTn_FRAME_PARITY__MASK) {
+	case UARTn_FRAME_PARITY_ODD:
 		*parity = 'o';
-	else if (frame & UARTn_FRAME_PARITY_EVEN)
+		break;
+	case UARTn_FRAME_PARITY_EVEN:
 		*parity = 'e';
-	else
+		break;
+	default:
 		*parity = 'n';
+	}
 
 	*bits = (frame & UARTn_FRAME_DATABITS__MASK) -
 			UARTn_FRAME_DATABITS(4) + 4;
@@ -742,6 +744,7 @@ static int efm32_uart_probe(struct platform_device *pdev)
 	efm_port->port.type = PORT_EFMUART;
 	efm_port->port.iotype = UPIO_MEM32;
 	efm_port->port.fifosize = 2;
+	efm_port->port.has_sysrq = IS_ENABLED(CONFIG_SERIAL_EFM32_UART_CONSOLE);
 	efm_port->port.ops = &efm32_uart_pops;
 	efm_port->port.flags = UPF_BOOT_AUTOCONF;
 

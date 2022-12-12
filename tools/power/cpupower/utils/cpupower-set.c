@@ -1,7 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  (C) 2011 Thomas Renninger <trenn@suse.de>, Novell Inc.
- *
- *  Licensed under the terms of the GNU GPL License version 2.
  */
 
 
@@ -11,8 +10,8 @@
 #include <errno.h>
 #include <string.h>
 #include <getopt.h>
+#include <sys/utsname.h>
 
-#include <cpufreq.h>
 #include "helpers/helpers.h"
 #include "helpers/sysfs.h"
 #include "helpers/bitmask.h"
@@ -33,6 +32,7 @@ int cmd_set(int argc, char **argv)
 	extern char *optarg;
 	extern int optind, opterr, optopt;
 	unsigned int cpu;
+	struct utsname uts;
 
 	union {
 		struct {
@@ -42,6 +42,13 @@ int cmd_set(int argc, char **argv)
 	} params;
 	int perf_bias = 0;
 	int ret = 0;
+
+	ret = uname(&uts);
+	if (!ret && (!strcmp(uts.machine, "ppc64le") ||
+		     !strcmp(uts.machine, "ppc64"))) {
+		fprintf(stderr, _("Subcommand not supported on POWER.\n"));
+		return ret;
+	}
 
 	setlocale(LC_ALL, "");
 	textdomain(PACKAGE);
@@ -65,7 +72,7 @@ int cmd_set(int argc, char **argv)
 		default:
 			print_wrong_arg_exit();
 		}
-	};
+	}
 
 	if (!params.params)
 		print_wrong_arg_exit();
@@ -78,9 +85,14 @@ int cmd_set(int argc, char **argv)
 	for (cpu = bitmask_first(cpus_chosen);
 	     cpu <= bitmask_last(cpus_chosen); cpu++) {
 
-		if (!bitmask_isbitset(cpus_chosen, cpu) ||
-		    cpufreq_cpu_exists(cpu))
+		if (!bitmask_isbitset(cpus_chosen, cpu))
 			continue;
+
+		if (sysfs_is_cpu_online(cpu) != 1){
+			fprintf(stderr, _("Cannot set values on CPU %d:"), cpu);
+			fprintf(stderr, _(" *is offline\n"));
+			continue;
+		}
 
 		if (params.perf_bias) {
 			ret = msr_intel_set_perf_bias(cpu, perf_bias);

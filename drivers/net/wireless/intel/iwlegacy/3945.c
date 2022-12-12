@@ -1,22 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
  *
  * Copyright(c) 2003 - 2011 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- * The full GNU General Public License is included in this distribution in the
- * file called LICENSE.
  *
  * Contact Information:
  *  Intel Linux Wireless <ilw@linux.intel.com>
@@ -105,7 +90,7 @@ il3945_get_prev_ieee_rate(u8 rate_idx)
 #define IL_EVT_DISABLE (0)
 #define IL_EVT_DISABLE_SIZE (1532/32)
 
-/**
+/*
  * il3945_disable_events - Disable selected events in uCode event log
  *
  * Disable an event by writing "1"s into "disable"
@@ -255,13 +240,13 @@ il3945_rs_next_rate(struct il_priv *il, int rate)
 	int next_rate = il3945_get_prev_ieee_rate(rate);
 
 	switch (il->band) {
-	case IEEE80211_BAND_5GHZ:
+	case NL80211_BAND_5GHZ:
 		if (rate == RATE_12M_IDX)
 			next_rate = RATE_9M_IDX;
 		else if (rate == RATE_6M_IDX)
 			next_rate = RATE_6M_IDX;
 		break;
-	case IEEE80211_BAND_2GHZ:
+	case NL80211_BAND_2GHZ:
 		if (!(il->_3945.sta_supp_rates & IL_OFDM_RATES_MASK) &&
 		    il_is_associated(il)) {
 			if (rate == RATE_11M_IDX)
@@ -276,7 +261,7 @@ il3945_rs_next_rate(struct il_priv *il, int rate)
 	return next_rate;
 }
 
-/**
+/*
  * il3945_tx_queue_reclaim - Reclaim Tx queue entries already Tx'd
  *
  * When FW advances 'R' idx, all entries between old and new 'R' idx
@@ -306,7 +291,7 @@ il3945_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx)
 		il_wake_queue(il, txq);
 }
 
-/**
+/*
  * il3945_hdl_tx - Handle Tx response
  */
 static void
@@ -349,7 +334,7 @@ il3945_hdl_tx(struct il_priv *il, struct il_rx_buf *rxb)
 
 	/* Fill the MRR chain with some info about on-chip retransmissions */
 	rate_idx = il3945_hwrate_to_plcp_idx(tx_resp->rate);
-	if (info->band == IEEE80211_BAND_5GHZ)
+	if (info->band == NL80211_BAND_5GHZ)
 		rate_idx -= IL_FIRST_OFDM_RATE;
 
 	fail = tx_resp->failure_frame;
@@ -520,7 +505,7 @@ il3945_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
 	 * and do not consume a full page
 	 */
 	if (len <= SMALL_PACKET_SIZE) {
-		memcpy(skb_put(skb, len), rx_hdr->payload, len);
+		skb_put_data(skb, rx_hdr->payload, len);
 	} else {
 		skb_add_rx_frag(skb, 0, rxb->page,
 				(void *)rx_hdr->payload - (void *)pkt, len,
@@ -554,14 +539,14 @@ il3945_hdl_rx(struct il_priv *il, struct il_rx_buf *rxb)
 	rx_status.mactime = le64_to_cpu(rx_end->timestamp);
 	rx_status.band =
 	    (rx_hdr->
-	     phy_flags & RX_RES_PHY_FLAGS_BAND_24_MSK) ? IEEE80211_BAND_2GHZ :
-	    IEEE80211_BAND_5GHZ;
+	     phy_flags & RX_RES_PHY_FLAGS_BAND_24_MSK) ? NL80211_BAND_2GHZ :
+	    NL80211_BAND_5GHZ;
 	rx_status.freq =
 	    ieee80211_channel_to_frequency(le16_to_cpu(rx_hdr->channel),
 					   rx_status.band);
 
 	rx_status.rate_idx = il3945_hwrate_to_plcp_idx(rx_hdr->rate);
-	if (rx_status.band == IEEE80211_BAND_5GHZ)
+	if (rx_status.band == NL80211_BAND_5GHZ)
 		rx_status.rate_idx -= IL_FIRST_OFDM_RATE;
 
 	rx_status.antenna =
@@ -570,7 +555,7 @@ il3945_hdl_rx(struct il_priv *il, struct il_rx_buf *rxb)
 
 	/* set the preamble flag if appropriate */
 	if (rx_hdr->phy_flags & RX_RES_PHY_FLAGS_SHORT_PREAMBLE_MSK)
-		rx_status.flag |= RX_FLAG_SHORTPRE;
+		rx_status.enc_flags |= RX_ENC_FLAG_SHORTPRE;
 
 	if ((unlikely(rx_stats->phy_count > 20))) {
 		D_DROP("dsp size out of range [0,20]: %d\n",
@@ -642,7 +627,7 @@ il3945_hw_txq_attach_buf_to_tfd(struct il_priv *il, struct il_tx_queue *txq,
 	return 0;
 }
 
-/**
+/*
  * il3945_hw_txq_free_tfd - Free one TFD, those at idx [txq->q.read_ptr]
  *
  * Does NOT advance any idxes
@@ -690,7 +675,7 @@ il3945_hw_txq_free_tfd(struct il_priv *il, struct il_tx_queue *txq)
 	}
 }
 
-/**
+/*
  * il3945_hw_build_tx_cmd_rate - Add rate portion to TX_CMD:
  *
 */
@@ -843,7 +828,7 @@ il3945_tx_reset(struct il_priv *il)
 	return 0;
 }
 
-/**
+/*
  * il3945_txq_ctx_reset - Reset TX queue context
  *
  * Destroys all DMA structures and initialize them again
@@ -1008,7 +993,7 @@ il3945_hw_nic_init(struct il_priv *il)
 	return 0;
 }
 
-/**
+/*
  * il3945_hw_txq_ctx_free - Free TXQ Context
  *
  * Destroy all TX DMA queues and structures
@@ -1019,12 +1004,13 @@ il3945_hw_txq_ctx_free(struct il_priv *il)
 	int txq_id;
 
 	/* Tx queues */
-	if (il->txq)
+	if (il->txq) {
 		for (txq_id = 0; txq_id < il->hw_params.max_txq_num; txq_id++)
 			if (txq_id == IL39_CMD_QUEUE_NUM)
 				il_cmd_queue_free(il);
 			else
 				il_tx_queue_free(il, txq_id);
+	}
 
 	/* free tx queue structure */
 	il_free_txq_mem(il);
@@ -1049,7 +1035,7 @@ il3945_hw_txq_ctx_stop(struct il_priv *il)
 	}
 }
 
-/**
+/*
  * il3945_hw_reg_adjust_power_by_temp
  * return idx delta into power gain settings table
 */
@@ -1059,7 +1045,7 @@ il3945_hw_reg_adjust_power_by_temp(int new_reading, int old_reading)
 	return (new_reading - old_reading) * (-11) / 100;
 }
 
-/**
+/*
  * il3945_hw_reg_temp_out_of_range - Keep temperature in sane range
  */
 static inline int
@@ -1074,7 +1060,7 @@ il3945_hw_get_temperature(struct il_priv *il)
 	return _il_rd(il, CSR_UCODE_DRV_GP2);
 }
 
-/**
+/*
  * il3945_hw_reg_txpower_get_temperature
  * get the current temperature by reading from NIC
 */
@@ -1110,7 +1096,7 @@ il3945_hw_reg_txpower_get_temperature(struct il_priv *il)
  * Both are lower than older versions' 9 degrees */
 #define IL_TEMPERATURE_LIMIT_TIMER   6
 
-/**
+/*
  * il3945_is_temp_calib_needed - determines if new calibration is needed
  *
  * records new temperature in tx_mgr->temperature.
@@ -1329,7 +1315,7 @@ il3945_hw_reg_fix_power_idx(int idx)
 /* Kick off thermal recalibration check every 60 seconds */
 #define REG_RECALIB_PERIOD (60)
 
-/**
+/*
  * il3945_hw_reg_set_scan_power - Set Tx power for scan probe requests
  *
  * Set (in our channel info database) the direct scan Tx power for 1 Mbit (CCK)
@@ -1386,7 +1372,7 @@ il3945_hw_reg_set_scan_power(struct il_priv *il, u32 scan_tbl_idx, s32 rate_idx,
 	    power_gain_table[band_idx][power_idx].dsp_atten;
 }
 
-/**
+/*
  * il3945_send_tx_power - fill in Tx Power command with gain settings
  *
  * Configures power settings for all rates for the current channel,
@@ -1409,7 +1395,7 @@ il3945_send_tx_power(struct il_priv *il)
 
 	chan = le16_to_cpu(il->active.channel);
 
-	txpower.band = (il->band == IEEE80211_BAND_5GHZ) ? 0 : 1;
+	txpower.band = (il->band == NL80211_BAND_5GHZ) ? 0 : 1;
 	ch_info = il_get_channel_info(il, il->band, chan);
 	if (!ch_info) {
 		IL_ERR("Failed to get channel info for channel %d [%d]\n", chan,
@@ -1453,7 +1439,7 @@ il3945_send_tx_power(struct il_priv *il)
 
 }
 
-/**
+/*
  * il3945_hw_reg_set_new_power - Configures power tables at new levels
  * @ch_info: Channel to update.  Uses power_info.requested_power.
  *
@@ -1524,7 +1510,7 @@ il3945_hw_reg_set_new_power(struct il_priv *il, struct il_channel_info *ch_info)
 	return 0;
 }
 
-/**
+/*
  * il3945_hw_reg_get_ch_txpower_limit - returns new power limit for channel
  *
  * NOTE: Returned power limit may be less (but not more) than requested,
@@ -1551,7 +1537,7 @@ il3945_hw_reg_get_ch_txpower_limit(struct il_channel_info *ch_info)
 	return min(max_power, ch_info->max_power_avg);
 }
 
-/**
+/*
  * il3945_hw_reg_comp_txpower_temp - Compensate for temperature
  *
  * Compensate txpower settings of *all* channels for temperature.
@@ -1633,7 +1619,6 @@ il3945_hw_reg_set_txpower(struct il_priv *il, s8 power)
 {
 	struct il_channel_info *ch_info;
 	s8 max_power;
-	u8 a_band;
 	u8 i;
 
 	if (il->tx_power_user_lmt == power) {
@@ -1649,7 +1634,6 @@ il3945_hw_reg_set_txpower(struct il_priv *il, s8 power)
 
 	for (i = 0; i < il->channel_count; i++) {
 		ch_info = &il->channel_info[i];
-		a_band = il_is_channel_a_band(ch_info);
 
 		/* find minimum power of all user and regulatory constraints
 		 *    (does not consider h/w clipping limitations) */
@@ -1715,7 +1699,7 @@ il3945_send_rxon_assoc(struct il_priv *il)
 	return rc;
 }
 
-/**
+/*
  * il3945_commit_rxon - commit staging_rxon to hardware
  *
  * The RXON command in staging_rxon is committed to the hardware and
@@ -1846,7 +1830,7 @@ il3945_commit_rxon(struct il_priv *il)
 	return 0;
 }
 
-/**
+/*
  * il3945_reg_txpower_periodic -  called when time to check our temperature.
  *
  * -- reset periodic timer
@@ -1889,7 +1873,7 @@ out:
 	mutex_unlock(&il->mutex);
 }
 
-/**
+/*
  * il3945_hw_reg_get_ch_grp_idx - find the channel-group idx (0-4) for channel.
  *
  * This function is used when initializing channel-info structs.
@@ -1928,7 +1912,7 @@ il3945_hw_reg_get_ch_grp_idx(struct il_priv *il,
 	return group_idx;
 }
 
-/**
+/*
  * il3945_hw_reg_get_matched_power_idx - Interpolate to get nominal idx
  *
  * Interpolate to get nominal (i.e. at factory calibration temperature) idx
@@ -2051,7 +2035,7 @@ il3945_hw_reg_init_channel_groups(struct il_priv *il)
 	}
 }
 
-/**
+/*
  * il3945_txpower_set_from_eeprom - Set channel power info based on EEPROM
  *
  * Second pass (during init) to set up il->channel_info
@@ -2116,7 +2100,7 @@ il3945_txpower_set_from_eeprom(struct il_priv *il)
 
 		/* set tx power value for all OFDM rates */
 		for (rate_idx = 0; rate_idx < IL_OFDM_RATES; rate_idx++) {
-			s32 uninitialized_var(power_idx);
+			s32 power_idx;
 			int rc;
 
 			/* use channel group's clip-power table,
@@ -2310,7 +2294,7 @@ il3945_manage_ibss_station(struct il_priv *il, struct ieee80211_vif *vif,
 
 		il3945_sync_sta(il, vif_priv->ibss_bssid_sta_id,
 				(il->band ==
-				 IEEE80211_BAND_5GHZ) ? RATE_6M_PLCP :
+				 NL80211_BAND_5GHZ) ? RATE_6M_PLCP :
 				RATE_1M_PLCP);
 		il3945_rate_scale_init(il->hw, vif_priv->ibss_bssid_sta_id);
 
@@ -2321,7 +2305,7 @@ il3945_manage_ibss_station(struct il_priv *il, struct ieee80211_vif *vif,
 				 vif->bss_conf.bssid);
 }
 
-/**
+/*
  * il3945_init_hw_rate_table - Initialize the hardware rate fallback table
  */
 int
@@ -2343,7 +2327,7 @@ il3945_init_hw_rate_table(struct il_priv *il)
 	}
 
 	switch (il->band) {
-	case IEEE80211_BAND_5GHZ:
+	case NL80211_BAND_5GHZ:
 		D_RATE("Select A mode rate scale\n");
 		/* If one of the following CCK rates is used,
 		 * have it fall back to the 6M OFDM rate */
@@ -2359,7 +2343,7 @@ il3945_init_hw_rate_table(struct il_priv *il)
 		    il3945_rates[IL_FIRST_OFDM_RATE].table_rs_idx;
 		break;
 
-	case IEEE80211_BAND_2GHZ:
+	case NL80211_BAND_2GHZ:
 		D_RATE("Select B/G mode rate scale\n");
 		/* If an OFDM rate is used, have it fall back to the
 		 * 1M CCK rates */
@@ -2536,7 +2520,7 @@ il3945_eeprom_release_semaphore(struct il_priv *il)
 	return;
 }
 
- /**
+ /*
   * il3945_load_bsm - Load bootstrap instructions
   *
   * BSM operation:
@@ -2670,7 +2654,7 @@ const struct il_ops il3945_ops = {
 	.send_led_cmd = il3945_send_led_cmd,
 };
 
-static struct il_cfg il3945_bg_cfg = {
+static const struct il_cfg il3945_bg_cfg = {
 	.name = "3945BG",
 	.fw_name_pre = IL3945_FW_PRE,
 	.ucode_api_max = IL3945_UCODE_API_MAX,
@@ -2699,7 +2683,7 @@ static struct il_cfg il3945_bg_cfg = {
 	},
 };
 
-static struct il_cfg il3945_abg_cfg = {
+static const struct il_cfg il3945_abg_cfg = {
 	.name = "3945ABG",
 	.fw_name_pre = IL3945_FW_PRE,
 	.ucode_api_max = IL3945_UCODE_API_MAX,

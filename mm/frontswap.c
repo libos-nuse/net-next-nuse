@@ -1,14 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Frontswap frontend
  *
  * This code provides the generic "frontend" layer to call a matching
  * "backend" driver implementation of frontswap.  See
- * Documentation/vm/frontswap.txt for more information.
+ * Documentation/vm/frontswap.rst for more information.
  *
  * Copyright (C) 2009-2012 Oracle Corp.  All rights reserved.
  * Author: Dan Magenheimer
- *
- * This work is licensed under the terms of the GNU GPL, version 2.
  */
 
 #include <linux/mman.h>
@@ -19,6 +18,8 @@
 #include <linux/debugfs.h>
 #include <linux/frontswap.h>
 #include <linux/swapfile.h>
+
+DEFINE_STATIC_KEY_FALSE(frontswap_enabled_key);
 
 /*
  * frontswap_ops are added by frontswap_register_ops, and provide the
@@ -60,16 +61,16 @@ static u64 frontswap_failed_stores;
 static u64 frontswap_invalidates;
 
 static inline void inc_frontswap_loads(void) {
-	frontswap_loads++;
+	data_race(frontswap_loads++);
 }
 static inline void inc_frontswap_succ_stores(void) {
-	frontswap_succ_stores++;
+	data_race(frontswap_succ_stores++);
 }
 static inline void inc_frontswap_failed_stores(void) {
-	frontswap_failed_stores++;
+	data_race(frontswap_failed_stores++);
 }
 static inline void inc_frontswap_invalidates(void) {
-	frontswap_invalidates++;
+	data_race(frontswap_invalidates++);
 }
 #else
 static inline void inc_frontswap_loads(void) { }
@@ -86,7 +87,7 @@ static inline void inc_frontswap_invalidates(void) { }
  *
  * This would not guards us against the user deciding to call swapoff right as
  * we are calling the backend to initialize (so swapon is in action).
- * Fortunatly for us, the swapon_mutex has been taked by the callee so we are
+ * Fortunately for us, the swapon_mutex has been taken by the callee so we are
  * OK. The other scenario where calls to frontswap_store (called via
  * swap_writepage) is racing with frontswap_invalidate_area (called via
  * swapoff) is again guarded by the swap subsystem.
@@ -139,6 +140,8 @@ void frontswap_register_ops(struct frontswap_ops *ops)
 		ops->next = frontswap_ops;
 	} while (cmpxchg(&frontswap_ops, ops->next, ops) != ops->next);
 
+	static_branch_inc(&frontswap_enabled_key);
+
 	spin_lock(&swap_lock);
 	plist_for_each_entry(si, &swap_active_head, list) {
 		if (si->frontswap_map)
@@ -189,7 +192,7 @@ void __frontswap_init(unsigned type, unsigned long *map)
 	struct swap_info_struct *sis = swap_info[type];
 	struct frontswap_ops *ops;
 
-	BUG_ON(sis == NULL);
+	VM_BUG_ON(sis == NULL);
 
 	/*
 	 * p->frontswap is a bitmap that we MUST have to figure out which page
@@ -248,15 +251,9 @@ int __frontswap_store(struct page *page)
 	pgoff_t offset = swp_offset(entry);
 	struct frontswap_ops *ops;
 
-	/*
-	 * Return if no backend registed.
-	 * Don't need to inc frontswap_failed_stores here.
-	 */
-	if (!frontswap_ops)
-		return -1;
-
-	BUG_ON(!PageLocked(page));
-	BUG_ON(sis == NULL);
+	VM_BUG_ON(!frontswap_ops);
+	VM_BUG_ON(!PageLocked(page));
+	VM_BUG_ON(sis == NULL);
 
 	/*
 	 * If a dup, we must remove the old page first; we can't leave the
@@ -303,11 +300,10 @@ int __frontswap_load(struct page *page)
 	pgoff_t offset = swp_offset(entry);
 	struct frontswap_ops *ops;
 
-	if (!frontswap_ops)
-		return -1;
+	VM_BUG_ON(!frontswap_ops);
+	VM_BUG_ON(!PageLocked(page));
+	VM_BUG_ON(sis == NULL);
 
-	BUG_ON(!PageLocked(page));
-	BUG_ON(sis == NULL);
 	if (!__frontswap_test(sis, offset))
 		return -1;
 
@@ -337,10 +333,9 @@ void __frontswap_invalidate_page(unsigned type, pgoff_t offset)
 	struct swap_info_struct *sis = swap_info[type];
 	struct frontswap_ops *ops;
 
-	if (!frontswap_ops)
-		return;
+	VM_BUG_ON(!frontswap_ops);
+	VM_BUG_ON(sis == NULL);
 
-	BUG_ON(sis == NULL);
 	if (!__frontswap_test(sis, offset))
 		return;
 
@@ -360,10 +355,9 @@ void __frontswap_invalidate_area(unsigned type)
 	struct swap_info_struct *sis = swap_info[type];
 	struct frontswap_ops *ops;
 
-	if (!frontswap_ops)
-		return;
+	VM_BUG_ON(!frontswap_ops);
+	VM_BUG_ON(sis == NULL);
 
-	BUG_ON(sis == NULL);
 	if (sis->frontswap_map == NULL)
 		return;
 
@@ -419,8 +413,8 @@ static int __frontswap_unuse_pages(unsigned long total, unsigned long *unused,
 }
 
 /*
- * Used to check if it's necessory and feasible to unuse pages.
- * Return 1 when nothing to do, 0 when need to shink pages,
+ * Used to check if it's necessary and feasible to unuse pages.
+ * Return 1 when nothing to do, 0 when need to shrink pages,
  * error code when there is an error.
  */
 static int __frontswap_shrink(unsigned long target_pages,
@@ -452,7 +446,7 @@ static int __frontswap_shrink(unsigned long target_pages,
 void frontswap_shrink(unsigned long target_pages)
 {
 	unsigned long pages_to_unuse = 0;
-	int uninitialized_var(type), ret;
+	int type, ret;
 
 	/*
 	 * we don't want to hold swap_lock while doing a very
@@ -491,12 +485,11 @@ static int __init init_frontswap(void)
 	struct dentry *root = debugfs_create_dir("frontswap", NULL);
 	if (root == NULL)
 		return -ENXIO;
-	debugfs_create_u64("loads", S_IRUGO, root, &frontswap_loads);
-	debugfs_create_u64("succ_stores", S_IRUGO, root, &frontswap_succ_stores);
-	debugfs_create_u64("failed_stores", S_IRUGO, root,
-				&frontswap_failed_stores);
-	debugfs_create_u64("invalidates", S_IRUGO,
-				root, &frontswap_invalidates);
+	debugfs_create_u64("loads", 0444, root, &frontswap_loads);
+	debugfs_create_u64("succ_stores", 0444, root, &frontswap_succ_stores);
+	debugfs_create_u64("failed_stores", 0444, root,
+			   &frontswap_failed_stores);
+	debugfs_create_u64("invalidates", 0444, root, &frontswap_invalidates);
 #endif
 	return 0;
 }

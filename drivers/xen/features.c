@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
  * features.c
  *
@@ -7,7 +8,7 @@
  */
 #include <linux/types.h>
 #include <linux/cache.h>
-#include <linux/module.h>
+#include <linux/export.h>
 
 #include <asm/xen/hypercall.h>
 

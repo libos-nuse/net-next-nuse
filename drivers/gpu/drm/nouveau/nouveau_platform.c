@@ -24,7 +24,7 @@
 static int nouveau_platform_probe(struct platform_device *pdev)
 {
 	const struct nvkm_device_tegra_func *func;
-	struct nvkm_device *device;
+	struct nvkm_device *device = NULL;
 	struct drm_device *drm;
 	int ret;
 
@@ -36,7 +36,7 @@ static int nouveau_platform_probe(struct platform_device *pdev)
 
 	ret = drm_dev_register(drm, 0);
 	if (ret < 0) {
-		drm_dev_unref(drm);
+		drm_dev_put(drm);
 		return ret;
 	}
 
@@ -53,6 +53,19 @@ static int nouveau_platform_remove(struct platform_device *pdev)
 #if IS_ENABLED(CONFIG_OF)
 static const struct nvkm_device_tegra_func gk20a_platform_data = {
 	.iommu_bit = 34,
+	.require_vdd = true,
+};
+
+static const struct nvkm_device_tegra_func gm20b_platform_data = {
+	.iommu_bit = 34,
+	.require_vdd = true,
+	.require_ref_clk = true,
+};
+
+static const struct nvkm_device_tegra_func gp10b_platform_data = {
+	.iommu_bit = 36,
+	/* power provided by generic PM domains */
+	.require_vdd = false,
 };
 
 static const struct of_device_id nouveau_platform_match[] = {
@@ -62,7 +75,11 @@ static const struct of_device_id nouveau_platform_match[] = {
 	},
 	{
 		.compatible = "nvidia,gm20b",
-		.data = &gk20a_platform_data,
+		.data = &gm20b_platform_data,
+	},
+	{
+		.compatible = "nvidia,gp10b",
+		.data = &gp10b_platform_data,
 	},
 	{ }
 };

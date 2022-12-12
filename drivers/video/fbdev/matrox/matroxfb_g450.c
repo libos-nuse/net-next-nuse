@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *
  * Hardware accelerated Matrox Millennium I, II, Mystique, G100, G200, G400 and G450.
@@ -433,7 +434,7 @@ static void cve2_init_TVdata(int norm, struct mavenregs* data, const struct outp
 		0x00,	/* 3E written multiple times */
 		0x00,	/* 3F not written */
 	} };
-	static struct mavenregs ntscregs = { {
+	static const struct mavenregs ntscregs = { {
 		0x21, 0xF0, 0x7C, 0x1F,	/* 00: chroma subcarrier */
 		0x00,
 		0x00,	/* test */

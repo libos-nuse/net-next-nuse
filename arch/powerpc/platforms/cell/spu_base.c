@@ -1,30 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Low-level SPU handling
  *
  * (C) Copyright IBM Deutschland Entwicklung GmbH 2005
  *
  * Author: Arnd Bergmann <arndb@de.ibm.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #undef DEBUG
 
 #include <linux/interrupt.h>
 #include <linux/list.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/ptrace.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
@@ -50,11 +37,11 @@ struct cbe_spu_info cbe_spu_info[MAX_NUMNODES];
 EXPORT_SYMBOL_GPL(cbe_spu_info);
 
 /*
- * The spufs fault-handling code needs to call force_sig_info to raise signals
+ * The spufs fault-handling code needs to call force_sig_fault to raise signals
  * on DMA errors. Export it here to avoid general kernel-wide access to this
  * function
  */
-EXPORT_SYMBOL_GPL(force_sig_info);
+EXPORT_SYMBOL_GPL(force_sig_fault);
 
 /*
  * Protects cbe_spu_info and spu->number.
@@ -69,7 +56,7 @@ static DEFINE_SPINLOCK(spu_lock);
  * spu_full_list_lock and spu_full_list_mutex held, while iterating
  * through it requires either of these locks.
  *
- * In addition spu_full_list_lock protects all assignmens to
+ * In addition spu_full_list_lock protects all assignments to
  * spu->mm.
  */
 static LIST_HEAD(spu_full_list);
@@ -194,10 +181,12 @@ static int __spu_trap_data_map(struct spu *spu, unsigned long ea, u64 dsisr)
 	 * faults need to be deferred to process context.
 	 */
 	if ((dsisr & MFC_DSISR_PTE_NOT_FOUND) &&
-	    (REGION_ID(ea) != USER_REGION_ID)) {
+	    (get_region_id(ea) != USER_REGION_ID)) {
 
 		spin_unlock(&spu->register_lock);
-		ret = hash_page(ea, _PAGE_PRESENT, 0x300, dsisr);
+		ret = hash_page(ea,
+				_PAGE_PRESENT | _PAGE_READ | _PAGE_PRIVILEGED,
+				0x300, dsisr);
 		spin_lock(&spu->register_lock);
 
 		if (!ret) {
@@ -222,7 +211,7 @@ static void __spu_kernel_slb(void *addr, struct copro_slb *slb)
 	unsigned long ea = (unsigned long)addr;
 	u64 llp;
 
-	if (REGION_ID(ea) == KERNEL_REGION_ID)
+	if (get_region_id(ea) == LINEAR_MAP_REGION_ID)
 		llp = mmu_psize_defs[mmu_linear_psize].sllp;
 	else
 		llp = mmu_psize_defs[mmu_virtual_psize].sllp;
@@ -253,7 +242,7 @@ static inline int __slb_present(struct copro_slb *slbs, int nr_slbs,
  * Setup the SPU kernel SLBs, in preparation for a context save/restore. We
  * need to map both the context save area, and the save/restore code.
  *
- * Because the lscsa and code may cross segment boundaires, we check to see
+ * Because the lscsa and code may cross segment boundaries, we check to see
  * if mappings are required for the start and end of each range. We currently
  * assume that the mappings are smaller that one segment - if not, something
  * is seriously wrong.
@@ -402,7 +391,7 @@ static int spu_request_irqs(struct spu *spu)
 {
 	int ret = 0;
 
-	if (spu->irqs[0] != NO_IRQ) {
+	if (spu->irqs[0]) {
 		snprintf(spu->irq_c0, sizeof (spu->irq_c0), "spe%02d.0",
 			 spu->number);
 		ret = request_irq(spu->irqs[0], spu_irq_class_0,
@@ -410,7 +399,7 @@ static int spu_request_irqs(struct spu *spu)
 		if (ret)
 			goto bail0;
 	}
-	if (spu->irqs[1] != NO_IRQ) {
+	if (spu->irqs[1]) {
 		snprintf(spu->irq_c1, sizeof (spu->irq_c1), "spe%02d.1",
 			 spu->number);
 		ret = request_irq(spu->irqs[1], spu_irq_class_1,
@@ -418,7 +407,7 @@ static int spu_request_irqs(struct spu *spu)
 		if (ret)
 			goto bail1;
 	}
-	if (spu->irqs[2] != NO_IRQ) {
+	if (spu->irqs[2]) {
 		snprintf(spu->irq_c2, sizeof (spu->irq_c2), "spe%02d.2",
 			 spu->number);
 		ret = request_irq(spu->irqs[2], spu_irq_class_2,
@@ -429,10 +418,10 @@ static int spu_request_irqs(struct spu *spu)
 	return 0;
 
 bail2:
-	if (spu->irqs[1] != NO_IRQ)
+	if (spu->irqs[1])
 		free_irq(spu->irqs[1], spu);
 bail1:
-	if (spu->irqs[0] != NO_IRQ)
+	if (spu->irqs[0])
 		free_irq(spu->irqs[0], spu);
 bail0:
 	return ret;
@@ -440,11 +429,11 @@ bail0:
 
 static void spu_free_irqs(struct spu *spu)
 {
-	if (spu->irqs[0] != NO_IRQ)
+	if (spu->irqs[0])
 		free_irq(spu->irqs[0], spu);
-	if (spu->irqs[1] != NO_IRQ)
+	if (spu->irqs[1])
 		free_irq(spu->irqs[1], spu);
-	if (spu->irqs[2] != NO_IRQ)
+	if (spu->irqs[2])
 		free_irq(spu->irqs[2], spu);
 }
 
@@ -676,7 +665,7 @@ static ssize_t spu_stat_show(struct device *dev,
 
 static DEVICE_ATTR(stat, 0444, spu_stat_show, NULL);
 
-#ifdef CONFIG_KEXEC
+#ifdef CONFIG_KEXEC_CORE
 
 struct crash_spu_info {
 	struct spu *spu;
@@ -805,7 +794,4 @@ static int __init init_spu_base(void)
  out:
 	return ret;
 }
-module_init(init_spu_base);
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Arnd Bergmann <arndb@de.ibm.com>");
+device_initcall(init_spu_base);

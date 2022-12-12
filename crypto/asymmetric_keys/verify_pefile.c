@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Parse a signed PE binary
  *
  * Copyright (C) 2014 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public Licence
- * as published by the Free Software Foundation; either version
- * 2 of the Licence, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt) "PEFILE: "fmt
@@ -16,7 +12,7 @@
 #include <linux/err.h>
 #include <linux/pe.h>
 #include <linux/asn1.h>
-#include <crypto/pkcs7.h>
+#include <linux/verification.h>
 #include <crypto/hash.h>
 #include "verify_pefile.h"
 
@@ -100,7 +96,7 @@ static int pefile_parse_binary(const void *pebuf, unsigned int pelen,
 
 	if (!ddir->certs.virtual_address || !ddir->certs.size) {
 		pr_debug("Unsigned PE binary\n");
-		return -EKEYREJECTED;
+		return -ENODATA;
 	}
 
 	chkaddr(ctx->header_size, ddir->certs.virtual_address,
@@ -328,12 +324,12 @@ static int pefile_digest_pe(const void *pebuf, unsigned int pelen,
 	void *digest;
 	int ret;
 
-	kenter(",%u", ctx->digest_algo);
+	kenter(",%s", ctx->digest_algo);
 
 	/* Allocate the hashing algorithm we're going to need and find out how
 	 * big the hash operational data will be.
 	 */
-	tfm = crypto_alloc_shash(hash_algo_name[ctx->digest_algo], 0, 0);
+	tfm = crypto_alloc_shash(ctx->digest_algo, 0, 0);
 	if (IS_ERR(tfm))
 		return (PTR_ERR(tfm) == -ENOENT) ? -ENOPKG : PTR_ERR(tfm);
 
@@ -354,7 +350,6 @@ static int pefile_digest_pe(const void *pebuf, unsigned int pelen,
 		goto error_no_desc;
 
 	desc->tfm   = tfm;
-	desc->flags = CRYPTO_TFM_REQ_MAY_SLEEP;
 	ret = crypto_shash_init(desc);
 	if (ret < 0)
 		goto error;
@@ -381,7 +376,7 @@ static int pefile_digest_pe(const void *pebuf, unsigned int pelen,
 	}
 
 error:
-	kfree(desc);
+	kfree_sensitive(desc);
 error_no_desc:
 	crypto_free_shash(tfm);
 	kleave(" = %d", ret);
@@ -392,9 +387,8 @@ error_no_desc:
  * verify_pefile_signature - Verify the signature on a PE binary image
  * @pebuf: Buffer containing the PE binary image
  * @pelen: Length of the binary image
- * @trust_keyring: Signing certificates to use as starting points
+ * @trust_keys: Signing certificate(s) to use as starting points
  * @usage: The use to which the key is being put.
- * @_trusted: Set to true if trustworth, false otherwise
  *
  * Validate that the certificate chain inside the PKCS#7 message inside the PE
  * binary image intersects keys we already know and trust.
@@ -409,6 +403,8 @@ error_no_desc:
  *  (*) 0 if at least one signature chain intersects with the keys in the trust
  *	keyring, or:
  *
+ *  (*) -ENODATA if there is no signature present.
+ *
  *  (*) -ENOPKG if a suitable crypto module couldn't be found for a check on a
  *	chain.
  *
@@ -418,14 +414,10 @@ error_no_desc:
  * May also return -ENOMEM.
  */
 int verify_pefile_signature(const void *pebuf, unsigned pelen,
-			    struct key *trusted_keyring,
-			    enum key_being_used_for usage,
-			    bool *_trusted)
+			    struct key *trusted_keys,
+			    enum key_being_used_for usage)
 {
-	struct pkcs7_message *pkcs7;
 	struct pefile_context ctx;
-	const void *data;
-	size_t datalen;
 	int ret;
 
 	kenter("");
@@ -439,19 +431,10 @@ int verify_pefile_signature(const void *pebuf, unsigned pelen,
 	if (ret < 0)
 		return ret;
 
-	pkcs7 = pkcs7_parse_message(pebuf + ctx.sig_offset, ctx.sig_len);
-	if (IS_ERR(pkcs7))
-		return PTR_ERR(pkcs7);
-	ctx.pkcs7 = pkcs7;
-
-	ret = pkcs7_get_content_data(ctx.pkcs7, &data, &datalen, false);
-	if (ret < 0 || datalen == 0) {
-		pr_devel("PKCS#7 message does not contain data\n");
-		ret = -EBADMSG;
-		goto error;
-	}
-
-	ret = mscode_parse(&ctx);
+	ret = verify_pkcs7_signature(NULL, 0,
+				     pebuf + ctx.sig_offset, ctx.sig_len,
+				     trusted_keys, usage,
+				     mscode_parse, &ctx);
 	if (ret < 0)
 		goto error;
 
@@ -462,16 +445,8 @@ int verify_pefile_signature(const void *pebuf, unsigned pelen,
 	 * contents.
 	 */
 	ret = pefile_digest_pe(pebuf, pelen, &ctx);
-	if (ret < 0)
-		goto error;
-
-	ret = pkcs7_verify(pkcs7, usage);
-	if (ret < 0)
-		goto error;
-
-	ret = pkcs7_validate_trust(pkcs7, trusted_keyring, _trusted);
 
 error:
-	pkcs7_free_message(ctx.pkcs7);
+	kfree_sensitive(ctx.digest);
 	return ret;
 }

@@ -14,19 +14,32 @@
  */
 #ifndef __NFIT_H__
 #define __NFIT_H__
+#include <linux/workqueue.h>
 #include <linux/libnvdimm.h>
 #include <linux/types.h>
 #include <linux/uuid.h>
 #include <linux/acpi.h>
 #include <acpi/acuuid.h>
 
+/* ACPI 6.1 */
 #define UUID_NFIT_BUS "2f10e7a4-9e91-11e4-89d3-123b93f75cba"
+
+/* http://pmem.io/documents/NVDIMM_DSM_Interface_Example.pdf */
 #define UUID_NFIT_DIMM "4309ac30-0d11-11e4-9191-0800200c9a66"
+
+/* https://github.com/HewlettPackard/hpe-nvm/blob/master/Documentation/ */
+#define UUID_NFIT_DIMM_N_HPE1 "9002c334-acf3-4c0e-9642-a235f0d53bc6"
+#define UUID_NFIT_DIMM_N_HPE2 "5008664b-b758-41a0-a03c-27c2f2d04f7e"
+
 #define ACPI_NFIT_MEM_FAILED_MASK (ACPI_NFIT_MEM_SAVE_FAILED \
 		| ACPI_NFIT_MEM_RESTORE_FAILED | ACPI_NFIT_MEM_FLUSH_FAILED \
 		| ACPI_NFIT_MEM_NOT_ARMED)
 
 enum nfit_uuids {
+	/* for simplicity alias the uuid index with the family id */
+	NFIT_DEV_DIMM = NVDIMM_FAMILY_INTEL,
+	NFIT_DEV_DIMM_N_HPE1 = NVDIMM_FAMILY_HPE1,
+	NFIT_DEV_DIMM_N_HPE2 = NVDIMM_FAMILY_HPE2,
 	NFIT_SPA_VOLATILE,
 	NFIT_SPA_PM,
 	NFIT_SPA_DCR,
@@ -36,19 +49,37 @@ enum nfit_uuids {
 	NFIT_SPA_PDISK,
 	NFIT_SPA_PCD,
 	NFIT_DEV_BUS,
-	NFIT_DEV_DIMM,
 	NFIT_UUID_MAX,
 };
 
+/*
+ * Region format interface codes are stored as an array of bytes in the
+ * NFIT DIMM Control Region structure
+ */
+#define NFIT_FIC_BYTE cpu_to_be16(0x101) /* byte-addressable energy backed */
+#define NFIT_FIC_BLK cpu_to_be16(0x201) /* block-addressable non-energy backed */
+#define NFIT_FIC_BYTEN cpu_to_be16(0x301) /* byte-addressable non-energy backed */
+
 enum {
-	ND_BLK_READ_FLUSH = 1,
-	ND_BLK_DCR_LATCH = 2,
+	NFIT_BLK_READ_FLUSH = 1,
+	NFIT_BLK_DCR_LATCH = 2,
+	NFIT_ARS_STATUS_DONE = 0,
+	NFIT_ARS_STATUS_BUSY = 1 << 16,
+	NFIT_ARS_STATUS_NONE = 2 << 16,
+	NFIT_ARS_STATUS_INTR = 3 << 16,
+	NFIT_ARS_START_BUSY = 6,
+	NFIT_ARS_CAP_NONE = 1,
+	NFIT_ARS_F_OVERFLOW = 1,
+	NFIT_ARS_TIMEOUT = 90,
 };
 
 struct nfit_spa {
 	struct acpi_nfit_system_address *spa;
 	struct list_head list;
-	int is_registered;
+	struct nd_region *nd_region;
+	unsigned int ars_done:1;
+	u32 clear_err_unit;
+	u32 max_ars;
 };
 
 struct nfit_dcr {
@@ -91,7 +122,9 @@ struct nfit_mem {
 	struct nfit_flush *nfit_flush;
 	struct list_head list;
 	struct acpi_device *adev;
+	struct acpi_nfit_desc *acpi_desc;
 	unsigned long dsm_mask;
+	int family;
 };
 
 struct acpi_nfit_desc {
@@ -110,8 +143,12 @@ struct acpi_nfit_desc {
 	struct list_head idts;
 	struct nvdimm_bus *nvdimm_bus;
 	struct device *dev;
-	unsigned long dimm_dsm_force_en;
-	unsigned long bus_dsm_force_en;
+	struct nd_cmd_ars_status *ars_status;
+	size_t ars_status_size;
+	struct work_struct work;
+	unsigned int cancel:1;
+	unsigned long dimm_cmd_force_en;
+	unsigned long bus_cmd_force_en;
 	int (*blk_do_io)(struct nd_blk_region *ndbr, resource_size_t dpa,
 			void *iobuf, u64 len, int rw);
 };
@@ -182,5 +219,5 @@ static inline struct acpi_nfit_desc *to_acpi_desc(
 
 const u8 *to_nfit_uuid(enum nfit_uuids id);
 int acpi_nfit_init(struct acpi_nfit_desc *nfit, acpi_size sz);
-extern const struct attribute_group *acpi_nfit_attribute_groups[];
+void acpi_nfit_desc_init(struct acpi_nfit_desc *acpi_desc, struct device *dev);
 #endif /* __NFIT_H__ */

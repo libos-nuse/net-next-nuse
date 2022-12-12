@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * drivers/video/geode/video_cs5530.c
  *   -- CS5530 video device
@@ -6,11 +7,6 @@
  *
  * Based on AMD's original 2.4 driver:
  *   Copyright (C) 2004 Advanced Micro Devices, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 #include <linux/fb.h>
 #include <linux/delay.h>
@@ -186,7 +182,7 @@ static int cs5530_blank_display(struct fb_info *info, int blank_mode)
 	return 0;
 }
 
-struct geode_vid_ops cs5530_vid_ops = {
+const struct geode_vid_ops cs5530_vid_ops = {
 	.set_dclk          = cs5530_set_dclk_frequency,
 	.configure_display = cs5530_configure_display,
 	.blank_display     = cs5530_blank_display,

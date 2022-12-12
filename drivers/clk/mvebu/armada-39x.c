@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Marvell Armada 39x SoC clocks
  *
@@ -8,9 +9,6 @@
  * Andrew Lunn <andrew@lunn.ch>
  * Thomas Petazzoni <thomas.petazzoni@free-electrons.com>
  *
- * This file is licensed under the terms of the GNU General Public
- * License version 2.  This program is licensed "as is" without any
- * warranty of any kind, whether express or implied.
  */
 
 #include <linux/kernel.h>
@@ -142,6 +140,8 @@ static const struct clk_gating_soc_desc armada_39x_gating_desc[] __initconst = {
 	{ "pex3", NULL, 7 },
 	{ "pex0", NULL, 8 },
 	{ "usb3h0", NULL, 9 },
+	{ "usb3h1", NULL, 10 },
+	{ "sata0", NULL, 15 },
 	{ "sdio", NULL, 17 },
 	{ "xor0", NULL, 22 },
 	{ "xor1", NULL, 28 },

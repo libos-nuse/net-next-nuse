@@ -7,6 +7,7 @@
  *
  * Copyright(c) 2008 - 2014 Intel Corporation. All rights reserved.
  * Copyright(c) 2015 Intel Mobile Communications GmbH
+ * Copyright (C) 2018 Intel Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -16,11 +17,6 @@
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110,
- * USA
  *
  * The full GNU General Public License is included in this distribution
  * in the file called COPYING.
@@ -33,6 +29,7 @@
  *
  * Copyright(c) 2005 - 2014 Intel Corporation. All rights reserved.
  * Copyright(c) 2015 Intel Mobile Communications GmbH
+ * Copyright (C) 2018 Intel Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -66,6 +63,7 @@
 
 #include <linux/types.h>
 #include <linux/if_ether.h>
+#include <net/cfg80211.h>
 #include "iwl-trans.h"
 
 struct iwl_nvm_data {
@@ -80,10 +78,11 @@ struct iwl_nvm_data {
 	__le16 kelvin_voltage;
 	__le16 xtal_calib[2];
 
-	bool sku_cap_band_24GHz_enable;
-	bool sku_cap_band_52GHz_enable;
+	bool sku_cap_band_24ghz_enable;
+	bool sku_cap_band_52ghz_enable;
 	bool sku_cap_11n_enable;
 	bool sku_cap_11ac_enable;
+	bool sku_cap_11ax_enable;
 	bool sku_cap_amt_enable;
 	bool sku_cap_ipan_enable;
 	bool sku_cap_mimo_disabled;
@@ -98,7 +97,8 @@ struct iwl_nvm_data {
 	s8 max_tx_pwr_half_dbm;
 
 	bool lar_enabled;
-	struct ieee80211_supported_band bands[IEEE80211_NUM_BANDS];
+	bool vht160_supported;
+	struct ieee80211_supported_band bands[NUM_NL80211_BANDS];
 	struct ieee80211_channel channels[];
 };
 
@@ -116,29 +116,17 @@ struct iwl_nvm_data {
  * later with iwl_free_nvm_data().
  */
 struct iwl_nvm_data *
-iwl_parse_eeprom_data(struct device *dev, const struct iwl_cfg *cfg,
+iwl_parse_eeprom_data(struct iwl_trans *trans, const struct iwl_cfg *cfg,
 		      const u8 *eeprom, size_t eeprom_size);
-
-/**
- * iwl_free_nvm_data - free NVM data
- * @data: the data to free
- */
-static inline void iwl_free_nvm_data(struct iwl_nvm_data *data)
-{
-	kfree(data);
-}
-
-int iwl_nvm_check_version(struct iwl_nvm_data *data,
-			  struct iwl_trans *trans);
 
 int iwl_init_sband_channels(struct iwl_nvm_data *data,
 			    struct ieee80211_supported_band *sband,
-			    int n_channels, enum ieee80211_band band);
+			    int n_channels, enum nl80211_band band);
 
-void iwl_init_ht_hw_capab(const struct iwl_cfg *cfg,
+void iwl_init_ht_hw_capab(struct iwl_trans *trans,
 			  struct iwl_nvm_data *data,
 			  struct ieee80211_sta_ht_cap *ht_info,
-			  enum ieee80211_band band,
+			  enum nl80211_band band,
 			  u8 tx_chains, u8 rx_chains);
 
 #endif /* __iwl_eeprom_parse_h__ */

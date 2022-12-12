@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
 
     bt8xx GPIO abuser
@@ -28,25 +29,12 @@
     Copyright (C) 2005, 2006 Michael H. Schimek
     Sponsored by OPQ Systems AB
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/spinlock.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/slab.h>
 
 /* Steal the hardware definitions from the bttv driver. */
@@ -80,7 +68,7 @@ MODULE_PARM_DESC(gpiobase, "The GPIO number base. -1 means dynamic, which is the
 
 static int bt8xxgpio_gpio_direction_input(struct gpio_chip *gpio, unsigned nr)
 {
-	struct bt8xxgpio *bg = container_of(gpio, struct bt8xxgpio, gpio);
+	struct bt8xxgpio *bg = gpiochip_get_data(gpio);
 	unsigned long flags;
 	u32 outen, data;
 
@@ -101,7 +89,7 @@ static int bt8xxgpio_gpio_direction_input(struct gpio_chip *gpio, unsigned nr)
 
 static int bt8xxgpio_gpio_get(struct gpio_chip *gpio, unsigned nr)
 {
-	struct bt8xxgpio *bg = container_of(gpio, struct bt8xxgpio, gpio);
+	struct bt8xxgpio *bg = gpiochip_get_data(gpio);
 	unsigned long flags;
 	u32 val;
 
@@ -115,7 +103,7 @@ static int bt8xxgpio_gpio_get(struct gpio_chip *gpio, unsigned nr)
 static int bt8xxgpio_gpio_direction_output(struct gpio_chip *gpio,
 					unsigned nr, int val)
 {
-	struct bt8xxgpio *bg = container_of(gpio, struct bt8xxgpio, gpio);
+	struct bt8xxgpio *bg = gpiochip_get_data(gpio);
 	unsigned long flags;
 	u32 outen, data;
 
@@ -140,7 +128,7 @@ static int bt8xxgpio_gpio_direction_output(struct gpio_chip *gpio,
 static void bt8xxgpio_gpio_set(struct gpio_chip *gpio,
 			    unsigned nr, int val)
 {
-	struct bt8xxgpio *bg = container_of(gpio, struct bt8xxgpio, gpio);
+	struct bt8xxgpio *bg = gpiochip_get_data(gpio);
 	unsigned long flags;
 	u32 data;
 
@@ -217,7 +205,7 @@ static int bt8xxgpio_probe(struct pci_dev *dev,
 	bgwrite(0, BT848_GPIO_OUT_EN);
 
 	bt8xxgpio_gpio_setup(bg);
-	err = gpiochip_add(&bg->gpio);
+	err = gpiochip_add_data(&bg->gpio, bg);
 	if (err) {
 		printk(KERN_ERR "bt8xxgpio: Failed to register GPIOs\n");
 		goto err_disable;

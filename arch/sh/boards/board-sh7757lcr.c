@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Renesas R0P7757LC0012RL Support.
  *
  * Copyright (C) 2009 - 2010  Renesas Solutions Corp.
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file "COPYING" in the main directory of this archive
- * for more details.
  */
 
 #include <linux/init.h>
@@ -20,7 +17,6 @@
 #include <linux/mfd/tmio.h>
 #include <linux/mmc/host.h>
 #include <linux/mmc/sh_mmcif.h>
-#include <linux/mmc/sh_mobile_sdhi.h>
 #include <linux/sh_eth.h>
 #include <linux/sh_intc.h>
 #include <linux/usb/renesas_usbhs.h>
@@ -77,7 +73,6 @@ static struct resource sh_eth0_resources[] = {
 
 static struct sh_eth_plat_data sh7757_eth0_pdata = {
 	.phy = 1,
-	.edmac_endian = EDMAC_LITTLE_ENDIAN,
 	.set_mdio_gate = sh7757_eth_set_mdio_gate,
 };
 
@@ -105,7 +100,6 @@ static struct resource sh_eth1_resources[] = {
 
 static struct sh_eth_plat_data sh7757_eth1_pdata = {
 	.phy = 1,
-	.edmac_endian = EDMAC_LITTLE_ENDIAN,
 	.set_mdio_gate = sh7757_eth_set_mdio_gate,
 };
 
@@ -149,7 +143,6 @@ static struct resource sh_eth_giga0_resources[] = {
 
 static struct sh_eth_plat_data sh7757_eth_giga0_pdata = {
 	.phy = 18,
-	.edmac_endian = EDMAC_LITTLE_ENDIAN,
 	.set_mdio_gate = sh7757_eth_giga_set_mdio_gate,
 	.phy_interface = PHY_INTERFACE_MODE_RGMII_ID,
 };
@@ -183,7 +176,6 @@ static struct resource sh_eth_giga1_resources[] = {
 
 static struct sh_eth_plat_data sh7757_eth_giga1_pdata = {
 	.phy = 19,
-	.edmac_endian = EDMAC_LITTLE_ENDIAN,
 	.set_mdio_gate = sh7757_eth_giga_set_mdio_gate,
 	.phy_interface = PHY_INTERFACE_MODE_RGMII_ID,
 };

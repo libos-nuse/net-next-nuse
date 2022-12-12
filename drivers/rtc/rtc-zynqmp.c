@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Xilinx Zynq Ultrascale+ MPSoC Real Time Clock Driver
  *
  * Copyright (C) 2015 Xilinx, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program. If not, see <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -45,16 +34,19 @@
 #define RTC_INT_SEC		BIT(0)
 #define RTC_INT_ALRM		BIT(1)
 #define RTC_OSC_EN		BIT(24)
+#define RTC_BATT_EN		BIT(31)
 
 #define RTC_CALIB_DEF		0x198233
 #define RTC_CALIB_MASK		0x1FFFFF
-#define RTC_SEC_MAX_VAL		0xFFFFFFFF
+#define RTC_ALRM_MASK          BIT(1)
+#define RTC_MSEC               1000
 
 struct xlnx_rtc_dev {
 	struct rtc_device	*rtc;
 	void __iomem		*reg_base;
 	int			alarm_irq;
 	int			sec_irq;
+	unsigned int		calibval;
 };
 
 static int xlnx_rtc_set_time(struct device *dev, struct rtc_time *tm)
@@ -62,23 +54,62 @@ static int xlnx_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	struct xlnx_rtc_dev *xrtcdev = dev_get_drvdata(dev);
 	unsigned long new_time;
 
-	new_time = rtc_tm_to_time64(tm);
+	/*
+	 * The value written will be updated after 1 sec into the
+	 * seconds read register, so we need to program time +1 sec
+	 * to get the correct time on read.
+	 */
+	new_time = rtc_tm_to_time64(tm) + 1;
 
-	if (new_time > RTC_SEC_MAX_VAL)
-		return -EINVAL;
+	/*
+	 * Writing into calibration register will clear the Tick Counter and
+	 * force the next second to be signaled exactly in 1 second period
+	 */
+	xrtcdev->calibval &= RTC_CALIB_MASK;
+	writel(xrtcdev->calibval, (xrtcdev->reg_base + RTC_CALIB_WR));
 
 	writel(new_time, xrtcdev->reg_base + RTC_SET_TM_WR);
+
+	/*
+	 * Clear the rtc interrupt status register after setting the
+	 * time. During a read_time function, the code should read the
+	 * RTC_INT_STATUS register and if bit 0 is still 0, it means
+	 * that one second has not elapsed yet since RTC was set and
+	 * the current time should be read from SET_TIME_READ register;
+	 * otherwise, CURRENT_TIME register is read to report the time
+	 */
+	writel(RTC_INT_SEC, xrtcdev->reg_base + RTC_INT_STS);
 
 	return 0;
 }
 
 static int xlnx_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
+	u32 status;
+	unsigned long read_time;
 	struct xlnx_rtc_dev *xrtcdev = dev_get_drvdata(dev);
 
-	rtc_time64_to_tm(readl(xrtcdev->reg_base + RTC_CUR_TM), tm);
+	status = readl(xrtcdev->reg_base + RTC_INT_STS);
 
-	return rtc_valid_tm(tm);
+	if (status & RTC_INT_SEC) {
+		/*
+		 * RTC has updated the CURRENT_TIME with the time written into
+		 * SET_TIME_WRITE register.
+		 */
+		read_time = readl(xrtcdev->reg_base + RTC_CUR_TM);
+	} else {
+		/*
+		 * Time written in SET_TIME_WRITE has not yet updated into
+		 * the seconds read register, so read the time from the
+		 * SET_TIME_WRITE instead of CURRENT_TIME register.
+		 * Since we add +1 sec while writing, we need to -1 sec while
+		 * reading.
+		 */
+		read_time = readl(xrtcdev->reg_base + RTC_SET_TM_RD) - 1;
+	}
+	rtc_time64_to_tm(read_time, tm);
+
+	return 0;
 }
 
 static int xlnx_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
@@ -94,11 +125,28 @@ static int xlnx_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 static int xlnx_rtc_alarm_irq_enable(struct device *dev, u32 enabled)
 {
 	struct xlnx_rtc_dev *xrtcdev = dev_get_drvdata(dev);
+	unsigned int status;
+	ulong timeout;
 
-	if (enabled)
+	timeout = jiffies + msecs_to_jiffies(RTC_MSEC);
+
+	if (enabled) {
+		while (1) {
+			status = readl(xrtcdev->reg_base + RTC_INT_STS);
+			if (!((status & RTC_ALRM_MASK) == RTC_ALRM_MASK))
+				break;
+
+			if (time_after_eq(jiffies, timeout)) {
+				dev_err(dev, "Time out occur, while clearing alarm status bit\n");
+				return -ETIMEDOUT;
+			}
+			writel(RTC_INT_ALRM, xrtcdev->reg_base + RTC_INT_STS);
+		}
+
 		writel(RTC_INT_ALRM, xrtcdev->reg_base + RTC_INT_EN);
-	else
+	} else {
 		writel(RTC_INT_ALRM, xrtcdev->reg_base + RTC_INT_DIS);
+	}
 
 	return 0;
 }
@@ -110,9 +158,6 @@ static int xlnx_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 
 	alarm_time = rtc_tm_to_time64(&alrm->time);
 
-	if (alarm_time > RTC_SEC_MAX_VAL)
-		return -EINVAL;
-
 	writel((u32)alarm_time, (xrtcdev->reg_base + RTC_ALRM));
 
 	xlnx_rtc_alarm_irq_enable(dev, alrm->enabled);
@@ -120,16 +165,23 @@ static int xlnx_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	return 0;
 }
 
-static void xlnx_init_rtc(struct xlnx_rtc_dev *xrtcdev, u32 calibval)
+static void xlnx_init_rtc(struct xlnx_rtc_dev *xrtcdev)
 {
+	u32 rtc_ctrl;
+
+	/* Enable RTC switch to battery when VCC_PSAUX is not available */
+	rtc_ctrl = readl(xrtcdev->reg_base + RTC_CTRL);
+	rtc_ctrl |= RTC_BATT_EN;
+	writel(rtc_ctrl, xrtcdev->reg_base + RTC_CTRL);
+
 	/*
 	 * Based on crystal freq of 33.330 KHz
 	 * set the seconds counter and enable, set fractions counter
 	 * to default value suggested as per design spec
 	 * to correct RTC delay in frequency over period of time.
 	 */
-	calibval &= RTC_CALIB_MASK;
-	writel(calibval, (xrtcdev->reg_base + RTC_CALIB_WR));
+	xrtcdev->calibval &= RTC_CALIB_MASK;
+	writel(xrtcdev->calibval, (xrtcdev->reg_base + RTC_CALIB_WR));
 }
 
 static const struct rtc_class_ops xlnx_rtc_ops = {
@@ -150,11 +202,9 @@ static irqreturn_t xlnx_rtc_interrupt(int irq, void *id)
 	if (!(status & (RTC_INT_SEC | RTC_INT_ALRM)))
 		return IRQ_NONE;
 
-	/* Clear interrupt */
-	writel(status, xrtcdev->reg_base + RTC_INT_STS);
+	/* Disable RTC_INT_ALRM interrupt only */
+	writel(RTC_INT_ALRM, xrtcdev->reg_base + RTC_INT_DIS);
 
-	if (status & RTC_INT_SEC)
-		rtc_update_irq(xrtcdev->rtc, 1, RTC_IRQF | RTC_UF);
 	if (status & RTC_INT_ALRM)
 		rtc_update_irq(xrtcdev->rtc, 1, RTC_IRQF | RTC_AF);
 
@@ -164,9 +214,7 @@ static irqreturn_t xlnx_rtc_interrupt(int irq, void *id)
 static int xlnx_rtc_probe(struct platform_device *pdev)
 {
 	struct xlnx_rtc_dev *xrtcdev;
-	struct resource *res;
 	int ret;
-	unsigned int calibvalue;
 
 	xrtcdev = devm_kzalloc(&pdev->dev, sizeof(*xrtcdev), GFP_KERNEL);
 	if (!xrtcdev)
@@ -174,17 +222,20 @@ static int xlnx_rtc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, xrtcdev);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	xrtcdev->rtc = devm_rtc_allocate_device(&pdev->dev);
+	if (IS_ERR(xrtcdev->rtc))
+		return PTR_ERR(xrtcdev->rtc);
 
-	xrtcdev->reg_base = devm_ioremap_resource(&pdev->dev, res);
+	xrtcdev->rtc->ops = &xlnx_rtc_ops;
+	xrtcdev->rtc->range_max = U32_MAX;
+
+	xrtcdev->reg_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(xrtcdev->reg_base))
 		return PTR_ERR(xrtcdev->reg_base);
 
 	xrtcdev->alarm_irq = platform_get_irq_byname(pdev, "alarm");
-	if (xrtcdev->alarm_irq < 0) {
-		dev_err(&pdev->dev, "no irq resource\n");
+	if (xrtcdev->alarm_irq < 0)
 		return xrtcdev->alarm_irq;
-	}
 	ret = devm_request_irq(&pdev->dev, xrtcdev->alarm_irq,
 			       xlnx_rtc_interrupt, 0,
 			       dev_name(&pdev->dev), xrtcdev);
@@ -194,10 +245,8 @@ static int xlnx_rtc_probe(struct platform_device *pdev)
 	}
 
 	xrtcdev->sec_irq = platform_get_irq_byname(pdev, "sec");
-	if (xrtcdev->sec_irq < 0) {
-		dev_err(&pdev->dev, "no irq resource\n");
+	if (xrtcdev->sec_irq < 0)
 		return xrtcdev->sec_irq;
-	}
 	ret = devm_request_irq(&pdev->dev, xrtcdev->sec_irq,
 			       xlnx_rtc_interrupt, 0,
 			       dev_name(&pdev->dev), xrtcdev);
@@ -207,17 +256,15 @@ static int xlnx_rtc_probe(struct platform_device *pdev)
 	}
 
 	ret = of_property_read_u32(pdev->dev.of_node, "calibration",
-				   &calibvalue);
+				   &xrtcdev->calibval);
 	if (ret)
-		calibvalue = RTC_CALIB_DEF;
+		xrtcdev->calibval = RTC_CALIB_DEF;
 
-	xlnx_init_rtc(xrtcdev, calibvalue);
+	xlnx_init_rtc(xrtcdev);
 
 	device_init_wakeup(&pdev->dev, 1);
 
-	xrtcdev->rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
-					 &xlnx_rtc_ops, THIS_MODULE);
-	return PTR_ERR_OR_ZERO(xrtcdev->rtc);
+	return rtc_register_device(xrtcdev->rtc);
 }
 
 static int xlnx_rtc_remove(struct platform_device *pdev)
@@ -230,10 +277,9 @@ static int xlnx_rtc_remove(struct platform_device *pdev)
 
 static int __maybe_unused xlnx_rtc_suspend(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct xlnx_rtc_dev *xrtcdev = platform_get_drvdata(pdev);
+	struct xlnx_rtc_dev *xrtcdev = dev_get_drvdata(dev);
 
-	if (device_may_wakeup(&pdev->dev))
+	if (device_may_wakeup(dev))
 		enable_irq_wake(xrtcdev->alarm_irq);
 	else
 		xlnx_rtc_alarm_irq_enable(dev, 0);
@@ -243,10 +289,9 @@ static int __maybe_unused xlnx_rtc_suspend(struct device *dev)
 
 static int __maybe_unused xlnx_rtc_resume(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct xlnx_rtc_dev *xrtcdev = platform_get_drvdata(pdev);
+	struct xlnx_rtc_dev *xrtcdev = dev_get_drvdata(dev);
 
-	if (device_may_wakeup(&pdev->dev))
+	if (device_may_wakeup(dev))
 		disable_irq_wake(xrtcdev->alarm_irq);
 	else
 		xlnx_rtc_alarm_irq_enable(dev, 1);

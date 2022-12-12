@@ -1,10 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <sys/types.h>
+#include <errno.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <regex.h>
 
-#include "../../util/header.h"
+#include "../../../util/debug.h"
+#include "../../../util/header.h"
 
 static inline void
 cpuid(unsigned int op, unsigned int *a, unsigned int *b, unsigned int *c,
@@ -19,8 +23,8 @@ cpuid(unsigned int op, unsigned int *a, unsigned int *b, unsigned int *c,
 			: "a" (op));
 }
 
-int
-get_cpuid(char *buffer, size_t sz)
+static int
+__get_cpuid(char *buffer, size_t sz, const char *fmt)
 {
 	unsigned int a, b, c, d, lvl;
 	int family = -1, model = -1, step = -1;
@@ -48,12 +52,93 @@ get_cpuid(char *buffer, size_t sz)
 		if (family >= 0x6)
 			model += ((a >> 16) & 0xf) << 4;
 	}
-	nb = scnprintf(buffer, sz, "%s,%u,%u,%u$", vendor, family, model, step);
+	nb = scnprintf(buffer, sz, fmt, vendor, family, model, step);
 
 	/* look for end marker to ensure the entire data fit */
 	if (strchr(buffer, '$')) {
 		buffer[nb-1] = '\0';
 		return 0;
 	}
-	return -1;
+	return ENOBUFS;
+}
+
+int
+get_cpuid(char *buffer, size_t sz)
+{
+	return __get_cpuid(buffer, sz, "%s,%u,%u,%u$");
+}
+
+char *
+get_cpuid_str(struct perf_pmu *pmu __maybe_unused)
+{
+	char *buf = malloc(128);
+
+	if (buf && __get_cpuid(buf, 128, "%s-%u-%X-%X$") < 0) {
+		free(buf);
+		return NULL;
+	}
+	return buf;
+}
+
+/* Full CPUID format for x86 is vendor-family-model-stepping */
+static bool is_full_cpuid(const char *id)
+{
+	const char *tmp = id;
+	int count = 0;
+
+	while ((tmp = strchr(tmp, '-')) != NULL) {
+		count++;
+		tmp++;
+	}
+
+	if (count == 3)
+		return true;
+
+	return false;
+}
+
+int strcmp_cpuid_str(const char *mapcpuid, const char *id)
+{
+	regex_t re;
+	regmatch_t pmatch[1];
+	int match;
+	bool full_mapcpuid = is_full_cpuid(mapcpuid);
+	bool full_cpuid = is_full_cpuid(id);
+
+	/*
+	 * Full CPUID format is required to identify a platform.
+	 * Error out if the cpuid string is incomplete.
+	 */
+	if (full_mapcpuid && !full_cpuid) {
+		pr_info("Invalid CPUID %s. Full CPUID is required, "
+			"vendor-family-model-stepping\n", id);
+		return 1;
+	}
+
+	if (regcomp(&re, mapcpuid, REG_EXTENDED) != 0) {
+		/* Warn unable to generate match particular string. */
+		pr_info("Invalid regular expression %s\n", mapcpuid);
+		return 1;
+	}
+
+	match = !regexec(&re, id, 1, pmatch, 0);
+	regfree(&re);
+	if (match) {
+		size_t match_len = (pmatch[0].rm_eo - pmatch[0].rm_so);
+		size_t cpuid_len;
+
+		/* If the full CPUID format isn't required,
+		 * ignoring the stepping.
+		 */
+		if (!full_mapcpuid && full_cpuid)
+			cpuid_len = strrchr(id, '-') - id;
+		else
+			cpuid_len = strlen(id);
+
+		/* Verify the entire string matched. */
+		if (match_len == cpuid_len)
+			return 0;
+	}
+
+	return 1;
 }

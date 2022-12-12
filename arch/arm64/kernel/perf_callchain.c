@@ -1,23 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * arm64 callchain support
  *
  * Copyright (C) 2015 ARM Limited
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <linux/perf_event.h>
 #include <linux/uaccess.h>
 
+#include <asm/pointer_auth.h>
 #include <asm/stacktrace.h>
 
 struct frame_tail {
@@ -31,13 +21,14 @@ struct frame_tail {
  */
 static struct frame_tail __user *
 user_backtrace(struct frame_tail __user *tail,
-	       struct perf_callchain_entry *entry)
+	       struct perf_callchain_entry_ctx *entry)
 {
 	struct frame_tail buftail;
 	unsigned long err;
+	unsigned long lr;
 
 	/* Also check accessibility of one struct frame_tail beyond */
-	if (!access_ok(VERIFY_READ, tail, sizeof(buftail)))
+	if (!access_ok(tail, sizeof(buftail)))
 		return NULL;
 
 	pagefault_disable();
@@ -47,7 +38,9 @@ user_backtrace(struct frame_tail __user *tail,
 	if (err)
 		return NULL;
 
-	perf_callchain_store(entry, buftail.lr);
+	lr = ptrauth_strip_insn_pac(buftail.lr);
+
+	perf_callchain_store(entry, lr);
 
 	/*
 	 * Frame pointers should strictly progress back up the stack
@@ -76,13 +69,13 @@ struct compat_frame_tail {
 
 static struct compat_frame_tail __user *
 compat_user_backtrace(struct compat_frame_tail __user *tail,
-		      struct perf_callchain_entry *entry)
+		      struct perf_callchain_entry_ctx *entry)
 {
 	struct compat_frame_tail buftail;
 	unsigned long err;
 
 	/* Also check accessibility of one struct frame_tail beyond */
-	if (!access_ok(VERIFY_READ, tail, sizeof(buftail)))
+	if (!access_ok(tail, sizeof(buftail)))
 		return NULL;
 
 	pagefault_disable();
@@ -106,7 +99,7 @@ compat_user_backtrace(struct compat_frame_tail __user *tail,
 }
 #endif /* CONFIG_COMPAT */
 
-void perf_callchain_user(struct perf_callchain_entry *entry,
+void perf_callchain_user(struct perf_callchain_entry_ctx *entry,
 			 struct pt_regs *regs)
 {
 	if (perf_guest_cbs && perf_guest_cbs->is_in_guest()) {
@@ -122,7 +115,7 @@ void perf_callchain_user(struct perf_callchain_entry *entry,
 
 		tail = (struct frame_tail __user *)regs->regs[29];
 
-		while (entry->nr < PERF_MAX_STACK_DEPTH &&
+		while (entry->nr < entry->max_stack &&
 		       tail && !((unsigned long)tail & 0xf))
 			tail = user_backtrace(tail, entry);
 	} else {
@@ -132,7 +125,7 @@ void perf_callchain_user(struct perf_callchain_entry *entry,
 
 		tail = (struct compat_frame_tail __user *)regs->compat_fp - 1;
 
-		while ((entry->nr < PERF_MAX_STACK_DEPTH) &&
+		while ((entry->nr < entry->max_stack) &&
 			tail && !((unsigned long)tail & 0x3))
 			tail = compat_user_backtrace(tail, entry);
 #endif
@@ -144,14 +137,14 @@ void perf_callchain_user(struct perf_callchain_entry *entry,
  * whist unwinding the stackframe and is like a subroutine return so we use
  * the PC.
  */
-static int callchain_trace(struct stackframe *frame, void *data)
+static bool callchain_trace(void *data, unsigned long pc)
 {
-	struct perf_callchain_entry *entry = data;
-	perf_callchain_store(entry, frame->pc);
-	return 0;
+	struct perf_callchain_entry_ctx *entry = data;
+	perf_callchain_store(entry, pc);
+	return true;
 }
 
-void perf_callchain_kernel(struct perf_callchain_entry *entry,
+void perf_callchain_kernel(struct perf_callchain_entry_ctx *entry,
 			   struct pt_regs *regs)
 {
 	struct stackframe frame;
@@ -161,11 +154,8 @@ void perf_callchain_kernel(struct perf_callchain_entry *entry,
 		return;
 	}
 
-	frame.fp = regs->regs[29];
-	frame.sp = regs->sp;
-	frame.pc = regs->pc;
-
-	walk_stackframe(&frame, callchain_trace, entry);
+	start_backtrace(&frame, regs->regs[29], regs->pc);
+	walk_stackframe(current, &frame, callchain_trace, entry);
 }
 
 unsigned long perf_instruction_pointer(struct pt_regs *regs)

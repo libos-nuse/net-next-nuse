@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * arch/sh/kernel/cpu/sh2a/clock-sh7264.c
  *
  * SH7264 clock framework support
  *
  * Copyright (C) 2012  Phil Edworthy
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file "COPYING" in the main directory of this archive
- * for more details.
  */
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -115,7 +112,14 @@ static struct clk_lookup lookups[] = {
 	CLKDEV_CON_ID("peripheral_clk", &div4_clks[DIV4_P]),
 
 	/* MSTP clocks */
-	CLKDEV_CON_ID("sci_ick", &mstp_clks[MSTP77]),
+	CLKDEV_ICK_ID("fck", "sh-sci.0", &mstp_clks[MSTP77]),
+	CLKDEV_ICK_ID("fck", "sh-sci.1", &mstp_clks[MSTP77]),
+	CLKDEV_ICK_ID("fck", "sh-sci.2", &mstp_clks[MSTP77]),
+	CLKDEV_ICK_ID("fck", "sh-sci.3", &mstp_clks[MSTP77]),
+	CLKDEV_ICK_ID("fck", "sh-sci.4", &mstp_clks[MSTP77]),
+	CLKDEV_ICK_ID("fck", "sh-sci.5", &mstp_clks[MSTP77]),
+	CLKDEV_ICK_ID("fck", "sh-sci.6", &mstp_clks[MSTP77]),
+	CLKDEV_ICK_ID("fck", "sh-sci.7", &mstp_clks[MSTP77]),
 	CLKDEV_CON_ID("vdc3", &mstp_clks[MSTP74]),
 	CLKDEV_ICK_ID("fck", "sh-cmt-16.0", &mstp_clks[MSTP72]),
 	CLKDEV_CON_ID("usb0", &mstp_clks[MSTP60]),

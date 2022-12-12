@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2014 Oleksij Rempel <linux@rempel-privat.de>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -184,7 +180,7 @@ static irqreturn_t asm9260_timer_interrupt(int irq, void *dev_id)
  * Timer initialization
  * ---------------------------------------------------------------------------
  */
-static void __init asm9260_timer_init(struct device_node *np)
+static int __init asm9260_timer_init(struct device_node *np)
 {
 	int irq;
 	struct clk *clk;
@@ -192,20 +188,30 @@ static void __init asm9260_timer_init(struct device_node *np)
 	unsigned long rate;
 
 	priv.base = of_io_request_and_map(np, 0, np->name);
-	if (IS_ERR(priv.base))
-		panic("%s: unable to map resource", np->name);
+	if (IS_ERR(priv.base)) {
+		pr_err("%pOFn: unable to map resource\n", np);
+		return PTR_ERR(priv.base);
+	}
 
 	clk = of_clk_get(np, 0);
+	if (IS_ERR(clk)) {
+		pr_err("Failed to get clk!\n");
+		return PTR_ERR(clk);
+	}
 
 	ret = clk_prepare_enable(clk);
-	if (ret)
-		panic("Failed to enable clk!\n");
+	if (ret) {
+		pr_err("Failed to enable clk!\n");
+		return ret;
+	}
 
 	irq = irq_of_parse_and_map(np, 0);
 	ret = request_irq(irq, asm9260_timer_interrupt, IRQF_TIMER,
 			DRIVER_NAME, &event_dev);
-	if (ret)
-		panic("Failed to setup irq!\n");
+	if (ret) {
+		pr_err("Failed to setup irq!\n");
+		return ret;
+	}
 
 	/* set all timers for count-up */
 	writel_relaxed(BM_DIR_DEFAULT, priv.base + HW_DIR);
@@ -229,6 +235,8 @@ static void __init asm9260_timer_init(struct device_node *np)
 	priv.ticks_per_jiffy = DIV_ROUND_CLOSEST(rate, HZ);
 	event_dev.cpumask = cpumask_of(0);
 	clockevents_config_and_register(&event_dev, rate, 0x2c00, 0xfffffffe);
+
+	return 0;
 }
-CLOCKSOURCE_OF_DECLARE(asm9260_timer, "alphascale,asm9260-timer",
+TIMER_OF_DECLARE(asm9260_timer, "alphascale,asm9260-timer",
 		asm9260_timer_init);

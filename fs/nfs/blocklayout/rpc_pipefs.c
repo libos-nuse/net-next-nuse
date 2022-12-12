@@ -79,7 +79,7 @@ bl_resolve_deviceid(struct nfs_server *server, struct pnfs_block_volume *b,
 		goto out_free_data;
 
 	bl_msg = msg->data;
-	bl_msg->type = BL_DEVICE_MOUNT,
+	bl_msg->type = BL_DEVICE_MOUNT;
 	bl_msg->totallen = b->simple.len;
 	nfs4_encode_simple(msg->data + sizeof(*bl_msg), b);
 
@@ -281,7 +281,7 @@ out:
 	return ret;
 }
 
-void __exit bl_cleanup_pipefs(void)
+void bl_cleanup_pipefs(void)
 {
 	rpc_pipefs_notifier_unregister(&nfs4blocklayout_block);
 	unregister_pernet_subsys(&nfs4blocklayout_net_ops);

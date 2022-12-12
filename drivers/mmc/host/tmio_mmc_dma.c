@@ -15,7 +15,6 @@
 #include <linux/dmaengine.h>
 #include <linux/mfd/tmio.h>
 #include <linux/mmc/host.h>
-#include <linux/mmc/tmio.h>
 #include <linux/pagemap.h>
 #include <linux/scatterlist.h>
 
@@ -63,7 +62,7 @@ static void tmio_mmc_start_dma_rx(struct tmio_mmc_host *host)
 		}
 	}
 
-	if ((!aligned && (host->sg_len > 1 || sg->length > PAGE_CACHE_SIZE ||
+	if ((!aligned && (host->sg_len > 1 || sg->length > PAGE_SIZE ||
 			  (align & PAGE_MASK))) || !multiple) {
 		ret = -EINVAL;
 		goto pio;
@@ -95,9 +94,6 @@ static void tmio_mmc_start_dma_rx(struct tmio_mmc_host *host)
 			ret = cookie;
 		}
 	}
-	dev_dbg(&host->pdev->dev, "%s(): mapped %d -> %d, cookie %d, rq %p\n",
-		__func__, host->sg_len, ret, cookie, host->mrq);
-
 pio:
 	if (!desc) {
 		/* DMA failed, fall back to PIO */
@@ -115,9 +111,6 @@ pio:
 		dev_warn(&host->pdev->dev,
 			 "DMA failed: %d, falling back to PIO\n", ret);
 	}
-
-	dev_dbg(&host->pdev->dev, "%s(): desc %p, cookie %d, sg[%d]\n", __func__,
-		desc, cookie, host->sg_len);
 }
 
 static void tmio_mmc_start_dma_tx(struct tmio_mmc_host *host)
@@ -139,7 +132,7 @@ static void tmio_mmc_start_dma_tx(struct tmio_mmc_host *host)
 		}
 	}
 
-	if ((!aligned && (host->sg_len > 1 || sg->length > PAGE_CACHE_SIZE ||
+	if ((!aligned && (host->sg_len > 1 || sg->length > PAGE_SIZE ||
 			  (align & PAGE_MASK))) || !multiple) {
 		ret = -EINVAL;
 		goto pio;
@@ -175,9 +168,6 @@ static void tmio_mmc_start_dma_tx(struct tmio_mmc_host *host)
 			ret = cookie;
 		}
 	}
-	dev_dbg(&host->pdev->dev, "%s(): mapped %d -> %d, cookie %d, rq %p\n",
-		__func__, host->sg_len, ret, cookie, host->mrq);
-
 pio:
 	if (!desc) {
 		/* DMA failed, fall back to PIO */
@@ -195,9 +185,6 @@ pio:
 		dev_warn(&host->pdev->dev,
 			 "DMA failed: %d, falling back to PIO\n", ret);
 	}
-
-	dev_dbg(&host->pdev->dev, "%s(): desc %p, cookie %d\n", __func__,
-		desc, cookie);
 }
 
 void tmio_mmc_start_dma(struct tmio_mmc_host *host,

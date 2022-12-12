@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * QLogic Fibre Channel HBA Driver
  * Copyright (c)  2003-2014 QLogic Corporation
- *
- * See LICENSE.qla2xxx for copyright and licensing details.
  */
 #ifndef __QLA_BSG_H
 #define __QLA_BSG_H
@@ -25,6 +24,13 @@
 #define QL_VND_FX00_MGMT_CMD	0x12
 #define QL_VND_SERDES_OP	0x13
 #define	QL_VND_SERDES_OP_EX	0x14
+#define QL_VND_GET_FLASH_UPDATE_CAPS    0x15
+#define QL_VND_SET_FLASH_UPDATE_CAPS    0x16
+#define QL_VND_GET_BBCR_DATA    0x17
+#define QL_VND_GET_PRIV_STATS	0x18
+#define QL_VND_DPORT_DIAGNOSTICS	0x19
+#define QL_VND_GET_PRIV_STATS_EX	0x1A
+#define QL_VND_SS_GET_FLASH_IMAGE_STATUS	0x1E
 
 /* BSG Vendor specific subcode returns */
 #define EXT_STATUS_OK			0
@@ -230,6 +236,57 @@ struct qla_serdes_reg_ex {
 	uint16_t cmd;
 	uint32_t addr;
 	uint32_t val;
+} __packed;
+
+struct qla_flash_update_caps {
+	uint64_t  capabilities;
+	uint32_t  outage_duration;
+	uint8_t   reserved[20];
+} __packed;
+
+/* BB_CR Status */
+#define QLA_BBCR_STATUS_DISABLED       0
+#define QLA_BBCR_STATUS_ENABLED        1
+#define QLA_BBCR_STATUS_UNKNOWN        2
+
+/* BB_CR State */
+#define QLA_BBCR_STATE_OFFLINE         0
+#define QLA_BBCR_STATE_ONLINE          1
+
+/* BB_CR Offline Reason Code */
+#define QLA_BBCR_REASON_PORT_SPEED     1
+#define QLA_BBCR_REASON_PEER_PORT      2
+#define QLA_BBCR_REASON_SWITCH         3
+#define QLA_BBCR_REASON_LOGIN_REJECT   4
+
+struct  qla_bbcr_data {
+	uint8_t   status;         /* 1 - enabled, 0 - Disabled */
+	uint8_t   state;          /* 1 - online, 0 - offline */
+	uint8_t   configured_bbscn;       /* 0-15 */
+	uint8_t   negotiated_bbscn;       /* 0-15 */
+	uint8_t   offline_reason_code;
+	uint16_t  mbx1;			/* Port state */
+	uint8_t   reserved[9];
+} __packed;
+
+struct qla_dport_diag {
+	uint16_t options;
+	uint32_t buf[16];
+	uint8_t  unused[62];
+} __packed;
+
+/* D_Port options */
+#define QLA_DPORT_RESULT	0x0
+#define QLA_DPORT_START		0x2
+
+/* active images in flash */
+struct qla_active_regions {
+	uint8_t global_image;
+	uint8_t board_config;
+	uint8_t vpd_nvram;
+	uint8_t npiv_config_0_1;
+	uint8_t npiv_config_2_3;
+	uint8_t reserved[32];
 } __packed;
 
 #endif

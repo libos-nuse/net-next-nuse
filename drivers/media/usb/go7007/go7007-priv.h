@@ -1,14 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2005-2006 Micronas USA Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License (Version 2) as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 /*
@@ -250,7 +242,7 @@ struct go7007 {
 	struct i2c_adapter i2c_adapter;
 
 	/* HPI driver */
-	struct go7007_hpi_ops *hpi_ops;
+	const struct go7007_hpi_ops *hpi_ops;
 	void *hpi_context;
 	int interrupt_available;
 	wait_queue_head_t interrupt_waitq;

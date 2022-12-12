@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * POWER Data Stream Control Register (DSCR) fork exec test
  *
@@ -5,21 +6,17 @@
  * verifies that the child is using the changed DSCR using mfspr.
  *
  * When using the privilege state SPR, the instructions such as
- * mfspr or mtspr are priviledged and the kernel emulates them
- * for us. Instructions using problem state SPR can be exuecuted
+ * mfspr or mtspr are privileged and the kernel emulates them
+ * for us. Instructions using problem state SPR can be executed
  * directly without any emulation if the HW supports them. Else
  * they also get emulated by the kernel.
  *
  * Copyright 2012, Anton Blanchard, IBM Corporation.
  * Copyright 2015, Anshuman Khandual, IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  */
 #include "dscr.h"
 
-static char prog[LEN_MAX];
+static char *prog;
 
 static void do_exec(unsigned long parent_dscr)
 {
@@ -47,6 +44,8 @@ int dscr_inherit_exec(void)
 	unsigned long i, dscr = 0;
 	pid_t pid;
 
+	SKIP_IF(!have_hwcap2(PPC_FEATURE2_DSCR));
+
 	for (i = 0; i < COUNT; i++) {
 		dscr++;
 		if (dscr > DSCR_MAX)
@@ -59,14 +58,6 @@ int dscr_inherit_exec(void)
 			set_dscr_usr(dscr);
 		else
 			set_dscr(dscr);
-
-		/*
-		 * XXX: Force a context switch out so that DSCR
-		 * current value is copied into the thread struct
-		 * which is required for the child to inherit the
-		 * changed value.
-		 */
-		sleep(1);
 
 		pid = fork();
 		if (pid == -1) {
@@ -112,6 +103,6 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	strncpy(prog, argv[0], strlen(argv[0]));
+	prog = argv[0];
 	return test_harness(dscr_inherit_exec, "dscr_inherit_exec_test");
 }

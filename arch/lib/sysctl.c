@@ -91,14 +91,14 @@ int sched_rt_handler(struct ctl_table *table, int write,
 	return 0;
 }
 
-int sysctl_overcommit_memory = OVERCOMMIT_GUESS;
-int sysctl_overcommit_ratio = 50;
+//int sysctl_overcommit_memory = OVERCOMMIT_GUESS;
+//int sysctl_overcommit_ratio = 50;
 int sysctl_panic_on_oom = 0;
 int sysctl_oom_dump_tasks = 0;
 int sysctl_oom_kill_allocating_task = 0;
 int sysctl_nr_trim_pages = 0;
 int sysctl_drop_caches = 0;
-int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES - 1] = { 32 };
+int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES] = { 32 };
 unsigned int sysctl_sched_child_runs_first = 0;
 unsigned int sysctl_sched_compat_yield = 0;
 unsigned int sysctl_sched_rt_period = 1000000;
@@ -150,8 +150,8 @@ int C_A_D = 0;
 struct nsproxy init_nsproxy;
 #include <linux/reboot.h>
 char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
-unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
-unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
+//unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
+//unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 
 int pdflush_proc_obsolete(struct ctl_table *table, int write,
 			  void __user *buffer, size_t *lenp, loff_t *ppos)
@@ -216,7 +216,7 @@ static void iterate_recursive(const struct SimSysIterator *iter,
 			dir = ctl_table_xlate_dir(&init_net.sysctls, h->parent);
 			if (IS_ERR(dir)) {
 				ret = PTR_ERR(dir);
-				lib_assert(false);
+				//continue;
 			} else {
 				procname = entry->procname;
 				h = NULL;
@@ -242,7 +242,7 @@ void lib_sys_iterate_files(const struct SimSysIterator *iter)
 {
 	struct ctl_table_header *root =
 		&sysctl_table_root.default_set.dir.header;
-
+	
 	iterate_recursive(iter, root);
 }
 

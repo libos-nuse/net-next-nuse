@@ -1,17 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * xen-acpi-pad.c - Xen pad interface
  *
  * Copyright (c) 2012, Intel Corporation.
  *    Author: Liu, Jinsong <jinsong.liu@intel.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -19,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/acpi.h>
+#include <xen/xen.h>
 #include <xen/interface/version.h>
 #include <xen/xen-ops.h>
 #include <asm/xen/hypercall.h>
@@ -36,7 +29,7 @@ static int xen_acpi_pad_idle_cpus(unsigned int idle_nums)
 	op.u.core_parking.type = XEN_CORE_PARKING_SET;
 	op.u.core_parking.idle_nums = idle_nums;
 
-	return HYPERVISOR_dom0_op(&op);
+	return HYPERVISOR_platform_op(&op);
 }
 
 static int xen_acpi_pad_idle_cpus_num(void)
@@ -46,7 +39,7 @@ static int xen_acpi_pad_idle_cpus_num(void)
 	op.cmd = XENPF_core_parking;
 	op.u.core_parking.type = XEN_CORE_PARKING_GET;
 
-	return HYPERVISOR_dom0_op(&op)
+	return HYPERVISOR_platform_op(&op)
 	       ?: op.u.core_parking.idle_nums;
 }
 

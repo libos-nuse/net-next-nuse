@@ -1,18 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Support code for the SCOOP interface found on various Sharp PDAs
  *
  * Copyright (c) 2004 Richard Purdie
  *
  *	Based on code written by Sharp/Lineo for 2.4 kernels
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/device.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
@@ -69,7 +65,7 @@ static void __scoop_gpio_set(struct scoop_dev *sdev,
 
 static void scoop_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct scoop_dev *sdev = container_of(chip, struct scoop_dev, gpio);
+	struct scoop_dev *sdev = gpiochip_get_data(chip);
 	unsigned long flags;
 
 	spin_lock_irqsave(&sdev->scoop_lock, flags);
@@ -81,16 +77,16 @@ static void scoop_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 
 static int scoop_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct scoop_dev *sdev = container_of(chip, struct scoop_dev, gpio);
+	struct scoop_dev *sdev = gpiochip_get_data(chip);
 
 	/* XXX: I'm unsure, but it seems so */
-	return ioread16(sdev->base + SCOOP_GPRR) & (1 << (offset + 1));
+	return !!(ioread16(sdev->base + SCOOP_GPRR) & (1 << (offset + 1)));
 }
 
 static int scoop_gpio_direction_input(struct gpio_chip *chip,
 			unsigned offset)
 {
-	struct scoop_dev *sdev = container_of(chip, struct scoop_dev, gpio);
+	struct scoop_dev *sdev = gpiochip_get_data(chip);
 	unsigned long flags;
 	unsigned short gpcr;
 
@@ -108,7 +104,7 @@ static int scoop_gpio_direction_input(struct gpio_chip *chip,
 static int scoop_gpio_direction_output(struct gpio_chip *chip,
 			unsigned offset, int value)
 {
-	struct scoop_dev *sdev = container_of(chip, struct scoop_dev, gpio);
+	struct scoop_dev *sdev = gpiochip_get_data(chip);
 	unsigned long flags;
 	unsigned short gpcr;
 
@@ -224,7 +220,7 @@ static int scoop_probe(struct platform_device *pdev)
 		devptr->gpio.direction_input = scoop_gpio_direction_input;
 		devptr->gpio.direction_output = scoop_gpio_direction_output;
 
-		ret = gpiochip_add(&devptr->gpio);
+		ret = gpiochip_add_data(&devptr->gpio, devptr);
 		if (ret)
 			goto err_gpio;
 	}

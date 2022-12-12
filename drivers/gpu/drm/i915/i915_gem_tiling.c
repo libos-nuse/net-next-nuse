@@ -166,7 +166,7 @@ i915_gem_set_tiling(struct drm_device *dev, void *data,
 	struct drm_i915_gem_object *obj;
 	int ret = 0;
 
-	obj = to_intel_bo(drm_gem_object_lookup(dev, file, args->handle));
+	obj = to_intel_bo(drm_gem_object_lookup(file, args->handle));
 	if (&obj->base == NULL)
 		return -ENOENT;
 
@@ -175,6 +175,8 @@ i915_gem_set_tiling(struct drm_device *dev, void *data,
 		drm_gem_object_unreference_unlocked(&obj->base);
 		return -EINVAL;
 	}
+
+	intel_runtime_pm_get(dev_priv);
 
 	mutex_lock(&dev->struct_mutex);
 	if (obj->pin_display || obj->framebuffer_references) {
@@ -269,6 +271,8 @@ err:
 	drm_gem_object_unreference(&obj->base);
 	mutex_unlock(&dev->struct_mutex);
 
+	intel_runtime_pm_put(dev_priv);
+
 	return ret;
 }
 
@@ -293,7 +297,7 @@ i915_gem_get_tiling(struct drm_device *dev, void *data,
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct drm_i915_gem_object *obj;
 
-	obj = to_intel_bo(drm_gem_object_lookup(dev, file, args->handle));
+	obj = to_intel_bo(drm_gem_object_lookup(file, args->handle));
 	if (&obj->base == NULL)
 		return -ENOENT;
 

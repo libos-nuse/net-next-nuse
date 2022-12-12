@@ -1,16 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * Copyright IBM Corp. 2008
  *
@@ -84,7 +73,6 @@
 #define BOOK3S_INTERRUPT_INST_STORAGE	0x400
 #define BOOK3S_INTERRUPT_INST_SEGMENT	0x480
 #define BOOK3S_INTERRUPT_EXTERNAL	0x500
-#define BOOK3S_INTERRUPT_EXTERNAL_LEVEL	0x501
 #define BOOK3S_INTERRUPT_EXTERNAL_HV	0x502
 #define BOOK3S_INTERRUPT_ALIGNMENT	0x600
 #define BOOK3S_INTERRUPT_PROGRAM	0x700
@@ -99,11 +87,23 @@
 #define BOOK3S_INTERRUPT_H_EMUL_ASSIST	0xe40
 #define BOOK3S_INTERRUPT_HMI		0xe60
 #define BOOK3S_INTERRUPT_H_DOORBELL	0xe80
+#define BOOK3S_INTERRUPT_H_VIRT		0xea0
 #define BOOK3S_INTERRUPT_PERFMON	0xf00
 #define BOOK3S_INTERRUPT_ALTIVEC	0xf20
 #define BOOK3S_INTERRUPT_VSX		0xf40
 #define BOOK3S_INTERRUPT_FAC_UNAVAIL	0xf60
 #define BOOK3S_INTERRUPT_H_FAC_UNAVAIL	0xf80
+
+/* book3s_hv */
+
+#define BOOK3S_INTERRUPT_HV_SOFTPATCH	0x1500
+
+/*
+ * Special trap used to indicate to host that this is a
+ * passthrough interrupt that could not be handled
+ * completely in the guest.
+ */
+#define BOOK3S_INTERRUPT_HV_RM_HARD	0x5555
 
 #define BOOK3S_IRQPRIO_SYSTEM_RESET		0
 #define BOOK3S_IRQPRIO_DATA_SEGMENT		1
@@ -122,8 +122,7 @@
 #define BOOK3S_IRQPRIO_EXTERNAL			14
 #define BOOK3S_IRQPRIO_DECREMENTER		15
 #define BOOK3S_IRQPRIO_PERFORMANCE_MONITOR	16
-#define BOOK3S_IRQPRIO_EXTERNAL_LEVEL		17
-#define BOOK3S_IRQPRIO_MAX			18
+#define BOOK3S_IRQPRIO_MAX			17
 
 #define BOOK3S_HFLAG_DCBZ32			0x1
 #define BOOK3S_HFLAG_SLB			0x2
@@ -136,6 +135,7 @@
 #define RESUME_FLAG_NV          (1<<0)  /* Reload guest nonvolatile state? */
 #define RESUME_FLAG_HOST        (1<<1)  /* Resume host? */
 #define RESUME_FLAG_ARCH1	(1<<2)
+#define RESUME_FLAG_ARCH2	(1<<3)
 
 #define RESUME_GUEST            0
 #define RESUME_GUEST_NV         RESUME_FLAG_NV
@@ -149,5 +149,8 @@
 #define KVM_GUEST_MODE_HOST_HV	4
 
 #define KVM_INST_FETCH_FAILED	-1
+
+/* Extract PO and XOP opcode fields */
+#define PO_XOP_OPCODE_MASK 0xfc0007fe
 
 #endif /* __POWERPC_KVM_ASM_H__ */

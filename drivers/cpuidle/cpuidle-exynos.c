@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011-2014 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
@@ -5,16 +6,12 @@
  * Coupled cpuidle support based on the work of:
  *	Colin Cross <ccross@android.com>
  *	Daniel Lezcano <daniel.lezcano@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
 */
 
 #include <linux/cpuidle.h>
 #include <linux/cpu_pm.h>
 #include <linux/export.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/platform_data/cpuidle-exynos.h>
@@ -84,7 +81,7 @@ static struct cpuidle_driver exynos_idle_driver = {
 		[1] = {
 			.enter			= exynos_enter_lowpower,
 			.exit_latency		= 300,
-			.target_residency	= 100000,
+			.target_residency	= 10000,
 			.name			= "C1",
 			.desc			= "ARM power down",
 		},
@@ -117,7 +114,8 @@ static int exynos_cpuidle_probe(struct platform_device *pdev)
 	int ret;
 
 	if (IS_ENABLED(CONFIG_SMP) &&
-	    of_machine_is_compatible("samsung,exynos4210")) {
+	    (of_machine_is_compatible("samsung,exynos4210") ||
+	     of_machine_is_compatible("samsung,exynos3250"))) {
 		exynos_cpuidle_pdata = pdev->dev.platform_data;
 
 		ret = cpuidle_register(&exynos_coupled_idle_driver,
@@ -142,5 +140,4 @@ static struct platform_driver exynos_cpuidle_driver = {
 		.name = "exynos_cpuidle",
 	},
 };
-
-module_platform_driver(exynos_cpuidle_driver);
+builtin_platform_driver(exynos_cpuidle_driver);

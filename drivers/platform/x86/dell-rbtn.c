@@ -1,22 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
     Dell Airplane Mode Switch driver
-    Copyright (C) 2014-2015  Pali Rohár <pali.rohar@gmail.com>
+    Copyright (C) 2014-2015  Pali Rohár <pali@kernel.org>
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
 */
 
 #include <linux/module.h>
 #include <linux/acpi.h>
 #include <linux/rfkill.h>
 #include <linux/input.h>
+
+#include "dell-rbtn.h"
 
 enum rbtn_type {
 	RBTN_UNKNOWN,
@@ -28,6 +22,7 @@ struct rbtn_data {
 	enum rbtn_type type;
 	struct rfkill *rfkill;
 	struct input_dev *input_dev;
+	bool suspended;
 };
 
 
@@ -109,7 +104,7 @@ static int rbtn_rfkill_set_block(void *data, bool blocked)
 	return -EINVAL;
 }
 
-static struct rfkill_ops rbtn_ops = {
+static const struct rfkill_ops rbtn_ops = {
 	.query = rbtn_rfkill_query,
 	.set_block = rbtn_rfkill_set_block,
 };
@@ -217,12 +212,84 @@ static void rbtn_notify(struct acpi_device *device, u32 event);
 static const struct acpi_device_id rbtn_ids[] = {
 	{ "DELRBTN", 0 },
 	{ "DELLABCE", 0 },
+
+	/*
+	 * This driver can also handle the "DELLABC6" device that
+	 * appears on the XPS 13 9350, but that device is disabled by
+	 * the DSDT unless booted with acpi_osi="!Windows 2012"
+	 * acpi_osi="!Windows 2013".
+	 *
+	 * According to Mario at Dell:
+	 *
+	 *  DELLABC6 is a custom interface that was created solely to
+	 *  have airplane mode support for Windows 7.  For Windows 10
+	 *  the proper interface is to use that which is handled by
+	 *  intel-hid. A OEM airplane mode driver is not used.
+	 *
+	 *  Since the kernel doesn't identify as Windows 7 it would be
+	 *  incorrect to do attempt to use that interface.
+	 *
+	 * Even if we override _OSI and bind to DELLABC6, we end up with
+	 * inconsistent behavior in which userspace can get out of sync
+	 * with the rfkill state as it conflicts with events from
+	 * intel-hid.
+	 *
+	 * The upshot is that it is better to just ignore DELLABC6
+	 * devices.
+	 */
+
 	{ "", 0 },
 };
+
+#ifdef CONFIG_PM_SLEEP
+static void ACPI_SYSTEM_XFACE rbtn_clear_suspended_flag(void *context)
+{
+	struct rbtn_data *rbtn_data = context;
+
+	rbtn_data->suspended = false;
+}
+
+static int rbtn_suspend(struct device *dev)
+{
+	struct acpi_device *device = to_acpi_device(dev);
+	struct rbtn_data *rbtn_data = acpi_driver_data(device);
+
+	rbtn_data->suspended = true;
+
+	return 0;
+}
+
+static int rbtn_resume(struct device *dev)
+{
+	struct acpi_device *device = to_acpi_device(dev);
+	struct rbtn_data *rbtn_data = acpi_driver_data(device);
+	acpi_status status;
+
+	/*
+	 * Upon resume, some BIOSes send an ACPI notification thet triggers
+	 * an unwanted input event. In order to ignore it, we use a flag
+	 * that we set at suspend and clear once we have received the extra
+	 * ACPI notification. Since ACPI notifications are delivered
+	 * asynchronously to drivers, we clear the flag from the workqueue
+	 * used to deliver the notifications. This should be enough
+	 * to have the flag cleared only after we received the extra
+	 * notification, if any.
+	 */
+	status = acpi_os_execute(OSL_NOTIFY_HANDLER,
+			 rbtn_clear_suspended_flag, rbtn_data);
+	if (ACPI_FAILURE(status))
+		rbtn_clear_suspended_flag(rbtn_data);
+
+	return 0;
+}
+#endif
+
+static SIMPLE_DEV_PM_OPS(rbtn_pm_ops, rbtn_suspend, rbtn_resume);
 
 static struct acpi_driver rbtn_driver = {
 	.name = "dell-rbtn",
 	.ids = rbtn_ids,
+	.drv.pm = &rbtn_pm_ops,
 	.ops = {
 		.add = rbtn_add,
 		.remove = rbtn_remove,
@@ -384,6 +451,15 @@ static void rbtn_notify(struct acpi_device *device, u32 event)
 {
 	struct rbtn_data *rbtn_data = device->driver_data;
 
+	/*
+	 * Some BIOSes send a notification at resume.
+	 * Ignore it to prevent unwanted input events.
+	 */
+	if (rbtn_data->suspended) {
+		dev_dbg(&device->dev, "ACPI notification ignored\n");
+		return;
+	}
+
 	if (event != 0x80) {
 		dev_info(&device->dev, "Received unknown event (0x%x)\n",
 			 event);
@@ -419,5 +495,5 @@ MODULE_PARM_DESC(auto_remove_rfkill, "Automatically remove rfkill devices when "
 				     "(default true)");
 MODULE_DEVICE_TABLE(acpi, rbtn_ids);
 MODULE_DESCRIPTION("Dell Airplane Mode Switch driver");
-MODULE_AUTHOR("Pali Rohár <pali.rohar@gmail.com>");
+MODULE_AUTHOR("Pali Rohár <pali@kernel.org>");
 MODULE_LICENSE("GPL");

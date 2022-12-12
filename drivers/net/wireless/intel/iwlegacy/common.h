@@ -1,22 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /******************************************************************************
  *
  * Copyright(c) 2003 - 2011 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- * The full GNU General Public License is included in this distribution in the
- * file called LICENSE.
  *
  * Contact Information:
  *  Intel Linux Wireless <ilw@linux.intel.com>
@@ -45,6 +30,7 @@ struct il_tx_queue;
 
 #define IL_ERR(f, a...) dev_err(&il->pci_dev->dev, f, ## a)
 #define IL_WARN(f, a...) dev_warn(&il->pci_dev->dev, f, ## a)
+#define IL_WARN_ONCE(f, a...) dev_warn_once(&il->pci_dev->dev, f, ## a)
 #define IL_INFO(f, a...) dev_info(&il->pci_dev->dev, f, ## a)
 
 #define RX_QUEUE_SIZE                         256
@@ -432,7 +418,7 @@ u16 il_eeprom_query16(const struct il_priv *il, size_t offset);
 int il_init_channel_map(struct il_priv *il);
 void il_free_channel_map(struct il_priv *il);
 const struct il_channel_info *il_get_channel_info(const struct il_priv *il,
-						  enum ieee80211_band band,
+						  enum nl80211_band band,
 						  u16 channel);
 
 #define IL_NUM_SCAN_RATES         (2)
@@ -497,7 +483,7 @@ struct il_channel_info {
 
 	u8 group_idx;		/* 0-4, maps channel to group1/2/3/4/5 */
 	u8 band_idx;		/* 0-4, maps channel to band1/2/3/4/5 */
-	enum ieee80211_band band;
+	enum nl80211_band band;
 
 	/* HT40 channel info */
 	s8 ht40_max_power_avg;	/* (dBm) regul. eeprom, normal Tx, any rate */
@@ -793,9 +779,6 @@ struct il_sensitivity_ranges {
 	u16 nrg_th_cca;
 };
 
-#define KELVIN_TO_CELSIUS(x) ((x)-273)
-#define CELSIUS_TO_KELVIN(x) ((x)+273)
-
 /**
  * struct il_hw_params
  * @bcast_id: f/w broadcast station ID
@@ -811,7 +794,7 @@ struct il_sensitivity_ranges {
  * @rx_wrt_ptr_reg: FH{39}_RSCSR_CHNL0_WPTR
  * @max_stations:
  * @ht40_channel: is 40MHz width possible in band 2.4
- * BIT(IEEE80211_BAND_5GHZ) BIT(IEEE80211_BAND_5GHZ)
+ * BIT(NL80211_BAND_5GHZ) BIT(NL80211_BAND_5GHZ)
  * @sw_crypto: 0 for hw, 1 for sw
  * @max_xxx_size: for ucode uses
  * @ct_kill_threshold: temperature threshold
@@ -1141,13 +1124,13 @@ struct il_priv {
 	struct list_head free_frames;
 	int frames_count;
 
-	enum ieee80211_band band;
+	enum nl80211_band band;
 	int alloc_rxb_page;
 
 	void (*handlers[IL_CN_MAX]) (struct il_priv *il,
 				     struct il_rx_buf *rxb);
 
-	struct ieee80211_supported_band bands[IEEE80211_NUM_BANDS];
+	struct ieee80211_supported_band bands[NUM_NL80211_BANDS];
 
 	/* spectrum measurement report caching */
 	struct il_spectrum_notification measure_report;
@@ -1176,10 +1159,10 @@ struct il_priv {
 	unsigned long scan_start;
 	unsigned long scan_start_tsf;
 	void *scan_cmd;
-	enum ieee80211_band scan_band;
+	enum nl80211_band scan_band;
 	struct cfg80211_scan_request *scan_request;
 	struct ieee80211_vif *scan_vif;
-	u8 scan_tx_ant[IEEE80211_NUM_BANDS];
+	u8 scan_tx_ant[NUM_NL80211_BANDS];
 	u8 mgmt_tx_ant;
 
 	/* spinlock */
@@ -1320,7 +1303,7 @@ struct il_priv {
 	u64 timestamp;
 
 	union {
-#if defined(CONFIG_IWL3945) || defined(CONFIG_IWL3945_MODULE)
+#if IS_ENABLED(CONFIG_IWL3945)
 		struct {
 			void *shared_virt;
 			dma_addr_t shared_phys;
@@ -1351,7 +1334,7 @@ struct il_priv {
 
 		} _3945;
 #endif
-#if defined(CONFIG_IWL4965) || defined(CONFIG_IWL4965_MODULE)
+#if IS_ENABLED(CONFIG_IWL4965)
 		struct {
 			struct il_rx_phy_res last_phy_res;
 			bool last_phy_res_valid;
@@ -1479,7 +1462,7 @@ il_is_channel_radar(const struct il_channel_info *ch_info)
 static inline u8
 il_is_channel_a_band(const struct il_channel_info *ch_info)
 {
-	return ch_info->band == IEEE80211_BAND_5GHZ;
+	return ch_info->band == NL80211_BAND_5GHZ;
 }
 
 static inline int
@@ -1673,7 +1656,7 @@ struct il_cfg {
 	/* params not likely to change within a device family */
 	struct il_base_params *base_params;
 	/* params likely to change within a device family */
-	u8 scan_rx_antennas[IEEE80211_NUM_BANDS];
+	u8 scan_rx_antennas[NUM_NL80211_BANDS];
 	enum il_led_mode led_mode;
 
 	int eeprom_size;
@@ -1707,9 +1690,9 @@ void il_set_rxon_hwcrypto(struct il_priv *il, int hw_decrypt);
 int il_check_rxon_cmd(struct il_priv *il);
 int il_full_rxon_required(struct il_priv *il);
 int il_set_rxon_channel(struct il_priv *il, struct ieee80211_channel *ch);
-void il_set_flags_for_band(struct il_priv *il, enum ieee80211_band band,
+void il_set_flags_for_band(struct il_priv *il, enum nl80211_band band,
 			   struct ieee80211_vif *vif);
-u8 il_get_single_channel_number(struct il_priv *il, enum ieee80211_band band);
+u8 il_get_single_channel_number(struct il_priv *il, enum nl80211_band band);
 void il_set_rxon_ht(struct il_priv *il, struct il_ht_config *ht_conf);
 bool il_is_ht40_tx_allowed(struct il_priv *il,
 			   struct ieee80211_sta_ht_cap *ht_cap);
@@ -1793,9 +1776,9 @@ int il_force_reset(struct il_priv *il, bool external);
 u16 il_fill_probe_req(struct il_priv *il, struct ieee80211_mgmt *frame,
 		      const u8 *ta, const u8 *ie, int ie_len, int left);
 void il_setup_rx_scan_handlers(struct il_priv *il);
-u16 il_get_active_dwell_time(struct il_priv *il, enum ieee80211_band band,
+u16 il_get_active_dwell_time(struct il_priv *il, enum nl80211_band band,
 			     u8 n_probes);
-u16 il_get_passive_dwell_time(struct il_priv *il, enum ieee80211_band band,
+u16 il_get_passive_dwell_time(struct il_priv *il, enum nl80211_band band,
 			      struct ieee80211_vif *vif);
 void il_setup_scan_deferred_work(struct il_priv *il);
 void il_cancel_scan_deferred_work(struct il_priv *il);
@@ -1831,7 +1814,7 @@ int il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd);
  * PCI						     *
  *****************************************************/
 
-void il_bg_watchdog(unsigned long data);
+void il_bg_watchdog(struct timer_list *t);
 u32 il_usecs_to_beacons(struct il_priv *il, u32 usec, u32 beacon_interval);
 __le32 il_add_beacon_time(struct il_priv *il, u32 base, u32 addon,
 			  u32 beacon_interval);
@@ -1955,7 +1938,7 @@ il_commit_rxon(struct il_priv *il)
 }
 
 static inline const struct ieee80211_supported_band *
-il_get_hw_mode(struct il_priv *il, enum ieee80211_band band)
+il_get_hw_mode(struct il_priv *il, enum nl80211_band band)
 {
 	return il->hw->wiphy->bands[band];
 }
@@ -2029,13 +2012,6 @@ static inline void
 _il_release_nic_access(struct il_priv *il)
 {
 	_il_clear_bit(il, CSR_GP_CNTRL, CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
-	/*
-	 * In above we are reading CSR_GP_CNTRL register, what will flush any
-	 * previous writes, but still want write, which clear MAC_ACCESS_REQ
-	 * bit, be performed on PCI bus before any other writes scheduled on
-	 * different CPUs (after we drop reg_lock).
-	 */
-	mmiowb();
 }
 
 static inline u32
@@ -2813,7 +2789,7 @@ struct il_lq_sta {
 	u8 action_counter;	/* # mode-switch actions tried */
 	u8 is_green;
 	u8 is_dup;
-	enum ieee80211_band band;
+	enum nl80211_band band;
 
 	/* The following are bitmaps of rates; RATE_6M_MASK, etc. */
 	u32 supp_rates;
@@ -2828,10 +2804,6 @@ struct il_lq_sta {
 	struct il_traffic_load load[TID_MAX_LOAD_COUNT];
 	u8 tx_agg_tid_en;
 #ifdef CONFIG_MAC80211_DEBUGFS
-	struct dentry *rs_sta_dbgfs_scale_table_file;
-	struct dentry *rs_sta_dbgfs_stats_table_file;
-	struct dentry *rs_sta_dbgfs_rate_scale_data_file;
-	struct dentry *rs_sta_dbgfs_tx_agg_tid_en_file;
 	u32 dbg_fixed_rate;
 #endif
 	struct il_priv *drv;
@@ -2953,8 +2925,8 @@ do {									\
 #define IL_DBG(level, fmt, args...)					\
 do {									\
 	if (il_get_debug_level(il) & level)				\
-		dev_err(&il->hw->wiphy->dev, "%c %s " fmt,		\
-			in_interrupt() ? 'I' : 'U', __func__ , ##args); \
+		dev_err(&il->hw->wiphy->dev, "%s " fmt, __func__,	\
+			 ##args);					\
 } while (0)
 
 #define il_print_hex_dump(il, level, p, len)				\
@@ -2973,13 +2945,11 @@ il_print_hex_dump(struct il_priv *il, int level, const void *p, u32 len)
 #endif /* CONFIG_IWLEGACY_DEBUG */
 
 #ifdef CONFIG_IWLEGACY_DEBUGFS
-int il_dbgfs_register(struct il_priv *il, const char *name);
+void il_dbgfs_register(struct il_priv *il, const char *name);
 void il_dbgfs_unregister(struct il_priv *il);
 #else
-static inline int
-il_dbgfs_register(struct il_priv *il, const char *name)
+static inline void il_dbgfs_register(struct il_priv *il, const char *name)
 {
-	return 0;
 }
 
 static inline void

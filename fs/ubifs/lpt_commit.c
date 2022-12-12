@@ -1,20 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file is part of UBIFS.
  *
  * Copyright (C) 2006-2008 Nokia Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 51
- * Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
  *
  * Authors: Adrian Hunter
  *          Artem Bityutskiy (Битюцкий Артём)
@@ -39,9 +27,9 @@ static int dbg_populate_lsave(struct ubifs_info *c);
  *
  * This function returns the first dirty cnode or %NULL if there is not one.
  */
-static struct ubifs_cnode *first_dirty_cnode(struct ubifs_nnode *nnode)
+static struct ubifs_cnode *first_dirty_cnode(const struct ubifs_info *c, struct ubifs_nnode *nnode)
 {
-	ubifs_assert(nnode);
+	ubifs_assert(c, nnode);
 	while (1) {
 		int i, cont = 0;
 
@@ -65,16 +53,17 @@ static struct ubifs_cnode *first_dirty_cnode(struct ubifs_nnode *nnode)
 
 /**
  * next_dirty_cnode - find next dirty cnode.
+ * @c: UBIFS file-system description object
  * @cnode: cnode from which to begin searching
  *
  * This function returns the next dirty cnode or %NULL if there is not one.
  */
-static struct ubifs_cnode *next_dirty_cnode(struct ubifs_cnode *cnode)
+static struct ubifs_cnode *next_dirty_cnode(const struct ubifs_info *c, struct ubifs_cnode *cnode)
 {
 	struct ubifs_nnode *nnode;
 	int i;
 
-	ubifs_assert(cnode);
+	ubifs_assert(c, cnode);
 	nnode = cnode->parent;
 	if (!nnode)
 		return NULL;
@@ -84,7 +73,7 @@ static struct ubifs_cnode *next_dirty_cnode(struct ubifs_cnode *cnode)
 			if (cnode->level == 0)
 				return cnode; /* cnode is a pnode */
 			/* cnode is a nnode */
-			return first_dirty_cnode((struct ubifs_nnode *)cnode);
+			return first_dirty_cnode(c, (struct ubifs_nnode *)cnode);
 		}
 	}
 	return (struct ubifs_cnode *)nnode;
@@ -107,15 +96,15 @@ static int get_cnodes_to_commit(struct ubifs_info *c)
 	if (!test_bit(DIRTY_CNODE, &c->nroot->flags))
 		return 0;
 
-	c->lpt_cnext = first_dirty_cnode(c->nroot);
+	c->lpt_cnext = first_dirty_cnode(c, c->nroot);
 	cnode = c->lpt_cnext;
 	if (!cnode)
 		return 0;
 	cnt += 1;
 	while (1) {
-		ubifs_assert(!test_bit(COW_CNODE, &cnode->flags));
+		ubifs_assert(c, !test_bit(COW_CNODE, &cnode->flags));
 		__set_bit(COW_CNODE, &cnode->flags);
-		cnext = next_dirty_cnode(cnode);
+		cnext = next_dirty_cnode(c, cnode);
 		if (!cnext) {
 			cnode->cnext = c->lpt_cnext;
 			break;
@@ -126,7 +115,7 @@ static int get_cnodes_to_commit(struct ubifs_info *c)
 	}
 	dbg_cmt("committing %d cnodes", cnt);
 	dbg_lp("committing %d cnodes", cnt);
-	ubifs_assert(cnt == c->dirty_nn_cnt + c->dirty_pn_cnt);
+	ubifs_assert(c, cnt == c->dirty_nn_cnt + c->dirty_pn_cnt);
 	return cnt;
 }
 
@@ -142,7 +131,7 @@ static void upd_ltab(struct ubifs_info *c, int lnum, int free, int dirty)
 	dbg_lp("LEB %d free %d dirty %d to %d +%d",
 	       lnum, c->ltab[lnum - c->lpt_first].free,
 	       c->ltab[lnum - c->lpt_first].dirty, free, dirty);
-	ubifs_assert(lnum >= c->lpt_first && lnum <= c->lpt_last);
+	ubifs_assert(c, lnum >= c->lpt_first && lnum <= c->lpt_last);
 	c->ltab[lnum - c->lpt_first].free = free;
 	c->ltab[lnum - c->lpt_first].dirty += dirty;
 }
@@ -238,7 +227,7 @@ static int layout_cnodes(struct ubifs_info *c)
 			if (err)
 				goto no_space;
 			offs = 0;
-			ubifs_assert(lnum >= c->lpt_first &&
+			ubifs_assert(c, lnum >= c->lpt_first &&
 				     lnum <= c->lpt_last);
 			/* Try to place lsave and ltab nicely */
 			if (!done_lsave) {
@@ -281,7 +270,7 @@ static int layout_cnodes(struct ubifs_info *c)
 			if (err)
 				goto no_space;
 			offs = 0;
-			ubifs_assert(lnum >= c->lpt_first &&
+			ubifs_assert(c, lnum >= c->lpt_first &&
 				     lnum <= c->lpt_last);
 		}
 		done_lsave = 1;
@@ -301,7 +290,7 @@ static int layout_cnodes(struct ubifs_info *c)
 			if (err)
 				goto no_space;
 			offs = 0;
-			ubifs_assert(lnum >= c->lpt_first &&
+			ubifs_assert(c, lnum >= c->lpt_first &&
 				     lnum <= c->lpt_last);
 		}
 		c->ltab_lnum = lnum;
@@ -424,7 +413,7 @@ static int write_cnodes(struct ubifs_info *c)
 			if (err)
 				goto no_space;
 			offs = from = 0;
-			ubifs_assert(lnum >= c->lpt_first &&
+			ubifs_assert(c, lnum >= c->lpt_first &&
 				     lnum <= c->lpt_last);
 			err = ubifs_leb_unmap(c, lnum);
 			if (err)
@@ -481,7 +470,7 @@ static int write_cnodes(struct ubifs_info *c)
 			if (err)
 				goto no_space;
 			offs = from = 0;
-			ubifs_assert(lnum >= c->lpt_first &&
+			ubifs_assert(c, lnum >= c->lpt_first &&
 				     lnum <= c->lpt_last);
 			err = ubifs_leb_unmap(c, lnum);
 			if (err)
@@ -507,7 +496,7 @@ static int write_cnodes(struct ubifs_info *c)
 			if (err)
 				goto no_space;
 			offs = from = 0;
-			ubifs_assert(lnum >= c->lpt_first &&
+			ubifs_assert(c, lnum >= c->lpt_first &&
 				     lnum <= c->lpt_last);
 			err = ubifs_leb_unmap(c, lnum);
 			if (err)
@@ -618,38 +607,6 @@ static struct ubifs_pnode *next_pnode_to_dirty(struct ubifs_info *c,
 }
 
 /**
- * pnode_lookup - lookup a pnode in the LPT.
- * @c: UBIFS file-system description object
- * @i: pnode number (0 to main_lebs - 1)
- *
- * This function returns a pointer to the pnode on success or a negative
- * error code on failure.
- */
-static struct ubifs_pnode *pnode_lookup(struct ubifs_info *c, int i)
-{
-	int err, h, iip, shft;
-	struct ubifs_nnode *nnode;
-
-	if (!c->nroot) {
-		err = ubifs_read_nnode(c, NULL, 0);
-		if (err)
-			return ERR_PTR(err);
-	}
-	i <<= UBIFS_LPT_FANOUT_SHIFT;
-	nnode = c->nroot;
-	shft = c->lpt_hght * UBIFS_LPT_FANOUT_SHIFT;
-	for (h = 1; h < c->lpt_hght; h++) {
-		iip = ((i >> shft) & (UBIFS_LPT_FANOUT - 1));
-		shft -= UBIFS_LPT_FANOUT_SHIFT;
-		nnode = ubifs_get_nnode(c, nnode, iip);
-		if (IS_ERR(nnode))
-			return ERR_CAST(nnode);
-	}
-	iip = ((i >> shft) & (UBIFS_LPT_FANOUT - 1));
-	return ubifs_get_pnode(c, nnode, iip);
-}
-
-/**
  * add_pnode_dirt - add dirty space to LPT LEB properties.
  * @c: UBIFS file-system description object
  * @pnode: pnode for which to add dirt
@@ -701,7 +658,7 @@ static int make_tree_dirty(struct ubifs_info *c)
 {
 	struct ubifs_pnode *pnode;
 
-	pnode = pnode_lookup(c, 0);
+	pnode = ubifs_pnode_lookup(c, 0);
 	if (IS_ERR(pnode))
 		return PTR_ERR(pnode);
 
@@ -807,7 +764,7 @@ static void populate_lsave(struct ubifs_info *c)
 	struct ubifs_lpt_heap *heap;
 	int i, cnt = 0;
 
-	ubifs_assert(c->big_lpt);
+	ubifs_assert(c, c->big_lpt);
 	if (!(c->lpt_drty_flgs & LSAVE_DIRTY)) {
 		c->lpt_drty_flgs |= LSAVE_DIRTY;
 		ubifs_add_lpt_dirt(c, c->lsave_lnum, c->lsave_sz);
@@ -955,7 +912,7 @@ static int make_pnode_dirty(struct ubifs_info *c, int node_num, int lnum,
 	struct ubifs_pnode *pnode;
 	struct ubifs_nbranch *branch;
 
-	pnode = pnode_lookup(c, node_num);
+	pnode = ubifs_pnode_lookup(c, node_num);
 	if (IS_ERR(pnode))
 		return PTR_ERR(pnode);
 	branch = &pnode->parent->nbranch[pnode->iip];
@@ -1096,8 +1053,8 @@ static int get_lpt_node_type(const struct ubifs_info *c, uint8_t *buf,
 	uint8_t *addr = buf + UBIFS_LPT_CRC_BYTES;
 	int pos = 0, node_type;
 
-	node_type = ubifs_unpack_bits(&addr, &pos, UBIFS_LPT_TYPE_BITS);
-	*node_num = ubifs_unpack_bits(&addr, &pos, c->pcnt_bits);
+	node_type = ubifs_unpack_bits(c, &addr, &pos, UBIFS_LPT_TYPE_BITS);
+	*node_num = ubifs_unpack_bits(c, &addr, &pos, c->pcnt_bits);
 	return node_type;
 }
 
@@ -1117,7 +1074,7 @@ static int is_a_node(const struct ubifs_info *c, uint8_t *buf, int len)
 
 	if (len < UBIFS_LPT_CRC_BYTES + (UBIFS_LPT_TYPE_BITS + 7) / 8)
 		return 0;
-	node_type = ubifs_unpack_bits(&addr, &pos, UBIFS_LPT_TYPE_BITS);
+	node_type = ubifs_unpack_bits(c, &addr, &pos, UBIFS_LPT_TYPE_BITS);
 	if (node_type == UBIFS_LPT_NOT_A_NODE)
 		return 0;
 	node_len = get_lpt_node_len(c, node_type);
@@ -1125,7 +1082,7 @@ static int is_a_node(const struct ubifs_info *c, uint8_t *buf, int len)
 		return 0;
 	pos = 0;
 	addr = buf;
-	crc = ubifs_unpack_bits(&addr, &pos, UBIFS_LPT_CRC_BITS);
+	crc = ubifs_unpack_bits(c, &addr, &pos, UBIFS_LPT_CRC_BITS);
 	calc_crc = crc16(-1, buf + UBIFS_LPT_CRC_BYTES,
 			 node_len - UBIFS_LPT_CRC_BYTES);
 	if (crc != calc_crc)
@@ -1171,7 +1128,7 @@ static int lpt_gc_lnum(struct ubifs_info *c, int lnum)
 		node_type = get_lpt_node_type(c, buf, &node_num);
 		node_len = get_lpt_node_len(c, node_type);
 		offs = c->leb_size - len;
-		ubifs_assert(node_len != 0);
+		ubifs_assert(c, node_len != 0);
 		mutex_lock(&c->lp_mutex);
 		err = make_node_dirty(c, node_type, node_num, lnum, offs);
 		mutex_unlock(&c->lp_mutex);
@@ -1196,7 +1153,7 @@ static int lpt_gc(struct ubifs_info *c)
 
 	mutex_lock(&c->lp_mutex);
 	for (i = 0; i < c->lpt_lebs; i++) {
-		ubifs_assert(!c->ltab[i].tgc);
+		ubifs_assert(c, !c->ltab[i].tgc);
 		if (i + c->lpt_first == c->nhead_lnum ||
 		    c->ltab[i].free + c->ltab[i].dirty == c->leb_size)
 			continue;
@@ -1272,9 +1229,13 @@ int ubifs_lpt_start_commit(struct ubifs_info *c)
 		populate_lsave(c);
 
 	cnt = get_cnodes_to_commit(c);
-	ubifs_assert(cnt != 0);
+	ubifs_assert(c, cnt != 0);
 
 	err = layout_cnodes(c);
+	if (err)
+		goto out;
+
+	err = ubifs_lpt_calc_hash(c, c->mst_node->hash_lpt);
 	if (err)
 		goto out;
 
@@ -1557,7 +1518,7 @@ static int dbg_is_pnode_dirty(struct ubifs_info *c, int lnum, int offs)
 		struct ubifs_nbranch *branch;
 
 		cond_resched();
-		pnode = pnode_lookup(c, i);
+		pnode = ubifs_pnode_lookup(c, i);
 		if (IS_ERR(pnode))
 			return PTR_ERR(pnode);
 		branch = &pnode->parent->nbranch[pnode->iip];
@@ -1623,7 +1584,6 @@ static int dbg_is_node_dirty(struct ubifs_info *c, int node_type, int lnum,
  * dbg_check_ltab_lnum - check the ltab for a LPT LEB number.
  * @c: the UBIFS file-system description object
  * @lnum: LEB number where node was written
- * @offs: offset where node was written
  *
  * This function returns %0 on success and a negative error code on failure.
  */
@@ -1636,7 +1596,7 @@ static int dbg_check_ltab_lnum(struct ubifs_info *c, int lnum)
 	if (!dbg_is_chk_lprops(c))
 		return 0;
 
-	buf = p = __vmalloc(c->leb_size, GFP_NOFS, PAGE_KERNEL);
+	buf = p = __vmalloc(c->leb_size, GFP_NOFS);
 	if (!buf) {
 		ubifs_err(c, "cannot allocate memory for ltab checking");
 		return 0;
@@ -1710,7 +1670,7 @@ int dbg_check_ltab(struct ubifs_info *c)
 	for (i = 0; i < cnt; i++) {
 		struct ubifs_pnode *pnode;
 
-		pnode = pnode_lookup(c, i);
+		pnode = ubifs_pnode_lookup(c, i);
 		if (IS_ERR(pnode))
 			return PTR_ERR(pnode);
 		cond_resched();
@@ -1870,7 +1830,7 @@ int dbg_chk_lpt_sz(struct ubifs_info *c, int action, int len)
 }
 
 /**
- * ubifs_dump_lpt_leb - dump an LPT LEB.
+ * dump_lpt_leb - dump an LPT LEB.
  * @c: UBIFS file-system description object
  * @lnum: LEB number to dump
  *
@@ -1885,7 +1845,7 @@ static void dump_lpt_leb(const struct ubifs_info *c, int lnum)
 	void *buf, *p;
 
 	pr_err("(pid %d) start dumping LEB %d\n", current->pid, lnum);
-	buf = p = __vmalloc(c->leb_size, GFP_NOFS, PAGE_KERNEL);
+	buf = p = __vmalloc(c->leb_size, GFP_NOFS);
 	if (!buf) {
 		ubifs_err(c, "cannot allocate memory to dump LPT");
 		return;

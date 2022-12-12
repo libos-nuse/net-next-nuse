@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * arch/sh/kernel/cpu/sh4a/clock-sh7786.c
  *
  * SH7786 support for the clock framework
  *
  *  Copyright (C) 2010  Paul Mundt
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file "COPYING" in the main directory of this archive
- * for more details.
  */
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -139,12 +136,12 @@ static struct clk_lookup lookups[] = {
 	CLKDEV_CON_ID("cpu_clk", &div4_clks[DIV4_I]),
 
 	/* MSTP32 clocks */
-	CLKDEV_ICK_ID("sci_fck", "sh-sci.5", &mstp_clks[MSTP029]),
-	CLKDEV_ICK_ID("sci_fck", "sh-sci.4", &mstp_clks[MSTP028]),
-	CLKDEV_ICK_ID("sci_fck", "sh-sci.3", &mstp_clks[MSTP027]),
-	CLKDEV_ICK_ID("sci_fck", "sh-sci.2", &mstp_clks[MSTP026]),
-	CLKDEV_ICK_ID("sci_fck", "sh-sci.1", &mstp_clks[MSTP025]),
-	CLKDEV_ICK_ID("sci_fck", "sh-sci.0", &mstp_clks[MSTP024]),
+	CLKDEV_ICK_ID("fck", "sh-sci.5", &mstp_clks[MSTP029]),
+	CLKDEV_ICK_ID("fck", "sh-sci.4", &mstp_clks[MSTP028]),
+	CLKDEV_ICK_ID("fck", "sh-sci.3", &mstp_clks[MSTP027]),
+	CLKDEV_ICK_ID("fck", "sh-sci.2", &mstp_clks[MSTP026]),
+	CLKDEV_ICK_ID("fck", "sh-sci.1", &mstp_clks[MSTP025]),
+	CLKDEV_ICK_ID("fck", "sh-sci.0", &mstp_clks[MSTP024]),
 
 	CLKDEV_CON_ID("ssi3_fck", &mstp_clks[MSTP023]),
 	CLKDEV_CON_ID("ssi2_fck", &mstp_clks[MSTP022]),

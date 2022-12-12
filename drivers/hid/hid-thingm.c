@@ -14,7 +14,6 @@
 #include <linux/leds.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/workqueue.h>
 
 #include "hid-ids.h"
 
@@ -56,7 +55,6 @@ struct thingm_rgb {
 	struct thingm_led red;
 	struct thingm_led green;
 	struct thingm_led blue;
-	struct work_struct work;
 	u8 num;
 };
 
@@ -79,8 +77,12 @@ static int thingm_send(struct thingm_device *tdev, u8 buf[REPORT_SIZE])
 			buf[0], buf[1], buf[2], buf[3], buf[4],
 			buf[5], buf[6], buf[7], buf[8]);
 
+	mutex_lock(&tdev->lock);
+
 	ret = hid_hw_raw_request(tdev->hdev, buf[0], buf, REPORT_SIZE,
 			HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
+
+	mutex_unlock(&tdev->lock);
 
 	return ret < 0 ? ret : 0;
 }
@@ -89,26 +91,37 @@ static int thingm_recv(struct thingm_device *tdev, u8 buf[REPORT_SIZE])
 {
 	int ret;
 
+	/*
+	 * A read consists of two operations: sending the read command
+	 * and the actual read from the device. Use the mutex to protect
+	 * the full sequence of both operations.
+	 */
+	mutex_lock(&tdev->lock);
+
+	ret = hid_hw_raw_request(tdev->hdev, buf[0], buf, REPORT_SIZE,
+			HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
+	if (ret < 0)
+		goto err;
+
 	ret = hid_hw_raw_request(tdev->hdev, buf[0], buf, REPORT_SIZE,
 			HID_FEATURE_REPORT, HID_REQ_GET_REPORT);
 	if (ret < 0)
-		return ret;
+		goto err;
+
+	ret = 0;
 
 	hid_dbg(tdev->hdev, "<- %d %c %02hhx %02hhx %02hhx %02hhx %02hhx %02hhx %02hhx\n",
 			buf[0], buf[1], buf[2], buf[3], buf[4],
 			buf[5], buf[6], buf[7], buf[8]);
-
-	return 0;
+err:
+	mutex_unlock(&tdev->lock);
+	return ret;
 }
 
 static int thingm_version(struct thingm_device *tdev)
 {
 	u8 buf[REPORT_SIZE] = { REPORT_ID, 'v', 0, 0, 0, 0, 0, 0, 0 };
 	int err;
-
-	err = thingm_send(tdev, buf);
-	if (err)
-		return err;
 
 	err = thingm_recv(tdev, buf);
 	if (err)
@@ -131,25 +144,25 @@ static int thingm_write_color(struct thingm_rgb *rgb)
 	return thingm_send(rgb->tdev, buf);
 }
 
-static void thingm_work(struct work_struct *work)
-{
-	struct thingm_rgb *rgb = container_of(work, struct thingm_rgb, work);
-
-	mutex_lock(&rgb->tdev->lock);
-
-	if (thingm_write_color(rgb))
-		hid_err(rgb->tdev->hdev, "failed to write color\n");
-
-	mutex_unlock(&rgb->tdev->lock);
-}
-
-static void thingm_led_set(struct led_classdev *ldev,
-		enum led_brightness brightness)
+static int thingm_led_set(struct led_classdev *ldev,
+			  enum led_brightness brightness)
 {
 	struct thingm_led *led = container_of(ldev, struct thingm_led, ldev);
 
-	/* the ledclass has already stored the brightness value */
-	schedule_work(&led->rgb->work);
+	return thingm_write_color(led->rgb);
+}
+
+static int thingm_init_led(struct thingm_led *led, const char *color_name,
+			   struct thingm_rgb *rgb, int minor)
+{
+	snprintf(led->name, sizeof(led->name), "thingm%d:%s:led%d",
+		 minor, color_name, rgb->num);
+	led->ldev.name = led->name;
+	led->ldev.max_brightness = 255;
+	led->ldev.brightness_set_blocking = thingm_led_set;
+	led->ldev.flags = LED_HW_PLUGGABLE;
+	led->rgb = rgb;
+	return devm_led_classdev_register(&rgb->tdev->hdev->dev, &led->ldev);
 }
 
 static int thingm_init_rgb(struct thingm_rgb *rgb)
@@ -158,60 +171,17 @@ static int thingm_init_rgb(struct thingm_rgb *rgb)
 	int err;
 
 	/* Register the red diode */
-	snprintf(rgb->red.name, sizeof(rgb->red.name),
-			"thingm%d:red:led%d", minor, rgb->num);
-	rgb->red.ldev.name = rgb->red.name;
-	rgb->red.ldev.max_brightness = 255;
-	rgb->red.ldev.brightness_set = thingm_led_set;
-	rgb->red.rgb = rgb;
-
-	err = led_classdev_register(&rgb->tdev->hdev->dev, &rgb->red.ldev);
+	err = thingm_init_led(&rgb->red, "red", rgb, minor);
 	if (err)
 		return err;
 
 	/* Register the green diode */
-	snprintf(rgb->green.name, sizeof(rgb->green.name),
-			"thingm%d:green:led%d", minor, rgb->num);
-	rgb->green.ldev.name = rgb->green.name;
-	rgb->green.ldev.max_brightness = 255;
-	rgb->green.ldev.brightness_set = thingm_led_set;
-	rgb->green.rgb = rgb;
-
-	err = led_classdev_register(&rgb->tdev->hdev->dev, &rgb->green.ldev);
+	err = thingm_init_led(&rgb->green, "green", rgb, minor);
 	if (err)
-		goto unregister_red;
+		return err;
 
 	/* Register the blue diode */
-	snprintf(rgb->blue.name, sizeof(rgb->blue.name),
-			"thingm%d:blue:led%d", minor, rgb->num);
-	rgb->blue.ldev.name = rgb->blue.name;
-	rgb->blue.ldev.max_brightness = 255;
-	rgb->blue.ldev.brightness_set = thingm_led_set;
-	rgb->blue.rgb = rgb;
-
-	err = led_classdev_register(&rgb->tdev->hdev->dev, &rgb->blue.ldev);
-	if (err)
-		goto unregister_green;
-
-	INIT_WORK(&rgb->work, thingm_work);
-
-	return 0;
-
-unregister_green:
-	led_classdev_unregister(&rgb->green.ldev);
-
-unregister_red:
-	led_classdev_unregister(&rgb->red.ldev);
-
-	return err;
-}
-
-static void thingm_remove_rgb(struct thingm_rgb *rgb)
-{
-	led_classdev_unregister(&rgb->red.ldev);
-	led_classdev_unregister(&rgb->green.ldev);
-	led_classdev_unregister(&rgb->blue.ldev);
-	flush_work(&rgb->work);
+	return thingm_init_led(&rgb->blue, "blue", rgb, minor);
 }
 
 static int thingm_probe(struct hid_device *hdev, const struct hid_device_id *id)
@@ -229,17 +199,13 @@ static int thingm_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	err = hid_parse(hdev);
 	if (err)
-		goto error;
-
-	err = hid_hw_start(hdev, HID_CONNECT_HIDRAW);
-	if (err)
-		goto error;
+		return err;
 
 	mutex_init(&tdev->lock);
 
 	err = thingm_version(tdev);
 	if (err)
-		goto stop;
+		return err;
 
 	hid_dbg(hdev, "firmware version: %c.%c\n",
 			tdev->version.major, tdev->version.minor);
@@ -250,17 +216,18 @@ static int thingm_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	if (!tdev->fwinfo) {
 		hid_err(hdev, "unsupported firmware %c\n", tdev->version.major);
-		err = -ENODEV;
-		goto stop;
+		return -ENODEV;
 	}
 
 	tdev->rgb = devm_kzalloc(&hdev->dev,
 			sizeof(struct thingm_rgb) * tdev->fwinfo->numrgb,
 			GFP_KERNEL);
-	if (!tdev->rgb) {
-		err = -ENOMEM;
-		goto stop;
-	}
+	if (!tdev->rgb)
+		return -ENOMEM;
+
+	err = hid_hw_start(hdev, HID_CONNECT_HIDRAW);
+	if (err)
+		return err;
 
 	for (i = 0; i < tdev->fwinfo->numrgb; ++i) {
 		struct thingm_rgb *rgb = tdev->rgb + i;
@@ -269,28 +236,12 @@ static int thingm_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		rgb->num = tdev->fwinfo->first + i;
 		err = thingm_init_rgb(rgb);
 		if (err) {
-			while (--i >= 0)
-				thingm_remove_rgb(tdev->rgb + i);
-			goto stop;
+			hid_hw_stop(hdev);
+			return err;
 		}
 	}
 
 	return 0;
-stop:
-	hid_hw_stop(hdev);
-error:
-	return err;
-}
-
-static void thingm_remove(struct hid_device *hdev)
-{
-	struct thingm_device *tdev = hid_get_drvdata(hdev);
-	int i;
-
-	hid_hw_stop(hdev);
-
-	for (i = 0; i < tdev->fwinfo->numrgb; ++i)
-		thingm_remove_rgb(tdev->rgb + i);
 }
 
 static const struct hid_device_id thingm_table[] = {
@@ -302,7 +253,6 @@ MODULE_DEVICE_TABLE(hid, thingm_table);
 static struct hid_driver thingm_driver = {
 	.name = "thingm",
 	.probe = thingm_probe,
-	.remove = thingm_remove,
 	.id_table = thingm_table,
 };
 

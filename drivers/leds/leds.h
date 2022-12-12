@@ -1,43 +1,16 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * LED Core
  *
  * Copyright 2005 Openedhand Ltd.
  *
  * Author: Richard Purdie <rpurdie@openedhand.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 #ifndef __LEDS_H_INCLUDED
 #define __LEDS_H_INCLUDED
 
 #include <linux/rwsem.h>
 #include <linux/leds.h>
-
-static inline void led_set_brightness_async(struct led_classdev *led_cdev,
-					enum led_brightness value)
-{
-	value = min(value, led_cdev->max_brightness);
-	led_cdev->brightness = value;
-
-	if (!(led_cdev->flags & LED_SUSPENDED))
-		led_cdev->brightness_set(led_cdev, value);
-}
-
-static inline int led_set_brightness_sync(struct led_classdev *led_cdev,
-					enum led_brightness value)
-{
-	int ret = 0;
-
-	led_cdev->brightness = min(value, led_cdev->max_brightness);
-
-	if (!(led_cdev->flags & LED_SUSPENDED))
-		ret = led_cdev->brightness_set_sync(led_cdev,
-						led_cdev->brightness);
-	return ret;
-}
 
 static inline int led_get_brightness(struct led_classdev *led_cdev)
 {
@@ -46,8 +19,20 @@ static inline int led_get_brightness(struct led_classdev *led_cdev)
 
 void led_init_core(struct led_classdev *led_cdev);
 void led_stop_software_blink(struct led_classdev *led_cdev);
+void led_set_brightness_nopm(struct led_classdev *led_cdev,
+				enum led_brightness value);
+void led_set_brightness_nosleep(struct led_classdev *led_cdev,
+				enum led_brightness value);
+ssize_t led_trigger_read(struct file *filp, struct kobject *kobj,
+			struct bin_attribute *attr, char *buf,
+			loff_t pos, size_t count);
+ssize_t led_trigger_write(struct file *filp, struct kobject *kobj,
+			struct bin_attribute *bin_attr, char *buf,
+			loff_t pos, size_t count);
 
 extern struct rw_semaphore leds_list_lock;
 extern struct list_head leds_list;
+extern struct list_head trigger_list;
+extern const char * const led_colors[LED_COLOR_ID_MAX];
 
 #endif	/* __LEDS_H_INCLUDED */

@@ -1,4 +1,6 @@
-/* Transport & Protocol Driver for In-System Design, Inc. ISD200 ASIC
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Transport & Protocol Driver for In-System Design, Inc. ISD200 ASIC
  *
  * Current development and maintenance:
  *   (C) 2001-2002 Björn Stenberg (bjorn@haxx.se)
@@ -12,20 +14,6 @@
  * The ISD200 ASIC does not natively support ATA devices.  The chip
  * does implement an interface, the ATA Command Block (ATACB) which provides
  * a means of passing ATA commands and ATA register accesses to a device.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2, or (at your option) any
- * later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 675 Mass Ave, Cambridge, MA 02139, USA.
  *
  * History:
  *
@@ -65,6 +53,7 @@
 MODULE_DESCRIPTION("Driver for In-System Design, Inc. ISD200 ASIC");
 MODULE_AUTHOR("Björn Stenberg <bjorn@haxx.se>");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(USB_STORAGE);
 
 static int isd200_Initialization(struct us_data *us);
 
@@ -628,7 +617,8 @@ static void isd200_invoke_transport( struct us_data *us,
 	srb->cmd_len = sizeof(ataCdb->generic);
 	transferStatus = usb_stor_Bulk_transport(srb, us);
 
-	/* if the command gets aborted by the higher layers, we need to
+	/*
+	 * if the command gets aborted by the higher layers, we need to
 	 * short-circuit all other processing
 	 */
 	if (test_bit(US_FLIDX_TIMED_OUT, &us->dflags)) {
@@ -695,15 +685,18 @@ static void isd200_invoke_transport( struct us_data *us,
 		}
 	}
 
-	/* Regardless of auto-sense, if we _know_ we have an error
+	/*
+	 * Regardless of auto-sense, if we _know_ we have an error
 	 * condition, show that in the result code
 	 */
 	if (transferStatus == USB_STOR_TRANSPORT_FAILED)
 		srb->result = SAM_STAT_CHECK_CONDITION;
 	return;
 
-	/* abort processing: the bulk-only transport requires a reset
-	 * following an abort */
+	/*
+	 * abort processing: the bulk-only transport requires a reset
+	 * following an abort
+	 */
 	Handle_Abort:
 	srb->result = DID_ABORT << 16;
 
@@ -965,20 +958,22 @@ static int isd200_try_enum(struct us_data *us, unsigned char master_slave,
 			info->DeviceHead = master_slave;
 			break;
 		} 
-		/* check Cylinder High/Low to
-		   determine if it is an ATAPI device
-		*/
+		/*
+		 * check Cylinder High/Low to
+		 * determine if it is an ATAPI device
+		 */
 		else if (regs[ATA_REG_HCYL_OFFSET] == 0xEB &&
 			 regs[ATA_REG_LCYL_OFFSET] == 0x14) {
-			/* It seems that the RICOH 
-			   MP6200A CD/RW drive will 
-			   report itself okay as a
-			   slave when it is really a
-			   master. So this check again
-			   as a master device just to
-			   make sure it doesn't report
-			   itself okay as a master also
-			*/
+			/*
+			 * It seems that the RICOH
+			 * MP6200A CD/RW drive will
+			 * report itself okay as a
+			 * slave when it is really a
+			 * master. So this check again
+			 * as a master device just to
+			 * make sure it doesn't report
+			 * itself okay as a master also
+			 */
 			if ((master_slave & ATA_ADDRESS_DEVHEAD_SLAVE) &&
 			    !recheckAsMaster) {
 				usb_stor_dbg(us, "   Identified ATAPI device as slave.  Rechecking again as master\n");
@@ -1159,7 +1154,7 @@ static int isd200_get_inquiry_data( struct us_data *us )
 				/* Fill in vendor identification fields */
 				src = (__be16 *)&id[ATA_ID_PROD];
 				dest = (__u16*)info->InquiryData.VendorId;
-				for (i=0;i<4;i++)
+				for (i = 0; i < 4; i++)
 					dest[i] = be16_to_cpu(src[i]);
 
 				src = (__be16 *)&id[ATA_ID_PROD + 8/2];
@@ -1176,9 +1171,11 @@ static int isd200_get_inquiry_data( struct us_data *us )
 				if (id[ATA_ID_COMMAND_SET_2] & COMMANDSET_MEDIA_STATUS) {
 					usb_stor_dbg(us, "   Device supports Media Status Notification\n");
 
-					/* Indicate that it is enabled, even though it is not
-					 * This allows the lock/unlock of the media to work
-					 * correctly.
+					/*
+					 * Indicate that it is enabled, even
+					 * though it is not.
+					 * This allows the lock/unlock of the
+					 * media to work correctly.
 					 */
 					info->DeviceFlags |= DF_MEDIA_STATUS_ENABLED;
 				}
@@ -1197,7 +1194,7 @@ static int isd200_get_inquiry_data( struct us_data *us )
 			usb_stor_dbg(us, "Protocol changed to: %s\n",
 				     us->protocol_name);
 	    
-			/* Free driver structure */	    
+			/* Free driver structure */
 			us->extra_destructor(info);
 			kfree(info);
 			us->extra = NULL;
@@ -1386,7 +1383,7 @@ static int isd200_scsi_to_ata(struct scsi_cmnd *srb, struct us_data *us,
 				ATA_CMD_MEDIA_LOCK : ATA_CMD_MEDIA_UNLOCK;
 			isd200_srb_set_bufflen(srb, 0);
 		} else {
-			usb_stor_dbg(us, "   Not removeable media, just report okay\n");
+			usb_stor_dbg(us, "   Not removable media, just report okay\n");
 			srb->result = SAM_STAT_GOOD;
 			sendToTransport = 0;
 		}
@@ -1515,13 +1512,16 @@ static int isd200_Initialization(struct us_data *us)
 
 static void isd200_ata_command(struct scsi_cmnd *srb, struct us_data *us)
 {
-	int sendToTransport = 1, orig_bufflen;
+	int sendToTransport, orig_bufflen;
 	union ata_cdb ataCdb;
 
 	/* Make sure driver was initialized */
 
-	if (us->extra == NULL)
+	if (us->extra == NULL) {
 		usb_stor_dbg(us, "ERROR Driver not initialized\n");
+		srb->result = DID_ERROR << 16;
+		return;
+	}
 
 	scsi_set_resid(srb, 0);
 	/* scsi_bufflen might change in protocol translation to ata */

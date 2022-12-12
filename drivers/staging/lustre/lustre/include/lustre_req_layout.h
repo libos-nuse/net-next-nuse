@@ -27,7 +27,7 @@
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright (c) 2011, 2012, Intel Corporation.
+ * Copyright (c) 2011, 2015, Intel Corporation.
  */
 /*
  * This file is part of Lustre, http://www.lustre.org/
@@ -107,8 +107,8 @@ void req_capsule_set_size(struct req_capsule *pill,
 			  const struct req_msg_field *field,
 			  enum req_location loc, int size);
 int req_capsule_get_size(const struct req_capsule *pill,
-			  const struct req_msg_field *field,
-			  enum req_location loc);
+			 const struct req_msg_field *field,
+			 enum req_location loc);
 int req_capsule_msg_size(struct req_capsule *pill, enum req_location loc);
 int req_capsule_fmt_size(__u32 magic, const struct req_format *fmt,
 			 enum req_location loc);
@@ -130,7 +130,6 @@ void req_layout_fini(void);
 extern struct req_format RQF_OBD_PING;
 extern struct req_format RQF_OBD_SET_INFO;
 extern struct req_format RQF_SEC_CTX;
-extern struct req_format RQF_OBD_IDX_READ;
 /* MGS req_format */
 extern struct req_format RQF_MGS_TARGET_REG;
 extern struct req_format RQF_MGS_SET_INFO;
@@ -138,6 +137,7 @@ extern struct req_format RQF_MGS_CONFIG_READ;
 /* fid/fld req_format */
 extern struct req_format RQF_SEQ_QUERY;
 extern struct req_format RQF_FLD_QUERY;
+extern struct req_format RQF_FLD_READ;
 /* MDS req_format */
 extern struct req_format RQF_MDS_CONNECT;
 extern struct req_format RQF_MDS_DISCONNECT;
@@ -146,7 +146,6 @@ extern struct req_format RQF_MDS_GETSTATUS;
 extern struct req_format RQF_MDS_SYNC;
 extern struct req_format RQF_MDS_GETXATTR;
 extern struct req_format RQF_MDS_GETATTR;
-extern struct req_format RQF_UPDATE_OBJ;
 
 /*
  * This is format of direct (non-intent) MDS_GETATTR_NAME request.
@@ -177,7 +176,6 @@ extern struct req_format RQF_MDS_REINT_SETXATTR;
 extern struct req_format RQF_MDS_QUOTACHECK;
 extern struct req_format RQF_MDS_QUOTACTL;
 extern struct req_format RQF_QC_CALLBACK;
-extern struct req_format RQF_QUOTA_DQACQ;
 extern struct req_format RQF_MDS_SWAP_LAYOUTS;
 /* MDS hsm formats */
 extern struct req_format RQF_MDS_HSM_STATE_GET;
@@ -202,7 +200,7 @@ extern struct req_format RQF_OST_BRW_READ;
 extern struct req_format RQF_OST_BRW_WRITE;
 extern struct req_format RQF_OST_STATFS;
 extern struct req_format RQF_OST_SET_GRANT_INFO;
-extern struct req_format RQF_OST_GET_INFO_GENERIC;
+extern struct req_format RQF_OST_GET_INFO;
 extern struct req_format RQF_OST_GET_INFO_LAST_ID;
 extern struct req_format RQF_OST_GET_INFO_LAST_FID;
 extern struct req_format RQF_OST_SET_INFO_LAST_FID;
@@ -220,7 +218,6 @@ extern struct req_format RQF_LDLM_INTENT_OPEN;
 extern struct req_format RQF_LDLM_INTENT_CREATE;
 extern struct req_format RQF_LDLM_INTENT_UNLINK;
 extern struct req_format RQF_LDLM_INTENT_GETXATTR;
-extern struct req_format RQF_LDLM_INTENT_QUOTA;
 extern struct req_format RQF_LDLM_CANCEL;
 extern struct req_format RQF_LDLM_CALLBACK;
 extern struct req_format RQF_LDLM_CP_CALLBACK;
@@ -252,7 +249,6 @@ extern struct req_msg_field RMF_SETINFO_KEY;
 extern struct req_msg_field RMF_GETINFO_VAL;
 extern struct req_msg_field RMF_GETINFO_VALLEN;
 extern struct req_msg_field RMF_GETINFO_KEY;
-extern struct req_msg_field RMF_IDX_INFO;
 extern struct req_msg_field RMF_CLOSE_DATA;
 
 /*
@@ -277,7 +273,6 @@ extern struct req_msg_field RMF_CAPA1;
 extern struct req_msg_field RMF_CAPA2;
 extern struct req_msg_field RMF_OBD_QUOTACHECK;
 extern struct req_msg_field RMF_OBD_QUOTACTL;
-extern struct req_msg_field RMF_QUOTA_BODY;
 extern struct req_msg_field RMF_STRING;
 extern struct req_msg_field RMF_SWAP_LAYOUTS;
 extern struct req_msg_field RMF_MDS_HSM_PROGRESS;
@@ -322,9 +317,6 @@ extern struct req_msg_field RMF_MGS_CONFIG_RES;
 /* generic uint32 */
 extern struct req_msg_field RMF_U32;
 
-/* OBJ update format */
-extern struct req_msg_field RMF_UPDATE;
-extern struct req_msg_field RMF_UPDATE_REPLY;
 /** @} req_layout */
 
 #endif /* _LUSTRE_REQ_LAYOUT_H__ */

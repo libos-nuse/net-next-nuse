@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Glibc independent futex library for testing kernel functionality.
  * Shamelessly stolen from Darren Hart <dvhltc@us.ibm.com>
@@ -57,13 +58,11 @@ futex_wake(u_int32_t *uaddr, int nr_wake, int opflags)
 
 /**
  * futex_lock_pi() - block on uaddr as a PI mutex
- * @detect:	whether (1) or not (0) to perform deadlock detection
  */
 static inline int
-futex_lock_pi(u_int32_t *uaddr, struct timespec *timeout, int detect,
-	      int opflags)
+futex_lock_pi(u_int32_t *uaddr, struct timespec *timeout, int opflags)
 {
-	return futex(uaddr, FUTEX_LOCK_PI, detect, timeout, NULL, 0, opflags);
+	return futex(uaddr, FUTEX_LOCK_PI, 0, timeout, NULL, 0, opflags);
 }
 
 /**
@@ -87,18 +86,4 @@ futex_cmp_requeue(u_int32_t *uaddr, u_int32_t val, u_int32_t *uaddr2, int nr_wak
 	return futex(uaddr, FUTEX_CMP_REQUEUE, nr_wake, nr_requeue, uaddr2,
 		 val, opflags);
 }
-
-#ifndef HAVE_PTHREAD_ATTR_SETAFFINITY_NP
-#include <pthread.h>
-static inline int pthread_attr_setaffinity_np(pthread_attr_t *attr,
-					      size_t cpusetsize,
-					      cpu_set_t *cpuset)
-{
-	attr = attr;
-	cpusetsize = cpusetsize;
-	cpuset = cpuset;
-	return 0;
-}
-#endif
-
 #endif /* _FUTEX_H */

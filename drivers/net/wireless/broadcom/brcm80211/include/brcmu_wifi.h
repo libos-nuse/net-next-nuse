@@ -1,17 +1,6 @@
+// SPDX-License-Identifier: ISC
 /*
  * Copyright (c) 2010 Broadcom Corporation
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
 #ifndef	_BRCMU_WIFI_H_
@@ -29,6 +18,8 @@
 #define CH_UPPER_SB			0x01
 #define CH_LOWER_SB			0x02
 #define CH_EWA_VALID			0x04
+#define CH_70MHZ_APART			14
+#define CH_50MHZ_APART			10
 #define CH_30MHZ_APART			6
 #define CH_20MHZ_APART			4
 #define CH_10MHZ_APART			2
@@ -236,9 +227,11 @@ static inline bool ac_bitmap_tst(u8 bitmap, int prec)
 #define WPA2_AUTH_RESERVED3	0x0200
 #define WPA2_AUTH_RESERVED4	0x0400
 #define WPA2_AUTH_RESERVED5	0x0800
+#define WPA2_AUTH_1X_SHA256	0x1000  /* 1X with SHA256 key derivation */
+#define WPA2_AUTH_FT		0x4000	/* Fast BSS Transition */
+#define WPA2_AUTH_PSK_SHA256	0x8000	/* PSK with SHA256 key derivation */
 
-/* pmkid */
-#define	MAXPMKID		16
+#define WPA3_AUTH_SAE_PSK	0x40000	/* SAE with 4-way handshake */
 
 #define DOT11_DEFAULT_RTS_LEN		2347
 #define DOT11_DEFAULT_FRAG_LEN		2346
@@ -250,25 +243,5 @@ static inline bool ac_bitmap_tst(u8 bitmap, int prec)
 
 #define HT_CAP_RX_STBC_NO		0x0
 #define HT_CAP_RX_STBC_ONE_STREAM	0x1
-
-struct pmkid {
-	u8 BSSID[ETH_ALEN];
-	u8 PMKID[WLAN_PMKID_LEN];
-};
-
-struct pmkid_list {
-	__le32 npmkid;
-	struct pmkid pmkid[1];
-};
-
-struct pmkid_cand {
-	u8 BSSID[ETH_ALEN];
-	u8 preauth;
-};
-
-struct pmkid_cand_list {
-	u32 npmkid_cand;
-	struct pmkid_cand pmkid_cand[1];
-};
 
 #endif				/* _BRCMU_WIFI_H_ */

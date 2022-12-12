@@ -8,6 +8,7 @@
  */
 #include <linux/clockchips.h>
 #include <linux/interrupt.h>
+#include <linux/cpufreq.h>
 #include <linux/percpu.h>
 #include <linux/smp.h>
 #include <linux/irq.h>
@@ -26,6 +27,83 @@ static int mips_next_event(unsigned long delta,
 	write_c0_compare(cnt);
 	res = ((int)(read_c0_count() - cnt) >= 0) ? -ETIME : 0;
 	return res;
+}
+
+/**
+ * calculate_min_delta() - Calculate a good minimum delta for mips_next_event().
+ *
+ * Running under virtualisation can introduce overhead into mips_next_event() in
+ * the form of hypervisor emulation of CP0_Count/CP0_Compare registers,
+ * potentially with an unnatural frequency, which makes a fixed min_delta_ns
+ * value inappropriate as it may be too small.
+ *
+ * It can also introduce occasional latency from the guest being descheduled.
+ *
+ * This function calculates a good minimum delta based roughly on the 75th
+ * percentile of the time taken to do the mips_next_event() sequence, in order
+ * to handle potentially higher overhead while also eliminating outliers due to
+ * unpredictable hypervisor latency (which can be handled by retries).
+ *
+ * Return:	An appropriate minimum delta for the clock event device.
+ */
+static unsigned int calculate_min_delta(void)
+{
+	unsigned int cnt, i, j, k, l;
+	unsigned int buf1[4], buf2[3];
+	unsigned int min_delta;
+
+	/*
+	 * Calculate the median of 5 75th percentiles of 5 samples of how long
+	 * it takes to set CP0_Compare = CP0_Count + delta.
+	 */
+	for (i = 0; i < 5; ++i) {
+		for (j = 0; j < 5; ++j) {
+			/*
+			 * This is like the code in mips_next_event(), and
+			 * directly measures the borderline "safe" delta.
+			 */
+			cnt = read_c0_count();
+			write_c0_compare(cnt);
+			cnt = read_c0_count() - cnt;
+
+			/* Sorted insert into buf1 */
+			for (k = 0; k < j; ++k) {
+				if (cnt < buf1[k]) {
+					l = min_t(unsigned int,
+						  j, ARRAY_SIZE(buf1) - 1);
+					for (; l > k; --l)
+						buf1[l] = buf1[l - 1];
+					break;
+				}
+			}
+			if (k < ARRAY_SIZE(buf1))
+				buf1[k] = cnt;
+		}
+
+		/* Sorted insert of 75th percentile into buf2 */
+		for (k = 0; k < i && k < ARRAY_SIZE(buf2); ++k) {
+			if (buf1[ARRAY_SIZE(buf1) - 1] < buf2[k]) {
+				l = min_t(unsigned int,
+					  i, ARRAY_SIZE(buf2) - 1);
+				for (; l > k; --l)
+					buf2[l] = buf2[l - 1];
+				break;
+			}
+		}
+		if (k < ARRAY_SIZE(buf2))
+			buf2[k] = buf1[ARRAY_SIZE(buf1) - 1];
+	}
+
+	/* Use 2 * median of 75th percentiles */
+	min_delta = buf2[ARRAY_SIZE(buf2) - 1] * 2;
+
+	/* Don't go too low */
+	if (min_delta < 0x300)
+		min_delta = 0x300;
+
+	pr_debug("%s: median 75th percentile=%#x, min_delta=%#x\n",
+		 __func__, buf2[ARRAY_SIZE(buf2) - 1], min_delta);
+	return min_delta;
 }
 
 DEFINE_PER_CPU(struct clock_event_device, mips_clockevent_device);
@@ -173,11 +251,55 @@ unsigned int __weak get_c0_compare_int(void)
 	return MIPS_CPU_IRQ_BASE + cp0_compare_irq;
 }
 
+#ifdef CONFIG_CPU_FREQ
+
+static unsigned long mips_ref_freq;
+
+static int r4k_cpufreq_callback(struct notifier_block *nb,
+				unsigned long val, void *data)
+{
+	struct cpufreq_freqs *freq = data;
+	struct clock_event_device *cd;
+	unsigned long rate;
+	int cpu;
+
+	if (!mips_ref_freq)
+		mips_ref_freq = freq->old;
+
+	if (val == CPUFREQ_POSTCHANGE) {
+		rate = cpufreq_scale(mips_hpt_frequency, mips_ref_freq,
+				     freq->new);
+
+		for_each_cpu(cpu, freq->policy->cpus) {
+			cd = &per_cpu(mips_clockevent_device, cpu);
+
+			clockevents_update_freq(cd, rate);
+		}
+	}
+
+	return 0;
+}
+
+static struct notifier_block r4k_cpufreq_notifier = {
+	.notifier_call  = r4k_cpufreq_callback,
+};
+
+static int __init r4k_register_cpufreq_notifier(void)
+{
+	return cpufreq_register_notifier(&r4k_cpufreq_notifier,
+					 CPUFREQ_TRANSITION_NOTIFIER);
+
+}
+core_initcall(r4k_register_cpufreq_notifier);
+
+#endif /* !CONFIG_CPU_FREQ */
+
 int r4k_clockevent_init(void)
 {
+	unsigned long flags = IRQF_PERCPU | IRQF_TIMER | IRQF_SHARED;
 	unsigned int cpu = smp_processor_id();
 	struct clock_event_device *cd;
-	unsigned int irq;
+	unsigned int irq, min_delta;
 
 	if (!cpu_has_counter || !mips_hpt_frequency)
 		return -ENXIO;
@@ -199,11 +321,7 @@ int r4k_clockevent_init(void)
 				  CLOCK_EVT_FEAT_C3STOP |
 				  CLOCK_EVT_FEAT_PERCPU;
 
-	clockevent_set_clock(cd, mips_hpt_frequency);
-
-	/* Calculate the min / max delta */
-	cd->max_delta_ns	= clockevent_delta2ns(0x7fffffff, cd);
-	cd->min_delta_ns	= clockevent_delta2ns(0x300, cd);
+	min_delta		= calculate_min_delta();
 
 	cd->rating		= 300;
 	cd->irq			= irq;
@@ -211,14 +329,16 @@ int r4k_clockevent_init(void)
 	cd->set_next_event	= mips_next_event;
 	cd->event_handler	= mips_event_handler;
 
-	clockevents_register_device(cd);
+	clockevents_config_and_register(cd, mips_hpt_frequency, min_delta, 0x7fffffff);
 
 	if (cp0_timer_irq_installed)
 		return 0;
 
 	cp0_timer_irq_installed = 1;
 
-	setup_irq(irq, &c0_compare_irqaction);
+	if (request_irq(irq, c0_compare_interrupt, flags, "timer",
+			c0_compare_interrupt))
+		pr_err("Failed to request irq %d (timer)\n", irq);
 
 	return 0;
 }

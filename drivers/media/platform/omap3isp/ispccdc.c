@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ispccdc.c
  *
@@ -8,10 +9,6 @@
  *
  * Contacts: Laurent Pinchart <laurent.pinchart@ideasonboard.com>
  *	     Sakari Ailus <sakari.ailus@iki.fi>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -151,8 +148,8 @@ static int ccdc_lsc_validate_config(struct isp_ccdc_device *ccdc,
 	}
 
 	if (lsc_cfg->offset & 3) {
-		dev_dbg(isp->dev, "CCDC: LSC: Offset must be a multiple of "
-			"4\n");
+		dev_dbg(isp->dev,
+			"CCDC: LSC: Offset must be a multiple of 4\n");
 		return -EINVAL;
 	}
 
@@ -416,8 +413,9 @@ static int ccdc_lsc_config(struct isp_ccdc_device *ccdc,
 		return 0;
 
 	if (update != (OMAP3ISP_CCDC_CONFIG_LSC | OMAP3ISP_CCDC_TBL_LSC)) {
-		dev_dbg(to_device(ccdc), "%s: Both LSC configuration and table "
-			"need to be supplied\n", __func__);
+		dev_dbg(to_device(ccdc),
+			"%s: Both LSC configuration and table need to be supplied\n",
+			__func__);
 		return -EINVAL;
 	}
 
@@ -734,7 +732,7 @@ static int ccdc_config(struct isp_ccdc_device *ccdc,
 				return -ENOMEM;
 
 			if (copy_from_user(fpc_new.addr,
-					   (__force void __user *)fpc.fpcaddr,
+					   (__force void __user *)(long)fpc.fpcaddr,
 					   size)) {
 				dma_free_coherent(isp->dev, size, fpc_new.addr,
 						  fpc_new.dma);
@@ -1138,15 +1136,11 @@ static void ccdc_configure(struct isp_ccdc_device *ccdc)
 	pad = media_entity_remote_pad(&ccdc->pads[CCDC_PAD_SINK]);
 	sensor = media_entity_to_v4l2_subdev(pad->entity);
 	if (ccdc->input == CCDC_INPUT_PARALLEL) {
-		struct v4l2_mbus_config cfg;
-		int ret;
+		struct v4l2_subdev *sd =
+			to_isp_pipeline(&ccdc->subdev.entity)->external;
 
-		ret = v4l2_subdev_call(sensor, video, g_mbus_config, &cfg);
-		if (!ret)
-			ccdc->bt656 = cfg.type == V4L2_MBUS_BT656;
-
-		parcfg = &((struct isp_bus_cfg *)sensor->host_priv)
-			->bus.parallel;
+		parcfg = &v4l2_subdev_to_bus_cfg(sd)->bus.parallel;
+		ccdc->bt656 = parcfg->bt656;
 	}
 
 	/* CCDC_PAD_SINK */
@@ -1317,6 +1311,10 @@ unlock:
 static void __ccdc_enable(struct isp_ccdc_device *ccdc, int enable)
 {
 	struct isp_device *isp = to_isp_device(ccdc);
+
+	/* Avoid restarting the CCDC when streaming is stopping. */
+	if (enable && ccdc->stopping & CCDC_STOP_REQUEST)
+		return;
 
 	isp_reg_clr_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_PCR,
 			ISPCCDC_PCR_EN, enable ? ISPCCDC_PCR_EN : 0);
@@ -1597,7 +1595,7 @@ static int ccdc_isr_buffer(struct isp_ccdc_device *ccdc)
 		return 0;
 
 	/* We're in continuous mode, and memory writes were disabled due to a
-	 * buffer underrun. Reenable them now that we have a buffer. The buffer
+	 * buffer underrun. Re-enable them now that we have a buffer. The buffer
 	 * address has been set in ccdc_video_queue.
 	 */
 	if (ccdc->state == ISP_PIPELINE_STREAM_CONTINUOUS && ccdc->underrun) {
@@ -1608,10 +1606,15 @@ static int ccdc_isr_buffer(struct isp_ccdc_device *ccdc)
 	/* Wait for the CCDC to become idle. */
 	if (ccdc_sbl_wait_idle(ccdc, 1000)) {
 		dev_info(isp->dev, "CCDC won't become idle!\n");
-		isp->crashed |= 1U << ccdc->subdev.entity.id;
+		media_entity_enum_set(&isp->crashed, &ccdc->subdev.entity);
 		omap3isp_pipeline_cancel_stream(pipe);
 		return 0;
 	}
+
+	/* Don't restart CCDC if we're just about to stop streaming. */
+	if (ccdc->state == ISP_PIPELINE_STREAM_CONTINUOUS &&
+	    ccdc->stopping & CCDC_STOP_REQUEST)
+		return 0;
 
 	if (!ccdc_has_all_fields(ccdc))
 		return 1;
@@ -1667,15 +1670,14 @@ static void ccdc_vd0_isr(struct isp_ccdc_device *ccdc)
 		spin_unlock_irqrestore(&ccdc->lock, flags);
 	}
 
-	if (ccdc->output & CCDC_OUTPUT_MEMORY)
-		restart = ccdc_isr_buffer(ccdc);
-
 	spin_lock_irqsave(&ccdc->lock, flags);
-
 	if (ccdc_handle_stopping(ccdc, CCDC_EVENT_VD0)) {
 		spin_unlock_irqrestore(&ccdc->lock, flags);
 		return;
 	}
+
+	if (ccdc->output & CCDC_OUTPUT_MEMORY)
+		restart = ccdc_isr_buffer(ccdc);
 
 	if (!ccdc->shadow_update)
 		ccdc_apply_controls(ccdc);
@@ -1715,7 +1717,7 @@ static void ccdc_vd1_isr(struct isp_ccdc_device *ccdc)
 	 * data to memory the CCDC and LSC are stopped immediately but
 	 * without change the CCDC stopping state machine. The CCDC
 	 * stopping state machine should be used only when user request
-	 * for stopping is received (SINGLESHOT is an exeption).
+	 * for stopping is received (SINGLESHOT is an exception).
 	 */
 	switch (ccdc->state) {
 	case ISP_PIPELINE_STREAM_SINGLESHOT:
@@ -2417,11 +2419,11 @@ static int ccdc_link_validate(struct v4l2_subdev *sd,
 
 	/* We've got a parallel sensor here. */
 	if (ccdc->input == CCDC_INPUT_PARALLEL) {
-		struct isp_parallel_cfg *parcfg =
-			&((struct isp_bus_cfg *)
-			  media_entity_to_v4l2_subdev(link->source->entity)
-			  ->host_priv)->bus.parallel;
-		parallel_shift = parcfg->data_lane_shift * 2;
+		struct v4l2_subdev *sd =
+			media_entity_to_v4l2_subdev(link->source->entity);
+		struct isp_bus_cfg *bus_cfg = v4l2_subdev_to_bus_cfg(sd);
+
+		parallel_shift = bus_cfg->bus.parallel.data_lane_shift;
 	} else {
 		parallel_shift = 0;
 	}
@@ -2513,9 +2515,14 @@ static int ccdc_link_setup(struct media_entity *entity,
 	struct v4l2_subdev *sd = media_entity_to_v4l2_subdev(entity);
 	struct isp_ccdc_device *ccdc = v4l2_get_subdevdata(sd);
 	struct isp_device *isp = to_isp_device(ccdc);
+	unsigned int index = local->index;
 
-	switch (local->index | media_entity_type(remote->entity)) {
-	case CCDC_PAD_SINK | MEDIA_ENT_T_V4L2_SUBDEV:
+	/* FIXME: this is actually a hack! */
+	if (is_media_entity_v4l2_subdev(remote->entity))
+		index |= 2 << 16;
+
+	switch (index) {
+	case CCDC_PAD_SINK | 2 << 16:
 		/* Read from the sensor (parallel interface), CCP2, CSI2a or
 		 * CSI2c.
 		 */
@@ -2543,7 +2550,7 @@ static int ccdc_link_setup(struct media_entity *entity,
 	 * Revisit this when it will be implemented, and return -EBUSY for now.
 	 */
 
-	case CCDC_PAD_SOURCE_VP | MEDIA_ENT_T_V4L2_SUBDEV:
+	case CCDC_PAD_SOURCE_VP | 2 << 16:
 		/* Write to preview engine, histogram and H3A. When none of
 		 * those links are active, the video port can be disabled.
 		 */
@@ -2556,7 +2563,7 @@ static int ccdc_link_setup(struct media_entity *entity,
 		}
 		break;
 
-	case CCDC_PAD_SOURCE_OF | MEDIA_ENT_T_DEVNODE:
+	case CCDC_PAD_SOURCE_OF:
 		/* Write to memory */
 		if (flags & MEDIA_LNK_FL_ENABLED) {
 			if (ccdc->output & ~CCDC_OUTPUT_MEMORY)
@@ -2567,7 +2574,7 @@ static int ccdc_link_setup(struct media_entity *entity,
 		}
 		break;
 
-	case CCDC_PAD_SOURCE_OF | MEDIA_ENT_T_V4L2_SUBDEV:
+	case CCDC_PAD_SOURCE_OF | 2 << 16:
 		/* Write to resizer */
 		if (flags & MEDIA_LNK_FL_ENABLED) {
 			if (ccdc->output & ~CCDC_OUTPUT_RESIZER)
@@ -2603,6 +2610,7 @@ int omap3isp_ccdc_register_entities(struct isp_ccdc_device *ccdc,
 	int ret;
 
 	/* Register the subdev and video node. */
+	ccdc->subdev.dev = vdev->mdev->dev;
 	ret = v4l2_device_register_subdev(vdev, &ccdc->subdev);
 	if (ret < 0)
 		goto error;
@@ -2639,7 +2647,7 @@ static int ccdc_init_entities(struct isp_ccdc_device *ccdc)
 
 	v4l2_subdev_init(sd, &ccdc_v4l2_ops);
 	sd->internal_ops = &ccdc_v4l2_internal_ops;
-	strlcpy(sd->name, "OMAP3 ISP CCDC", sizeof(sd->name));
+	strscpy(sd->name, "OMAP3 ISP CCDC", sizeof(sd->name));
 	sd->grp_id = 1 << 16;	/* group ID for isp subdevs */
 	v4l2_set_subdevdata(sd, ccdc);
 	sd->flags |= V4L2_SUBDEV_FL_HAS_EVENTS | V4L2_SUBDEV_FL_HAS_DEVNODE;
@@ -2650,7 +2658,7 @@ static int ccdc_init_entities(struct isp_ccdc_device *ccdc)
 	pads[CCDC_PAD_SOURCE_OF].flags = MEDIA_PAD_FL_SOURCE;
 
 	me->ops = &ccdc_media_ops;
-	ret = media_entity_init(me, CCDC_PADS_NUM, pads, 0);
+	ret = media_entity_pads_init(me, CCDC_PADS_NUM, pads);
 	if (ret < 0)
 		return ret;
 
@@ -2664,19 +2672,11 @@ static int ccdc_init_entities(struct isp_ccdc_device *ccdc)
 
 	ret = omap3isp_video_init(&ccdc->video_out, "CCDC");
 	if (ret < 0)
-		goto error_video;
-
-	/* Connect the CCDC subdev to the video node. */
-	ret = media_entity_create_link(&ccdc->subdev.entity, CCDC_PAD_SOURCE_OF,
-			&ccdc->video_out.video.entity, 0, 0);
-	if (ret < 0)
-		goto error_link;
+		goto error;
 
 	return 0;
 
-error_link:
-	omap3isp_video_cleanup(&ccdc->video_out);
-error_video:
+error:
 	media_entity_cleanup(me);
 	return ret;
 }

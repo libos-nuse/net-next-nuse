@@ -1,11 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * (C) 2004-2006  Sebastian Witt <se.witt@gmx.net>
  *
- *  Licensed under the terms of the GNU GPL License version 2.
  *  Based upon reverse engineered information
  *
  *  BIG FAT DISCLAIMER: Work in progress code. Possibly *dangerous*
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -55,8 +57,6 @@ module_param(min_fsb, int, 0444);
 MODULE_PARM_DESC(fid, "CPU multiplier to use (11.5 = 115)");
 MODULE_PARM_DESC(min_fsb,
 		"Minimum FSB to use, if not defined: current FSB - 50");
-
-#define PFX "cpufreq-nforce2: "
 
 /**
  * nforce2_calc_fsb - calculate FSB
@@ -123,8 +123,6 @@ static void nforce2_write_pll(int pll)
 	/* Now write the value in all 64 registers */
 	for (temp = 0; temp <= 0x3f; temp++)
 		pci_write_config_dword(nforce2_dev, NFORCE2_PLLREG, pll);
-
-	return;
 }
 
 /**
@@ -174,13 +172,13 @@ static int nforce2_set_fsb(unsigned int fsb)
 	int pll = 0;
 
 	if ((fsb > max_fsb) || (fsb < NFORCE2_MIN_FSB)) {
-		printk(KERN_ERR PFX "FSB %d is out of range!\n", fsb);
+		pr_err("FSB %d is out of range!\n", fsb);
 		return -EINVAL;
 	}
 
 	tfsb = nforce2_fsb_read(0);
 	if (!tfsb) {
-		printk(KERN_ERR PFX "Error while reading the FSB\n");
+		pr_err("Error while reading the FSB\n");
 		return -EINVAL;
 	}
 
@@ -276,8 +274,7 @@ static int nforce2_target(struct cpufreq_policy *policy,
 	/* local_irq_save(flags); */
 
 	if (nforce2_set_fsb(target_fsb) < 0)
-		printk(KERN_ERR PFX "Changing FSB to %d failed\n",
-			target_fsb);
+		pr_err("Changing FSB to %d failed\n", target_fsb);
 	else
 		pr_debug("Changed FSB successfully to %d\n",
 			target_fsb);
@@ -294,7 +291,7 @@ static int nforce2_target(struct cpufreq_policy *policy,
  * nforce2_verify - verifies a new CPUFreq policy
  * @policy: new policy
  */
-static int nforce2_verify(struct cpufreq_policy *policy)
+static int nforce2_verify(struct cpufreq_policy_data *policy)
 {
 	unsigned int fsb_pol_max;
 
@@ -325,8 +322,7 @@ static int nforce2_cpu_init(struct cpufreq_policy *policy)
 	/* FIX: Get FID from CPU */
 	if (!fid) {
 		if (!cpu_khz) {
-			printk(KERN_WARNING PFX
-			"cpu_khz not set, can't calculate multiplier!\n");
+			pr_warn("cpu_khz not set, can't calculate multiplier!\n");
 			return -ENODEV;
 		}
 
@@ -341,8 +337,8 @@ static int nforce2_cpu_init(struct cpufreq_policy *policy)
 		}
 	}
 
-	printk(KERN_INFO PFX "FSB currently at %i MHz, FID %d.%d\n", fsb,
-	       fid / 10, fid % 10);
+	pr_info("FSB currently at %i MHz, FID %d.%d\n",
+		fsb, fid / 10, fid % 10);
 
 	/* Set maximum FSB to FSB at boot time */
 	max_fsb = nforce2_fsb_read(1);
@@ -359,7 +355,6 @@ static int nforce2_cpu_init(struct cpufreq_policy *policy)
 	/* cpuinfo and default policy values */
 	policy->min = policy->cpuinfo.min_freq = min_fsb * fid * 100;
 	policy->max = policy->cpuinfo.max_freq = max_fsb * fid * 100;
-	policy->cpuinfo.transition_latency = CPUFREQ_ETERNAL;
 
 	return 0;
 }
@@ -371,6 +366,7 @@ static int nforce2_cpu_exit(struct cpufreq_policy *policy)
 
 static struct cpufreq_driver nforce2_driver = {
 	.name = "nforce2",
+	.flags = CPUFREQ_NO_AUTO_DYNAMIC_SWITCHING,
 	.verify = nforce2_verify,
 	.target = nforce2_target,
 	.get = nforce2_get,
@@ -401,11 +397,9 @@ static int nforce2_detect_chipset(void)
 	if (nforce2_dev == NULL)
 		return -ENODEV;
 
-	printk(KERN_INFO PFX "Detected nForce2 chipset revision %X\n",
-	       nforce2_dev->revision);
-	printk(KERN_INFO PFX
-	       "FSB changing is maybe unstable and can lead to "
-	       "crashes and data loss.\n");
+	pr_info("Detected nForce2 chipset revision %X\n",
+		nforce2_dev->revision);
+	pr_info("FSB changing is maybe unstable and can lead to crashes and data loss\n");
 
 	return 0;
 }
@@ -423,7 +417,7 @@ static int __init nforce2_init(void)
 
 	/* detect chipset */
 	if (nforce2_detect_chipset()) {
-		printk(KERN_INFO PFX "No nForce2 chipset.\n");
+		pr_info("No nForce2 chipset\n");
 		return -ENODEV;
 	}
 
@@ -442,4 +436,3 @@ static void __exit nforce2_exit(void)
 
 module_init(nforce2_init);
 module_exit(nforce2_exit);
-

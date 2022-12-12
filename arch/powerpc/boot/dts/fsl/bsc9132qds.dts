@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * BSC9132 QDS Device Tree Source
  *
  * Copyright 2014 Freescale Semiconductor Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 /include/ "bsc9132si-pre.dtsi"
@@ -28,6 +24,21 @@
 
 	soc: soc@ff700000 {
 		ranges = <0x0 0x0 0xff700000 0x100000>;
+	};
+
+	pci0: pcie@ff70a000 {
+		reg = <0 0xff70a000 0 0x1000>;
+		ranges = <0x2000000 0x0 0x90000000 0 0x90000000 0x0 0x20000000
+			  0x1000000 0x0 0x00000000 0 0xc0010000 0x0 0x10000>;
+		pcie@0 {
+			ranges = <0x2000000 0x0 0x90000000
+				  0x2000000 0x0 0x90000000
+				  0x0 0x20000000
+
+				  0x1000000 0x0 0x0
+				  0x1000000 0x0 0x0
+				  0x0 0x100000>;
+		};
 	};
 };
 

@@ -1,20 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * sky81452.c	SKY81452 MFD driver
  *
  * Copyright 2014 Skyworks Solutions Inc.
  * Author : Gyungoh Yoo <jack.yoo@skyworksinc.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/kernel.h>
@@ -58,23 +47,16 @@ static int sky81452_probe(struct i2c_client *client,
 	memset(cells, 0, sizeof(cells));
 	cells[0].name = "sky81452-backlight";
 	cells[0].of_compatible = "skyworks,sky81452-backlight";
-	cells[0].platform_data = pdata->bl_pdata;
-	cells[0].pdata_size = sizeof(*pdata->bl_pdata);
 	cells[1].name = "sky81452-regulator";
 	cells[1].platform_data = pdata->regulator_init_data;
 	cells[1].pdata_size = sizeof(*pdata->regulator_init_data);
 
-	ret = mfd_add_devices(dev, -1, cells, ARRAY_SIZE(cells), NULL, 0, NULL);
+	ret = devm_mfd_add_devices(dev, -1, cells, ARRAY_SIZE(cells),
+				   NULL, 0, NULL);
 	if (ret)
 		dev_err(dev, "failed to add child devices. err=%d\n", ret);
 
 	return ret;
-}
-
-static int sky81452_remove(struct i2c_client *client)
-{
-	mfd_remove_devices(&client->dev);
-	return 0;
 }
 
 static const struct i2c_device_id sky81452_ids[] = {
@@ -97,7 +79,6 @@ static struct i2c_driver sky81452_driver = {
 		.of_match_table = of_match_ptr(sky81452_of_match),
 	},
 	.probe = sky81452_probe,
-	.remove = sky81452_remove,
 	.id_table = sky81452_ids,
 };
 

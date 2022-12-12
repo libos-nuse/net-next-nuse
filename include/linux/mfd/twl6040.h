@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * MFD driver for twl6040
  *
@@ -5,21 +6,6 @@
  *              Misael Lopez Cruz <misael.lopez@ti.com>
  *
  * Copyright:   (C) 2011 Texas Instruments, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #ifndef __TWL6040_CODEC_H__
@@ -134,6 +120,7 @@
 #define TWL6040_HFDACENA		(1 << 0)
 #define TWL6040_HFPGAENA		(1 << 1)
 #define TWL6040_HFDRVENA		(1 << 4)
+#define TWL6040_HFSWENA			(1 << 6)
 
 /* VIBCTLL/R (0x18/0x1A) fields */
 
@@ -167,7 +154,7 @@
 #define TWL6040_VIBROCDET		0x20
 #define TWL6040_TSHUTDET                0x40
 
-#define TWL6040_CELLS			3
+#define TWL6040_CELLS			4
 
 #define TWL6040_REV_ES1_0		0x00
 #define TWL6040_REV_ES1_1		0x01 /* Rev ES1.1 and ES1.2 */
@@ -225,6 +212,7 @@ struct twl6040 {
 	struct regmap_irq_chip_data *irq_data;
 	struct regulator_bulk_data supplies[2]; /* supplies for vio, v2v1 */
 	struct clk *clk32k;
+	struct clk *mclk;
 	struct mutex mutex;
 	struct mutex irq_mutex;
 	struct mfd_cell cells[TWL6040_CELLS];
@@ -236,8 +224,8 @@ struct twl6040 {
 
 	/* PLL configuration */
 	int pll;
-	unsigned int sysclk;
-	unsigned int mclk;
+	unsigned int sysclk_rate;
+	unsigned int mclk_rate;
 
 	unsigned int irq;
 	unsigned int irq_ready;

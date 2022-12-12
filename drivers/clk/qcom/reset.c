@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013, The Linux Foundation. All rights reserved.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/bitops.h>
@@ -55,7 +47,7 @@ qcom_reset_deassert(struct reset_controller_dev *rcdev, unsigned long id)
 	return regmap_update_bits(rst->regmap, map->reg, mask, 0);
 }
 
-struct reset_control_ops qcom_reset_ops = {
+const struct reset_control_ops qcom_reset_ops = {
 	.reset = qcom_reset,
 	.assert = qcom_reset_assert,
 	.deassert = qcom_reset_deassert,

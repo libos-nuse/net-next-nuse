@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * arch/sh/kernel/topology.c
  *
  *  Copyright (C) 2007  Paul Mundt
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file "COPYING" in the main directory of this archive
- * for more details.
  */
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
@@ -21,7 +18,7 @@ static DEFINE_PER_CPU(struct cpu, cpu_devices);
 cpumask_t cpu_core_map[NR_CPUS];
 EXPORT_SYMBOL(cpu_core_map);
 
-static cpumask_t cpu_coregroup_map(unsigned int cpu)
+static cpumask_t cpu_coregroup_map(int cpu)
 {
 	/*
 	 * Presently all SH-X3 SMP cores are multi-cores, so just keep it
@@ -30,7 +27,7 @@ static cpumask_t cpu_coregroup_map(unsigned int cpu)
 	return *cpu_possible_mask;
 }
 
-const struct cpumask *cpu_coregroup_mask(unsigned int cpu)
+const struct cpumask *cpu_coregroup_mask(int cpu)
 {
 	return &cpu_core_map[cpu];
 }

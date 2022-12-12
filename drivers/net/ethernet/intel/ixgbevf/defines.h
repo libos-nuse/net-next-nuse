@@ -1,28 +1,5 @@
-/*******************************************************************************
-
-  Intel 82599 Virtual Function driver
-  Copyright(c) 1999 - 2015 Intel Corporation.
-
-  This program is free software; you can redistribute it and/or modify it
-  under the terms and conditions of the GNU General Public License,
-  version 2, as published by the Free Software Foundation.
-
-  This program is distributed in the hope it will be useful, but WITHOUT
-  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-  more details.
-
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, see <http://www.gnu.org/licenses/>.
-
-  The full GNU General Public License is included in this distribution in
-  the file called "COPYING".
-
-  Contact Information:
-  e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
-
-*******************************************************************************/
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Copyright(c) 1999 - 2018 Intel Corporation. */
 
 #ifndef _IXGBEVF_DEFINES_H_
 #define _IXGBEVF_DEFINES_H_
@@ -32,6 +9,12 @@
 #define IXGBE_DEV_ID_X540_VF		0x1515
 #define IXGBE_DEV_ID_X550_VF		0x1565
 #define IXGBE_DEV_ID_X550EM_X_VF	0x15A8
+#define IXGBE_DEV_ID_X550EM_A_VF	0x15C5
+
+#define IXGBE_DEV_ID_82599_VF_HV	0x152E
+#define IXGBE_DEV_ID_X540_VF_HV		0x1530
+#define IXGBE_DEV_ID_X550_VF_HV		0x1564
+#define IXGBE_DEV_ID_X550EM_X_VF_HV	0x15A9
 
 #define IXGBE_VF_IRQ_CLEAR_MASK		7
 #define IXGBE_VF_MAX_TX_QUEUES		8
@@ -74,7 +57,7 @@ typedef u32 ixgbe_link_speed;
 #define IXGBE_RXDCTL_RLPML_EN	0x00008000
 
 /* DCA Control */
-#define IXGBE_DCA_TXCTRL_TX_WB_RO_EN (1 << 11) /* Tx Desc writeback RO bit */
+#define IXGBE_DCA_TXCTRL_TX_WB_RO_EN BIT(11) /* Tx Desc writeback RO bit */
 
 /* PSRTYPE bit definitions */
 #define IXGBE_PSRTYPE_TCPHDR	0x00000010
@@ -150,9 +133,14 @@ typedef u32 ixgbe_link_speed;
 #define IXGBE_RXDADV_STAT_FCSTAT_NODDP	0x00000010 /* 01: Ctxt w/o DDP */
 #define IXGBE_RXDADV_STAT_FCSTAT_FCPRSP	0x00000020 /* 10: Recv. FCP_RSP */
 #define IXGBE_RXDADV_STAT_FCSTAT_DDP	0x00000030 /* 11: Ctxt w/ DDP */
+#define IXGBE_RXDADV_STAT_SECP		0x00020000 /* IPsec/MACsec pkt found */
 
 #define IXGBE_RXDADV_RSSTYPE_MASK	0x0000000F
 #define IXGBE_RXDADV_PKTTYPE_MASK	0x0000FFF0
+#define IXGBE_RXDADV_PKTTYPE_IPV4	0x00000010 /* IPv4 hdr present */
+#define IXGBE_RXDADV_PKTTYPE_IPV6	0x00000040 /* IPv6 hdr present */
+#define IXGBE_RXDADV_PKTTYPE_IPSEC_ESP	0x00001000 /* IPSec ESP */
+#define IXGBE_RXDADV_PKTTYPE_IPSEC_AH	0x00002000 /* IPSec AH */
 #define IXGBE_RXDADV_PKTTYPE_MASK_EX	0x0001FFF0
 #define IXGBE_RXDADV_HDRBUFLEN_MASK	0x00007FE0
 #define IXGBE_RXDADV_RSCCNT_MASK	0x001E0000
@@ -246,7 +234,7 @@ union ixgbe_adv_rx_desc {
 /* Context descriptors */
 struct ixgbe_adv_tx_context_desc {
 	__le32 vlan_macip_lens;
-	__le32 seqnum_seed;
+	__le32 fceof_saidx;
 	__le32 type_tucmd_mlhl;
 	__le32 mss_l4len_idx;
 };
@@ -267,9 +255,12 @@ struct ixgbe_adv_tx_context_desc {
 #define IXGBE_ADVTXD_TUCMD_L4T_UDP	0x00000000  /* L4 Packet TYPE of UDP */
 #define IXGBE_ADVTXD_TUCMD_L4T_TCP	0x00000800  /* L4 Packet TYPE of TCP */
 #define IXGBE_ADVTXD_TUCMD_L4T_SCTP	0x00001000  /* L4 Packet TYPE of SCTP */
+#define IXGBE_ADVTXD_TUCMD_IPSEC_TYPE_ESP   0x00002000 /* IPSec Type ESP */
+#define IXGBE_ADVTXD_TUCMD_IPSEC_ENCRYPT_EN 0x00004000 /* ESP Encrypt Enable */
 #define IXGBE_ADVTXD_IDX_SHIFT	4 /* Adv desc Index shift */
 #define IXGBE_ADVTXD_CC		0x00000080 /* Check Context */
 #define IXGBE_ADVTXD_POPTS_SHIFT	8  /* Adv desc POPTS shift */
+#define IXGBE_ADVTXD_POPTS_IPSEC	0x00000400 /* IPSec offload request */
 #define IXGBE_ADVTXD_POPTS_IXSM	(IXGBE_TXD_POPTS_IXSM << \
 				 IXGBE_ADVTXD_POPTS_SHIFT)
 #define IXGBE_ADVTXD_POPTS_TXSM	(IXGBE_TXD_POPTS_TXSM << \
@@ -296,16 +287,16 @@ struct ixgbe_adv_tx_context_desc {
 #define IXGBE_TXDCTL_SWFLSH		0x04000000 /* Tx Desc. wr-bk flushing */
 #define IXGBE_TXDCTL_WTHRESH_SHIFT	16	   /* shift to WTHRESH bits */
 
-#define IXGBE_DCA_RXCTRL_DESC_DCA_EN	(1 << 5)  /* Rx Desc enable */
-#define IXGBE_DCA_RXCTRL_HEAD_DCA_EN	(1 << 6)  /* Rx Desc header ena */
-#define IXGBE_DCA_RXCTRL_DATA_DCA_EN	(1 << 7)  /* Rx Desc payload ena */
-#define IXGBE_DCA_RXCTRL_DESC_RRO_EN	(1 << 9)  /* Rx rd Desc Relax Order */
-#define IXGBE_DCA_RXCTRL_DATA_WRO_EN	(1 << 13) /* Rx wr data Relax Order */
-#define IXGBE_DCA_RXCTRL_HEAD_WRO_EN	(1 << 15) /* Rx wr header RO */
+#define IXGBE_DCA_RXCTRL_DESC_DCA_EN	BIT(5)  /* Rx Desc enable */
+#define IXGBE_DCA_RXCTRL_HEAD_DCA_EN	BIT(6)  /* Rx Desc header ena */
+#define IXGBE_DCA_RXCTRL_DATA_DCA_EN	BIT(7)  /* Rx Desc payload ena */
+#define IXGBE_DCA_RXCTRL_DESC_RRO_EN	BIT(9)  /* Rx rd Desc Relax Order */
+#define IXGBE_DCA_RXCTRL_DATA_WRO_EN	BIT(13) /* Rx wr data Relax Order */
+#define IXGBE_DCA_RXCTRL_HEAD_WRO_EN	BIT(15) /* Rx wr header RO */
 
-#define IXGBE_DCA_TXCTRL_DESC_DCA_EN	(1 << 5)  /* DCA Tx Desc enable */
-#define IXGBE_DCA_TXCTRL_DESC_RRO_EN	(1 << 9)  /* Tx rd Desc Relax Order */
-#define IXGBE_DCA_TXCTRL_DESC_WRO_EN	(1 << 11) /* Tx Desc writeback RO bit */
-#define IXGBE_DCA_TXCTRL_DATA_RRO_EN	(1 << 13) /* Tx rd data Relax Order */
+#define IXGBE_DCA_TXCTRL_DESC_DCA_EN	BIT(5)  /* DCA Tx Desc enable */
+#define IXGBE_DCA_TXCTRL_DESC_RRO_EN	BIT(9)  /* Tx rd Desc Relax Order */
+#define IXGBE_DCA_TXCTRL_DESC_WRO_EN	BIT(11) /* Tx Desc writeback RO bit */
+#define IXGBE_DCA_TXCTRL_DATA_RRO_EN	BIT(13) /* Tx rd data Relax Order */
 
 #endif /* _IXGBEVF_DEFINES_H_ */

@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2015 Heiko Stuebner <heiko@sntech.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/slab.h>
@@ -90,7 +81,7 @@ struct clk *rockchip_clk_register_inverter(const char *name,
 
 	inv_clock = kmalloc(sizeof(*inv_clock), GFP_KERNEL);
 	if (!inv_clock)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	init.name = name;
 	init.num_parents = num_parents;
@@ -106,11 +97,7 @@ struct clk *rockchip_clk_register_inverter(const char *name,
 
 	clk = clk_register(NULL, &inv_clock->hw);
 	if (IS_ERR(clk))
-		goto err_free;
+		kfree(inv_clock);
 
 	return clk;
-
-err_free:
-	kfree(inv_clock);
-	return NULL;
 }

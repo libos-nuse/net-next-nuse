@@ -111,13 +111,13 @@ snic_queue_report_tgt_req(struct snic *snic)
 
 	SNIC_BUG_ON((((unsigned long)buf) % SNIC_SG_DESC_ALIGN) != 0);
 
-	pa = pci_map_single(snic->pdev, buf, buf_len, PCI_DMA_FROMDEVICE);
-	if (pci_dma_mapping_error(snic->pdev, pa)) {
-		kfree(buf);
-		snic_req_free(snic, rqi);
+	pa = dma_map_single(&snic->pdev->dev, buf, buf_len, DMA_FROM_DEVICE);
+	if (dma_mapping_error(&snic->pdev->dev, pa)) {
 		SNIC_HOST_ERR(snic->shost,
 			      "Rpt-tgt rspbuf %p: PCI DMA Mapping Failed\n",
 			      buf);
+		kfree(buf);
+		snic_req_free(snic, rqi);
 		ret = -EINVAL;
 
 		goto error;
@@ -138,7 +138,8 @@ snic_queue_report_tgt_req(struct snic *snic)
 
 	ret = snic_queue_wq_desc(snic, rqi->req, rqi->req_len);
 	if (ret) {
-		pci_unmap_single(snic->pdev, pa, buf_len, PCI_DMA_FROMDEVICE);
+		dma_unmap_single(&snic->pdev->dev, pa, buf_len,
+				 DMA_FROM_DEVICE);
 		kfree(buf);
 		rqi->sge_va = 0;
 		snic_release_untagged_req(snic, rqi);
@@ -171,7 +172,7 @@ snic_scsi_scan_tgt(struct work_struct *work)
 			 tgt->channel,
 			 tgt->scsi_tgt_id,
 			 SCAN_WILD_CARD,
-			 1);
+			 SCSI_SCAN_RESCAN);
 
 	spin_lock_irqsave(shost->host_lock, flags);
 	tgt->flags &= ~SNIC_TGT_SCAN_PENDING;
@@ -480,9 +481,20 @@ int
 snic_disc_start(struct snic *snic)
 {
 	struct snic_disc *disc = &snic->disc;
+	unsigned long flags;
 	int ret = 0;
 
 	SNIC_SCSI_DBG(snic->shost, "Discovery Start.\n");
+
+	spin_lock_irqsave(&snic->snic_lock, flags);
+	if (snic->in_remove) {
+		spin_unlock_irqrestore(&snic->snic_lock, flags);
+		SNIC_ERR("snic driver removal in progress ...\n");
+		ret = 0;
+
+		return ret;
+	}
+	spin_unlock_irqrestore(&snic->snic_lock, flags);
 
 	mutex_lock(&disc->mutex);
 	if (disc->state == SNIC_DISC_PENDING) {
@@ -533,6 +545,8 @@ snic_tgt_del_all(struct snic *snic)
 	struct list_head *cur, *nxt;
 	unsigned long flags;
 
+	scsi_flush_work(snic->shost);
+
 	mutex_lock(&snic->disc.mutex);
 	spin_lock_irqsave(snic->shost->host_lock, flags);
 
@@ -545,7 +559,7 @@ snic_tgt_del_all(struct snic *snic)
 		tgt = NULL;
 	}
 	spin_unlock_irqrestore(snic->shost->host_lock, flags);
-
-	scsi_flush_work(snic->shost);
 	mutex_unlock(&snic->disc.mutex);
+
+	flush_workqueue(snic_glob->event_q);
 } /* end of snic_tgt_del_all */

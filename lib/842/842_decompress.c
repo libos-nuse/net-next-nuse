@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * 842 Software Decompression
  *
  * Copyright (C) 2015 Dan Streetman, IBM Corp
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * See 842.h for details of the 842 compressed format.
  */
@@ -69,7 +60,7 @@ struct sw842_param {
 	((s) == 2 ? be16_to_cpu(get_unaligned((__be16 *)d)) :	\
 	 (s) == 4 ? be32_to_cpu(get_unaligned((__be32 *)d)) :	\
 	 (s) == 8 ? be64_to_cpu(get_unaligned((__be64 *)d)) :	\
-	 WARN(1, "pr_debug param err invalid size %x\n", s))
+	 0)
 
 static int next_bits(struct sw842_param *p, u64 *d, u8 n);
 
@@ -202,10 +193,14 @@ static int __do_index(struct sw842_param *p, u8 size, u8 bits, u64 fsize)
 		return -EINVAL;
 	}
 
-	pr_debug("index%x to %lx off %lx adjoff %lx tot %lx data %lx\n",
-		 size, (unsigned long)index, (unsigned long)(index * size),
-		 (unsigned long)offset, (unsigned long)total,
-		 (unsigned long)beN_to_cpu(&p->ostart[offset], size));
+	if (size != 2 && size != 4 && size != 8)
+		WARN(1, "__do_index invalid size %x\n", size);
+	else
+		pr_debug("index%x to %lx off %lx adjoff %lx tot %lx data %lx\n",
+			 size, (unsigned long)index,
+			 (unsigned long)(index * size), (unsigned long)offset,
+			 (unsigned long)total,
+			 (unsigned long)beN_to_cpu(&p->ostart[offset], size));
 
 	memcpy(p->out, &p->ostart[offset], size);
 	p->out += size;
@@ -250,7 +245,7 @@ static int do_op(struct sw842_param *p, u8 o)
 		case OP_ACTION_NOOP:
 			break;
 		default:
-			pr_err("Interal error, invalid op %x\n", op);
+			pr_err("Internal error, invalid op %x\n", op);
 			return -EINVAL;
 		}
 

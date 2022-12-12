@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * arizona-spi.c  --  Arizona SPI bus interface
  *
  * Copyright 2012 Wolfson Microelectronics plc
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/err.h>
@@ -45,6 +42,11 @@ static int arizona_spi_probe(struct spi_device *spi)
 	case WM8280:
 		if (IS_ENABLED(CONFIG_MFD_WM5110))
 			regmap_config = &wm5110_spi_regmap;
+		break;
+	case WM1831:
+	case CS47L24:
+		if (IS_ENABLED(CONFIG_MFD_CS47L24))
+			regmap_config = &cs47l24_spi_regmap;
 		break;
 	default:
 		dev_err(&spi->dev, "Unknown device type %ld\n", type);
@@ -89,6 +91,8 @@ static const struct spi_device_id arizona_spi_ids[] = {
 	{ "wm5102", WM5102 },
 	{ "wm5110", WM5110 },
 	{ "wm8280", WM8280 },
+	{ "wm1831", WM1831 },
+	{ "cs47l24", CS47L24 },
 	{ },
 };
 MODULE_DEVICE_TABLE(spi, arizona_spi_ids);

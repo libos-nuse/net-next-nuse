@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * We need constants.h for:
  *  VMA_VM_MM
@@ -6,6 +7,10 @@
  */
 #include <asm/asm-offsets.h>
 #include <asm/thread_info.h>
+
+#ifdef CONFIG_CPU_V7M
+#include <asm/v7m.h>
+#endif
 
 /*
  * vma_vm_mm - get mm pointer from vma pointer (vma->vm_mm)
@@ -21,19 +26,16 @@
 	ldr	\rd, [\rn, #VMA_VM_FLAGS]
 	.endm
 
-	.macro	tsk_mm, rd, rn
-	ldr	\rd, [\rn, #TI_TASK]
-	ldr	\rd, [\rd, #TSK_ACTIVE_MM]
-	.endm
-
 /*
  * act_mm - get current->active_mm
  */
 	.macro	act_mm, rd
-	bic	\rd, sp, #8128
-	bic	\rd, \rd, #63
+	get_thread_info \rd
 	ldr	\rd, [\rd, #TI_TASK]
-	ldr	\rd, [\rd, #TSK_ACTIVE_MM]
+	.if (TSK_ACTIVE_MM > IMM12_MASK)
+	add	\rd, \rd, #TSK_ACTIVE_MM & ~IMM12_MASK
+	.endif
+	ldr	\rd, [\rd, #TSK_ACTIVE_MM & IMM12_MASK]
 	.endm
 
 /*
@@ -70,7 +72,13 @@
  * on ARMv7.
  */
 	.macro	dcache_line_size, reg, tmp
+#ifdef CONFIG_CPU_V7M
+	movw	\tmp, #:lower16:BASEADDR_V7M_SCB + V7M_SCB_CTR
+	movt	\tmp, #:upper16:BASEADDR_V7M_SCB + V7M_SCB_CTR
+	ldr     \tmp, [\tmp]
+#else
 	mrc	p15, 0, \tmp, c0, c0, 1		@ read ctr
+#endif
 	lsr	\tmp, \tmp, #16
 	and	\tmp, \tmp, #0xf		@ cache line size encoding
 	mov	\reg, #4			@ bytes per word
@@ -82,7 +90,13 @@
  * on ARMv7.
  */
 	.macro	icache_line_size, reg, tmp
+#ifdef CONFIG_CPU_V7M
+	movw	\tmp, #:lower16:BASEADDR_V7M_SCB + V7M_SCB_CTR
+	movt	\tmp, #:upper16:BASEADDR_V7M_SCB + V7M_SCB_CTR
+	ldr     \tmp, [\tmp]
+#else
 	mrc	p15, 0, \tmp, c0, c0, 1		@ read ctr
+#endif
 	and	\tmp, \tmp, #0xf		@ cache line size encoding
 	mov	\reg, #4			@ bytes per word
 	mov	\reg, \reg, lsl \tmp		@ actual cache line size
@@ -258,13 +272,21 @@
 	mcr	p15, 0, ip, c7, c10, 4		@ data write barrier
 	.endm
 
-.macro define_processor_functions name:req, dabort:req, pabort:req, nommu=0, suspend=0
+.macro define_processor_functions name:req, dabort:req, pabort:req, nommu=0, suspend=0, bugs=0
+/*
+ * If we are building for big.Little with branch predictor hardening,
+ * we need the processor function tables to remain available after boot.
+ */
+#if defined(CONFIG_BIG_LITTLE) && defined(CONFIG_HARDEN_BRANCH_PREDICTOR)
+	.section ".rodata"
+#endif
 	.type	\name\()_processor_functions, #object
 	.align 2
 ENTRY(\name\()_processor_functions)
 	.word	\dabort
 	.word	\pabort
 	.word	cpu_\name\()_proc_init
+	.word	\bugs
 	.word	cpu_\name\()_proc_fin
 	.word	cpu_\name\()_reset
 	.word	cpu_\name\()_do_idle
@@ -293,6 +315,9 @@ ENTRY(\name\()_processor_functions)
 	.endif
 
 	.size	\name\()_processor_functions, . - \name\()_processor_functions
+#if defined(CONFIG_BIG_LITTLE) && defined(CONFIG_HARDEN_BRANCH_PREDICTOR)
+	.previous
+#endif
 .endm
 
 .macro define_cache_functions name:req

@@ -29,7 +29,7 @@ static const struct drm_framebuffer_funcs cirrus_fb_funcs = {
 
 int cirrus_framebuffer_init(struct drm_device *dev,
 			    struct cirrus_framebuffer *gfb,
-			    struct drm_mode_fb_cmd2 *mode_cmd,
+			    const struct drm_mode_fb_cmd2 *mode_cmd,
 			    struct drm_gem_object *obj)
 {
 	int ret;
@@ -47,7 +47,7 @@ int cirrus_framebuffer_init(struct drm_device *dev,
 static struct drm_framebuffer *
 cirrus_user_framebuffer_create(struct drm_device *dev,
 			       struct drm_file *filp,
-			       struct drm_mode_fb_cmd2 *mode_cmd)
+			       const struct drm_mode_fb_cmd2 *mode_cmd)
 {
 	struct cirrus_device *cdev = dev->dev_private;
 	struct drm_gem_object *obj;
@@ -61,7 +61,7 @@ cirrus_user_framebuffer_create(struct drm_device *dev,
 				      bpp, mode_cmd->pitches[0]))
 		return ERR_PTR(-EINVAL);
 
-	obj = drm_gem_object_lookup(dev, filp, mode_cmd->handles[0]);
+	obj = drm_gem_object_lookup(filp, mode_cmd->handles[0]);
 	if (obj == NULL)
 		return ERR_PTR(-ENOENT);
 
@@ -295,7 +295,7 @@ cirrus_dumb_mmap_offset(struct drm_file *file,
 	struct drm_gem_object *obj;
 	struct cirrus_bo *bo;
 
-	obj = drm_gem_object_lookup(dev, file, handle);
+	obj = drm_gem_object_lookup(file, handle);
 	if (obj == NULL)
 		return -ENOENT;
 

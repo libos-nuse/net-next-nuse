@@ -1,13 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2011 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright 2011 Linaro Ltd.
- *
- * The code contained herein is licensed under the GNU General Public
- * License. You may obtain a copy of the GNU General Public License
- * Version 2 or later at the following locations:
- *
- * http://www.opensource.org/licenses/gpl-license.html
- * http://www.gnu.org/copyleft/gpl.html
  */
 
 #include <linux/clk.h>
@@ -31,17 +25,13 @@ static void __init imx53_init_early(void)
 static void __init imx53_dt_init(void)
 {
 	imx_src_init();
-
-	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
-
+	imx5_pmu_init();
 	imx_aips_allow_unprivileged_access("fsl,imx53-aipstz");
 }
 
 static void __init imx53_init_late(void)
 {
 	imx53_pm_init();
-
-	platform_device_register_simple("cpufreq-dt", -1, NULL, 0);
 }
 
 static const char * const imx53_dt_board_compat[] __initconst = {
@@ -51,7 +41,6 @@ static const char * const imx53_dt_board_compat[] __initconst = {
 
 DT_MACHINE_START(IMX53_DT, "Freescale i.MX53 (Device Tree Support)")
 	.init_early	= imx53_init_early,
-	.init_irq	= tzic_init_irq,
 	.init_machine	= imx53_dt_init,
 	.init_late	= imx53_init_late,
 	.dt_compat	= imx53_dt_board_compat,

@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Broadcom B43 wireless driver
  * IEEE 802.11ac AC-PHY support
  *
  * Copyright (c) 2015 Rafał Miłecki <zajec5@gmail.com>
- *
- * This program is free software; you can redistribute	it and/or modify it
- * under  the terms of	the GNU General	 Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include "b43.h"
@@ -61,7 +57,7 @@ static void b43_phy_ac_op_radio_write(struct b43_wldev *dev, u16 reg,
 
 static unsigned int b43_phy_ac_op_get_default_chan(struct b43_wldev *dev)
 {
-	if (b43_current_band(dev->wl) == IEEE80211_BAND_2GHZ)
+	if (b43_current_band(dev->wl) == NL80211_BAND_2GHZ)
 		return 11;
 	return 36;
 }

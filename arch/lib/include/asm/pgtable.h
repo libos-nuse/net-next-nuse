@@ -1,6 +1,9 @@
 #ifndef _ASM_SIM_PGTABLE_H
 #define _ASM_SIM_PGTABLE_H
 
+typedef unsigned long	p4dval_t;
+typedef struct { p4dval_t p4d; } p4d_t;
+
 #define PAGE_KERNEL ((pgprot_t) {0 })
 
 #define arch_start_context_switch(prev) do {} while (0)
@@ -15,16 +18,7 @@
 #define __pte_to_swp_entry(pte)         ((swp_entry_t) {pte_val((pte)) })
 #define __swp_entry_to_pte(x)           ((pte_t) {(x).val })
 #define pmd_page(pmd) (struct page *)(pmd_val(pmd) & PAGE_MASK)
-#define pgtable_cache_init()   do { } while (0)
 
-static inline int pte_swp_soft_dirty(pte_t pte)
-{
-	return 0;
-}
-
-static inline pte_t pte_swp_clear_soft_dirty(pte_t pte)
-{
-	return pte;
-}
+#define swapper_pg_dir		((pgd_t *)0)
 
 #endif /* _ASM_SIM_PGTABLE_H */

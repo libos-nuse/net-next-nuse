@@ -1,22 +1,28 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #ifndef __ASM_ARC_PAGE_H
 #define __ASM_ARC_PAGE_H
 
 #include <uapi/asm/page.h>
 
+#ifdef CONFIG_ARC_HAS_PAE40
+
+#define MAX_POSSIBLE_PHYSMEM_BITS	40
+#define PAGE_MASK_PHYS			(0xff00000000ull | PAGE_MASK)
+
+#else /* CONFIG_ARC_HAS_PAE40 */
+
+#define MAX_POSSIBLE_PHYSMEM_BITS	32
+#define PAGE_MASK_PHYS			PAGE_MASK
+
+#endif /* CONFIG_ARC_HAS_PAE40 */
 
 #ifndef __ASSEMBLY__
 
-#define get_user_page(vaddr)		__get_free_page(GFP_KERNEL)
-#define free_user_page(page, addr)	free_page(addr)
-
 #define clear_page(paddr)		memset((paddr), 0, PAGE_SIZE)
+#define copy_user_page(to, from, vaddr, pg)	copy_page(to, from)
 #define copy_page(to, from)		memcpy((to), (from), PAGE_SIZE)
 
 struct vm_area_struct;
@@ -35,7 +41,11 @@ void clear_user_page(void *to, unsigned long u_vaddr, struct page *page);
  * These are used to make use of C type-checking..
  */
 typedef struct {
+#ifdef CONFIG_ARC_HAS_PAE40
+	unsigned long long pte;
+#else
 	unsigned long pte;
+#endif
 } pte_t;
 typedef struct {
 	unsigned long pgd;
@@ -76,33 +86,36 @@ typedef unsigned long pgprot_t;
 
 typedef pte_t * pgtable_t;
 
-#define ARCH_PFN_OFFSET     (CONFIG_LINUX_LINK_BASE >> PAGE_SHIFT)
+/*
+ * Use virt_to_pfn with caution:
+ * If used in pte or paddr related macros, it could cause truncation
+ * in PAE40 builds
+ * As a rule of thumb, only use it in helpers starting with virt_
+ * You have been warned !
+ */
+#define virt_to_pfn(kaddr)	(__pa(kaddr) >> PAGE_SHIFT)
 
-#define pfn_valid(pfn)      (((pfn) - ARCH_PFN_OFFSET) < max_mapnr)
+#define ARCH_PFN_OFFSET		virt_to_pfn(CONFIG_LINUX_RAM_BASE)
+
+#ifdef CONFIG_FLATMEM
+#define pfn_valid(pfn)		(((pfn) - ARCH_PFN_OFFSET) < max_mapnr)
+#endif
 
 /*
  * __pa, __va, virt_to_page (ALERT: deprecated, don't use them)
  *
  * These macros have historically been misnamed
  * virt here means link-address/program-address as embedded in object code.
- * So if kernel img is linked at 0x8000_0000 onwards, 0x8010_0000 will be
- * 128th page, and virt_to_page( ) will return the struct page corresp to it.
- * mem_map[ ] is an array of struct page for each page frame in the system
- *
- * Independent of where linux is linked at, link-addr = physical address
- * So the old macro  __pa = vaddr + PAGE_OFFSET - CONFIG_LINUX_LINK_BASE
- * would have been wrong in case kernel is not at 0x8zs
+ * And for ARC, link-addr = physical address
  */
-#define __pa(vaddr)  ((unsigned long)vaddr)
+#define __pa(vaddr)  ((unsigned long)(vaddr))
 #define __va(paddr)  ((void *)((unsigned long)(paddr)))
 
-#define virt_to_page(kaddr)	\
-	(mem_map + ((__pa(kaddr) - CONFIG_LINUX_LINK_BASE) >> PAGE_SHIFT))
-
-#define virt_addr_valid(kaddr)  pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
+#define virt_to_page(kaddr)	pfn_to_page(virt_to_pfn(kaddr))
+#define virt_addr_valid(kaddr)  pfn_valid(virt_to_pfn(kaddr))
 
 /* Default Permissions for stack/heaps pages (Non Executable) */
-#define VM_DATA_DEFAULT_FLAGS   (VM_READ | VM_WRITE | VM_MAYREAD | VM_MAYWRITE)
+#define VM_DATA_DEFAULT_FLAGS	VM_DATA_FLAGS_NON_EXEC
 
 #define WANT_PAGE_VIRTUAL   1
 

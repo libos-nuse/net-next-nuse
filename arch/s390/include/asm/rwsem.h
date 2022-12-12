@@ -31,7 +31,7 @@
  * This should be totally fair - if anything is waiting, a process that wants a
  * lock will go to the back of the queue. When the currently active lock is
  * released, if there's a writer at the front of the queue, then that and only
- * that will be woken up; if there's a bunch of consequtive readers at the
+ * that will be woken up; if there's a bunch of consecutive readers at the
  * front, then they'll all be woken up, but no other readers will be.
  */
 
@@ -90,7 +90,7 @@ static inline int __down_read_trylock(struct rw_semaphore *sem)
 /*
  * lock for writing
  */
-static inline void __down_write_nested(struct rw_semaphore *sem, int subclass)
+static inline long ___down_write(struct rw_semaphore *sem)
 {
 	signed long old, new, tmp;
 
@@ -104,13 +104,23 @@ static inline void __down_write_nested(struct rw_semaphore *sem, int subclass)
 		: "=&d" (old), "=&d" (new), "=Q" (sem->count)
 		: "Q" (sem->count), "m" (tmp)
 		: "cc", "memory");
-	if (old != 0)
-		rwsem_down_write_failed(sem);
+
+	return old;
 }
 
 static inline void __down_write(struct rw_semaphore *sem)
 {
-	__down_write_nested(sem, 0);
+	if (___down_write(sem))
+		rwsem_down_write_failed(sem);
+}
+
+static inline int __down_write_killable(struct rw_semaphore *sem)
+{
+	if (___down_write(sem))
+		if (IS_ERR(rwsem_down_write_failed_killable(sem)))
+			return -EINTR;
+
+	return 0;
 }
 
 /*

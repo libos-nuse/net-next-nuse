@@ -881,7 +881,7 @@ static const struct v4l2_file_operations mxr_fops = {
 	.unlocked_ioctl = video_ioctl2,
 };
 
-static int queue_setup(struct vb2_queue *vq, const void *parg,
+static int queue_setup(struct vb2_queue *vq,
 	unsigned int *nbuffers, unsigned int *nplanes, unsigned int sizes[],
 	void *alloc_ctxs[])
 {
@@ -1070,7 +1070,7 @@ static void mxr_vfd_release(struct video_device *vdev)
 }
 
 struct mxr_layer *mxr_base_layer_create(struct mxr_device *mdev,
-	int idx, char *name, struct mxr_layer_ops *ops)
+	int idx, char *name, const struct mxr_layer_ops *ops)
 {
 	struct mxr_layer *layer;
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _IPV6_H
 #define _IPV6_H
 
@@ -18,6 +19,7 @@ struct ipv6_devconf {
 	__s32		dad_transmits;
 	__s32		rtr_solicits;
 	__s32		rtr_solicit_interval;
+	__s32		rtr_solicit_max_interval;
 	__s32		rtr_solicit_delay;
 	__s32		force_mld_version;
 	__s32		mldv1_unsolicited_report_interval;
@@ -36,6 +38,7 @@ struct ipv6_devconf {
 	__s32		accept_ra_rtr_pref;
 	__s32		rtr_probe_interval;
 #ifdef CONFIG_IPV6_ROUTE_INFO
+	__s32		accept_ra_rt_info_min_plen;
 	__s32		accept_ra_rt_info_max_plen;
 #endif
 #endif
@@ -50,17 +53,30 @@ struct ipv6_devconf {
 	__s32		mc_forwarding;
 #endif
 	__s32		disable_ipv6;
+	__s32		drop_unicast_in_l2_multicast;
 	__s32		accept_dad;
 	__s32		force_tllao;
 	__s32           ndisc_notify;
 	__s32		suppress_frag_ndisc;
 	__s32		accept_ra_mtu;
+	__s32		drop_unsolicited_na;
 	struct ipv6_stable_secret {
 		bool initialized;
 		struct in6_addr secret;
 	} stable_secret;
 	__s32		use_oif_addrs_only;
-	void		*sysctl;
+	__s32		keep_addr_on_down;
+	__s32		seg6_enabled;
+#ifdef CONFIG_IPV6_SEG6_HMAC
+	__s32		seg6_require_hmac;
+#endif
+	__u32		enhanced_dad;
+	__u32		addr_gen_mode;
+	__s32		disable_policy;
+	__s32           ndisc_tclass;
+	__s32		rpl_seg_enabled;
+
+	struct ctl_table_header *sysctl_header;
 };
 
 struct ipv6_params {
@@ -68,7 +84,6 @@ struct ipv6_params {
 	__s32 autoconf;
 };
 extern struct ipv6_params ipv6_defaults;
-#include <linux/icmpv6.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
@@ -87,6 +102,12 @@ static inline struct ipv6hdr *inner_ipv6_hdr(const struct sk_buff *skb)
 static inline struct ipv6hdr *ipipv6_hdr(const struct sk_buff *skb)
 {
 	return (struct ipv6hdr *)skb_transport_header(skb);
+}
+
+static inline unsigned int ipv6_transport_len(const struct sk_buff *skb)
+{
+	return ntohs(ipv6_hdr(skb)->payload_len) + sizeof(struct ipv6hdr) -
+	       skb_network_header_len(skb);
 }
 
 /* 
@@ -114,14 +135,45 @@ struct inet6_skb_parm {
 #define IP6SKB_ROUTERALERT	8
 #define IP6SKB_FRAGMENTED      16
 #define IP6SKB_HOPBYHOP        32
+#define IP6SKB_L3SLAVE         64
+#define IP6SKB_JUMBOGRAM      128
 };
+
+#if defined(CONFIG_NET_L3_MASTER_DEV)
+static inline bool ipv6_l3mdev_skb(__u16 flags)
+{
+	return flags & IP6SKB_L3SLAVE;
+}
+#else
+static inline bool ipv6_l3mdev_skb(__u16 flags)
+{
+	return false;
+}
+#endif
 
 #define IP6CB(skb)	((struct inet6_skb_parm*)((skb)->cb))
 #define IP6CBMTU(skb)	((struct ip6_mtuinfo *)((skb)->cb))
 
 static inline int inet6_iif(const struct sk_buff *skb)
 {
-	return IP6CB(skb)->iif;
+	bool l3_slave = ipv6_l3mdev_skb(IP6CB(skb)->flags);
+
+	return l3_slave ? skb->skb_iif : IP6CB(skb)->iif;
+}
+
+static inline bool inet6_is_jumbogram(const struct sk_buff *skb)
+{
+	return !!(IP6CB(skb)->flags & IP6SKB_JUMBOGRAM);
+}
+
+/* can not be used in TCP layer after tcp_v6_fill_cb */
+static inline int inet6_sdif(const struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_NET_L3_MASTER_DEV)
+	if (skb && ipv6_l3mdev_skb(IP6CB(skb)->flags))
+		return IP6CB(skb)->iif;
+#endif
+	return 0;
 }
 
 struct tcp6_request_sock {
@@ -159,7 +211,7 @@ struct ipv6_pinfo {
 
 	/*
 	 * Packed in 16bits.
-	 * Omit one shift by by putting the signed field at MSB.
+	 * Omit one shift by putting the signed field at MSB.
 	 */
 #if defined(__BIG_ENDIAN_BITFIELD)
 	__s16			hop_limit:9;
@@ -198,8 +250,9 @@ struct ipv6_pinfo {
                                 rxflow:1,
 				rxtclass:1,
 				rxpmtu:1,
-				rxorigdstaddr:1;
-				/* 2 bits hole */
+				rxorigdstaddr:1,
+				recvfragsize:1;
+				/* 1 bits hole */
 		} bits;
 		__u16		all;
 	} rxopt;
@@ -215,7 +268,11 @@ struct ipv6_pinfo {
 						 * 100: prefer care-of address
 						 */
 				dontfrag:1,
-				autoflowlabel:1;
+				autoflowlabel:1,
+				autoflowlabel_set:1,
+				mc_all:1,
+				recverr_rfc4884:1,
+				rtalert_isolate:1;
 	__u8			min_hopcount;
 	__u8			tclass;
 	__be32			rcv_flowinfo;
@@ -264,6 +321,8 @@ struct tcp6_timewait_sock {
 };
 
 #if IS_ENABLED(CONFIG_IPV6)
+bool ipv6_mod_enabled(void);
+
 static inline struct ipv6_pinfo *inet6_sk(const struct sock *__sk)
 {
 	return sk_fullsock(__sk) ? inet_sk(__sk)->pinet6 : NULL;
@@ -272,17 +331,6 @@ static inline struct ipv6_pinfo *inet6_sk(const struct sock *__sk)
 static inline struct raw6_sock *raw6_sk(const struct sock *sk)
 {
 	return (struct raw6_sock *)sk;
-}
-
-static inline void inet_sk_copy_descendant(struct sock *sk_to,
-					   const struct sock *sk_from)
-{
-	int ancestor_size = sizeof(struct inet_sock);
-
-	if (sk_from->sk_family == PF_INET6)
-		ancestor_size += sizeof(struct ipv6_pinfo);
-
-	__inet_sk_copy_descendant(sk_to, sk_from, ancestor_size);
 }
 
 #define __ipv6_only_sock(sk)	(sk->sk_ipv6only)
@@ -306,6 +354,11 @@ static inline int inet_v6_ipv6only(const struct sock *sk)
 #define __ipv6_only_sock(sk)	0
 #define ipv6_only_sock(sk)	0
 #define ipv6_sk_rxinfo(sk)	0
+
+static inline bool ipv6_mod_enabled(void)
+{
+	return false;
+}
 
 static inline struct ipv6_pinfo * inet6_sk(const struct sock *__sk)
 {

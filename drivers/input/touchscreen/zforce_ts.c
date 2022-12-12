@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012-2013 MundoReader S.L.
  * Author: Heiko Stuebner <heiko@sntech.de>
@@ -6,15 +7,6 @@
  *
  * Copyright (C) 2010 Barnes & Noble, Inc.
  * Author: Pieter Truter<ptruter@intrinsyc.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -370,8 +362,8 @@ static int zforce_touch_event(struct zforce_ts *ts, u8 *payload)
 			point.coord_x = point.coord_y = 0;
 		}
 
-		point.state = payload[9 * i + 5] & 0x03;
-		point.id = (payload[9 * i + 5] & 0xfc) >> 2;
+		point.state = payload[9 * i + 5] & 0x0f;
+		point.id = (payload[9 * i + 5] & 0xf0) >> 4;
 
 		/* determine touch major, minor and orientation */
 		point.area_major = max(payload[9 * i + 6],

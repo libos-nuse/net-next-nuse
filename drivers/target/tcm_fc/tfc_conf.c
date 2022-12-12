@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*******************************************************************************
  * Filename:  tcm_fc.c
  *
@@ -10,15 +11,6 @@
  *
  * Copyright (c) 2009,2010 Nicholas A. Bellinger <nab@linux-iscsi.org>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  ****************************************************************************/
 
 #include <linux/module.h>
@@ -171,9 +163,31 @@ static ssize_t ft_nacl_node_name_store(struct config_item *item,
 CONFIGFS_ATTR(ft_nacl_, node_name);
 CONFIGFS_ATTR(ft_nacl_, port_name);
 
+static ssize_t ft_nacl_tag_show(struct config_item *item,
+		char *page)
+{
+	return snprintf(page, PAGE_SIZE, "%s", acl_to_nacl(item)->acl_tag);
+}
+
+static ssize_t ft_nacl_tag_store(struct config_item *item,
+		const char *page, size_t count)
+{
+	struct se_node_acl *se_nacl = acl_to_nacl(item);
+	int ret;
+
+	ret = core_tpg_set_initiator_node_tag(se_nacl->se_tpg, se_nacl, page);
+
+	if (ret < 0)
+		return ret;
+	return count;
+}
+
+CONFIGFS_ATTR(ft_nacl_, tag);
+
 static struct configfs_attribute *ft_nacl_base_attrs[] = {
 	&ft_nacl_attr_port_name,
 	&ft_nacl_attr_node_name,
+	&ft_nacl_attr_tag,
 	NULL,
 };
 
@@ -198,38 +212,10 @@ static int ft_init_nodeacl(struct se_node_acl *nacl, const char *name)
 	return 0;
 }
 
-struct ft_node_acl *ft_acl_get(struct ft_tpg *tpg, struct fc_rport_priv *rdata)
-{
-	struct ft_node_acl *found = NULL;
-	struct ft_node_acl *acl;
-	struct se_portal_group *se_tpg = &tpg->se_tpg;
-	struct se_node_acl *se_acl;
-
-	mutex_lock(&se_tpg->acl_node_mutex);
-	list_for_each_entry(se_acl, &se_tpg->acl_node_list, acl_list) {
-		acl = container_of(se_acl, struct ft_node_acl, se_node_acl);
-		pr_debug("acl %p port_name %llx\n",
-			acl, (unsigned long long)acl->node_auth.port_name);
-		if (acl->node_auth.port_name == rdata->ids.port_name ||
-		    acl->node_auth.node_name == rdata->ids.node_name) {
-			pr_debug("acl %p port_name %llx matched\n", acl,
-				    (unsigned long long)rdata->ids.port_name);
-			found = acl;
-			/* XXX need to hold onto ACL */
-			break;
-		}
-	}
-	mutex_unlock(&se_tpg->acl_node_mutex);
-	return found;
-}
-
 /*
  * local_port port_group (tpg) ops.
  */
-static struct se_portal_group *ft_add_tpg(
-	struct se_wwn *wwn,
-	struct config_group *group,
-	const char *name)
+static struct se_portal_group *ft_add_tpg(struct se_wwn *wwn, const char *name)
 {
 	struct ft_lport_wwn *ft_wwn;
 	struct ft_tpg *tpg;
@@ -398,11 +384,6 @@ static inline struct ft_tpg *ft_tpg(struct se_portal_group *se_tpg)
 	return container_of(se_tpg, struct ft_tpg, se_tpg);
 }
 
-static char *ft_get_fabric_name(void)
-{
-	return "fc";
-}
-
 static char *ft_get_fabric_wwn(struct se_portal_group *se_tpg)
 {
 	return ft_tpg(se_tpg)->lport_wwn->name;
@@ -433,9 +414,8 @@ static u32 ft_tpg_get_inst_index(struct se_portal_group *se_tpg)
 
 static const struct target_core_fabric_ops ft_fabric_ops = {
 	.module =			THIS_MODULE,
-	.name =				"fc",
+	.fabric_name =			"fc",
 	.node_acl_size =		sizeof(struct ft_node_acl),
-	.get_fabric_name =		ft_get_fabric_name,
 	.tpg_get_wwn =			ft_get_fabric_wwn,
 	.tpg_get_tag =			ft_get_tag,
 	.tpg_check_demo_mode =		ft_check_false,
@@ -445,12 +425,10 @@ static const struct target_core_fabric_ops ft_fabric_ops = {
 	.tpg_get_inst_index =		ft_tpg_get_inst_index,
 	.check_stop_free =		ft_check_stop_free,
 	.release_cmd =			ft_release_cmd,
-	.shutdown_session =		ft_sess_shutdown,
 	.close_session =		ft_sess_close,
 	.sess_get_index =		ft_sess_get_index,
 	.sess_get_initiator_sid =	NULL,
 	.write_pending =		ft_write_pending,
-	.write_pending_status =		ft_write_pending_status,
 	.set_default_node_attributes =	ft_set_default_node_attr,
 	.get_cmd_state =		ft_get_cmd_state,
 	.queue_data_in =		ft_queue_data_in,

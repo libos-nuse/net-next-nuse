@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * SN Platform GRU Driver
  *
  *              KERNEL SERVICES THAT USE THE GRU
  *
  *  Copyright (c) 2008 Silicon Graphics, Inc.  All Rights Reserved.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include <linux/kernel.h>
@@ -29,6 +16,7 @@
 #include <linux/miscdevice.h>
 #include <linux/proc_fs.h>
 #include <linux/interrupt.h>
+#include <linux/sync_core.h>
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 #include <linux/export.h>
@@ -634,7 +622,7 @@ static int send_noop_message(void *cb, struct gru_message_queue_desc *mqd,
 			break;
 		case CBSS_PAGE_OVERFLOW:
 			STAT(mesq_noop_page_overflow);
-			/* fallthru */
+			fallthrough;
 		default:
 			BUG();
 		}
@@ -718,8 +706,8 @@ cberr:
 static int send_message_put_nacked(void *cb, struct gru_message_queue_desc *mqd,
 			void *mesg, int lines)
 {
-	unsigned long m, *val = mesg, gpa, save;
-	int ret;
+	unsigned long m;
+	int ret, loops = 200;	/* experimentally determined */
 
 	m = mqd->mq_gpa + (gru_get_amo_value_head(cb) << 6);
 	if (lines == 2) {
@@ -735,22 +723,28 @@ static int send_message_put_nacked(void *cb, struct gru_message_queue_desc *mqd,
 		return MQE_OK;
 
 	/*
-	 * Send a cross-partition interrupt to the SSI that contains the target
-	 * message queue. Normally, the interrupt is automatically delivered by
-	 * hardware but some error conditions require explicit delivery.
-	 * Use the GRU to deliver the interrupt. Otherwise partition failures
+	 * Send a noop message in order to deliver a cross-partition interrupt
+	 * to the SSI that contains the target message queue. Normally, the
+	 * interrupt is automatically delivered by hardware following mesq
+	 * operations, but some error conditions require explicit delivery.
+	 * The noop message will trigger delivery. Otherwise partition failures
 	 * could cause unrecovered errors.
 	 */
-	gpa = uv_global_gru_mmr_address(mqd->interrupt_pnode, UVH_IPI_INT);
-	save = *val;
-	*val = uv_hub_ipi_value(mqd->interrupt_apicid, mqd->interrupt_vector,
-				dest_Fixed);
-	gru_vstore_phys(cb, gpa, gru_get_tri(mesg), IAA_REGISTER, IMA);
-	ret = gru_wait(cb);
-	*val = save;
-	if (ret != CBS_IDLE)
-		return MQE_UNEXPECTED_CB_ERR;
-	return MQE_OK;
+	do {
+		ret = send_noop_message(cb, mqd, mesg);
+	} while ((ret == MQIE_AGAIN || ret == MQE_CONGESTION) && (loops-- > 0));
+
+	if (ret == MQIE_AGAIN || ret == MQE_CONGESTION) {
+		/*
+		 * Don't indicate to the app to resend the message, as it's
+		 * already been successfully sent.  We simply send an OK
+		 * (rather than fail the send with MQE_UNEXPECTED_CB_ERR),
+		 * assuming that the other side is receiving enough
+		 * interrupts to get this message processed anyway.
+		 */
+		ret = MQE_OK;
+	}
+	return ret;
 }
 
 /*
@@ -786,7 +780,7 @@ static int send_message_failure(void *cb, struct gru_message_queue_desc *mqd,
 		break;
 	case CBSS_PAGE_OVERFLOW:
 		STAT(mesq_page_overflow);
-		/* fallthru */
+		fallthrough;
 	default:
 		BUG();
 	}

@@ -1,21 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*******************************************************************************
   Copyright (C) 2007-2009  STMicroelectronics Ltd
 
-  This program is free software; you can redistribute it and/or modify it
-  under the terms and conditions of the GNU General Public License,
-  version 2, as published by the Free Software Foundation.
-
-  This program is distributed in the hope it will be useful, but WITHOUT
-  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-  more details.
-
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
-
-  The full GNU General Public License is included in this distribution in
-  the file called "COPYING".
 
   Author: Giuseppe Cavallaro <peppe.cavallaro@st.com>
 *******************************************************************************/
@@ -33,24 +19,30 @@
 #define GMAC_MII_DATA		0x00000014	/* MII Data */
 #define GMAC_FLOW_CTRL		0x00000018	/* Flow Control */
 #define GMAC_VLAN_TAG		0x0000001c	/* VLAN Tag */
-#define GMAC_VERSION		0x00000020	/* GMAC CORE Version */
 #define GMAC_DEBUG		0x00000024	/* GMAC debug register */
 #define GMAC_WAKEUP_FILTER	0x00000028	/* Wake-up Frame Filter */
 
 #define GMAC_INT_STATUS		0x00000038	/* interrupt status register */
-enum dwmac1000_irq_status {
-	lpiis_irq = 0x400,
-	time_stamp_irq = 0x0200,
-	mmc_rx_csum_offload_irq = 0x0080,
-	mmc_tx_irq = 0x0040,
-	mmc_rx_irq = 0x0020,
-	mmc_irq = 0x0010,
-	pmt_irq = 0x0008,
-	pcs_ane_irq = 0x0004,
-	pcs_link_irq = 0x0002,
-	rgmii_irq = 0x0001,
-};
-#define GMAC_INT_MASK		0x0000003c	/* interrupt mask register */
+#define GMAC_INT_STATUS_PMT	BIT(3)
+#define GMAC_INT_STATUS_MMCIS	BIT(4)
+#define GMAC_INT_STATUS_MMCRIS	BIT(5)
+#define GMAC_INT_STATUS_MMCTIS	BIT(6)
+#define GMAC_INT_STATUS_MMCCSUM	BIT(7)
+#define GMAC_INT_STATUS_TSTAMP	BIT(9)
+#define GMAC_INT_STATUS_LPIIS	BIT(10)
+
+/* interrupt mask register */
+#define	GMAC_INT_MASK		0x0000003c
+#define	GMAC_INT_DISABLE_RGMII		BIT(0)
+#define	GMAC_INT_DISABLE_PCSLINK	BIT(1)
+#define	GMAC_INT_DISABLE_PCSAN		BIT(2)
+#define	GMAC_INT_DISABLE_PMT		BIT(3)
+#define	GMAC_INT_DISABLE_TIMESTAMP	BIT(9)
+#define	GMAC_INT_DISABLE_PCS	(GMAC_INT_DISABLE_RGMII | \
+				 GMAC_INT_DISABLE_PCSLINK | \
+				 GMAC_INT_DISABLE_PCSAN)
+#define	GMAC_INT_DEFAULT_MASK	(GMAC_INT_DISABLE_TIMESTAMP | \
+				 GMAC_INT_DISABLE_PCS)
 
 /* PMT Control and Status */
 #define GMAC_PMT		0x0000002c
@@ -84,48 +76,29 @@ enum power_event {
 #define LPI_CTRL_STATUS_TLPIEN	0x00000001	/* Transmit LPI Entry */
 
 /* GMAC HW ADDR regs */
-#define GMAC_ADDR_HIGH(reg)	(((reg > 15) ? 0x00000800 : 0x00000040) + \
-				(reg * 8))
-#define GMAC_ADDR_LOW(reg)	(((reg > 15) ? 0x00000804 : 0x00000044) + \
-				(reg * 8))
+#define GMAC_ADDR_HIGH(reg)	((reg > 15) ? 0x00000800 + (reg - 16) * 8 : \
+				 0x00000040 + (reg * 8))
+#define GMAC_ADDR_LOW(reg)	((reg > 15) ? 0x00000804 + (reg - 16) * 8 : \
+				 0x00000044 + (reg * 8))
 #define GMAC_MAX_PERFECT_ADDRESSES	1
 
-/* PCS registers (AN/TBI/SGMII/RGMII) offset */
-#define GMAC_AN_CTRL	0x000000c0	/* AN control */
-#define GMAC_AN_STATUS	0x000000c4	/* AN status */
-#define GMAC_ANE_ADV	0x000000c8	/* Auto-Neg. Advertisement */
-#define GMAC_ANE_LPA	0x000000cc	/* Auto-Neg. link partener ability */
-#define GMAC_ANE_EXP	0x000000d0	/* ANE expansion */
-#define GMAC_TBI	0x000000d4	/* TBI extend status */
-#define GMAC_S_R_GMII	0x000000d8	/* SGMII RGMII status */
+#define GMAC_PCS_BASE		0x000000c0	/* PCS register base */
+#define GMAC_RGSMIIIS		0x000000d8	/* RGMII/SMII status */
 
-/* AN Configuration defines */
-#define GMAC_AN_CTRL_RAN	0x00000200	/* Restart Auto-Negotiation */
-#define GMAC_AN_CTRL_ANE	0x00001000	/* Auto-Negotiation Enable */
-#define GMAC_AN_CTRL_ELE	0x00004000	/* External Loopback Enable */
-#define GMAC_AN_CTRL_ECD	0x00010000	/* Enable Comma Detect */
-#define GMAC_AN_CTRL_LR		0x00020000	/* Lock to Reference */
-#define GMAC_AN_CTRL_SGMRAL	0x00040000	/* SGMII RAL Control */
-
-/* AN Status defines */
-#define GMAC_AN_STATUS_LS	0x00000004	/* Link Status 0:down 1:up */
-#define GMAC_AN_STATUS_ANA	0x00000008	/* Auto-Negotiation Ability */
-#define GMAC_AN_STATUS_ANC	0x00000020	/* Auto-Negotiation Complete */
-#define GMAC_AN_STATUS_ES	0x00000100	/* Extended Status */
-
-/* Register 54 (SGMII/RGMII status register) */
-#define GMAC_S_R_GMII_LINK		0x8
-#define GMAC_S_R_GMII_SPEED		0x5
-#define GMAC_S_R_GMII_SPEED_SHIFT	0x1
-#define GMAC_S_R_GMII_MODE		0x1
-#define GMAC_S_R_GMII_SPEED_125		2
-#define GMAC_S_R_GMII_SPEED_25		1
-
-/* Common ADV and LPA defines */
-#define GMAC_ANE_FD		(1 << 5)
-#define GMAC_ANE_HD		(1 << 6)
-#define GMAC_ANE_PSE		(3 << 7)
-#define GMAC_ANE_PSE_SHIFT	7
+/* SGMII/RGMII status register */
+#define GMAC_RGSMIIIS_LNKMODE		BIT(0)
+#define GMAC_RGSMIIIS_SPEED		GENMASK(2, 1)
+#define GMAC_RGSMIIIS_SPEED_SHIFT	1
+#define GMAC_RGSMIIIS_LNKSTS		BIT(3)
+#define GMAC_RGSMIIIS_JABTO		BIT(4)
+#define GMAC_RGSMIIIS_FALSECARDET	BIT(5)
+#define GMAC_RGSMIIIS_SMIDRXS		BIT(16)
+/* LNKMOD */
+#define GMAC_RGSMIIIS_LNKMOD_MASK	0x1
+/* LNKSPEED */
+#define GMAC_RGSMIIIS_SPEED_125		0x2
+#define GMAC_RGSMIIIS_SPEED_25		0x1
+#define GMAC_RGSMIIIS_SPEED_2_5		0x0
 
 /* GMAC Configuration defines */
 #define GMAC_CONTROL_2K 0x08000000	/* IEEE 802.3as 2K packets */
@@ -163,6 +136,7 @@ enum inter_frame_gap {
 #define GMAC_FRAME_FILTER_DAIF	0x00000008	/* DA Inverse Filtering */
 #define GMAC_FRAME_FILTER_PM	0x00000010	/* Pass all multicast */
 #define GMAC_FRAME_FILTER_DBF	0x00000020	/* Disable Broadcast frames */
+#define GMAC_FRAME_FILTER_PCF	0x00000080	/* Pass Control frames */
 #define GMAC_FRAME_FILTER_SAIF	0x00000100	/* Inverse Filtering */
 #define GMAC_FRAME_FILTER_SAF	0x00000200	/* Source Address Filter */
 #define GMAC_FRAME_FILTER_HPF	0x00000400	/* Hash or perfect Filter */
@@ -221,7 +195,6 @@ enum inter_frame_gap {
 
 /*--- DMA BLOCK defines ---*/
 /* DMA Bus Mode register defines */
-#define DMA_BUS_MODE_SFT_RESET	0x00000001	/* Software Reset */
 #define DMA_BUS_MODE_DA		0x00000002	/* Arbitration scheme */
 #define DMA_BUS_MODE_DSL_MASK	0x0000007c	/* Descriptor Skip Length */
 #define DMA_BUS_MODE_DSL_SHIFT	2		/*   (in DWORDS)      */
@@ -238,10 +211,10 @@ enum rx_tx_priority_ratio {
 
 #define DMA_BUS_MODE_FB		0x00010000	/* Fixed burst */
 #define DMA_BUS_MODE_MB		0x04000000	/* Mixed burst */
-#define DMA_BUS_MODE_RPBL_MASK	0x003e0000	/* Rx-Programmable Burst Len */
+#define DMA_BUS_MODE_RPBL_MASK	0x007e0000	/* Rx-Programmable Burst Len */
 #define DMA_BUS_MODE_RPBL_SHIFT	17
 #define DMA_BUS_MODE_USP	0x00800000
-#define DMA_BUS_MODE_PBL	0x01000000
+#define DMA_BUS_MODE_MAXPBL	0x01000000
 #define DMA_BUS_MODE_AAL	0x02000000
 
 /* DMA CRS Control and Status Register Mapping */

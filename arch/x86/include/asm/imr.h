@@ -1,13 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * imr.h: Isolated Memory Region API
  *
  * Copyright(c) 2013 Intel Corporation.
  * Copyright(c) 2015 Bryan O'Donoghue <pure.logic@nexus-software.ie>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; version 2
- * of the License.
  */
 #ifndef _IMR_H
 #define _IMR_H
@@ -53,7 +49,7 @@
 #define IMR_MASK		(IMR_ALIGN - 1)
 
 int imr_add_range(phys_addr_t base, size_t size,
-		  unsigned int rmask, unsigned int wmask, bool lock);
+		  unsigned int rmask, unsigned int wmask);
 
 int imr_remove_range(phys_addr_t base, size_t size);
 

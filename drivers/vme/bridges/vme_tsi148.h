@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * tsi148.h
  *
@@ -6,11 +7,6 @@
  * Author: Tom Armistead
  * Updated and maintained by Ajit Prem
  * Copyright 2004 Motorola Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #ifndef TSI148_H
@@ -38,7 +34,8 @@ struct tsi148_driver {
 	void __iomem *base;	/* Base Address of device registers */
 	wait_queue_head_t dma_queue[2];
 	wait_queue_head_t iack_queue;
-	void (*lm_callback[4])(int);	/* Called in interrupt handler */
+	void (*lm_callback[4])(void *);	/* Called in interrupt handler */
+	void *lm_data[4];
 	void *crcsr_kernel;
 	dma_addr_t crcsr_bus;
 	struct vme_master_resource *flush_image;

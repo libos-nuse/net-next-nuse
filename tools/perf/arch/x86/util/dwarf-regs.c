@@ -1,23 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * dwarf-regs.c : Mapping of DWARF debug register numbers into register names.
  * Extracted from probe-finder.c
  *
  * Written by Masami Hiramatsu <mhiramat@redhat.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
- *
  */
 
 #include <stddef.h>
@@ -63,6 +49,8 @@ struct pt_regs_offset {
 # define REG_OFFSET_NAME_32(n, r) {.name = n, .offset = offsetof(struct pt_regs, r)}
 #endif
 
+/* TODO: switching by dwarf address size */
+#ifndef __x86_64__
 static const struct pt_regs_offset x86_32_regoffset_table[] = {
 	REG_OFFSET_NAME_32("%ax",	eax),
 	REG_OFFSET_NAME_32("%cx",	ecx),
@@ -75,6 +63,8 @@ static const struct pt_regs_offset x86_32_regoffset_table[] = {
 	REG_OFFSET_END,
 };
 
+#define regoffset_table x86_32_regoffset_table
+#else
 static const struct pt_regs_offset x86_64_regoffset_table[] = {
 	REG_OFFSET_NAME_64("%ax",	rax),
 	REG_OFFSET_NAME_64("%dx",	rdx),
@@ -95,11 +85,7 @@ static const struct pt_regs_offset x86_64_regoffset_table[] = {
 	REG_OFFSET_END,
 };
 
-/* TODO: switching by dwarf address size */
-#ifdef __x86_64__
 #define regoffset_table x86_64_regoffset_table
-#else
-#define regoffset_table x86_32_regoffset_table
 #endif
 
 /* Minus 1 for the ending REG_OFFSET_END */

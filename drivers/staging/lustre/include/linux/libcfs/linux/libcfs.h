@@ -60,6 +60,7 @@
 #include <linux/moduleparam.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
+#include <linux/pagemap.h>
 #include <linux/random.h>
 #include <linux/rbtree.h>
 #include <linux/rwsem.h>
@@ -83,7 +84,6 @@
 #include <stdarg.h>
 #include "linux-cpu.h"
 #include "linux-time.h"
-#include "linux-mem.h"
 
 #define LUSTRE_TRACE_SIZE (THREAD_SIZE >> 5)
 
@@ -117,9 +117,6 @@ do {								    \
 #define CFS_CHECK_STACK(msgdata, mask, cdls) do {} while (0)
 #define CDEBUG_STACK() (0L)
 #endif /* __x86_64__ */
-
-/* initial pid  */
-#define LUSTRE_LNET_PID	  12345
 
 #define __current_nesting_level() (0)
 

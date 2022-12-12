@@ -1,17 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2014 Linaro Ltd.
  *
  * Author: Linus Walleij <linus.walleij@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
  */
 #include <linux/of_platform.h>
 #include <asm/mach/arch.h>
 #include <asm/hardware/cache-l2x0.h>
-#include "core.h"
 
 static const char *const realview_dt_platform_compat[] __initconst = {
 	"arm,realview-eb",

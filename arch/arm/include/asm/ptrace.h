@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  arch/arm/include/asm/ptrace.h
  *
  *  Copyright (C) 1996-2003 Russell King
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #ifndef __ASM_ARM_PTRACE_H
 #define __ASM_ARM_PTRACE_H
@@ -13,9 +10,19 @@
 #include <uapi/asm/ptrace.h>
 
 #ifndef __ASSEMBLY__
+#include <linux/types.h>
+
 struct pt_regs {
 	unsigned long uregs[18];
 };
+
+struct svc_pt_regs {
+	struct pt_regs regs;
+	u32 dacr;
+	u32 addr_limit;
+};
+
+#define to_svc_pt_regs(r) container_of(r, struct svc_pt_regs, regs)
 
 #define user_mode(regs)	\
 	(((regs)->ARM_cpsr & 0xf) == 0)
@@ -116,8 +123,7 @@ extern unsigned long profile_pc(struct pt_regs *regs);
 /*
  * kprobe-based event tracer support
  */
-#include <linux/stddef.h>
-#include <linux/types.h>
+#include <linux/compiler.h>
 #define MAX_REG_OFFSET (offsetof(struct pt_regs, ARM_ORIG_r0))
 
 extern int regs_query_register_offset(const char *name);

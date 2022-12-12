@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * EEPROM parser code for mac80211 Prism54 drivers
  *
@@ -10,10 +11,6 @@
  *   Copyright 2004-2006 Jean-Baptiste Note <jbnote@gmail.com>, et al.
  * - stlc45xx driver
  *   Copyright (C) 2008 Nokia Corporation and/or its subsidiary(-ies).
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/firmware.h>
@@ -76,14 +73,14 @@ struct p54_channel_entry {
 	u16 data;
 	int index;
 	int max_power;
-	enum ieee80211_band band;
+	enum nl80211_band band;
 };
 
 struct p54_channel_list {
 	struct p54_channel_entry *channels;
 	size_t entries;
 	size_t max_entries;
-	size_t band_channel_num[IEEE80211_NUM_BANDS];
+	size_t band_channel_num[NUM_NL80211_BANDS];
 };
 
 static int p54_get_band_from_freq(u16 freq)
@@ -91,10 +88,10 @@ static int p54_get_band_from_freq(u16 freq)
 	/* FIXME: sync these values with the 802.11 spec */
 
 	if ((freq >= 2412) && (freq <= 2484))
-		return IEEE80211_BAND_2GHZ;
+		return NL80211_BAND_2GHZ;
 
 	if ((freq >= 4920) && (freq <= 5825))
-		return IEEE80211_BAND_5GHZ;
+		return NL80211_BAND_5GHZ;
 
 	return -1;
 }
@@ -124,16 +121,16 @@ static int p54_compare_rssichan(const void *_a,
 
 static int p54_fill_band_bitrates(struct ieee80211_hw *dev,
 				  struct ieee80211_supported_band *band_entry,
-				  enum ieee80211_band band)
+				  enum nl80211_band band)
 {
 	/* TODO: generate rate array dynamically */
 
 	switch (band) {
-	case IEEE80211_BAND_2GHZ:
+	case NL80211_BAND_2GHZ:
 		band_entry->bitrates = p54_bgrates;
 		band_entry->n_bitrates = ARRAY_SIZE(p54_bgrates);
 		break;
-	case IEEE80211_BAND_5GHZ:
+	case NL80211_BAND_5GHZ:
 		band_entry->bitrates = p54_arates;
 		band_entry->n_bitrates = ARRAY_SIZE(p54_arates);
 		break;
@@ -147,7 +144,7 @@ static int p54_fill_band_bitrates(struct ieee80211_hw *dev,
 static int p54_generate_band(struct ieee80211_hw *dev,
 			     struct p54_channel_list *list,
 			     unsigned int *chan_num,
-			     enum ieee80211_band band)
+			     enum nl80211_band band)
 {
 	struct p54_common *priv = dev->priv;
 	struct ieee80211_supported_band *tmp, *old;
@@ -161,8 +158,9 @@ static int p54_generate_band(struct ieee80211_hw *dev,
 	if (!tmp)
 		goto err_out;
 
-	tmp->channels = kzalloc(sizeof(struct ieee80211_channel) *
-				list->band_channel_num[band], GFP_KERNEL);
+	tmp->channels = kcalloc(list->band_channel_num[band],
+				sizeof(struct ieee80211_channel),
+				GFP_KERNEL);
 	if (!tmp->channels)
 		goto err_out;
 
@@ -206,7 +204,7 @@ static int p54_generate_band(struct ieee80211_hw *dev,
 
 	if (j == 0) {
 		wiphy_err(dev->wiphy, "Disabling totally damaged %d GHz band\n",
-			  (band == IEEE80211_BAND_2GHZ) ? 2 : 5);
+			  (band == NL80211_BAND_2GHZ) ? 2 : 5);
 
 		ret = -ENODATA;
 		goto err_out;
@@ -344,7 +342,7 @@ static int p54_generate_channel_lists(struct ieee80211_hw *dev)
 		goto free;
 	}
 	priv->chan_num = max_channel_num;
-	priv->survey = kzalloc(sizeof(struct survey_info) * max_channel_num,
+	priv->survey = kcalloc(max_channel_num, sizeof(struct survey_info),
 			       GFP_KERNEL);
 	if (!priv->survey) {
 		ret = -ENOMEM;
@@ -352,8 +350,9 @@ static int p54_generate_channel_lists(struct ieee80211_hw *dev)
 	}
 
 	list->max_entries = max_channel_num;
-	list->channels = kzalloc(sizeof(struct p54_channel_entry) *
-				 max_channel_num, GFP_KERNEL);
+	list->channels = kcalloc(max_channel_num,
+				 sizeof(struct p54_channel_entry),
+				 GFP_KERNEL);
 	if (!list->channels) {
 		ret = -ENOMEM;
 		goto free;
@@ -396,7 +395,7 @@ static int p54_generate_channel_lists(struct ieee80211_hw *dev)
 	     p54_compare_channels, NULL);
 
 	k = 0;
-	for (i = 0, j = 0; i < IEEE80211_NUM_BANDS; i++) {
+	for (i = 0, j = 0; i < NUM_NL80211_BANDS; i++) {
 		if (p54_generate_band(dev, list, &k, i) == 0)
 			j++;
 	}
@@ -573,10 +572,10 @@ static int p54_parse_rssical(struct ieee80211_hw *dev,
 		for (i = 0; i < entries; i++) {
 			u16 freq = 0;
 			switch (i) {
-			case IEEE80211_BAND_2GHZ:
+			case NL80211_BAND_2GHZ:
 				freq = 2437;
 				break;
-			case IEEE80211_BAND_5GHZ:
+			case NL80211_BAND_5GHZ:
 				freq = 5240;
 				break;
 			}
@@ -902,11 +901,11 @@ good_eeprom:
 	if (priv->rxhw == PDR_SYNTH_FRONTEND_XBOW)
 		p54_init_xbow_synth(priv);
 	if (!(synth & PDR_SYNTH_24_GHZ_DISABLED))
-		dev->wiphy->bands[IEEE80211_BAND_2GHZ] =
-			priv->band_table[IEEE80211_BAND_2GHZ];
+		dev->wiphy->bands[NL80211_BAND_2GHZ] =
+			priv->band_table[NL80211_BAND_2GHZ];
 	if (!(synth & PDR_SYNTH_5_GHZ_DISABLED))
-		dev->wiphy->bands[IEEE80211_BAND_5GHZ] =
-			priv->band_table[IEEE80211_BAND_5GHZ];
+		dev->wiphy->bands[NL80211_BAND_5GHZ] =
+			priv->band_table[NL80211_BAND_5GHZ];
 	if ((synth & PDR_SYNTH_RX_DIV_MASK) == PDR_SYNTH_RX_DIV_SUPPORTED)
 		priv->rx_diversity_mask = 3;
 	if ((synth & PDR_SYNTH_TX_DIV_MASK) == PDR_SYNTH_TX_DIV_SUPPORTED)

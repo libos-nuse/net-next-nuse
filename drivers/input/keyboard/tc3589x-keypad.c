@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) ST-Ericsson SA 2010
  *
  * Author: Jayeeta Banerjee <jayeeta.banerjee@stericsson.com>
  * Author: Sundar Iyer <sundar.iyer@stericsson.com>
- *
- * License Terms: GNU General Public License, version 2
  *
  * TC35893 MFD Keypad Controller driver
  */
@@ -32,7 +31,7 @@
 #define TC3589x_PULL_DOWN_MASK		0x1
 #define TC3589x_PULL_UP_MASK		0x2
 #define TC3589x_PULLUP_ALL_MASK		0xAA
-#define TC3589x_IO_PULL_VAL(index, mask)	((mask)<<((index)%4)*2))
+#define TC3589x_IO_PULL_VAL(index, mask)	((mask)<<((index)%4)*2)
 
 /* Bit masks for IOCFG register */
 #define IOCFG_BALLCFG		0x01

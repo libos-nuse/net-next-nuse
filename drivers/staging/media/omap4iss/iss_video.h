@@ -1,14 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * TI OMAP4 ISS V4L2 Driver - Generic video node
  *
  * Copyright (C) 2012 Texas Instruments, Inc.
  *
  * Author: Sergio Aguirre <sergio.a.aguirre@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef OMAP4_ISS_VIDEO_H
@@ -40,7 +36,6 @@ struct v4l2_pix_format;
  *	shifted to be 8 bits per pixel. =0 if format is not shiftable.
  * @pixelformat: V4L2 pixel format FCC identifier
  * @bpp: Bits per pixel
- * @description: Human-readable format description
  */
 struct iss_format_info {
 	u32 code;
@@ -49,7 +44,6 @@ struct iss_format_info {
 	u32 flavor;
 	u32 pixelformat;
 	unsigned int bpp;
-	const char *description;
 };
 
 enum iss_pipeline_stream_state {
@@ -77,7 +71,7 @@ enum iss_pipeline_state {
 
 /*
  * struct iss_pipeline - An OMAP4 ISS hardware pipeline
- * @entities: Bitmask of entities in the pipeline (indexed by entity ID)
+ * @ent_enum: Entities in the pipeline
  * @error: A hardware error occurred during capture
  */
 struct iss_pipeline {
@@ -87,7 +81,7 @@ struct iss_pipeline {
 	enum iss_pipeline_stream_state stream_state;
 	struct iss_video *input;
 	struct iss_video *output;
-	unsigned int entities;
+	struct media_entity_enum ent_enum;
 	atomic_t frame_number;
 	bool do_propagation; /* of frame number */
 	bool error;
@@ -170,7 +164,6 @@ struct iss_video {
 	spinlock_t qlock;		/* protects dmaqueue and error */
 	struct list_head dmaqueue;
 	enum iss_video_dmaqueue_flags dmaqueue_flags;
-	struct vb2_alloc_ctx *alloc_ctx;
 
 	const struct iss_video_operations *ops;
 };

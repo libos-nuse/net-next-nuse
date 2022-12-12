@@ -1,19 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Intel I/OAT DMA Linux driver
  * Copyright(c) 2004 - 2015 Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * The full GNU General Public License is included in this distribution in
- * the file called "COPYING".
- *
  */
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -26,7 +14,7 @@
 #include "hw.h"
 #include "dma.h"
 
-#define MAX_SCF	1024
+#define MAX_SCF	256
 
 /* provide a lookup table for setting the source address in the base or
  * extended descriptor of an xor or pq descriptor

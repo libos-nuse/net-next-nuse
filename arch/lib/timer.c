@@ -57,9 +57,8 @@ static struct lib_timer *lib_timer_find(struct timer_list *timer)
  * other timer functions.
  */
 void init_timer_key(struct timer_list *timer,
-		    unsigned int flags,
-		    const char *name,
-		    struct lock_class_key *key)
+		    void (*func)(struct timer_list *), unsigned int flags,
+		    const char *name, struct lock_class_key *key)
 {
 	/**
 	 * Note: name and key are used for debugging. We ignore them
@@ -72,34 +71,37 @@ void init_timer_key(struct timer_list *timer,
 	 * thanks to its entry.pprev field set to NULL (timer_pending
 	 * will return 0)
 	 */
+	timer->function = func;
 	timer->entry.pprev = NULL;
+	if (WARN_ON_ONCE(flags & ~TIMER_INIT_FLAGS))
+		flags &= TIMER_INIT_FLAGS;
+	timer->flags = flags;
 }
 
 struct hlist_head g_expired_events;
 struct hlist_head g_pending_events;
 
-static void run_timer_softirq(struct softirq_action *h)
-{
-	while (!hlist_empty(&g_expired_events)) {
+void run_timer_softirq(struct softirq_action *h)
+{	
+	while (!hlist_empty(&g_expired_events)) {		
 		struct timer_list *timer =
 			hlist_entry((&g_expired_events)->first,
 				    struct timer_list, entry);
-		void (*fn)(unsigned long);
+		void (*fn)(struct timer_list *) = NULL;
 		unsigned long data;
-		struct lib_timer *l_timer = lib_timer_find(timer);
-
-		fn = timer->function;
-		data = timer->data;
-		lib_assert(l_timer->event == 0);
-		if (l_timer->t_hash.next != LIST_POISON1) {
+		struct lib_timer *l_timer = lib_timer_find(timer);		
+		if(timer->function)
+		fn = timer->function;			
+		lib_assert(l_timer->event == 0);		
+		if (l_timer->t_hash.next != LIST_POISON1) {			
 			hlist_del(&l_timer->t_hash);
 			lib_free(l_timer);
-		}
-
-		if (timer->entry.next != LIST_POISON1)
-			hlist_del(&timer->entry);
-		timer->entry.pprev = NULL;
-		fn(data);
+		}		
+		if (timer->entry.next != LIST_POISON1){			
+			hlist_del(&timer->entry);			
+		}		
+		timer->entry.pprev = NULL;		
+		fn(timer);		
 	}
 }
 
@@ -147,6 +149,10 @@ static void timer_trampoline(void *context)
  * Timers with an ->expires field in the past will be executed in the next
  * timer tick.
  */
+#define LONG_MAX	((long)(~0UL >> 1))
+#define ULONG_MAX	(~0UL)
+#define LLONG_MAX	((long long)(~0ULL >> 1))
+
 void add_timer(struct timer_list *timer)
 {
 	__u64 delay_ns = 0;
@@ -159,6 +165,7 @@ void add_timer(struct timer_list *timer)
 		delay_ns =
 			((__u64)timer->expires *
 			 (1000000000 / HZ)) - lib_current_ns();
+		
 	void *event = lib_event_schedule_ns(delay_ns, &timer_trampoline, timer);
 
 	/* store the external event in the hash table */
@@ -217,25 +224,13 @@ int del_timer(struct timer_list *timer)
 
 /* ////////////////////// */
 
-void init_timer_deferrable_key(struct timer_list *timer,
+/*void init_timer_deferrable_key(struct timer_list *timer,
 			       const char *name,
 			       struct lock_class_key *key)
 {
-	/**
-	 * From lwn.net:
-	 * Timers which are initialized in this fashion will be
-	 * recognized as deferrable by the kernel. They will not
-	 * be considered when the kernel makes its "when should
-	 * the next timer interrupt be?" decision. When the system
-	 * is busy these timers will fire at the scheduled time. When
-	 * things are idle, instead, they will simply wait until
-	 * something more important wakes up the processor.
-	 *
-	 * Note: Our implementation of deferrable timers uses
-	 * non-deferrable timers for simplicity.
-	 */
 	init_timer_key(timer, 0, name, key);
-}
+}*/
+
 /**
  * add_timer_on - start a timer on a particular CPU
  * @timer: the timer to be added
@@ -277,7 +272,7 @@ int mod_timer(struct timer_list *timer, unsigned long expires)
 		return 1;
 
 	ret = del_timer(timer);
-	timer->expires = expires;
+	timer->expires = expires;	
 	add_timer(timer);
 	return ret;
 }
@@ -302,6 +297,15 @@ int mod_timer_pinned(struct timer_list *timer, unsigned long expires)
 {
 	if (timer->expires == expires && timer_pending(timer))
 		return 1;
+
+	return mod_timer(timer, expires);
+}
+
+int timer_reduce(struct timer_list *timer, unsigned long expires)
+{
+	printk("HAmlo red rimer");
+	unsigned long diff = timer->expires-expires;
+	if(!diff || diff <= 0) return 1;
 
 	return mod_timer(timer, expires);
 }

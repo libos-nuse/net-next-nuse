@@ -1,16 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * An interface between IEEE802.15.4 device and rest of the kernel.
  *
  * Copyright (C) 2007-2012 Siemens AG
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * Written by:
  * Pavel Smolenskiy <pavel.smolenskiy@gmail.com>
@@ -337,7 +329,7 @@ struct ieee802154_mlme_ops {
 	void (*get_mac_params)(struct net_device *dev,
 			       struct ieee802154_mac_params *params);
 
-	struct ieee802154_llsec_ops *llsec;
+	const struct ieee802154_llsec_ops *llsec;
 };
 
 static inline struct ieee802154_mlme_ops *

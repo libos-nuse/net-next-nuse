@@ -7,7 +7,7 @@
  *
  * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  * Copyright(c) 2013 - 2015 Intel Mobile Communications GmbH
- * Copyright(c) 2015        Intel Deutschland GmbH
+ * Copyright(c) 2015 - 2016 Intel Deutschland GmbH
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -27,14 +27,14 @@
  * in the file called COPYING.
  *
  * Contact Information:
- *  Intel Linux Wireless <ilw@linux.intel.com>
+ *  Intel Linux Wireless <linuxwifi@intel.com>
  * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
  *
  * BSD LICENSE
  *
  * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  * Copyright(c) 2013 - 2015 Intel Mobile Communications GmbH
- * Copyright(c) 2015        Intel Deutschland GmbH
+ * Copyright(c) 2015 - 2016 Intel Deutschland GmbH
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -79,6 +79,11 @@
 #define IWL_RX_INFO_ENERGY_ANT_B_POS 8
 #define IWL_RX_INFO_ENERGY_ANT_C_POS 16
 
+enum iwl_mac_context_info {
+	MAC_CONTEXT_INFO_NONE,
+	MAC_CONTEXT_INFO_GSCAN,
+};
+
 /**
  * struct iwl_rx_phy_info - phy info
  * (REPLY_RX_PHY_CMD = 0xc0)
@@ -97,6 +102,8 @@
  * @frame_time: frame's time on the air, based on byte count and frame rate
  *	calculation
  * @mac_active_msk: what MACs were active when the frame was received
+ * @mac_context_info: additional info on the context in which the frame was
+ *	received as defined in &enum iwl_mac_context_info
  *
  * Before each Rx, the device sends this data. It contains PHY information
  * about the reception of the packet.
@@ -114,7 +121,8 @@ struct iwl_rx_phy_info {
 	__le32 non_cfg_phy[IWL_RX_INFO_PHY_CNT];
 	__le32 rate_n_flags;
 	__le32 byte_count;
-	__le16 mac_active_msk;
+	u8 mac_active_msk;
+	u8 mac_context_info;
 	__le16 frame_time;
 } __packed;
 
@@ -256,17 +264,29 @@ enum iwl_rx_mpdu_mac_flags2 {
 };
 
 enum iwl_rx_mpdu_amsdu_info {
-	IWL_RX_MPDU_AMSDU_SUBFRAME_IDX_MASK	= 0x3f,
-	IWL_RX_MPDU_AMSDU_LAST_SUBFRAME		= 0x40,
-	/* 0x80 bit reserved for now */
+	IWL_RX_MPDU_AMSDU_SUBFRAME_IDX_MASK	= 0x7f,
+	IWL_RX_MPDU_AMSDU_LAST_SUBFRAME		= 0x80,
 };
+
+enum iwl_rx_l3_proto_values {
+	IWL_RX_L3_TYPE_NONE,
+	IWL_RX_L3_TYPE_IPV4,
+	IWL_RX_L3_TYPE_IPV4_FRAG,
+	IWL_RX_L3_TYPE_IPV6_FRAG,
+	IWL_RX_L3_TYPE_IPV6,
+	IWL_RX_L3_TYPE_IPV6_IN_IPV4,
+	IWL_RX_L3_TYPE_ARP,
+	IWL_RX_L3_TYPE_EAPOL,
+};
+
+#define IWL_RX_L3_PROTO_POS 4
 
 enum iwl_rx_l3l4_flags {
 	IWL_RX_L3L4_IP_HDR_CSUM_OK		= BIT(0),
 	IWL_RX_L3L4_TCP_UDP_CSUM_OK		= BIT(1),
 	IWL_RX_L3L4_TCP_FIN_SYN_RST_PSH		= BIT(2),
 	IWL_RX_L3L4_TCP_ACK			= BIT(3),
-	IWL_RX_L3L4_L3_PROTO_MASK		= 0xf << 4,
+	IWL_RX_L3L4_L3_PROTO_MASK		= 0xf << IWL_RX_L3_PROTO_POS,
 	IWL_RX_L3L4_L4_PROTO_MASK		= 0xf << 8,
 	IWL_RX_L3L4_RSS_HASH_MASK		= 0xf << 12,
 };
@@ -279,11 +299,14 @@ enum iwl_rx_mpdu_status {
 	IWL_RX_MPDU_STATUS_KEY_ERROR		= BIT(4),
 	IWL_RX_MPDU_STATUS_ICV_OK		= BIT(5),
 	IWL_RX_MPDU_STATUS_MIC_OK		= BIT(6),
+	IWL_RX_MPDU_RES_STATUS_TTAK_OK		= BIT(7),
 	IWL_RX_MPDU_STATUS_SEC_MASK		= 0x7 << 8,
 	IWL_RX_MPDU_STATUS_SEC_NONE		= 0x0 << 8,
 	IWL_RX_MPDU_STATUS_SEC_WEP		= 0x1 << 8,
 	IWL_RX_MPDU_STATUS_SEC_CCM		= 0x2 << 8,
 	IWL_RX_MPDU_STATUS_SEC_TKIP		= 0x3 << 8,
+	IWL_RX_MPDU_STATUS_SEC_EXT_ENC		= 0x4 << 8,
+	IWL_RX_MPDU_STATUS_SEC_GCM		= 0x5 << 8,
 	IWL_RX_MPDU_STATUS_DECRYPTED		= BIT(11),
 	IWL_RX_MPDU_STATUS_WEP_MATCH		= BIT(12),
 	IWL_RX_MPDU_STATUS_EXT_IV_MATCH		= BIT(13),
@@ -301,6 +324,8 @@ enum iwl_rx_mpdu_sta_id_flags {
 	IWL_RX_MPDU_SIF_RRF_ABORT		= 0x20,
 	IWL_RX_MPDU_SIF_FILTER_STATUS_MASK	= 0xc0,
 };
+
+#define IWL_RX_REORDER_DATA_INVALID_BAID 0x7f
 
 enum iwl_rx_mpdu_reorder_data {
 	IWL_RX_MPDU_REORDER_NSSN_MASK		= 0x00000fff,
@@ -334,11 +359,11 @@ struct iwl_rx_mpdu_desc {
 	/* DW8 */
 	__le32 filter_match;
 	/* DW9 */
-	__le32 gp2_on_air_rise;
-	/* DW10 */
 	__le32 rate_n_flags;
+	/* DW10 */
+	u8 energy_a, energy_b, channel, reserved;
 	/* DW11 */
-	u8 energy_a, energy_b, energy_c, channel;
+	__le32 gp2_on_air_rise;
 	/* DW12 & DW13 */
 	__le64 tsf_on_air_rise;
 } __packed;
@@ -348,5 +373,93 @@ struct iwl_frame_release {
 	u8 reserved;
 	__le16 nssn;
 };
+
+enum iwl_rss_hash_func_en {
+	IWL_RSS_HASH_TYPE_IPV4_TCP,
+	IWL_RSS_HASH_TYPE_IPV4_UDP,
+	IWL_RSS_HASH_TYPE_IPV4_PAYLOAD,
+	IWL_RSS_HASH_TYPE_IPV6_TCP,
+	IWL_RSS_HASH_TYPE_IPV6_UDP,
+	IWL_RSS_HASH_TYPE_IPV6_PAYLOAD,
+};
+
+#define IWL_RSS_HASH_KEY_CNT 10
+#define IWL_RSS_INDIRECTION_TABLE_SIZE 128
+#define IWL_RSS_ENABLE 1
+
+/**
+ * struct iwl_rss_config_cmd - RSS (Receive Side Scaling) configuration
+ *
+ * @flags: 1 - enable, 0 - disable
+ * @hash_mask: Type of RSS to use. Values are from %iwl_rss_hash_func_en
+ * @secret_key: 320 bit input of random key configuration from driver
+ * @indirection_table: indirection table
+ */
+struct iwl_rss_config_cmd {
+	__le32 flags;
+	u8 hash_mask;
+	u8 reserved[3];
+	__le32 secret_key[IWL_RSS_HASH_KEY_CNT];
+	u8 indirection_table[IWL_RSS_INDIRECTION_TABLE_SIZE];
+} __packed; /* RSS_CONFIG_CMD_API_S_VER_1 */
+
+#define IWL_MULTI_QUEUE_SYNC_MSG_MAX_SIZE 128
+#define IWL_MULTI_QUEUE_SYNC_SENDER_POS 0
+#define IWL_MULTI_QUEUE_SYNC_SENDER_MSK 0xf
+
+/**
+ * struct iwl_rxq_sync_cmd - RXQ notification trigger
+ *
+ * @flags: flags of the notification. bit 0:3 are the sender queue
+ * @rxq_mask: rx queues to send the notification on
+ * @count: number of bytes in payload, should be DWORD aligned
+ * @payload: data to send to rx queues
+ */
+struct iwl_rxq_sync_cmd {
+	__le32 flags;
+	__le32 rxq_mask;
+	__le32 count;
+	u8 payload[];
+} __packed; /* MULTI_QUEUE_DRV_SYNC_HDR_CMD_API_S_VER_1 */
+
+/**
+ * struct iwl_rxq_sync_notification - Notification triggered by RXQ
+ * sync command
+ *
+ * @count: number of bytes in payload
+ * @payload: data to send to rx queues
+ */
+struct iwl_rxq_sync_notification {
+	__le32 count;
+	u8 payload[];
+} __packed; /* MULTI_QUEUE_DRV_SYNC_HDR_CMD_API_S_VER_1 */
+
+/**
+* Internal message identifier
+*
+* @IWL_MVM_RXQ_EMPTY: empty sync notification
+* @IWL_MVM_RXQ_NOTIF_DEL_BA: notify RSS queues of delBA
+*/
+enum iwl_mvm_rxq_notif_type {
+	IWL_MVM_RXQ_EMPTY,
+	IWL_MVM_RXQ_NOTIF_DEL_BA,
+};
+
+/**
+* struct iwl_mvm_internal_rxq_notif - Internal representation of the data sent
+* in &iwl_rxq_sync_cmd. Should be DWORD aligned.
+* FW is agnostic to the payload, so there are no endianity requirements.
+*
+* @type: value from &iwl_mvm_rxq_notif_type
+* @sync: ctrl path is waiting for all notifications to be received
+* @cookie: internal cookie to identify old notifications
+* @data: payload
+*/
+struct iwl_mvm_internal_rxq_notif {
+	u16 type;
+	u16 sync;
+	u32 cookie;
+	u8 data[];
+} __packed;
 
 #endif /* __fw_api_rx_h__ */

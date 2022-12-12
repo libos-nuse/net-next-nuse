@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * vineetg: May 2011
  *  -Folded PAGE_PRESENT (used by VM) and PAGE_VALID (used by MMU) into 1.
@@ -12,7 +9,7 @@
  *  - Utilise some unused free bits to confine PTE flags to 12 bits
  *     This is a must for 4k pg-sz
  *
- * vineetg: Mar 2011 - changes to accomodate MMU TLB Page Descriptor mods
+ * vineetg: Mar 2011 - changes to accommodate MMU TLB Page Descriptor mods
  *  -TLB Locking never really existed, except for initial specs
  *  -SILENT_xxx not needed for our port
  *  -Per my request, MMU V3 changes the layout of some of the bits
@@ -35,10 +32,10 @@
 #ifndef _ASM_ARC_PGTABLE_H
 #define _ASM_ARC_PGTABLE_H
 
-#include <asm/page.h>
-#include <asm/mmu.h>
+#include <linux/bits.h>
 #include <asm-generic/pgtable-nopmd.h>
-#include <linux/const.h>
+#include <asm/page.h>
+#include <asm/mmu.h>	/* to propagate CONFIG_ARC_MMU_VER <n> */
 
 /**************************************************************************
  * Page Table Flags
@@ -47,7 +44,7 @@
  * Page Tables are purely for Linux VM's consumption and the bits below are
  * suited to that (uniqueness). Hence some are not implemented in the TLB and
  * some have different value in TLB.
- * e.g. MMU v2: K_READ bit is 8 and so is GLOBAL (possible becoz they live in
+ * e.g. MMU v2: K_READ bit is 8 and so is GLOBAL (possible because they live in
  *      seperate PD0 and PD1, which combined forms a translation entry)
  *      while for PTE perspective, they are 8 and 9 respectively
  * with MMU v3: Most bits (except SHARED) represent the exact hardware pos
@@ -110,8 +107,8 @@
 #define ___DEF (_PAGE_PRESENT | _PAGE_CACHEABLE)
 
 /* Set of bits not changed in pte_modify */
-#define _PAGE_CHG_MASK	(PAGE_MASK | _PAGE_ACCESSED | _PAGE_DIRTY)
-
+#define _PAGE_CHG_MASK	(PAGE_MASK_PHYS | _PAGE_ACCESSED | _PAGE_DIRTY | \
+							   _PAGE_SPECIAL)
 /* More Abbrevaited helpers */
 #define PAGE_U_NONE     __pgprot(___DEF)
 #define PAGE_U_R        __pgprot(___DEF | _PAGE_READ)
@@ -135,11 +132,7 @@
 #define PTE_BITS_IN_PD0		(_PAGE_GLOBAL | _PAGE_PRESENT | _PAGE_HW_SZ)
 #define PTE_BITS_RWX		(_PAGE_EXECUTE | _PAGE_WRITE | _PAGE_READ)
 
-#ifdef CONFIG_ARC_HAS_PAE40
-#define PTE_BITS_NON_RWX_IN_PD1	(0xff00000000 | PAGE_MASK | _PAGE_CACHEABLE)
-#else
-#define PTE_BITS_NON_RWX_IN_PD1	(PAGE_MASK | _PAGE_CACHEABLE)
-#endif
+#define PTE_BITS_NON_RWX_IN_PD1	(PAGE_MASK_PHYS | _PAGE_CACHEABLE)
 
 /**************************************************************************
  * Mapping of vm_flags (Generic VM) to PTE flags (arch specific)
@@ -179,42 +172,49 @@
 #define __S111  PAGE_U_X_W_R
 
 /****************************************************************
- * Page Table Lookup split
+ * 2 tier (PGD:PTE) software page walker
  *
- * We implement 2 tier paging and since this is all software, we are free
- * to customize the span of a PGD / PTE entry to suit us
- *
- *			32 bit virtual address
+ * [31]		    32 bit virtual address              [0]
  * -------------------------------------------------------
- * | BITS_FOR_PGD    |  BITS_FOR_PTE    |  BITS_IN_PAGE  |
+ * |               | <------------ PGDIR_SHIFT ----------> |
+ * |		   |					 |
+ * | BITS_FOR_PGD  |  BITS_FOR_PTE  | <-- PAGE_SHIFT --> |
  * -------------------------------------------------------
  *       |                  |                |
  *       |                  |                --> off in page frame
- *       |		    |
  *       |                  ---> index into Page Table
- *       |
  *       ----> index into Page Directory
+ *
+ * In a single page size configuration, only PAGE_SHIFT is fixed
+ * So both PGD and PTE sizing can be tweaked
+ *  e.g. 8K page (PAGE_SHIFT 13) can have
+ *  - PGDIR_SHIFT 21  -> 11:8:13 address split
+ *  - PGDIR_SHIFT 24  -> 8:11:13 address split
+ *
+ * If Super Page is configured, PGDIR_SHIFT becomes fixed too,
+ * so the sizing flexibility is gone.
  */
 
-#define BITS_IN_PAGE	PAGE_SHIFT
-
-/* Optimal Sizing of Pg Tbl - based on MMU page size */
-#if defined(CONFIG_ARC_PAGE_SIZE_8K)
-#define BITS_FOR_PTE	8		/* 11:8:13 */
-#elif defined(CONFIG_ARC_PAGE_SIZE_16K)
-#define BITS_FOR_PTE	8		/* 10:8:14 */
-#elif defined(CONFIG_ARC_PAGE_SIZE_4K)
-#define BITS_FOR_PTE	9		/* 11:9:12 */
+#if defined(CONFIG_ARC_HUGEPAGE_16M)
+#define PGDIR_SHIFT	24
+#elif defined(CONFIG_ARC_HUGEPAGE_2M)
+#define PGDIR_SHIFT	21
+#else
+/*
+ * Only Normal page support so "hackable" (see comment above)
+ * Default value provides 11:8:13 (8K), 11:9:12 (4K)
+ */
+#define PGDIR_SHIFT	21
 #endif
 
-#define BITS_FOR_PGD	(32 - BITS_FOR_PTE - BITS_IN_PAGE)
+#define BITS_FOR_PTE	(PGDIR_SHIFT - PAGE_SHIFT)
+#define BITS_FOR_PGD	(32 - PGDIR_SHIFT)
 
-#define PGDIR_SHIFT	(32 - BITS_FOR_PGD)
-#define PGDIR_SIZE	(1UL << PGDIR_SHIFT)	/* vaddr span, not PDG sz */
+#define PGDIR_SIZE	BIT(PGDIR_SHIFT)	/* vaddr span, not PDG sz */
 #define PGDIR_MASK	(~(PGDIR_SIZE-1))
 
-#define	PTRS_PER_PTE	_BITUL(BITS_FOR_PTE)
-#define	PTRS_PER_PGD	_BITUL(BITS_FOR_PGD)
+#define	PTRS_PER_PTE	BIT(BITS_FOR_PTE)
+#define	PTRS_PER_PGD	BIT(BITS_FOR_PGD)
 
 /*
  * Number of entries a user land program use.
@@ -244,9 +244,6 @@
 extern char empty_zero_page[PAGE_SIZE];
 #define ZERO_PAGE(vaddr)	(virt_to_page(empty_zero_page))
 
-#define pte_unmap(pte)		do { } while (0)
-#define pte_unmap_nested(pte)		do { } while (0)
-
 #define set_pte(pteptr, pteval)	((*(pteptr)) = (pteval))
 #define set_pmd(pmdptr, pmdval)	(*(pmdptr) = pmdval)
 
@@ -269,28 +266,15 @@ static inline void pmd_set(pmd_t *pmdp, pte_t *ptep)
 #define pmd_none(x)			(!pmd_val(x))
 #define	pmd_bad(x)			((pmd_val(x) & ~PAGE_MASK))
 #define pmd_present(x)			(pmd_val(x))
+#define pmd_leaf(x)			(pmd_val(x) & _PAGE_HW_SZ)
 #define pmd_clear(xp)			do { pmd_val(*(xp)) = 0; } while (0)
 
-#define pte_page(x) (mem_map + \
-		(unsigned long)(((pte_val(x) - CONFIG_LINUX_LINK_BASE) >> \
-				PAGE_SHIFT)))
-
+#define pte_page(pte)		pfn_to_page(pte_pfn(pte))
 #define mk_pte(page, prot)	pfn_pte(page_to_pfn(page), prot)
+#define pfn_pte(pfn, prot)	__pte(__pfn_to_phys(pfn) | pgprot_val(prot))
+
+/* Don't use virt_to_pfn for macros below: could cause truncations for PAE40*/
 #define pte_pfn(pte)		(pte_val(pte) >> PAGE_SHIFT)
-#define pfn_pte(pfn, prot)	(__pte(((pte_t)(pfn) << PAGE_SHIFT) | \
-				 pgprot_val(prot)))
-#define __pte_index(addr)	(((addr) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
-
-/*
- * pte_offset gets a @ptr to PMD entry (PGD in our 2-tier paging system)
- * and returns ptr to PTE entry corresponding to @addr
- */
-#define pte_offset(dir, addr) ((pte_t *)(pmd_page_vaddr(*dir)) +\
-					 __pte_index(addr))
-
-/* No mapping of Page Tables in high mem etc, so following same as above */
-#define pte_offset_kernel(dir, addr)		pte_offset(dir, addr)
-#define pte_offset_map(dir, addr)		pte_offset(dir, addr)
 
 /* Zoo of pte_xxx function */
 #define pte_read(pte)		(pte_val(pte) & _PAGE_READ)
@@ -314,8 +298,6 @@ PTE_BIT_FUNC(mkexec,	|= (_PAGE_EXECUTE));
 PTE_BIT_FUNC(mkspecial,	|= (_PAGE_SPECIAL));
 PTE_BIT_FUNC(mkhuge,	|= (_PAGE_HW_SZ));
 
-#define __HAVE_ARCH_PTE_SPECIAL
-
 static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 {
 	return __pte((pte_val(pte) & _PAGE_CHG_MASK) | pgprot_val(newprot));
@@ -331,13 +313,6 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 }
 
 /*
- * All kernel related VM pages are in init's mm.
- */
-#define pgd_offset_k(address)	pgd_offset(&init_mm, address)
-#define pgd_index(addr)		((addr) >> PGDIR_SHIFT)
-#define pgd_offset(mm, addr)	(((mm)->pgd)+pgd_index(addr))
-
-/*
  * Macro to quickly access the PGD entry, utlising the fact that some
  * arch may cache the pointer to Page Directory of "current" task
  * in a MMU register
@@ -350,7 +325,7 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
  * Thus use this macro only when you are certain that "current" is current
  * e.g. when dealing with signal frame setup code etc
  */
-#ifndef CONFIG_SMP
+#ifdef ARC_USE_SCRATCH_REG
 #define pgd_offset_fast(mm, addr)	\
 ({					\
 	pgd_t *pgd_base = (pgd_t *) read_aux_reg(ARC_REG_SCRATCH_DATA0);  \
@@ -373,7 +348,7 @@ void update_mmu_cache(struct vm_area_struct *vma, unsigned long address,
 
 /* Decode a PTE containing swap "identifier "into constituents */
 #define __swp_type(pte_lookalike)	(((pte_lookalike).val) & 0x1f)
-#define __swp_offset(pte_lookalike)	((pte_lookalike).val << 13)
+#define __swp_offset(pte_lookalike)	((pte_lookalike).val >> 13)
 
 /* NOPs, to keep generic kernel happy */
 #define __pte_to_swp_entry(pte)	((swp_entry_t) { pte_val(pte) })
@@ -389,15 +364,8 @@ void update_mmu_cache(struct vm_area_struct *vma, unsigned long address,
 #include <asm/hugepage.h>
 #endif
 
-#include <asm-generic/pgtable.h>
-
 /* to cope with aliasing VIPT cache */
 #define HAVE_ARCH_UNMAPPED_AREA
-
-/*
- * No page table caches to initialise
- */
-#define pgtable_cache_init()   do { } while (0)
 
 #endif /* __ASSEMBLY__ */
 

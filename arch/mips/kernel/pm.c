@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2014 Imagination Technologies Ltd.
- *
- * This program is free software; you can redistribute	it and/or modify it
- * under  the terms of	the GNU General	 Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  *
  * CPU PM notifiers for saving/restoring general CPU state.
  */
@@ -56,7 +52,7 @@ static void mips_cpu_restore(void)
 		write_c0_userlocal(current_thread_info()->tp_value);
 
 	/* Restore watch registers */
-	__restore_watch();
+	__restore_watch(current);
 }
 
 /**

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OMAP3 powerdomain definitions
  *
@@ -5,10 +6,6 @@
  * Copyright (C) 2007-2011 Nokia Corporation
  *
  * Paul Walmsley, Jouni Högander
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -384,14 +381,14 @@ static struct powerdomain isp_814x_pwrdm = {
 	.voltdm		= { .name = "core" },
 };
 
-static struct powerdomain active_816x_pwrdm = {
+static struct powerdomain active_81xx_pwrdm = {
 	.name		  = "active_pwrdm",
 	.prcm_offs	  = TI816X_PRM_ACTIVE_MOD,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.voltdm		  = { .name = "core" },
 };
 
-static struct powerdomain default_816x_pwrdm = {
+static struct powerdomain default_81xx_pwrdm = {
 	.name		  = "default_pwrdm",
 	.prcm_offs	  = TI81XX_PRM_DEFAULT_MOD,
 	.pwrsts		  = PWRSTS_OFF_ON,
@@ -486,6 +483,8 @@ static struct powerdomain *powerdomains_am35x[] __initdata = {
 static struct powerdomain *powerdomains_ti814x[] __initdata = {
 	&alwon_81xx_pwrdm,
 	&device_81xx_pwrdm,
+	&active_81xx_pwrdm,
+	&default_81xx_pwrdm,
 	&gem_814x_pwrdm,
 	&ivahd_814x_pwrdm,
 	&hdvpss_814x_pwrdm,
@@ -497,8 +496,8 @@ static struct powerdomain *powerdomains_ti814x[] __initdata = {
 static struct powerdomain *powerdomains_ti816x[] __initdata = {
 	&alwon_81xx_pwrdm,
 	&device_81xx_pwrdm,
-	&active_816x_pwrdm,
-	&default_816x_pwrdm,
+	&active_81xx_pwrdm,
+	&default_81xx_pwrdm,
 	&ivahd0_816x_pwrdm,
 	&ivahd1_816x_pwrdm,
 	&ivahd2_816x_pwrdm,

@@ -1,14 +1,16 @@
-#include "perf.h"
+// SPDX-License-Identifier: GPL-2.0
 #include "util/debug.h"
+#include "util/map.h"
 #include "util/symbol.h"
 #include "util/sort.h"
 #include "util/evsel.h"
+#include "util/event.h"
 #include "util/evlist.h"
 #include "util/machine.h"
-#include "util/thread.h"
 #include "util/parse-events.h"
 #include "tests/tests.h"
 #include "tests/hists_common.h"
+#include <linux/kernel.h>
 
 struct sample {
 	u32 pid;
@@ -43,10 +45,10 @@ static struct sample fake_samples[] = {
 	{ .pid = FAKE_PID_BASH,  .ip = FAKE_IP_KERNEL_PAGE_FAULT, .socket = 3 },
 };
 
-static int add_hist_entries(struct perf_evlist *evlist,
+static int add_hist_entries(struct evlist *evlist,
 			    struct machine *machine)
 {
-	struct perf_evsel *evsel;
+	struct evsel *evsel;
 	struct addr_location al;
 	struct perf_sample sample = { .period = 100, };
 	size_t i;
@@ -56,13 +58,8 @@ static int add_hist_entries(struct perf_evlist *evlist,
 	 * (perf [perf] main) will be collapsed to an existing entry
 	 * so total 9 entries will be in the tree.
 	 */
-	evlist__for_each(evlist, evsel) {
+	evlist__for_each_entry(evlist, evsel) {
 		for (i = 0; i < ARRAY_SIZE(fake_samples); i++) {
-			const union perf_event event = {
-				.header = {
-					.misc = PERF_RECORD_MISC_USER,
-				},
-			};
 			struct hist_entry_iter iter = {
 				.evsel = evsel,
 				.sample = &sample,
@@ -76,17 +73,17 @@ static int add_hist_entries(struct perf_evlist *evlist,
 			hists->dso_filter = NULL;
 			hists->symbol_filter_str = NULL;
 
+			sample.cpumode = PERF_RECORD_MISC_USER;
 			sample.pid = fake_samples[i].pid;
 			sample.tid = fake_samples[i].pid;
 			sample.ip = fake_samples[i].ip;
 
-			if (perf_event__preprocess_sample(&event, machine, &al,
-							  &sample) < 0)
+			if (machine__resolve(machine, &al, &sample) < 0)
 				goto out;
 
 			al.socket = fake_samples[i].socket;
 			if (hist_entry_iter__add(&iter, &al,
-						 PERF_MAX_STACK_DEPTH, NULL) < 0) {
+						 sysctl_perf_event_max_stack, NULL) < 0) {
 				addr_location__put(&al);
 				goto out;
 			}
@@ -104,13 +101,13 @@ out:
 	return TEST_FAIL;
 }
 
-int test__hists_filter(void)
+int test__hists_filter(struct test *test __maybe_unused, int subtest __maybe_unused)
 {
 	int err = TEST_FAIL;
 	struct machines machines;
 	struct machine *machine;
-	struct perf_evsel *evsel;
-	struct perf_evlist *evlist = perf_evlist__new();
+	struct evsel *evsel;
+	struct evlist *evlist = evlist__new();
 
 	TEST_ASSERT_VAL("No memory", evlist);
 
@@ -120,9 +117,10 @@ int test__hists_filter(void)
 	err = parse_events(evlist, "task-clock", NULL);
 	if (err)
 		goto out;
+	err = TEST_FAIL;
 
 	/* default sort order (comm,dso,sym) will be used */
-	if (setup_sorting() < 0)
+	if (setup_sorting(NULL) < 0)
 		goto out;
 
 	machines__init(&machines);
@@ -140,11 +138,11 @@ int test__hists_filter(void)
 	if (err < 0)
 		goto out;
 
-	evlist__for_each(evlist, evsel) {
+	evlist__for_each_entry(evlist, evsel) {
 		struct hists *hists = evsel__hists(evsel);
 
 		hists__collapse_resort(hists, NULL);
-		hists__output_resort(hists, NULL);
+		evsel__output_resort(evsel, NULL);
 
 		if (verbose > 2) {
 			pr_info("Normal histogram\n");
@@ -321,7 +319,7 @@ int test__hists_filter(void)
 
 out:
 	/* tear down everything */
-	perf_evlist__delete(evlist);
+	evlist__delete(evlist);
 	reset_output_field();
 	machines__exit(&machines);
 

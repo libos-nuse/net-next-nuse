@@ -16,16 +16,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110,
- * USA
- *
  * The full GNU General Public License is included in this distribution
  * in the file called COPYING.
  *
  * Contact Information:
- *  Intel Linux Wireless <ilw@linux.intel.com>
+ *  Intel Linux Wireless <linuxwifi@intel.com>
  * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
  *
  * BSD LICENSE
@@ -73,8 +68,8 @@ struct iwl_phy_db *iwl_phy_db_init(struct iwl_trans *trans);
 
 void iwl_phy_db_free(struct iwl_phy_db *phy_db);
 
-int iwl_phy_db_set_section(struct iwl_phy_db *phy_db, struct iwl_rx_packet *pkt,
-			   gfp_t alloc_ctx);
+int iwl_phy_db_set_section(struct iwl_phy_db *phy_db,
+			   struct iwl_rx_packet *pkt);
 
 
 int iwl_send_phy_db_data(struct iwl_phy_db *phy_db);

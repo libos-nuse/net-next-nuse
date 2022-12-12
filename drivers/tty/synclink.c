@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-1.0+
 /*
  * $Id: synclink.c,v 4.38 2005/11/07 16:30:34 paulkf Exp $
  *
@@ -12,8 +13,6 @@
  * Derived from serial.c written by Theodore Ts'o and Linus Torvalds
  *
  * Original release 01/11/99
- *
- * This code is released under the GNU General Public License (GPL)
  *
  * This driver is primarily intended for use in synchronous
  * HDLC mode. Asynchronous mode is also provided.
@@ -107,7 +106,7 @@
 #define PUT_USER(error,value,addr) error = put_user(value,addr)
 #define COPY_TO_USER(error,dest,src,size) error = copy_to_user(dest,src,size) ? -EFAULT : 0
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #define RCLRVALUE 0xffff
 
@@ -253,7 +252,6 @@ struct mgsl_struct {
 
 	char device_name[25];		/* device instance name */
 
-	unsigned int bus_type;	/* expansion bus type (ISA,EISA,PCI) */
 	unsigned char bus;		/* expansion bus number (zero based) */
 	unsigned char function;		/* PCI device number */
 
@@ -701,7 +699,7 @@ static void usc_enable_async_clock( struct mgsl_struct *info, u32 DataRate );
 
 static void usc_loopback_frame( struct mgsl_struct *info );
 
-static void mgsl_tx_timeout(unsigned long context);
+static void mgsl_tx_timeout(struct timer_list *t);
 
 
 static void usc_loopmode_cancel_transmit( struct mgsl_struct * info );
@@ -869,9 +867,9 @@ static int txholdbufs[MAX_TOTAL_DEVICES];
 	
 module_param(break_on_load, bool, 0);
 module_param(ttymajor, int, 0);
-module_param_array(io, int, NULL, 0);
-module_param_array(irq, int, NULL, 0);
-module_param_array(dma, int, NULL, 0);
+module_param_hw_array(io, int, ioport, NULL, 0);
+module_param_hw_array(irq, int, irq, NULL, 0);
+module_param_hw_array(dma, int, dma, NULL, 0);
 module_param(debug_level, int, 0);
 module_param_array(maxframe, int, NULL, 0);
 module_param_array(txdmabufs, int, NULL, 0);
@@ -884,7 +882,7 @@ static int synclink_init_one (struct pci_dev *dev,
 				     const struct pci_device_id *ent);
 static void synclink_remove_one (struct pci_dev *dev);
 
-static struct pci_device_id synclink_pci_tbl[] = {
+static const struct pci_device_id synclink_pci_tbl[] = {
 	{ PCI_VENDOR_ID_MICROGATE, PCI_DEVICE_ID_MICROGATE_USC, PCI_ANY_ID, PCI_ANY_ID, },
 	{ PCI_VENDOR_ID_MICROGATE, 0x0210, PCI_ANY_ID, PCI_ANY_ID, },
 	{ 0, }, /* terminate list */
@@ -944,7 +942,7 @@ static inline int mgsl_paranoia_check(struct mgsl_struct *info,
 	return 0;
 }
 
-/**
+/*
  * line discipline callback wrappers
  *
  * The wrappers maintain line discipline references
@@ -1340,7 +1338,7 @@ static void mgsl_isr_io_pin( struct mgsl_struct *info )
 		wake_up_interruptible(&info->status_event_wait_q);
 		wake_up_interruptible(&info->event_wait_q);
 
-		if ( (info->port.flags & ASYNC_CHECK_CD) && 
+		if (tty_port_check_carrier(&info->port) &&
 		     (status & MISCSTATUS_DCD_LATCHED) ) {
 			if ( debug_level >= DEBUG_LEVEL_ISR )
 				printk("%s CD now %s...", info->device_name,
@@ -1361,8 +1359,7 @@ static void mgsl_isr_io_pin( struct mgsl_struct *info )
 				if (status & MISCSTATUS_CTS) {
 					if ( debug_level >= DEBUG_LEVEL_ISR )
 						printk("CTS tx start...");
-					if (info->port.tty)
-						info->port.tty->hw_stopped = 0;
+					info->port.tty->hw_stopped = 0;
 					usc_start_transmitter(info);
 					info->pending_bh |= BH_TRANSMIT;
 					return;
@@ -1749,13 +1746,13 @@ static irqreturn_t mgsl_interrupt(int dummy, void *dev_id)
 static int startup(struct mgsl_struct * info)
 {
 	int retval = 0;
-	
+
 	if ( debug_level >= DEBUG_LEVEL_INFO )
 		printk("%s(%d):mgsl_startup(%s)\n",__FILE__,__LINE__,info->device_name);
-		
-	if (info->port.flags & ASYNC_INITIALIZED)
+
+	if (tty_port_initialized(&info->port))
 		return 0;
-	
+
 	if (!info->xmit_buf) {
 		/* allocate a page of memory for a transmit buffer */
 		info->xmit_buf = (unsigned char *)get_zeroed_page(GFP_KERNEL);
@@ -1770,7 +1767,7 @@ static int startup(struct mgsl_struct * info)
 	
 	memset(&info->icount, 0, sizeof(info->icount));
 
-	setup_timer(&info->tx_timer, mgsl_tx_timeout, (unsigned long)info);
+	timer_setup(&info->tx_timer, mgsl_tx_timeout, 0);
 	
 	/* Allocate and claim adapter resources */
 	retval = mgsl_claim_resources(info);
@@ -1788,14 +1785,13 @@ static int startup(struct mgsl_struct * info)
 
 	/* program hardware for current parameters */
 	mgsl_change_params(info);
-	
+
 	if (info->port.tty)
 		clear_bit(TTY_IO_ERROR, &info->port.tty->flags);
 
-	info->port.flags |= ASYNC_INITIALIZED;
-	
+	tty_port_set_initialized(&info->port, 1);
+
 	return 0;
-	
 }	/* end of startup() */
 
 /* shutdown()
@@ -1808,8 +1804,8 @@ static int startup(struct mgsl_struct * info)
 static void shutdown(struct mgsl_struct * info)
 {
 	unsigned long flags;
-	
-	if (!(info->port.flags & ASYNC_INITIALIZED))
+
+	if (!tty_port_initialized(&info->port))
 		return;
 
 	if (debug_level >= DEBUG_LEVEL_INFO)
@@ -1853,13 +1849,12 @@ static void shutdown(struct mgsl_struct * info)
 
 	spin_unlock_irqrestore(&info->irq_spinlock,flags);
 
-	mgsl_release_resources(info);	
-	
+	mgsl_release_resources(info);
+
 	if (info->port.tty)
 		set_bit(TTY_IO_ERROR, &info->port.tty->flags);
 
-	info->port.flags &= ~ASYNC_INITIALIZED;
-	
+	tty_port_set_initialized(&info->port, 0);
 }	/* end of shutdown() */
 
 static void mgsl_program_hw(struct mgsl_struct *info)
@@ -1966,15 +1961,8 @@ static void mgsl_change_params(struct mgsl_struct *info)
 	}
 	info->timeout += HZ/50;		/* Add .02 seconds of slop */
 
-	if (cflag & CRTSCTS)
-		info->port.flags |= ASYNC_CTS_FLOW;
-	else
-		info->port.flags &= ~ASYNC_CTS_FLOW;
-		
-	if (cflag & CLOCAL)
-		info->port.flags &= ~ASYNC_CHECK_CD;
-	else
-		info->port.flags |= ASYNC_CHECK_CD;
+	tty_port_set_cts_flow(&info->port, cflag & CRTSCTS);
+	tty_port_set_check_carrier(&info->port, ~cflag & CLOCAL);
 
 	/* process tty input control flags */
 	
@@ -2363,7 +2351,7 @@ static void mgsl_throttle(struct tty_struct * tty)
 	if (I_IXOFF(tty))
 		mgsl_send_xchar(tty, STOP_CHAR(tty));
 
-	if (tty->termios.c_cflag & CRTSCTS) {
+	if (C_CRTSCTS(tty)) {
 		spin_lock_irqsave(&info->irq_spinlock,flags);
 		info->serial_signals &= ~SerialSignal_RTS;
 	 	usc_set_serial_signals(info);
@@ -2397,7 +2385,7 @@ static void mgsl_unthrottle(struct tty_struct * tty)
 			mgsl_send_xchar(tty, START_CHAR(tty));
 	}
 
-	if (tty->termios.c_cflag & CRTSCTS) {
+	if (C_CRTSCTS(tty)) {
 		spin_lock_irqsave(&info->irq_spinlock,flags);
 		info->serial_signals |= SerialSignal_RTS;
 	 	usc_set_serial_signals(info);
@@ -2970,9 +2958,8 @@ static int mgsl_ioctl(struct tty_struct *tty,
 	if (mgsl_paranoia_check(info, tty->name, "mgsl_ioctl"))
 		return -ENODEV;
 
-	if ((cmd != TIOCGSERIAL) && (cmd != TIOCSSERIAL) &&
-	    (cmd != TIOCMIWAIT)) {
-		if (tty->flags & (1 << TTY_IO_ERROR))
+	if (cmd != TIOCMIWAIT) {
+		if (tty_io_error(tty))
 		    return -EIO;
 	}
 
@@ -3039,30 +3026,25 @@ static void mgsl_set_termios(struct tty_struct *tty, struct ktermios *old_termio
 	mgsl_change_params(info);
 
 	/* Handle transition to B0 status */
-	if (old_termios->c_cflag & CBAUD &&
-	    !(tty->termios.c_cflag & CBAUD)) {
+	if ((old_termios->c_cflag & CBAUD) && !C_BAUD(tty)) {
 		info->serial_signals &= ~(SerialSignal_RTS | SerialSignal_DTR);
 		spin_lock_irqsave(&info->irq_spinlock,flags);
 	 	usc_set_serial_signals(info);
 		spin_unlock_irqrestore(&info->irq_spinlock,flags);
 	}
-	
+
 	/* Handle transition away from B0 status */
-	if (!(old_termios->c_cflag & CBAUD) &&
-	    tty->termios.c_cflag & CBAUD) {
+	if (!(old_termios->c_cflag & CBAUD) && C_BAUD(tty)) {
 		info->serial_signals |= SerialSignal_DTR;
- 		if (!(tty->termios.c_cflag & CRTSCTS) || 
- 		    !test_bit(TTY_THROTTLED, &tty->flags)) {
+		if (!C_CRTSCTS(tty) || !tty_throttled(tty))
 			info->serial_signals |= SerialSignal_RTS;
- 		}
 		spin_lock_irqsave(&info->irq_spinlock,flags);
 	 	usc_set_serial_signals(info);
 		spin_unlock_irqrestore(&info->irq_spinlock,flags);
 	}
-	
+
 	/* Handle turning off CRTSCTS */
-	if (old_termios->c_cflag & CRTSCTS &&
-	    !(tty->termios.c_cflag & CRTSCTS)) {
+	if (old_termios->c_cflag & CRTSCTS && !C_CRTSCTS(tty)) {
 		tty->hw_stopped = 0;
 		mgsl_start(tty);
 	}
@@ -3096,7 +3078,7 @@ static void mgsl_close(struct tty_struct *tty, struct file * filp)
 		goto cleanup;
 
 	mutex_lock(&info->port.mutex);
- 	if (info->port.flags & ASYNC_INITIALIZED)
+	if (tty_port_initialized(&info->port))
  		mgsl_wait_until_sent(tty, info->timeout);
 	mgsl_flush_buffer(tty);
 	tty_ldisc_flush(tty);
@@ -3134,15 +3116,15 @@ static void mgsl_wait_until_sent(struct tty_struct *tty, int timeout)
 	if (debug_level >= DEBUG_LEVEL_INFO)
 		printk("%s(%d):mgsl_wait_until_sent(%s) entry\n",
 			 __FILE__,__LINE__, info->device_name );
-      
+
 	if (mgsl_paranoia_check(info, tty->name, "mgsl_wait_until_sent"))
 		return;
 
-	if (!(info->port.flags & ASYNC_INITIALIZED))
+	if (!tty_port_initialized(&info->port))
 		goto exit;
-	 
+
 	orig_jiffies = jiffies;
-      
+
 	/* Set check interval to 1/5 of estimated time to
 	 * send a character, and make it at least 1. The check
 	 * interval should also be less than the timeout.
@@ -3209,7 +3191,7 @@ static void mgsl_hangup(struct tty_struct *tty)
 	shutdown(info);
 	
 	info->port.count = 0;	
-	info->port.flags &= ~ASYNC_NORMAL_ACTIVE;
+	tty_port_set_active(&info->port, 0);
 	info->port.tty = NULL;
 
 	wake_up_interruptible(&info->port.open_wait);
@@ -3275,13 +3257,13 @@ static int block_til_ready(struct tty_struct *tty, struct file * filp,
 		printk("%s(%d):block_til_ready on %s\n",
 			 __FILE__,__LINE__, tty->driver->name );
 
-	if (filp->f_flags & O_NONBLOCK || tty->flags & (1 << TTY_IO_ERROR)){
+	if (filp->f_flags & O_NONBLOCK || tty_io_error(tty)) {
 		/* nonblock mode is set or port is not enabled */
-		port->flags |= ASYNC_NORMAL_ACTIVE;
+		tty_port_set_active(port, 1);
 		return 0;
 	}
 
-	if (tty->termios.c_cflag & CLOCAL)
+	if (C_CLOCAL(tty))
 		do_clocal = true;
 
 	/* Wait for carrier detect and the line to become
@@ -3302,14 +3284,14 @@ static int block_til_ready(struct tty_struct *tty, struct file * filp,
 	port->count--;
 	spin_unlock_irqrestore(&info->irq_spinlock, flags);
 	port->blocked_open++;
-	
+
 	while (1) {
-		if (C_BAUD(tty) && test_bit(ASYNCB_INITIALIZED, &port->flags))
+		if (C_BAUD(tty) && tty_port_initialized(port))
 			tty_port_raise_dtr_rts(port);
-		
+
 		set_current_state(TASK_INTERRUPTIBLE);
-		
-		if (tty_hung_up_p(filp) || !(port->flags & ASYNC_INITIALIZED)){
+
+		if (tty_hung_up_p(filp) || !tty_port_initialized(port)) {
 			retval = (port->flags & ASYNC_HUP_NOTIFY) ?
 					-EAGAIN : -ERESTARTSYS;
 			break;
@@ -3346,7 +3328,7 @@ static int block_til_ready(struct tty_struct *tty, struct file * filp,
 			 __FILE__,__LINE__, tty->driver->name, port->count );
 			 
 	if (!retval)
-		port->flags |= ASYNC_NORMAL_ACTIVE;
+		tty_port_set_active(port, 1);
 		
 	return retval;
 	
@@ -3449,15 +3431,9 @@ static inline void line_info(struct seq_file *m, struct mgsl_struct *info)
 	char	stat_buf[30];
 	unsigned long flags;
 
-	if (info->bus_type == MGSL_BUS_TYPE_PCI) {
-		seq_printf(m, "%s:PCI io:%04X irq:%d mem:%08X lcr:%08X",
-			info->device_name, info->io_base, info->irq_level,
-			info->phys_memory_base, info->phys_lcr_base);
-	} else {
-		seq_printf(m, "%s:(E)ISA io:%04X irq:%d dma:%d",
-			info->device_name, info->io_base, 
-			info->irq_level, info->dma_level);
-	}
+	seq_printf(m, "%s:PCI io:%04X irq:%d mem:%08X lcr:%08X",
+		info->device_name, info->io_base, info->irq_level,
+		info->phys_memory_base, info->phys_lcr_base);
 
 	/* output current serial signal states */
 	spin_lock_irqsave(&info->irq_spinlock,flags);
@@ -3550,19 +3526,6 @@ static int mgsl_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int mgsl_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, mgsl_proc_show, NULL);
-}
-
-static const struct file_operations mgsl_proc_fops = {
-	.owner		= THIS_MODULE,
-	.open		= mgsl_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
 /* mgsl_allocate_dma_buffers()
  * 
  * 	Allocate and format DMA buffers (ISA adapter)
@@ -3586,54 +3549,27 @@ static int mgsl_allocate_dma_buffers(struct mgsl_struct *info)
 	if ( info->max_frame_size % DMABUFFERSIZE )
 		BuffersPerFrame++;
 
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI ) {
-		/*
-		 * The PCI adapter has 256KBytes of shared memory to use.
-		 * This is 64 PAGE_SIZE buffers.
-		 *
-		 * The first page is used for padding at this time so the
-		 * buffer list does not begin at offset 0 of the PCI
-		 * adapter's shared memory.
-		 *
-		 * The 2nd page is used for the buffer list. A 4K buffer
-		 * list can hold 128 DMA_BUFFER structures at 32 bytes
-		 * each.
-		 *
-		 * This leaves 62 4K pages.
-		 *
-		 * The next N pages are used for transmit frame(s). We
-		 * reserve enough 4K page blocks to hold the required
-		 * number of transmit dma buffers (num_tx_dma_buffers),
-		 * each of MaxFrameSize size.
-		 *
-		 * Of the remaining pages (62-N), determine how many can
-		 * be used to receive full MaxFrameSize inbound frames
-		 */
-		info->tx_buffer_count = info->num_tx_dma_buffers * BuffersPerFrame;
-		info->rx_buffer_count = 62 - info->tx_buffer_count;
-	} else {
-		/* Calculate the number of PAGE_SIZE buffers needed for */
-		/* receive and transmit DMA buffers. */
-
-
-		/* Calculate the number of DMA buffers necessary to */
-		/* hold 7 max size receive frames and one max size transmit frame. */
-		/* The receive buffer count is bumped by one so we avoid an */
-		/* End of List condition if all receive buffers are used when */
-		/* using linked list DMA buffers. */
-
-		info->tx_buffer_count = info->num_tx_dma_buffers * BuffersPerFrame;
-		info->rx_buffer_count = (BuffersPerFrame * MAXRXFRAMES) + 6;
-		
-		/* 
-		 * limit total TxBuffers & RxBuffers to 62 4K total 
-		 * (ala PCI Allocation) 
-		 */
-		
-		if ( (info->tx_buffer_count + info->rx_buffer_count) > 62 )
-			info->rx_buffer_count = 62 - info->tx_buffer_count;
-
-	}
+	/*
+	 * The PCI adapter has 256KBytes of shared memory to use.  This is 64
+	 * PAGE_SIZE buffers.
+	 *
+	 * The first page is used for padding at this time so the buffer list
+	 * does not begin at offset 0 of the PCI adapter's shared memory.
+	 *
+	 * The 2nd page is used for the buffer list. A 4K buffer list can hold
+	 * 128 DMA_BUFFER structures at 32 bytes each.
+	 *
+	 * This leaves 62 4K pages.
+	 *
+	 * The next N pages are used for transmit frame(s).  We reserve enough
+	 * 4K page blocks to hold the required number of transmit dma buffers
+	 * (num_tx_dma_buffers), each of MaxFrameSize size.
+	 *
+	 * Of the remaining pages (62-N), determine how many can be used to
+	 * receive full MaxFrameSize inbound frames
+	 */
+	info->tx_buffer_count = info->num_tx_dma_buffers * BuffersPerFrame;
+	info->rx_buffer_count = 62 - info->tx_buffer_count;
 
 	if ( debug_level >= DEBUG_LEVEL_INFO )
 		printk("%s(%d):Allocating %d TX and %d RX DMA buffers.\n",
@@ -3682,23 +3618,10 @@ static int mgsl_alloc_buffer_list_memory( struct mgsl_struct *info )
 {
 	unsigned int i;
 
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI ) {
-		/* PCI adapter uses shared memory. */
-		info->buffer_list = info->memory_base + info->last_mem_alloc;
-		info->buffer_list_phys = info->last_mem_alloc;
-		info->last_mem_alloc += BUFFERLISTSIZE;
-	} else {
-		/* ISA adapter uses system memory. */
-		/* The buffer lists are allocated as a common buffer that both */
-		/* the processor and adapter can access. This allows the driver to */
-		/* inspect portions of the buffer while other portions are being */
-		/* updated by the adapter using Bus Master DMA. */
-
-		info->buffer_list = dma_alloc_coherent(NULL, BUFFERLISTSIZE, &info->buffer_list_dma_addr, GFP_KERNEL);
-		if (info->buffer_list == NULL)
-			return -ENOMEM;
-		info->buffer_list_phys = (u32)(info->buffer_list_dma_addr);
-	}
+	/* PCI adapter uses shared memory. */
+	info->buffer_list = info->memory_base + info->last_mem_alloc;
+	info->buffer_list_phys = info->last_mem_alloc;
+	info->last_mem_alloc += BUFFERLISTSIZE;
 
 	/* We got the memory for the buffer entry lists. */
 	/* Initialize the memory block to all zeros. */
@@ -3764,9 +3687,6 @@ static int mgsl_alloc_buffer_list_memory( struct mgsl_struct *info )
  */
 static void mgsl_free_buffer_list_memory( struct mgsl_struct *info )
 {
-	if (info->buffer_list && info->bus_type != MGSL_BUS_TYPE_PCI)
-		dma_free_coherent(NULL, BUFFERLISTSIZE, info->buffer_list, info->buffer_list_dma_addr);
-		
 	info->buffer_list = NULL;
 	info->rx_buffer_list = NULL;
 	info->tx_buffer_list = NULL;
@@ -3792,24 +3712,13 @@ static void mgsl_free_buffer_list_memory( struct mgsl_struct *info )
 static int mgsl_alloc_frame_memory(struct mgsl_struct *info,DMABUFFERENTRY *BufferList,int Buffercount)
 {
 	int i;
-	u32 phys_addr;
 
 	/* Allocate page sized buffers for the receive buffer list */
 
 	for ( i = 0; i < Buffercount; i++ ) {
-		if ( info->bus_type == MGSL_BUS_TYPE_PCI ) {
-			/* PCI adapter uses shared memory buffers. */
-			BufferList[i].virt_addr = info->memory_base + info->last_mem_alloc;
-			phys_addr = info->last_mem_alloc;
-			info->last_mem_alloc += DMABUFFERSIZE;
-		} else {
-			/* ISA adapter uses system memory. */
-			BufferList[i].virt_addr = dma_alloc_coherent(NULL, DMABUFFERSIZE, &BufferList[i].dma_addr, GFP_KERNEL);
-			if (BufferList[i].virt_addr == NULL)
-				return -ENOMEM;
-			phys_addr = (u32)(BufferList[i].dma_addr);
-		}
-		BufferList[i].phys_addr = phys_addr;
+		BufferList[i].virt_addr = info->memory_base + info->last_mem_alloc;
+		BufferList[i].phys_addr = info->last_mem_alloc;
+		info->last_mem_alloc += DMABUFFERSIZE;
 	}
 
 	return 0;
@@ -3837,8 +3746,6 @@ static void mgsl_free_frame_memory(struct mgsl_struct *info, DMABUFFERENTRY *Buf
 	if ( BufferList ) {
 		for ( i = 0 ; i < Buffercount ; i++ ) {
 			if ( BufferList[i].virt_addr ) {
-				if ( info->bus_type != MGSL_BUS_TYPE_PCI )
-					dma_free_coherent(NULL, DMABUFFERSIZE, BufferList[i].virt_addr, BufferList[i].dma_addr);
 				BufferList[i].virt_addr = NULL;
 			}
 		}
@@ -4070,59 +3977,40 @@ static int mgsl_claim_resources(struct mgsl_struct *info)
 	}
 	info->irq_requested = true;
 	
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI ) {
-		if (request_mem_region(info->phys_memory_base,0x40000,"synclink") == NULL) {
-			printk( "%s(%d):mem addr conflict device %s Addr=%08X\n",
-				__FILE__,__LINE__,info->device_name, info->phys_memory_base);
-			goto errout;
-		}
-		info->shared_mem_requested = true;
-		if (request_mem_region(info->phys_lcr_base + info->lcr_offset,128,"synclink") == NULL) {
-			printk( "%s(%d):lcr mem addr conflict device %s Addr=%08X\n",
-				__FILE__,__LINE__,info->device_name, info->phys_lcr_base + info->lcr_offset);
-			goto errout;
-		}
-		info->lcr_mem_requested = true;
-
-		info->memory_base = ioremap_nocache(info->phys_memory_base,
-								0x40000);
-		if (!info->memory_base) {
-			printk( "%s(%d):Can't map shared memory on device %s MemAddr=%08X\n",
-				__FILE__,__LINE__,info->device_name, info->phys_memory_base );
-			goto errout;
-		}
-		
-		if ( !mgsl_memory_test(info) ) {
-			printk( "%s(%d):Failed shared memory test %s MemAddr=%08X\n",
-				__FILE__,__LINE__,info->device_name, info->phys_memory_base );
-			goto errout;
-		}
-		
-		info->lcr_base = ioremap_nocache(info->phys_lcr_base,
-								PAGE_SIZE);
-		if (!info->lcr_base) {
-			printk( "%s(%d):Can't map LCR memory on device %s MemAddr=%08X\n",
-				__FILE__,__LINE__,info->device_name, info->phys_lcr_base );
-			goto errout;
-		}
-		info->lcr_base += info->lcr_offset;
-		
-	} else {
-		/* claim DMA channel */
-		
-		if (request_dma(info->dma_level,info->device_name) < 0){
-			printk( "%s(%d):Can't request DMA channel on device %s DMA=%d\n",
-				__FILE__,__LINE__,info->device_name, info->dma_level );
-			mgsl_release_resources( info );
-			return -ENODEV;
-		}
-		info->dma_requested = true;
-
-		/* ISA adapter uses bus master DMA */		
-		set_dma_mode(info->dma_level,DMA_MODE_CASCADE);
-		enable_dma(info->dma_level);
+	if (request_mem_region(info->phys_memory_base,0x40000,"synclink") == NULL) {
+		printk( "%s(%d):mem addr conflict device %s Addr=%08X\n",
+			__FILE__,__LINE__,info->device_name, info->phys_memory_base);
+		goto errout;
 	}
-	
+	info->shared_mem_requested = true;
+	if (request_mem_region(info->phys_lcr_base + info->lcr_offset,128,"synclink") == NULL) {
+		printk( "%s(%d):lcr mem addr conflict device %s Addr=%08X\n",
+			__FILE__,__LINE__,info->device_name, info->phys_lcr_base + info->lcr_offset);
+		goto errout;
+	}
+	info->lcr_mem_requested = true;
+
+	info->memory_base = ioremap(info->phys_memory_base, 0x40000);
+	if (!info->memory_base) {
+		printk( "%s(%d):Can't map shared memory on device %s MemAddr=%08X\n",
+			__FILE__,__LINE__,info->device_name, info->phys_memory_base );
+		goto errout;
+	}
+		
+	if ( !mgsl_memory_test(info) ) {
+		printk( "%s(%d):Failed shared memory test %s MemAddr=%08X\n",
+			__FILE__,__LINE__,info->device_name, info->phys_memory_base );
+		goto errout;
+	}
+		
+	info->lcr_base = ioremap(info->phys_lcr_base, PAGE_SIZE);
+	if (!info->lcr_base) {
+		printk( "%s(%d):Can't map LCR memory on device %s MemAddr=%08X\n",
+			__FILE__,__LINE__,info->device_name, info->phys_lcr_base );
+		goto errout;
+	}
+	info->lcr_base += info->lcr_offset;
+		
 	if ( mgsl_allocate_dma_buffers(info) < 0 ) {
 		printk( "%s(%d):Can't allocate DMA buffers on device %s DMA=%d\n",
 			__FILE__,__LINE__,info->device_name, info->dma_level );
@@ -4231,16 +4119,10 @@ static void mgsl_add_device( struct mgsl_struct *info )
 	else if ( info->max_frame_size > 65535 )
 		info->max_frame_size = 65535;
 	
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI ) {
-		printk( "SyncLink PCI v%d %s: IO=%04X IRQ=%d Mem=%08X,%08X MaxFrameSize=%u\n",
-			info->hw_version + 1, info->device_name, info->io_base, info->irq_level,
-			info->phys_memory_base, info->phys_lcr_base,
-		     	info->max_frame_size );
-	} else {
-		printk( "SyncLink ISA %s: IO=%04X IRQ=%d DMA=%d MaxFrameSize=%u\n",
-			info->device_name, info->io_base, info->irq_level, info->dma_level,
-		     	info->max_frame_size );
-	}
+	printk( "SyncLink PCI v%d %s: IO=%04X IRQ=%d Mem=%08X,%08X MaxFrameSize=%u\n",
+		info->hw_version + 1, info->device_name, info->io_base, info->irq_level,
+		info->phys_memory_base, info->phys_lcr_base,
+	     	info->max_frame_size );
 
 #if SYNCLINK_GENERIC_HDLC
 	hdlcdev_init(info);
@@ -4315,7 +4197,7 @@ static const struct tty_operations mgsl_ops = {
 	.tiocmget = tiocmget,
 	.tiocmset = tiocmset,
 	.get_icount = msgl_get_icount,
-	.proc_fops = &mgsl_proc_fops,
+	.proc_show = mgsl_proc_show,
 };
 
 /*
@@ -4354,41 +4236,6 @@ static int mgsl_init_tty(void)
 		driver_name, driver_version,
 		serial_driver->major);
 	return 0;
-}
-
-/* enumerate user specified ISA adapters
- */
-static void mgsl_enum_isa_devices(void)
-{
-	struct mgsl_struct *info;
-	int i;
-		
-	/* Check for user specified ISA devices */
-	
-	for (i=0 ;(i < MAX_ISA_DEVICES) && io[i] && irq[i]; i++){
-		if ( debug_level >= DEBUG_LEVEL_INFO )
-			printk("ISA device specified io=%04X,irq=%d,dma=%d\n",
-				io[i], irq[i], dma[i] );
-		
-		info = mgsl_allocate_device();
-		if ( !info ) {
-			/* error allocating device instance data */
-			if ( debug_level >= DEBUG_LEVEL_ERROR )
-				printk( "can't allocate device instance data.\n");
-			continue;
-		}
-		
-		/* Copy user configuration info to device instance data */
-		info->io_base = (unsigned int)io[i];
-		info->irq_level = (unsigned int)irq[i];
-		info->irq_level = irq_canonicalize(info->irq_level);
-		info->dma_level = (unsigned int)dma[i];
-		info->bus_type = MGSL_BUS_TYPE_ISA;
-		info->io_addr_size = 16;
-		info->irq_flags = 0;
-		
-		mgsl_add_device( info );
-	}
 }
 
 static void synclink_cleanup(void)
@@ -4434,7 +4281,6 @@ static int __init synclink_init(void)
 
  	printk("%s %s\n", driver_name, driver_version);
 
-	mgsl_enum_isa_devices();
 	if ((rc = pci_register_driver(&synclink_pci_driver)) < 0)
 		printk("%s:failed to register PCI driver, error=%d\n",__FILE__,rc);
 	else
@@ -4487,8 +4333,7 @@ static void usc_RTCmd( struct mgsl_struct *info, u16 Cmd )
 	outw( Cmd + info->loopback_bits, info->io_base + CCAR );
 
 	/* Read to flush write to CCAR */
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-		inw( info->io_base + CCAR );
+	inw( info->io_base + CCAR );
 
 }	/* end of usc_RTCmd() */
 
@@ -4512,8 +4357,7 @@ static void usc_DmaCmd( struct mgsl_struct *info, u16 Cmd )
 	outw( Cmd + info->mbre_bit, info->io_base );
 
 	/* Read to flush write to DCAR */
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-		inw( info->io_base );
+	inw( info->io_base );
 
 }	/* end of usc_DmaCmd() */
 
@@ -4542,8 +4386,7 @@ static void usc_OutDmaReg( struct mgsl_struct *info, u16 RegAddr, u16 RegValue )
 	outw( RegValue, info->io_base );
 
 	/* Read to flush write to DCAR */
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-		inw( info->io_base );
+	inw( info->io_base );
 
 }	/* end of usc_OutDmaReg() */
  
@@ -4595,8 +4438,7 @@ static void usc_OutReg( struct mgsl_struct *info, u16 RegAddr, u16 RegValue )
 	outw( RegValue, info->io_base + CCAR );
 
 	/* Read to flush write to CCAR */
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-		inw( info->io_base + CCAR );
+	inw( info->io_base + CCAR );
 
 }	/* end of usc_OutReg() */
 
@@ -4795,10 +4637,7 @@ static void usc_set_sdlc_mode( struct mgsl_struct *info )
 
 	RegValue = usc_InReg( info, RICR ) & 0xc0;
 
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-		usc_OutReg( info, RICR, (u16)(0x030a | RegValue) );
-	else
-		usc_OutReg( info, RICR, (u16)(0x140a | RegValue) );
+	usc_OutReg( info, RICR, (u16)(0x030a | RegValue) );
 
 	/* Unlatch all Rx status bits and clear Rx status IRQ Pending */
 
@@ -4859,10 +4698,7 @@ static void usc_set_sdlc_mode( struct mgsl_struct *info )
 	 *	0000 0000 0011 0110 = 0x0036
 	 */
 
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-		usc_OutReg( info, TICR, 0x0736 );
-	else								
-		usc_OutReg( info, TICR, 0x1436 );
+	usc_OutReg( info, TICR, 0x0736 );
 
 	usc_UnlatchTxstatusBits( info, TXSTATUS_ALL );
 	usc_ClearIrqPendingBits( info, TRANSMIT_STATUS );
@@ -4952,10 +4788,7 @@ static void usc_set_sdlc_mode( struct mgsl_struct *info )
 		/*  DPLL is enabled. Use BRG1 to provide continuous reference clock  */
 		/*  for DPLL. DPLL mode in HCR is dependent on the encoding used. */
 
-		if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-			XtalSpeed = 11059200;
-		else
-			XtalSpeed = 14745600;
+		XtalSpeed = 11059200;
 
 		if ( info->params.flags & HDLC_FLAG_DPLL_DIV16 ) {
 			DpllDivisor = 16;
@@ -5056,12 +4889,6 @@ static void usc_set_sdlc_mode( struct mgsl_struct *info )
 	info->mbre_bit = BIT8;
 	outw( BIT8, info->io_base );			/* set Master Bus Enable (DCAR) */
 
-	if (info->bus_type == MGSL_BUS_TYPE_ISA) {
-		/* Enable DMAEN (Port 7, Bit 14) */
-		/* This connects the DMA request signal to the ISA bus */
-		usc_OutReg(info, PCR, (u16)((usc_InReg(info, PCR) | BIT15) & ~BIT14));
-	}
-
 	/* DMA Control Register (DCR)
 	 *
 	 * <15..14>	10	Priority mode = Alternating Tx/Rx
@@ -5084,13 +4911,8 @@ static void usc_set_sdlc_mode( struct mgsl_struct *info )
 	 *	0110 0000 0000 1011 = 0x600b
 	 */
 
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI ) {
-		/* PCI adapter does not need DMA wait state */
-		usc_OutDmaReg( info, DCR, 0xa00b );
-	}
-	else
-		usc_OutDmaReg( info, DCR, 0x800b );
-
+	/* PCI adapter does not need DMA wait state */
+	usc_OutDmaReg( info, DCR, 0xa00b );
 
 	/* Receive DMA mode Register (RDMR)
 	 *
@@ -5182,12 +5004,8 @@ static void usc_set_sdlc_mode( struct mgsl_struct *info )
 	 * <7..0>	0x00	Maximum number of clock cycles per bus grant
 	 */
 
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI ) {
-		/* don't limit bus occupancy on PCI adapter */
-		usc_OutDmaReg( info, BDCR, 0x0000 );
-	}
-	else
-		usc_OutDmaReg( info, BDCR, 0x2000 );
+	/* don't limit bus occupancy on PCI adapter */
+	usc_OutDmaReg( info, BDCR, 0x0000 );
 
 	usc_stop_transmitter(info);
 	usc_stop_receiver(info);
@@ -5228,10 +5046,7 @@ static void usc_enable_loopback(struct mgsl_struct *info, int enable)
 		/* Write 16-bit Time Constant for BRG0 */
 		/* use clock speed if available, otherwise use 8 for diagnostics */
 		if (info->params.clock_speed) {
-			if (info->bus_type == MGSL_BUS_TYPE_PCI)
-				usc_OutReg(info, TC0R, (u16)((11059200/info->params.clock_speed)-1));
-			else
-				usc_OutReg(info, TC0R, (u16)((14745600/info->params.clock_speed)-1));
+			usc_OutReg(info, TC0R, (u16)((11059200/info->params.clock_speed)-1));
 		} else
 			usc_OutReg(info, TC0R, (u16)8);
 
@@ -5274,10 +5089,7 @@ static void usc_enable_aux_clock( struct mgsl_struct *info, u32 data_rate )
 	u16 Tc;
 
 	if ( data_rate ) {
-		if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-			XtalSpeed = 11059200;
-		else
-			XtalSpeed = 14745600;
+		XtalSpeed = 11059200;
 
 
 		/* Tc = (Xtal/Speed) - 1 */
@@ -5755,44 +5567,38 @@ static void usc_load_txfifo( struct mgsl_struct *info )
  */
 static void usc_reset( struct mgsl_struct *info )
 {
-	if ( info->bus_type == MGSL_BUS_TYPE_PCI ) {
-		int i;
-		u32 readval;
+	int i;
+	u32 readval;
 
-		/* Set BIT30 of Misc Control Register */
-		/* (Local Control Register 0x50) to force reset of USC. */
+	/* Set BIT30 of Misc Control Register */
+	/* (Local Control Register 0x50) to force reset of USC. */
 
-		volatile u32 *MiscCtrl = (u32 *)(info->lcr_base + 0x50);
-		u32 *LCR0BRDR = (u32 *)(info->lcr_base + 0x28);
+	volatile u32 *MiscCtrl = (u32 *)(info->lcr_base + 0x50);
+	u32 *LCR0BRDR = (u32 *)(info->lcr_base + 0x28);
 
-		info->misc_ctrl_value |= BIT30;
-		*MiscCtrl = info->misc_ctrl_value;
+	info->misc_ctrl_value |= BIT30;
+	*MiscCtrl = info->misc_ctrl_value;
 
-		/*
-		 * Force at least 170ns delay before clearing 
-		 * reset bit. Each read from LCR takes at least 
-		 * 30ns so 10 times for 300ns to be safe.
-		 */
-		for(i=0;i<10;i++)
-			readval = *MiscCtrl;
+	/*
+	 * Force at least 170ns delay before clearing reset bit.  Each read from
+	 * LCR takes at least 30ns so 10 times for 300ns to be safe.
+	 */
+	for(i=0;i<10;i++)
+		readval = *MiscCtrl;
 
-		info->misc_ctrl_value &= ~BIT30;
-		*MiscCtrl = info->misc_ctrl_value;
+	info->misc_ctrl_value &= ~BIT30;
+	*MiscCtrl = info->misc_ctrl_value;
 
-		*LCR0BRDR = BUS_DESCRIPTOR(
-			1,		// Write Strobe Hold (0-3)
-			2,		// Write Strobe Delay (0-3)
-			2,		// Read Strobe Delay  (0-3)
-			0,		// NWDD (Write data-data) (0-3)
-			4,		// NWAD (Write Addr-data) (0-31)
-			0,		// NXDA (Read/Write Data-Addr) (0-3)
-			0,		// NRDD (Read Data-Data) (0-3)
-			5		// NRAD (Read Addr-Data) (0-31)
-			);
-	} else {
-		/* do HW reset */
-		outb( 0,info->io_base + 8 );
-	}
+	*LCR0BRDR = BUS_DESCRIPTOR(
+		1,		// Write Strobe Hold (0-3)
+		2,		// Write Strobe Delay (0-3)
+		2,		// Read Strobe Delay  (0-3)
+		0,		// NWDD (Write data-data) (0-3)
+		4,		// NWAD (Write Addr-data) (0-31)
+		0,		// NXDA (Read/Write Data-Addr) (0-3)
+		0,		// NRDD (Read Data-Data) (0-3)
+		5		// NRAD (Read Addr-Data) (0-31)
+		);
 
 	info->mbre_bit = 0;
 	info->loopback_bits = 0;
@@ -6038,12 +5844,6 @@ static void usc_set_async_mode( struct mgsl_struct *info )
 
 	usc_EnableMasterIrqBit( info );
 
-	if (info->bus_type == MGSL_BUS_TYPE_ISA) {
-		/* Enable INTEN (Port 6, Bit12) */
-		/* This connects the IRQ request signal to the ISA bus */
-		usc_OutReg(info, PCR, (u16)((usc_InReg(info, PCR) | BIT13) & ~BIT12));
-	}
-
 	if (info->params.loopback) {
 		info->loopback_bits = 0x300;
 		outw(0x0300, info->io_base + CCAR);
@@ -6137,12 +5937,6 @@ static void usc_set_sync_mode( struct mgsl_struct *info )
 {
 	usc_loopback_frame( info );
 	usc_set_sdlc_mode( info );
-
-	if (info->bus_type == MGSL_BUS_TYPE_ISA) {
-		/* Enable INTEN (Port 6, Bit12) */
-		/* This connects the IRQ request signal to the ISA bus */
-		usc_OutReg(info, PCR, (u16)((usc_InReg(info, PCR) | BIT13) & ~BIT12));
-	}
 
 	usc_enable_aux_clock(info, info->params.clock_speed);
 
@@ -6313,11 +6107,7 @@ static void usc_enable_async_clock( struct mgsl_struct *info, u32 data_rate )
 		 * ClkSpeed = 921600 (ISA), 691200 (PCI)
 		 */
 
-		if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-			usc_OutReg( info, TC0R, (u16)((691200/data_rate) - 1) );
-		else
-			usc_OutReg( info, TC0R, (u16)((921600/data_rate) - 1) );
-
+		usc_OutReg( info, TC0R, (u16)((691200/data_rate) - 1) );
 		
 		/*
 		 * Hardware Configuration Register (HCR)
@@ -6922,10 +6712,7 @@ static void mgsl_load_tx_dma_buffer(struct mgsl_struct *info,
 
 		/* Actually copy data from source buffer to DMA buffer. */
 		/* Also set the data count for this individual DMA buffer. */
-		if ( info->bus_type == MGSL_BUS_TYPE_PCI )
-			mgsl_load_pci_memory(pBufEntry->virt_addr, Buffer,Copycount);
-		else
-			memcpy(pBufEntry->virt_addr, Buffer, Copycount);
+		mgsl_load_pci_memory(pBufEntry->virt_addr, Buffer,Copycount);
 
 		pBufEntry->count = Copycount;
 
@@ -7400,9 +7187,6 @@ static bool mgsl_memory_test( struct mgsl_struct *info )
 	unsigned long TestLimit = SHARED_MEM_ADDRESS_SIZE/sizeof(unsigned long);
 	unsigned long * TestAddr;
 
-	if ( info->bus_type != MGSL_BUS_TYPE_PCI )
-		return true;
-
 	TestAddr = (unsigned long *)info->memory_base;
 
 	/* Test data lines with test pattern at one location. */
@@ -7534,9 +7318,9 @@ static void mgsl_trace_block(struct mgsl_struct *info,const char* data, int coun
  * Arguments:	context		pointer to device instance data
  * Return Value:	None
  */
-static void mgsl_tx_timeout(unsigned long context)
+static void mgsl_tx_timeout(struct timer_list *t)
 {
-	struct mgsl_struct *info = (struct mgsl_struct*)context;
+	struct mgsl_struct *info = from_timer(info, t, tx_timer);
 	unsigned long flags;
 	
 	if ( debug_level >= DEBUG_LEVEL_INFO )
@@ -7635,14 +7419,14 @@ static int usc_loopmode_active( struct mgsl_struct * info)
 #if SYNCLINK_GENERIC_HDLC
 
 /**
- * called by generic HDLC layer when protocol selected (PPP, frame relay, etc.)
- * set encoding and frame check sequence (FCS) options
+ * hdlcdev_attach - called by generic HDLC layer when protocol selected (PPP, frame relay, etc.)
+ * @dev:      pointer to network device structure
+ * @encoding: serial encoding setting
+ * @parity:   FCS setting
  *
- * dev       pointer to network device structure
- * encoding  serial encoding setting
- * parity    FCS setting
+ * Set encoding and frame check sequence (FCS) options.
  *
- * returns 0 if success, otherwise error code
+ * Return: 0 if success, otherwise error code
  */
 static int hdlcdev_attach(struct net_device *dev, unsigned short encoding,
 			  unsigned short parity)
@@ -7684,10 +7468,9 @@ static int hdlcdev_attach(struct net_device *dev, unsigned short encoding,
 }
 
 /**
- * called by generic HDLC layer to send frame
- *
- * skb  socket buffer containing HDLC frame
- * dev  pointer to network device structure
+ * hdlcdev_xmit - called by generic HDLC layer to send a frame
+ * @skb: socket buffer containing HDLC frame
+ * @dev: pointer to network device structure
  */
 static netdev_tx_t hdlcdev_xmit(struct sk_buff *skb,
 				      struct net_device *dev)
@@ -7713,7 +7496,7 @@ static netdev_tx_t hdlcdev_xmit(struct sk_buff *skb,
 	dev_kfree_skb(skb);
 
 	/* save start time for transmit timeout detection */
-	dev->trans_start = jiffies;
+	netif_trans_update(dev);
 
 	/* start hardware transmitter if necessary */
 	spin_lock_irqsave(&info->irq_spinlock,flags);
@@ -7725,12 +7508,12 @@ static netdev_tx_t hdlcdev_xmit(struct sk_buff *skb,
 }
 
 /**
- * called by network layer when interface enabled
- * claim resources and initialize hardware
+ * hdlcdev_open - called by network layer when interface enabled
+ * @dev: pointer to network device structure
  *
- * dev  pointer to network device structure
+ * Claim resources and initialize hardware.
  *
- * returns 0 if success, otherwise error code
+ * Return: 0 if success, otherwise error code
  */
 static int hdlcdev_open(struct net_device *dev)
 {
@@ -7769,7 +7552,7 @@ static int hdlcdev_open(struct net_device *dev)
 	mgsl_program_hw(info);
 
 	/* enable network layer transmit */
-	dev->trans_start = jiffies;
+	netif_trans_update(dev);
 	netif_start_queue(dev);
 
 	/* inform generic HDLC layer of current DCD status */
@@ -7784,12 +7567,12 @@ static int hdlcdev_open(struct net_device *dev)
 }
 
 /**
- * called by network layer when interface is disabled
- * shutdown hardware and release resources
+ * hdlcdev_close - called by network layer when interface is disabled
+ * @dev: pointer to network device structure
  *
- * dev  pointer to network device structure
+ * Shutdown hardware and release resources.
  *
- * returns 0 if success, otherwise error code
+ * Return: 0 if success, otherwise error code
  */
 static int hdlcdev_close(struct net_device *dev)
 {
@@ -7814,13 +7597,12 @@ static int hdlcdev_close(struct net_device *dev)
 }
 
 /**
- * called by network layer to process IOCTL call to network device
+ * hdlcdev_ioctl - called by network layer to process IOCTL call to network device
+ * @dev: pointer to network device structure
+ * @ifr: pointer to network interface request structure
+ * @cmd: IOCTL command code
  *
- * dev  pointer to network device structure
- * ifr  pointer to network interface request structure
- * cmd  IOCTL command code
- *
- * returns 0 if success, otherwise error code
+ * Return: 0 if success, otherwise error code
  */
 static int hdlcdev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
@@ -7918,11 +7700,11 @@ static int hdlcdev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 }
 
 /**
- * called by network layer when transmit timeout is detected
+ * hdlcdev_tx_timeout - called by network layer when transmit timeout is detected
  *
- * dev  pointer to network device structure
+ * @dev: pointer to network device structure
  */
-static void hdlcdev_tx_timeout(struct net_device *dev)
+static void hdlcdev_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
 	struct mgsl_struct *info = dev_to_port(dev);
 	unsigned long flags;
@@ -7941,10 +7723,10 @@ static void hdlcdev_tx_timeout(struct net_device *dev)
 }
 
 /**
- * called by device driver when transmit completes
- * reenable network layer transmit if stopped
+ * hdlcdev_tx_done - called by device driver when transmit completes
+ * @info: pointer to device instance information
  *
- * info  pointer to device instance information
+ * Reenable network layer transmit if stopped.
  */
 static void hdlcdev_tx_done(struct mgsl_struct *info)
 {
@@ -7953,12 +7735,12 @@ static void hdlcdev_tx_done(struct mgsl_struct *info)
 }
 
 /**
- * called by device driver when frame received
- * pass frame to network layer
+ * hdlcdev_rx - called by device driver when frame received
+ * @info: pointer to device instance information
+ * @buf:  pointer to buffer contianing frame data
+ * @size: count of data bytes in buf
  *
- * info  pointer to device instance information
- * buf   pointer to buffer contianing frame data
- * size  count of data bytes in buf
+ * Pass frame to network layer.
  */
 static void hdlcdev_rx(struct mgsl_struct *info, char *buf, int size)
 {
@@ -7975,7 +7757,7 @@ static void hdlcdev_rx(struct mgsl_struct *info, char *buf, int size)
 		return;
 	}
 
-	memcpy(skb_put(skb, size), buf, size);
+	skb_put_data(skb, buf, size);
 
 	skb->protocol = hdlc_type_trans(skb, dev);
 
@@ -7988,19 +7770,18 @@ static void hdlcdev_rx(struct mgsl_struct *info, char *buf, int size)
 static const struct net_device_ops hdlcdev_ops = {
 	.ndo_open       = hdlcdev_open,
 	.ndo_stop       = hdlcdev_close,
-	.ndo_change_mtu = hdlc_change_mtu,
 	.ndo_start_xmit = hdlc_start_xmit,
 	.ndo_do_ioctl   = hdlcdev_ioctl,
 	.ndo_tx_timeout = hdlcdev_tx_timeout,
 };
 
 /**
- * called by device driver when adding device instance
- * do generic HDLC initialization
+ * hdlcdev_init - called by device driver when adding device instance
+ * @info: pointer to device instance information
  *
- * info  pointer to device instance information
+ * Do generic HDLC initialization.
  *
- * returns 0 if success, otherwise error code
+ * Return: 0 if success, otherwise error code
  */
 static int hdlcdev_init(struct mgsl_struct *info)
 {
@@ -8044,10 +7825,10 @@ static int hdlcdev_init(struct mgsl_struct *info)
 }
 
 /**
- * called by device driver when removing device instance
- * do generic HDLC cleanup
+ * hdlcdev_exit - called by device driver when removing device instance
+ * @info: pointer to device instance information
  *
- * info  pointer to device instance information
+ * Do generic HDLC cleanup.
  */
 static void hdlcdev_exit(struct mgsl_struct *info)
 {
@@ -8089,7 +7870,6 @@ static int synclink_init_one (struct pci_dev *dev,
 	info->lcr_offset    = info->phys_lcr_base & (PAGE_SIZE-1);
 	info->phys_lcr_base &= ~(PAGE_SIZE-1);
 				
-	info->bus_type = MGSL_BUS_TYPE_PCI;
 	info->io_addr_size = 8;
 	info->irq_flags = IRQF_SHARED;
 

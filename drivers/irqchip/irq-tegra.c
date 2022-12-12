@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver code for Tegra's Legacy Interrupt Controller
  *
@@ -10,16 +11,6 @@
  *	Colin Cross <ccross@android.com>
  *
  * Copyright (C) 2010,2013, NVIDIA Corporation
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #include <linux/io.h>
@@ -90,7 +81,7 @@ static struct tegra_ictlr_info *lic;
 
 static inline void tegra_ictlr_write_mask(struct irq_data *d, unsigned long reg)
 {
-	void __iomem *base = d->chip_data;
+	void __iomem *base = (void __iomem __force *)d->chip_data;
 	u32 mask;
 
 	mask = BIT(d->hwirq % 32);
@@ -235,7 +226,7 @@ static int tegra_ictlr_domain_translate(struct irq_domain *d,
 			return -EINVAL;
 
 		*hwirq = fwspec->param[1];
-		*type = fwspec->param[2];
+		*type = fwspec->param[2] & IRQ_TYPE_SENSE_MASK;
 		return 0;
 	}
 
@@ -266,7 +257,7 @@ static int tegra_ictlr_domain_alloc(struct irq_domain *domain,
 
 		irq_domain_set_hwirq_and_chip(domain, virq + i, hwirq + i,
 					      &tegra_ictlr_chip,
-					      info->base[ictlr]);
+					      (void __force *)info->base[ictlr]);
 	}
 
 	parent_fwspec = *fwspec;
@@ -275,22 +266,10 @@ static int tegra_ictlr_domain_alloc(struct irq_domain *domain,
 					    &parent_fwspec);
 }
 
-static void tegra_ictlr_domain_free(struct irq_domain *domain,
-				    unsigned int virq,
-				    unsigned int nr_irqs)
-{
-	unsigned int i;
-
-	for (i = 0; i < nr_irqs; i++) {
-		struct irq_data *d = irq_domain_get_irq_data(domain, virq + i);
-		irq_domain_reset_irq_data(d);
-	}
-}
-
 static const struct irq_domain_ops tegra_ictlr_domain_ops = {
 	.translate	= tegra_ictlr_domain_translate,
 	.alloc		= tegra_ictlr_domain_alloc,
-	.free		= tegra_ictlr_domain_free,
+	.free		= irq_domain_free_irqs_common,
 };
 
 static int __init tegra_ictlr_init(struct device_node *node,
@@ -303,13 +282,13 @@ static int __init tegra_ictlr_init(struct device_node *node,
 	int err;
 
 	if (!parent) {
-		pr_err("%s: no parent, giving up\n", node->full_name);
+		pr_err("%pOF: no parent, giving up\n", node);
 		return -ENODEV;
 	}
 
 	parent_domain = irq_find_host(parent);
 	if (!parent_domain) {
-		pr_err("%s: unable to obtain parent domain\n", node->full_name);
+		pr_err("%pOF: unable to obtain parent domain\n", node);
 		return -ENXIO;
 	}
 
@@ -341,29 +320,29 @@ static int __init tegra_ictlr_init(struct device_node *node,
 	}
 
 	if (!num_ictlrs) {
-		pr_err("%s: no valid regions, giving up\n", node->full_name);
+		pr_err("%pOF: no valid regions, giving up\n", node);
 		err = -ENOMEM;
 		goto out_free;
 	}
 
 	WARN(num_ictlrs != soc->num_ictlrs,
-	     "%s: Found %u interrupt controllers in DT; expected %u.\n",
-	     node->full_name, num_ictlrs, soc->num_ictlrs);
+	     "%pOF: Found %u interrupt controllers in DT; expected %u.\n",
+	     node, num_ictlrs, soc->num_ictlrs);
 
 
 	domain = irq_domain_add_hierarchy(parent_domain, 0, num_ictlrs * 32,
 					  node, &tegra_ictlr_domain_ops,
 					  lic);
 	if (!domain) {
-		pr_err("%s: failed to allocated domain\n", node->full_name);
+		pr_err("%pOF: failed to allocated domain\n", node);
 		err = -ENOMEM;
 		goto out_unmap;
 	}
 
 	tegra_ictlr_syscore_init();
 
-	pr_info("%s: %d interrupts forwarded to %s\n",
-		node->full_name, num_ictlrs * 32, parent->full_name);
+	pr_info("%pOF: %d interrupts forwarded to %pOF\n",
+		node, num_ictlrs * 32, parent);
 
 	return 0;
 

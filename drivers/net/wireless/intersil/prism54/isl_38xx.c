@@ -1,26 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Copyright (C) 2002 Intersil Americas Inc.
  *  Copyright (C) 2003-2004 Luis R. Rodriguez <mcgrof@ruslug.rutgers.edu>_
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/delay.h>
+#include <linux/ktime.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/io.h>
 
 #include "prismcompat.h"
@@ -113,7 +102,7 @@ isl38xx_trigger_device(int asleep, void __iomem *device_base)
 
 #if VERBOSE > SHOW_ERROR_MESSAGES
 	u32 counter = 0;
-	struct timeval current_time;
+	struct timespec64 current_ts64;
 	DEBUG(SHOW_FUNCTION_CALLS, "isl38xx trigger device\n");
 #endif
 
@@ -121,22 +110,22 @@ isl38xx_trigger_device(int asleep, void __iomem *device_base)
 	if (asleep) {
 		/* device is in powersave, trigger the device for wakeup */
 #if VERBOSE > SHOW_ERROR_MESSAGES
-		do_gettimeofday(&current_time);
-		DEBUG(SHOW_TRACING, "%08li.%08li Device wakeup triggered\n",
-		      current_time.tv_sec, (long)current_time.tv_usec);
+		ktime_get_real_ts64(&current_ts64);
+		DEBUG(SHOW_TRACING, "%lld.%09ld Device wakeup triggered\n",
+		      (s64)current_ts64.tv_sec, current_ts64.tv_nsec);
 
-		DEBUG(SHOW_TRACING, "%08li.%08li Device register read %08x\n",
-		      current_time.tv_sec, (long)current_time.tv_usec,
+		DEBUG(SHOW_TRACING, "%lld.%09ld Device register read %08x\n",
+		      (s64)current_ts64.tv_sec, current_ts64.tv_nsec,
 		      readl(device_base + ISL38XX_CTRL_STAT_REG));
 #endif
 
 		reg = readl(device_base + ISL38XX_INT_IDENT_REG);
 		if (reg == 0xabadface) {
 #if VERBOSE > SHOW_ERROR_MESSAGES
-			do_gettimeofday(&current_time);
+			ktime_get_real_ts64(&current_ts64);
 			DEBUG(SHOW_TRACING,
-			      "%08li.%08li Device register abadface\n",
-			      current_time.tv_sec, (long)current_time.tv_usec);
+			      "%lld.%09ld Device register abadface\n",
+			      (s64)current_ts64.tv_sec, current_ts64.tv_nsec);
 #endif
 			/* read the Device Status Register until Sleepmode bit is set */
 			while (reg = readl(device_base + ISL38XX_CTRL_STAT_REG),
@@ -149,13 +138,13 @@ isl38xx_trigger_device(int asleep, void __iomem *device_base)
 
 #if VERBOSE > SHOW_ERROR_MESSAGES
 			DEBUG(SHOW_TRACING,
-			      "%08li.%08li Device register read %08x\n",
-			      current_time.tv_sec, (long)current_time.tv_usec,
+			      "%lld.%09ld Device register read %08x\n",
+			      (s64)current_ts64.tv_sec, current_ts64.tv_nsec,
 			      readl(device_base + ISL38XX_CTRL_STAT_REG));
-			do_gettimeofday(&current_time);
+			ktime_get_real_ts64(&current_ts64);
 			DEBUG(SHOW_TRACING,
-			      "%08li.%08li Device asleep counter %i\n",
-			      current_time.tv_sec, (long)current_time.tv_usec,
+			      "%lld.%09ld Device asleep counter %i\n",
+			      (s64)current_ts64.tv_sec, current_ts64.tv_nsec,
 			      counter);
 #endif
 		}
@@ -168,9 +157,9 @@ isl38xx_trigger_device(int asleep, void __iomem *device_base)
 
 		/* perform another read on the Device Status Register */
 		reg = readl(device_base + ISL38XX_CTRL_STAT_REG);
-		do_gettimeofday(&current_time);
-		DEBUG(SHOW_TRACING, "%08li.%08li Device register read %08x\n",
-		      current_time.tv_sec, (long)current_time.tv_usec, reg);
+		ktime_get_real_ts64(&current_ts64);
+		DEBUG(SHOW_TRACING, "%lld.%00ld Device register read %08x\n",
+		      (s64)current_ts64.tv_sec, current_ts64.tv_nsec, reg);
 #endif
 	} else {
 		/* device is (still) awake  */
@@ -234,6 +223,7 @@ isl38xx_in_queue(isl38xx_control_block *cb, int queue)
 		/* send queues */
 	case ISL38XX_CB_TX_MGMTQ:
 		BUG_ON(delta > ISL38XX_CB_MGMT_QSIZE);
+		fallthrough;
 
 	case ISL38XX_CB_TX_DATA_LQ:
 	case ISL38XX_CB_TX_DATA_HQ:

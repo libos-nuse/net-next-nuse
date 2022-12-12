@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * NXP LPC18xx State Configurable Timer - Pulse Width Modulator driver
  *
  * Copyright (c) 2015 Ariel D'Alessandro <ariel@vanguardiasur.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License.
  *
  * Notes
  * =====
@@ -249,7 +246,7 @@ static int lpc18xx_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 			   LPC18XX_PWM_EVSTATEMSK(lpc18xx_data->duty_event),
 			   LPC18XX_PWM_EVSTATEMSK_ALL);
 
-	if (pwm->polarity == PWM_POLARITY_NORMAL) {
+	if (pwm_get_polarity(pwm) == PWM_POLARITY_NORMAL) {
 		set_event = lpc18xx_pwm->period_event;
 		clear_event = lpc18xx_data->duty_event;
 		res_action = LPC18XX_PWM_RES_SET;
@@ -296,7 +293,6 @@ static int lpc18xx_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 
 	set_bit(event, &lpc18xx_pwm->event_map);
 	lpc18xx_data->duty_event = event;
-	lpc18xx_pwm_config_duty(chip, pwm, pwm_get_duty_cycle(pwm));
 
 	return 0;
 }
@@ -306,8 +302,6 @@ static void lpc18xx_pwm_free(struct pwm_chip *chip, struct pwm_device *pwm)
 	struct lpc18xx_pwm_chip *lpc18xx_pwm = to_lpc18xx_pwm_chip(chip);
 	struct lpc18xx_pwm_data *lpc18xx_data = pwm_get_chip_data(pwm);
 
-	pwm_disable(pwm);
-	pwm_set_duty_cycle(pwm, 0);
 	clear_bit(lpc18xx_data->duty_event, &lpc18xx_pwm->event_map);
 }
 
@@ -360,6 +354,11 @@ static int lpc18xx_pwm_probe(struct platform_device *pdev)
 	}
 
 	lpc18xx_pwm->clk_rate = clk_get_rate(lpc18xx_pwm->pwm_clk);
+	if (!lpc18xx_pwm->clk_rate) {
+		dev_err(&pdev->dev, "pwm clock has no frequency\n");
+		ret = -EINVAL;
+		goto disable_pwmclk;
+	}
 
 	mutex_init(&lpc18xx_pwm->res_lock);
 	mutex_init(&lpc18xx_pwm->period_lock);
@@ -408,14 +407,18 @@ static int lpc18xx_pwm_probe(struct platform_device *pdev)
 	}
 
 	for (i = 0; i < lpc18xx_pwm->chip.npwm; i++) {
+		struct lpc18xx_pwm_data *data;
+
 		pwm = &lpc18xx_pwm->chip.pwms[i];
-		pwm->chip_data = devm_kzalloc(lpc18xx_pwm->dev,
-					      sizeof(struct lpc18xx_pwm_data),
-					      GFP_KERNEL);
-		if (!pwm->chip_data) {
+
+		data = devm_kzalloc(lpc18xx_pwm->dev, sizeof(*data),
+				    GFP_KERNEL);
+		if (!data) {
 			ret = -ENOMEM;
 			goto remove_pwmchip;
 		}
+
+		pwm_set_chip_data(pwm, data);
 	}
 
 	platform_set_drvdata(pdev, lpc18xx_pwm);

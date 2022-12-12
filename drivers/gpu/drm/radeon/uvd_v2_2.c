@@ -23,7 +23,7 @@
  */
 
 #include <linux/firmware.h>
-#include <drm/drmP.h>
+
 #include "radeon.h"
 #include "radeon_asic.h"
 #include "rv770d.h"
@@ -109,19 +109,20 @@ int uvd_v2_2_resume(struct radeon_device *rdev)
 	if (r)
 		return r;
 
-	/* programm the VCPU memory controller bits 0-27 */
+	/* program the VCPU memory controller bits 0-27 */
 	addr = rdev->uvd.gpu_addr >> 3;
 	size = RADEON_GPU_PAGE_ALIGN(rdev->uvd_fw->size + 4) >> 3;
 	WREG32(UVD_VCPU_CACHE_OFFSET0, addr);
 	WREG32(UVD_VCPU_CACHE_SIZE0, size);
 
 	addr += size;
-	size = RADEON_UVD_STACK_SIZE >> 3;
+	size = RADEON_UVD_HEAP_SIZE >> 3;
 	WREG32(UVD_VCPU_CACHE_OFFSET1, addr);
 	WREG32(UVD_VCPU_CACHE_SIZE1, size);
 
 	addr += size;
-	size = RADEON_UVD_HEAP_SIZE >> 3;
+	size = (RADEON_UVD_STACK_SIZE +
+	       (RADEON_UVD_SESSION_SIZE * rdev->uvd.max_handles)) >> 3;
 	WREG32(UVD_VCPU_CACHE_OFFSET2, addr);
 	WREG32(UVD_VCPU_CACHE_SIZE2, size);
 

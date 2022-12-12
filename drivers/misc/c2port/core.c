@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Silicon Labs C2 port core Linux support
  *
  *  Copyright (c) 2007 Rodolfo Giometti <giometti@linux.it>
  *  Copyright (c) 2007 Eurotech S.p.A. <info@eurotech.it>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation
  */
 
 #include <linux/module.h>
@@ -15,7 +12,6 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
-#include <linux/kmemcheck.h>
 #include <linux/ctype.h>
 #include <linux/delay.h>
 #include <linux/idr.h>
@@ -721,9 +717,7 @@ static ssize_t c2port_read_flash_data(struct file *filp, struct kobject *kobj,
 				struct bin_attribute *attr,
 				char *buffer, loff_t offset, size_t count)
 {
-	struct c2port_device *c2dev =
-			dev_get_drvdata(container_of(kobj,
-						struct device, kobj));
+	struct c2port_device *c2dev = dev_get_drvdata(kobj_to_dev(kobj));
 	ssize_t ret;
 
 	/* Check the device and flash access status */
@@ -838,9 +832,7 @@ static ssize_t c2port_write_flash_data(struct file *filp, struct kobject *kobj,
 				struct bin_attribute *attr,
 				char *buffer, loff_t offset, size_t count)
 {
-	struct c2port_device *c2dev =
-			dev_get_drvdata(container_of(kobj,
-						struct device, kobj));
+	struct c2port_device *c2dev = dev_get_drvdata(kobj_to_dev(kobj));
 	int ret;
 
 	/* Check the device access status */
@@ -908,7 +900,6 @@ struct c2port_device *c2port_device_register(char *name,
 		return ERR_PTR(-EINVAL);
 
 	c2dev = kmalloc(sizeof(struct c2port_device), GFP_KERNEL);
-	kmemcheck_annotate_bitfield(c2dev, flags);
 	if (unlikely(!c2dev))
 		return ERR_PTR(-ENOMEM);
 
@@ -932,7 +923,7 @@ struct c2port_device *c2port_device_register(char *name,
 	}
 	dev_set_drvdata(c2dev->dev, c2dev);
 
-	strncpy(c2dev->name, name, C2PORT_NAME_LEN);
+	strncpy(c2dev->name, name, C2PORT_NAME_LEN - 1);
 	c2dev->ops = ops;
 	mutex_init(&c2dev->mutex);
 

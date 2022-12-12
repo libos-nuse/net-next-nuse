@@ -1,18 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/drivers/misc/xillybus_pcie.c
  *
  * Copyright 2011 Xillybus Ltd, http://xillybus.com
  *
  * Driver for the Xillybus FPGA/host framework using PCI Express.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the smems of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License.
  */
 
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/pci-aspm.h>
 #include <linux/slab.h>
 #include "xillybus.h"
 
@@ -24,7 +20,6 @@ MODULE_LICENSE("GPL v2");
 
 #define PCI_DEVICE_ID_XILLYBUS		0xebeb
 
-#define PCI_VENDOR_ID_ALTERA		0x1172
 #define PCI_VENDOR_ID_ACTEL		0x11aa
 #define PCI_VENDOR_ID_LATTICE		0x1204
 
@@ -98,7 +93,6 @@ static int xilly_map_single_pci(struct xilly_endpoint *ep,
 	int pci_direction;
 	dma_addr_t addr;
 	struct xilly_mapping *this;
-	int rc;
 
 	this = kzalloc(sizeof(*this), GFP_KERNEL);
 	if (!this)
@@ -120,14 +114,7 @@ static int xilly_map_single_pci(struct xilly_endpoint *ep,
 
 	*ret_dma_handle = addr;
 
-	rc = devm_add_action(ep->dev, xilly_pci_unmap, this);
-	if (rc) {
-		pci_unmap_single(ep->pdev, addr, size, pci_direction);
-		kfree(this);
-		return rc;
-	}
-
-	return 0;
+	return devm_add_action_or_reset(ep->dev, xilly_pci_unmap, this);
 }
 
 static struct xilly_endpoint_hardware pci_hw = {

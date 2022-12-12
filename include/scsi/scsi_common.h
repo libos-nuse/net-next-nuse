@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Functions used by both the SCSI initiator code and the SCSI target code.
  */
@@ -22,6 +23,13 @@ scsi_command_size(const unsigned char *cmnd)
 {
 	return (cmnd[0] == VARIABLE_LENGTH_CMD) ?
 		scsi_varlen_cdb_length(cmnd) : COMMAND_SIZE(cmnd[0]);
+}
+
+static inline unsigned char
+scsi_command_control(const unsigned char *cmnd)
+{
+	return (cmnd[0] == VARIABLE_LENGTH_CMD) ?
+		cmnd[1] : cmnd[COMMAND_SIZE(cmnd[0]) - 1];
 }
 
 /* Returns a human-readable name for the device */
@@ -63,6 +71,7 @@ extern bool scsi_normalize_sense(const u8 *sense_buffer, int sb_len,
 
 extern void scsi_build_sense_buffer(int desc, u8 *buf, u8 key, u8 asc, u8 ascq);
 int scsi_set_sense_information(u8 *buf, int buf_len, u64 info);
+int scsi_set_sense_field_pointer(u8 *buf, int buf_len, u16 fp, u8 bp, bool cd);
 extern const u8 * scsi_sense_desc_find(const u8 * sense_buffer, int sb_len,
 				       int desc_type);
 

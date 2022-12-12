@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * intel_mid_sfi.c: Intel MID SFI initialization code
  *
  * (C) Copyright 2013 Intel Corporation
  * Author: Sathyanarayanan Kuppuswamy <sathyanarayanan.kuppuswamy@intel.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; version 2
- * of the License.
  */
 
 #include <linux/init.h>
@@ -15,7 +11,6 @@
 #include <linux/interrupt.h>
 #include <linux/scatterlist.h>
 #include <linux/sfi.h>
-#include <linux/intel_pmic_gpio.h>
 #include <linux/spi/spi.h>
 #include <linux/i2c.h>
 #include <linux/skbuff.h>
@@ -24,7 +19,7 @@
 #include <linux/input.h>
 #include <linux/platform_device.h>
 #include <linux/irq.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/notifier.h>
 #include <linux/mmc/core.h>
 #include <linux/mmc/card.h>
@@ -97,8 +92,7 @@ int __init sfi_parse_mtmr(struct sfi_table_header *table)
 			pentry->freq_hz, pentry->irq);
 		mp_irq.type = MP_INTSRC;
 		mp_irq.irqtype = mp_INT;
-		/* triggering mode edge bit 2-3, active high polarity bit 0-1 */
-		mp_irq.irqflag = 5;
+		mp_irq.irqflag = MP_IRQTRIG_EDGE | MP_IRQPOL_ACTIVE_HIGH;
 		mp_irq.srcbus = MP_BUS_ISA;
 		mp_irq.srcbusirq = pentry->irq;	/* IRQ */
 		mp_irq.dstapic = MP_APIC_ALL;
@@ -169,7 +163,7 @@ int __init sfi_parse_mrtc(struct sfi_table_header *table)
 			totallen, (u32)pentry->phys_addr, pentry->irq);
 		mp_irq.type = MP_INTSRC;
 		mp_irq.irqtype = mp_INT;
-		mp_irq.irqflag = 0xf;	/* level trigger and active low */
+		mp_irq.irqflag = MP_IRQTRIG_LEVEL | MP_IRQPOL_ACTIVE_LOW;
 		mp_irq.srcbus = MP_BUS_ISA;
 		mp_irq.srcbusirq = pentry->irq;	/* IRQ */
 		mp_irq.dstapic = MP_APIC_ALL;
@@ -226,7 +220,7 @@ int get_gpio_by_name(const char *name)
 	return -EINVAL;
 }
 
-void __init intel_scu_device_register(struct platform_device *pdev)
+static void __init intel_scu_ipc_device_register(struct platform_device *pdev)
 {
 	if (ipc_next_dev == MAX_IPCDEVS)
 		pr_err("too many SCU IPC devices");
@@ -293,8 +287,8 @@ void intel_scu_devices_create(void)
 
 		adapter = i2c_get_adapter(i2c_bus[i]);
 		if (adapter) {
-			client = i2c_new_device(adapter, i2c_devs[i]);
-			if (!client)
+			client = i2c_new_client_device(adapter, i2c_devs[i]);
+			if (IS_ERR(client))
 				pr_err("can't create i2c device %s\n",
 					i2c_devs[i]->type);
 		} else
@@ -335,8 +329,20 @@ static void __init sfi_handle_ipc_dev(struct sfi_device_table_entry *pentry,
 
 	pr_debug("IPC bus, name = %16.16s, irq = 0x%2x\n",
 		pentry->name, pentry->irq);
+
+	/*
+	 * We need to call platform init of IPC devices to fill misc_pdata
+	 * structure. It will be used in msic_init for initialization.
+	 */
 	pdata = intel_mid_sfi_get_pdata(dev, pentry);
 	if (IS_ERR(pdata))
+		return;
+
+	/*
+	 * On Medfield the platform device creation is handled by the MSIC
+	 * MFD driver so we don't need to do it here.
+	 */
+	if (dev->msic && intel_mid_has_msic())
 		return;
 
 	pdev = platform_device_alloc(pentry->name, 0);
@@ -348,7 +354,10 @@ static void __init sfi_handle_ipc_dev(struct sfi_device_table_entry *pentry,
 	install_irq_resource(pdev, pentry->irq);
 
 	pdev->dev.platform_data = pdata;
-	platform_device_add(pdev);
+	if (dev->delay)
+		intel_scu_ipc_device_register(pdev);
+	else
+		platform_device_add(pdev);
 }
 
 static void __init sfi_handle_spi_dev(struct sfi_device_table_entry *pentry,
@@ -405,6 +414,32 @@ static void __init sfi_handle_i2c_dev(struct sfi_device_table_entry *pentry,
 		intel_scu_i2c_device_register(pentry->host_num, &i2c_info);
 	else
 		i2c_register_board_info(pentry->host_num, &i2c_info, 1);
+}
+
+static void __init sfi_handle_sd_dev(struct sfi_device_table_entry *pentry,
+					struct devs_id *dev)
+{
+	struct mid_sd_board_info sd_info;
+	void *pdata;
+
+	memset(&sd_info, 0, sizeof(sd_info));
+	strncpy(sd_info.name, pentry->name, SFI_NAME_LEN);
+	sd_info.bus_num = pentry->host_num;
+	sd_info.max_clk = pentry->max_freq;
+	sd_info.addr = pentry->addr;
+	pr_debug("SD bus = %d, name = %16.16s, max_clk = %d, addr = 0x%x\n",
+		 sd_info.bus_num,
+		 sd_info.name,
+		 sd_info.max_clk,
+		 sd_info.addr);
+	pdata = intel_mid_sfi_get_pdata(dev, &sd_info);
+	if (IS_ERR(pdata))
+		return;
+
+	/* Nothing we can do with this for now */
+	sd_info.platform_data = pdata;
+
+	pr_debug("Successfully registered %16.16s", sd_info.name);
 }
 
 extern struct devs_id *const __x86_intel_mid_dev_start[],
@@ -477,24 +512,23 @@ static int __init sfi_parse_devs(struct sfi_table_header *table)
 		if (!dev)
 			continue;
 
-		if (dev->device_handler) {
-			dev->device_handler(pentry, dev);
-		} else {
-			switch (pentry->type) {
-			case SFI_DEV_TYPE_IPC:
-				sfi_handle_ipc_dev(pentry, dev);
-				break;
-			case SFI_DEV_TYPE_SPI:
-				sfi_handle_spi_dev(pentry, dev);
-				break;
-			case SFI_DEV_TYPE_I2C:
-				sfi_handle_i2c_dev(pentry, dev);
-				break;
-			case SFI_DEV_TYPE_UART:
-			case SFI_DEV_TYPE_HSI:
-			default:
-				break;
-			}
+		switch (pentry->type) {
+		case SFI_DEV_TYPE_IPC:
+			sfi_handle_ipc_dev(pentry, dev);
+			break;
+		case SFI_DEV_TYPE_SPI:
+			sfi_handle_spi_dev(pentry, dev);
+			break;
+		case SFI_DEV_TYPE_I2C:
+			sfi_handle_i2c_dev(pentry, dev);
+			break;
+		case SFI_DEV_TYPE_SD:
+			sfi_handle_sd_dev(pentry, dev);
+			break;
+		case SFI_DEV_TYPE_UART:
+		case SFI_DEV_TYPE_HSI:
+		default:
+			break;
 		}
 	}
 	return 0;

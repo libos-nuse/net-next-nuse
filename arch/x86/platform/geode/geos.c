@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * System Specific setup for Traverse Technologies GEOS.
  * At the moment this means setup of GPIO control of LEDs.
@@ -9,20 +10,14 @@
  * TODO: There are large similarities with leds-net5501.c
  * by Alessandro Zummo <a.zummo@towertech.it>
  * In the future leds-net5501.c should be migrated over to platform
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/string.h>
-#include <linux/module.h>
 #include <linux/leds.h>
 #include <linux/platform_device.h>
-#include <linux/gpio.h>
 #include <linux/input.h>
 #include <linux/gpio_keys.h>
 #include <linux/dmi.h>
@@ -120,9 +115,4 @@ static int __init geos_init(void)
 
 	return 0;
 }
-
-module_init(geos_init);
-
-MODULE_AUTHOR("Philip Prindeville <philipp@redfish-solutions.com>");
-MODULE_DESCRIPTION("Traverse Technologies Geos System Setup");
-MODULE_LICENSE("GPL");
+device_initcall(geos_init);

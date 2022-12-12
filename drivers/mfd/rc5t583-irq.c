@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Interrupt driver for RICOH583 power management chip.
  *
@@ -6,19 +7,6 @@
  *
  * based on code
  *      Copyright (C) 2011 RICOH COMPANY,LTD
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -389,17 +377,10 @@ int rc5t583_irq_init(struct rc5t583 *rc5t583, int irq, int irq_base)
 		irq_clear_status_flags(__irq, IRQ_NOREQUEST);
 	}
 
-	ret = request_threaded_irq(irq, NULL, rc5t583_irq, IRQF_ONESHOT,
-				"rc5t583", rc5t583);
+	ret = devm_request_threaded_irq(rc5t583->dev, irq, NULL, rc5t583_irq,
+					IRQF_ONESHOT, "rc5t583", rc5t583);
 	if (ret < 0)
 		dev_err(rc5t583->dev,
 			"Error in registering interrupt error: %d\n", ret);
 	return ret;
-}
-
-int rc5t583_irq_exit(struct rc5t583 *rc5t583)
-{
-	if (rc5t583->chip_irq)
-		free_irq(rc5t583->chip_irq, rc5t583);
-	return 0;
 }

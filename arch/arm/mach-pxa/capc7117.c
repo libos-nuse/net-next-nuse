@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-pxa/capc7117.c
  *
@@ -13,10 +14,6 @@
  * 2010-01-09: Edwin Peer <epeer@tmtservices.co.za>
  *             Hennie van der Merwe <hvdmerwe@tmtservices.co.za>
  *             rework for upstream merge
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/irq.h>
@@ -29,8 +26,8 @@
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 
-#include <mach/pxa320.h>
-#include <mach/mxm8x10.h>
+#include "pxa320.h"
+#include "mxm8x10.h"
 
 #include "generic.h"
 

@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright 2012 Texas Instruments
  *
  * Author: Milo(Woogyom) Kim <milo.kim@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #ifndef __LP872X_REGULATOR_H__
@@ -17,6 +13,9 @@
 #include <linux/gpio.h>
 
 #define LP872X_MAX_REGULATORS		9
+
+#define LP8720_ENABLE_DELAY		200
+#define LP8725_ENABLE_DELAY		30000
 
 enum lp872x_regulator_id {
 	LP8720_ID_BASE,
@@ -79,12 +78,14 @@ struct lp872x_regulator_data {
  * @update_config     : if LP872X_GENERAL_CFG register is updated, set true
  * @regulator_data    : platform regulator id and init data
  * @dvs               : dvs data for buck voltage control
+ * @enable_gpio       : gpio pin number for enable control
  */
 struct lp872x_platform_data {
 	u8 general_config;
 	bool update_config;
 	struct lp872x_regulator_data regulator_data[LP872X_MAX_REGULATORS];
 	struct lp872x_dvs *dvs;
+	int enable_gpio;
 };
 
 #endif

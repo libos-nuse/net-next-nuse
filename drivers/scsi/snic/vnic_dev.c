@@ -225,10 +225,9 @@ int svnic_dev_alloc_desc_ring(struct vnic_dev *vdev, struct vnic_dev_ring *ring,
 {
 	svnic_dev_desc_ring_size(ring, desc_count, desc_size);
 
-	ring->descs_unaligned = pci_alloc_consistent(vdev->pdev,
-		ring->size_unaligned,
-		&ring->base_addr_unaligned);
-
+	ring->descs_unaligned = dma_alloc_coherent(&vdev->pdev->dev,
+			ring->size_unaligned, &ring->base_addr_unaligned,
+			GFP_KERNEL);
 	if (!ring->descs_unaligned) {
 		pr_err("Failed to allocate ring (size=%d), aborting\n",
 			(int)ring->size);
@@ -251,7 +250,7 @@ int svnic_dev_alloc_desc_ring(struct vnic_dev *vdev, struct vnic_dev_ring *ring,
 void svnic_dev_free_desc_ring(struct vnic_dev *vdev, struct vnic_dev_ring *ring)
 {
 	if (ring->descs) {
-		pci_free_consistent(vdev->pdev,
+		dma_free_coherent(&vdev->pdev->dev,
 			ring->size_unaligned,
 			ring->descs_unaligned,
 			ring->base_addr_unaligned);
@@ -263,12 +262,20 @@ static int _svnic_dev_cmd2(struct vnic_dev *vdev, enum vnic_devcmd_cmd cmd,
 	int wait)
 {
 	struct devcmd2_controller *dc2c = vdev->devcmd2;
-	struct devcmd2_result *result = dc2c->result + dc2c->next_result;
+	struct devcmd2_result *result = NULL;
 	unsigned int i;
 	int delay;
 	int err;
 	u32 posted;
+	u32 fetch_idx;
 	u32 new_posted;
+	u8 color;
+
+	fetch_idx = ioread32(&dc2c->wq_ctrl->fetch_index);
+	if (fetch_idx == 0xFFFFFFFF) { /* check for hardware gone  */
+		/* Hardware surprise removal: return error */
+		return -ENODEV;
+	}
 
 	posted = ioread32(&dc2c->wq_ctrl->posted_index);
 
@@ -278,6 +285,13 @@ static int _svnic_dev_cmd2(struct vnic_dev *vdev, enum vnic_devcmd_cmd cmd,
 	}
 
 	new_posted = (posted + 1) % DEVCMD2_RING_SIZE;
+	if (new_posted == fetch_idx) {
+		pr_err("%s: wq is full while issuing devcmd2 command %d, fetch index: %u, posted index: %u\n",
+			pci_name(vdev->pdev), _CMD_N(cmd), fetch_idx, posted);
+
+		return -EBUSY;
+	}
+
 	dc2c->cmd_ring[posted].cmd = cmd;
 	dc2c->cmd_ring[posted].flags = 0;
 
@@ -299,14 +313,22 @@ static int _svnic_dev_cmd2(struct vnic_dev *vdev, enum vnic_devcmd_cmd cmd,
 	if (dc2c->cmd_ring[posted].flags & DEVCMD2_FNORESULT)
 		return 0;
 
+	result = dc2c->result + dc2c->next_result;
+	color = dc2c->color;
+
+	/*
+	 * Increment next_result, after posting the devcmd, irrespective of
+	 * devcmd result, and it should be done only once.
+	 */
+	dc2c->next_result++;
+	if (dc2c->next_result == dc2c->result_size) {
+		dc2c->next_result = 0;
+		dc2c->color = dc2c->color ? 0 : 1;
+	}
+
 	for (delay = 0; delay < wait; delay++) {
 		udelay(100);
-		if (result->color == dc2c->color) {
-			dc2c->next_result++;
-			if (dc2c->next_result == dc2c->result_size) {
-				dc2c->next_result = 0;
-				dc2c->color = dc2c->color ? 0 : 1;
-			}
+		if (result->color == color) {
 			if (result->error) {
 				err = (int) result->error;
 				if (err != ERR_ECMDUNKNOWN ||
@@ -317,13 +339,6 @@ static int _svnic_dev_cmd2(struct vnic_dev *vdev, enum vnic_devcmd_cmd cmd,
 				return err;
 			}
 			if (_CMD_DIR(cmd) & _CMD_DIR_READ) {
-				/*
-				 * Adding the rmb() prevents the compiler
-				 * and/or CPU from reordering the reads which
-				 * would potentially result in reading stale
-				 * values.
-				 */
-				rmb();
 				for (i = 0; i < VNIC_DEVCMD_NARGS; i++)
 					vdev->args[i] = result->results[i];
 			}
@@ -454,9 +469,9 @@ int svnic_dev_fw_info(struct vnic_dev *vdev,
 	int err = 0;
 
 	if (!vdev->fw_info) {
-		vdev->fw_info = pci_alloc_consistent(vdev->pdev,
+		vdev->fw_info = dma_alloc_coherent(&vdev->pdev->dev,
 			sizeof(struct vnic_devcmd_fw_info),
-			&vdev->fw_info_pa);
+			&vdev->fw_info_pa, GFP_KERNEL);
 		if (!vdev->fw_info)
 			return -ENOMEM;
 
@@ -518,8 +533,8 @@ int svnic_dev_stats_dump(struct vnic_dev *vdev, struct vnic_stats **stats)
 	int wait = VNIC_DVCMD_TMO;
 
 	if (!vdev->stats) {
-		vdev->stats = pci_alloc_consistent(vdev->pdev,
-			sizeof(struct vnic_stats), &vdev->stats_pa);
+		vdev->stats = dma_alloc_coherent(&vdev->pdev->dev,
+			sizeof(struct vnic_stats), &vdev->stats_pa, GFP_KERNEL);
 		if (!vdev->stats)
 			return -ENOMEM;
 	}
@@ -591,9 +606,9 @@ int svnic_dev_notify_set(struct vnic_dev *vdev, u16 intr)
 	int wait = VNIC_DVCMD_TMO;
 
 	if (!vdev->notify) {
-		vdev->notify = pci_alloc_consistent(vdev->pdev,
+		vdev->notify = dma_alloc_coherent(&vdev->pdev->dev,
 			sizeof(struct vnic_devcmd_notify),
-			&vdev->notify_pa);
+			&vdev->notify_pa, GFP_KERNEL);
 		if (!vdev->notify)
 			return -ENOMEM;
 	}
@@ -681,21 +696,21 @@ void svnic_dev_unregister(struct vnic_dev *vdev)
 {
 	if (vdev) {
 		if (vdev->notify)
-			pci_free_consistent(vdev->pdev,
+			dma_free_coherent(&vdev->pdev->dev,
 				sizeof(struct vnic_devcmd_notify),
 				vdev->notify,
 				vdev->notify_pa);
 		if (vdev->linkstatus)
-			pci_free_consistent(vdev->pdev,
+			dma_free_coherent(&vdev->pdev->dev,
 				sizeof(u32),
 				vdev->linkstatus,
 				vdev->linkstatus_pa);
 		if (vdev->stats)
-			pci_free_consistent(vdev->pdev,
+			dma_free_coherent(&vdev->pdev->dev,
 				sizeof(struct vnic_stats),
 				vdev->stats, vdev->stats_pa);
 		if (vdev->fw_info)
-			pci_free_consistent(vdev->pdev,
+			dma_free_coherent(&vdev->pdev->dev,
 				sizeof(struct vnic_devcmd_fw_info),
 				vdev->fw_info, vdev->fw_info_pa);
 		if (vdev->devcmd2)

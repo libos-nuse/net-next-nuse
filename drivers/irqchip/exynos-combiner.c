@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2010-2011 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  *
  * Combiner irqchip for EXYNOS
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/err.h>
 #include <linux/export.h>
@@ -55,14 +52,14 @@ static void combiner_mask_irq(struct irq_data *data)
 {
 	u32 mask = 1 << (data->hwirq % 32);
 
-	__raw_writel(mask, combiner_base(data) + COMBINER_ENABLE_CLEAR);
+	writel_relaxed(mask, combiner_base(data) + COMBINER_ENABLE_CLEAR);
 }
 
 static void combiner_unmask_irq(struct irq_data *data)
 {
 	u32 mask = 1 << (data->hwirq % 32);
 
-	__raw_writel(mask, combiner_base(data) + COMBINER_ENABLE_SET);
+	writel_relaxed(mask, combiner_base(data) + COMBINER_ENABLE_SET);
 }
 
 static void combiner_handle_cascade_irq(struct irq_desc *desc)
@@ -75,7 +72,7 @@ static void combiner_handle_cascade_irq(struct irq_desc *desc)
 	chained_irq_enter(chip, desc);
 
 	spin_lock(&irq_controller_lock);
-	status = __raw_readl(chip_data->base + COMBINER_INT_STATUS);
+	status = readl_relaxed(chip_data->base + COMBINER_INT_STATUS);
 	spin_unlock(&irq_controller_lock);
 	status &= chip_data->irq_mask;
 
@@ -135,7 +132,7 @@ static void __init combiner_init_one(struct combiner_chip_data *combiner_data,
 	combiner_data->parent_irq = irq;
 
 	/* Disable all interrupts */
-	__raw_writel(combiner_data->irq_mask, base + COMBINER_ENABLE_CLEAR);
+	writel_relaxed(combiner_data->irq_mask, base + COMBINER_ENABLE_CLEAR);
 }
 
 static int combiner_irq_domain_xlate(struct irq_domain *d,
@@ -218,7 +215,7 @@ static int combiner_suspend(void)
 
 	for (i = 0; i < max_nr; i++)
 		combiner_data[i].pm_save =
-			__raw_readl(combiner_data[i].base + COMBINER_ENABLE_SET);
+			readl_relaxed(combiner_data[i].base + COMBINER_ENABLE_SET);
 
 	return 0;
 }
@@ -235,9 +232,9 @@ static void combiner_resume(void)
 	int i;
 
 	for (i = 0; i < max_nr; i++) {
-		__raw_writel(combiner_data[i].irq_mask,
+		writel_relaxed(combiner_data[i].irq_mask,
 			     combiner_data[i].base + COMBINER_ENABLE_CLEAR);
-		__raw_writel(combiner_data[i].pm_save,
+		writel_relaxed(combiner_data[i].pm_save,
 			     combiner_data[i].base + COMBINER_ENABLE_SET);
 	}
 }

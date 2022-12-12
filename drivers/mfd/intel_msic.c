@@ -1,18 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Driver for Intel MSIC
  *
  * Copyright (C) 2011, Intel Corporation
  * Author: Mika Westerberg <mika.westerberg@linux.intel.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/err.h>
 #include <linux/gpio.h>
 #include <linux/io.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/intel_msic.h>
 #include <linux/platform_device.h>
@@ -54,68 +51,44 @@ struct intel_msic {
 };
 
 static struct resource msic_touch_resources[] = {
-	{
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ(0),
 };
 
 static struct resource msic_adc_resources[] = {
-	{
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ(0),
 };
 
 static struct resource msic_battery_resources[] = {
-	{
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ(0),
 };
 
 static struct resource msic_gpio_resources[] = {
-	{
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ(0),
 };
 
 static struct resource msic_audio_resources[] = {
-	{
-		.name		= "IRQ",
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ_NAMED(0, "IRQ"),
 	/*
 	 * We will pass IRQ_BASE to the driver now but this can be removed
 	 * when/if the driver starts to use intel_msic_irq_read().
 	 */
-	{
-		.name		= "IRQ_BASE",
-		.flags		= IORESOURCE_MEM,
-		.start		= MSIC_IRQ_STATUS_ACCDET,
-		.end		= MSIC_IRQ_STATUS_ACCDET,
-	},
+	DEFINE_RES_MEM_NAMED(MSIC_IRQ_STATUS_ACCDET, 1, "IRQ_BASE"),
 };
 
 static struct resource msic_hdmi_resources[] = {
-	{
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ(0),
 };
 
 static struct resource msic_thermal_resources[] = {
-	{
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ(0),
 };
 
 static struct resource msic_power_btn_resources[] = {
-	{
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ(0),
 };
 
 static struct resource msic_ocd_resources[] = {
-	{
-		.flags		= IORESOURCE_IRQ,
-	},
+	DEFINE_RES_IRQ(0),
 };
 
 /*
@@ -449,9 +422,4 @@ static struct platform_driver intel_msic_driver = {
 		.name	= "intel_msic",
 	},
 };
-
-module_platform_driver(intel_msic_driver);
-
-MODULE_DESCRIPTION("Driver for Intel MSIC");
-MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");
-MODULE_LICENSE("GPL");
+builtin_platform_driver(intel_msic_driver);

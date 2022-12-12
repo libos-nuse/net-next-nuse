@@ -1,26 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TI Palma series PMIC's GPIO driver.
  *
  * Copyright (c) 2012, NVIDIA CORPORATION.  All rights reserved.
  *
  * Author: Laxman Dewangan <ldewangan@nvidia.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/kernel.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/mfd/palmas.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -35,14 +24,9 @@ struct palmas_device_data {
 	int ngpio;
 };
 
-static inline struct palmas_gpio *to_palmas_gpio(struct gpio_chip *chip)
-{
-	return container_of(chip, struct palmas_gpio, gpio_chip);
-}
-
 static int palmas_gpio_get(struct gpio_chip *gc, unsigned offset)
 {
-	struct palmas_gpio *pg = to_palmas_gpio(gc);
+	struct palmas_gpio *pg = gpiochip_get_data(gc);
 	struct palmas *palmas = pg->palmas;
 	unsigned int val;
 	int ret;
@@ -54,7 +38,7 @@ static int palmas_gpio_get(struct gpio_chip *gc, unsigned offset)
 
 	ret = palmas_read(palmas, PALMAS_GPIO_BASE, reg, &val);
 	if (ret < 0) {
-		dev_err(gc->dev, "Reg 0x%02x read failed, %d\n", reg, ret);
+		dev_err(gc->parent, "Reg 0x%02x read failed, %d\n", reg, ret);
 		return ret;
 	}
 
@@ -65,7 +49,7 @@ static int palmas_gpio_get(struct gpio_chip *gc, unsigned offset)
 
 	ret = palmas_read(palmas, PALMAS_GPIO_BASE, reg, &val);
 	if (ret < 0) {
-		dev_err(gc->dev, "Reg 0x%02x read failed, %d\n", reg, ret);
+		dev_err(gc->parent, "Reg 0x%02x read failed, %d\n", reg, ret);
 		return ret;
 	}
 	return !!(val & BIT(offset));
@@ -74,7 +58,7 @@ static int palmas_gpio_get(struct gpio_chip *gc, unsigned offset)
 static void palmas_gpio_set(struct gpio_chip *gc, unsigned offset,
 			int value)
 {
-	struct palmas_gpio *pg = to_palmas_gpio(gc);
+	struct palmas_gpio *pg = gpiochip_get_data(gc);
 	struct palmas *palmas = pg->palmas;
 	int ret;
 	unsigned int reg;
@@ -90,13 +74,13 @@ static void palmas_gpio_set(struct gpio_chip *gc, unsigned offset,
 
 	ret = palmas_write(palmas, PALMAS_GPIO_BASE, reg, BIT(offset));
 	if (ret < 0)
-		dev_err(gc->dev, "Reg 0x%02x write failed, %d\n", reg, ret);
+		dev_err(gc->parent, "Reg 0x%02x write failed, %d\n", reg, ret);
 }
 
 static int palmas_gpio_output(struct gpio_chip *gc, unsigned offset,
 				int value)
 {
-	struct palmas_gpio *pg = to_palmas_gpio(gc);
+	struct palmas_gpio *pg = gpiochip_get_data(gc);
 	struct palmas *palmas = pg->palmas;
 	int ret;
 	unsigned int reg;
@@ -111,13 +95,14 @@ static int palmas_gpio_output(struct gpio_chip *gc, unsigned offset,
 	ret = palmas_update_bits(palmas, PALMAS_GPIO_BASE, reg,
 				BIT(offset), BIT(offset));
 	if (ret < 0)
-		dev_err(gc->dev, "Reg 0x%02x update failed, %d\n", reg, ret);
+		dev_err(gc->parent, "Reg 0x%02x update failed, %d\n", reg,
+			ret);
 	return ret;
 }
 
 static int palmas_gpio_input(struct gpio_chip *gc, unsigned offset)
 {
-	struct palmas_gpio *pg = to_palmas_gpio(gc);
+	struct palmas_gpio *pg = gpiochip_get_data(gc);
 	struct palmas *palmas = pg->palmas;
 	int ret;
 	unsigned int reg;
@@ -128,13 +113,14 @@ static int palmas_gpio_input(struct gpio_chip *gc, unsigned offset)
 
 	ret = palmas_update_bits(palmas, PALMAS_GPIO_BASE, reg, BIT(offset), 0);
 	if (ret < 0)
-		dev_err(gc->dev, "Reg 0x%02x update failed, %d\n", reg, ret);
+		dev_err(gc->parent, "Reg 0x%02x update failed, %d\n", reg,
+			ret);
 	return ret;
 }
 
 static int palmas_gpio_to_irq(struct gpio_chip *gc, unsigned offset)
 {
-	struct palmas_gpio *pg = to_palmas_gpio(gc);
+	struct palmas_gpio *pg = gpiochip_get_data(gc);
 	struct palmas *palmas = pg->palmas;
 
 	return palmas_irq_get_virq(palmas, PALMAS_GPIO_0_IRQ + offset);
@@ -155,7 +141,6 @@ static const struct of_device_id of_palmas_gpio_match[] = {
 	{ .compatible = "ti,tps80036-gpio", .data = &tps80036_dev_data,},
 	{ },
 };
-MODULE_DEVICE_TABLE(of, of_palmas_gpio_match);
 
 static int palmas_gpio_probe(struct platform_device *pdev)
 {
@@ -163,13 +148,9 @@ static int palmas_gpio_probe(struct platform_device *pdev)
 	struct palmas_platform_data *palmas_pdata;
 	struct palmas_gpio *palmas_gpio;
 	int ret;
-	const struct of_device_id *match;
 	const struct palmas_device_data *dev_data;
 
-	match = of_match_device(of_palmas_gpio_match, &pdev->dev);
-	if (!match)
-		return -ENODEV;
-	dev_data = match->data;
+	dev_data = of_device_get_match_data(&pdev->dev);
 	if (!dev_data)
 		dev_data = &palmas_dev_data;
 
@@ -188,7 +169,7 @@ static int palmas_gpio_probe(struct platform_device *pdev)
 	palmas_gpio->gpio_chip.to_irq = palmas_gpio_to_irq;
 	palmas_gpio->gpio_chip.set	= palmas_gpio_set;
 	palmas_gpio->gpio_chip.get	= palmas_gpio_get;
-	palmas_gpio->gpio_chip.dev = &pdev->dev;
+	palmas_gpio->gpio_chip.parent = &pdev->dev;
 #ifdef CONFIG_OF_GPIO
 	palmas_gpio->gpio_chip.of_node = pdev->dev.of_node;
 #endif
@@ -198,7 +179,8 @@ static int palmas_gpio_probe(struct platform_device *pdev)
 	else
 		palmas_gpio->gpio_chip.base = -1;
 
-	ret = gpiochip_add(&palmas_gpio->gpio_chip);
+	ret = devm_gpiochip_add_data(&pdev->dev, &palmas_gpio->gpio_chip,
+				     palmas_gpio);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Could not register gpiochip, %d\n", ret);
 		return ret;
@@ -208,20 +190,10 @@ static int palmas_gpio_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int palmas_gpio_remove(struct platform_device *pdev)
-{
-	struct palmas_gpio *palmas_gpio = platform_get_drvdata(pdev);
-
-	gpiochip_remove(&palmas_gpio->gpio_chip);
-	return 0;
-}
-
 static struct platform_driver palmas_gpio_driver = {
 	.driver.name	= "palmas-gpio",
-	.driver.owner	= THIS_MODULE,
 	.driver.of_match_table = of_palmas_gpio_match,
 	.probe		= palmas_gpio_probe,
-	.remove		= palmas_gpio_remove,
 };
 
 static int __init palmas_gpio_init(void)
@@ -229,14 +201,3 @@ static int __init palmas_gpio_init(void)
 	return platform_driver_register(&palmas_gpio_driver);
 }
 subsys_initcall(palmas_gpio_init);
-
-static void __exit palmas_gpio_exit(void)
-{
-	platform_driver_unregister(&palmas_gpio_driver);
-}
-module_exit(palmas_gpio_exit);
-
-MODULE_ALIAS("platform:palmas-gpio");
-MODULE_AUTHOR("Laxman Dewangan <ldewangan@nvidia.com>");
-MODULE_DESCRIPTION("GPIO driver for TI Palmas series PMICs");
-MODULE_LICENSE("GPL v2");

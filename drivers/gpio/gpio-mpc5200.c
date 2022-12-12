@@ -1,20 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * MPC52xx gpio driver
  *
  * Copyright (c) 2008 Sascha Hauer <s.hauer@pengutronix.de>, Pengutronix
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/of.h>
@@ -25,7 +13,6 @@
 #include <linux/of_platform.h>
 #include <linux/module.h>
 
-#include <asm/gpio.h>
 #include <asm/mpc52xx.h>
 #include <sysdev/fsl_soc.h>
 
@@ -71,8 +58,7 @@ static inline void
 __mpc52xx_wkup_gpio_set(struct gpio_chip *gc, unsigned int gpio, int val)
 {
 	struct of_mm_gpio_chip *mm_gc = to_of_mm_gpio_chip(gc);
-	struct mpc52xx_gpiochip *chip = container_of(mm_gc,
-			struct mpc52xx_gpiochip, mmchip);
+	struct mpc52xx_gpiochip *chip = gpiochip_get_data(gc);
 	struct mpc52xx_gpio_wkup __iomem *regs = mm_gc->regs;
 
 	if (val)
@@ -100,8 +86,7 @@ mpc52xx_wkup_gpio_set(struct gpio_chip *gc, unsigned int gpio, int val)
 static int mpc52xx_wkup_gpio_dir_in(struct gpio_chip *gc, unsigned int gpio)
 {
 	struct of_mm_gpio_chip *mm_gc = to_of_mm_gpio_chip(gc);
-	struct mpc52xx_gpiochip *chip = container_of(mm_gc,
-			struct mpc52xx_gpiochip, mmchip);
+	struct mpc52xx_gpiochip *chip = gpiochip_get_data(gc);
 	struct mpc52xx_gpio_wkup __iomem *regs = mm_gc->regs;
 	unsigned long flags;
 
@@ -125,8 +110,7 @@ mpc52xx_wkup_gpio_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
 {
 	struct of_mm_gpio_chip *mm_gc = to_of_mm_gpio_chip(gc);
 	struct mpc52xx_gpio_wkup __iomem *regs = mm_gc->regs;
-	struct mpc52xx_gpiochip *chip = container_of(mm_gc,
-			struct mpc52xx_gpiochip, mmchip);
+	struct mpc52xx_gpiochip *chip = gpiochip_get_data(gc);
 	unsigned long flags;
 
 	spin_lock_irqsave(&gpio_lock, flags);
@@ -169,7 +153,7 @@ static int mpc52xx_wkup_gpiochip_probe(struct platform_device *ofdev)
 	gc->get              = mpc52xx_wkup_gpio_get;
 	gc->set              = mpc52xx_wkup_gpio_set;
 
-	ret = of_mm_gpiochip_add(ofdev->dev.of_node, &chip->mmchip);
+	ret = of_mm_gpiochip_add_data(ofdev->dev.of_node, &chip->mmchip, chip);
 	if (ret)
 		return ret;
 
@@ -236,8 +220,7 @@ static inline void
 __mpc52xx_simple_gpio_set(struct gpio_chip *gc, unsigned int gpio, int val)
 {
 	struct of_mm_gpio_chip *mm_gc = to_of_mm_gpio_chip(gc);
-	struct mpc52xx_gpiochip *chip = container_of(mm_gc,
-			struct mpc52xx_gpiochip, mmchip);
+	struct mpc52xx_gpiochip *chip = gpiochip_get_data(gc);
 	struct mpc52xx_gpio __iomem *regs = mm_gc->regs;
 
 	if (val)
@@ -264,8 +247,7 @@ mpc52xx_simple_gpio_set(struct gpio_chip *gc, unsigned int gpio, int val)
 static int mpc52xx_simple_gpio_dir_in(struct gpio_chip *gc, unsigned int gpio)
 {
 	struct of_mm_gpio_chip *mm_gc = to_of_mm_gpio_chip(gc);
-	struct mpc52xx_gpiochip *chip = container_of(mm_gc,
-			struct mpc52xx_gpiochip, mmchip);
+	struct mpc52xx_gpiochip *chip = gpiochip_get_data(gc);
 	struct mpc52xx_gpio __iomem *regs = mm_gc->regs;
 	unsigned long flags;
 
@@ -288,8 +270,7 @@ static int
 mpc52xx_simple_gpio_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
 {
 	struct of_mm_gpio_chip *mm_gc = to_of_mm_gpio_chip(gc);
-	struct mpc52xx_gpiochip *chip = container_of(mm_gc,
-			struct mpc52xx_gpiochip, mmchip);
+	struct mpc52xx_gpiochip *chip = gpiochip_get_data(gc);
 	struct mpc52xx_gpio __iomem *regs = mm_gc->regs;
 	unsigned long flags;
 
@@ -334,7 +315,7 @@ static int mpc52xx_simple_gpiochip_probe(struct platform_device *ofdev)
 	gc->get              = mpc52xx_simple_gpio_get;
 	gc->set              = mpc52xx_simple_gpio_set;
 
-	ret = of_mm_gpiochip_add(ofdev->dev.of_node, &chip->mmchip);
+	ret = of_mm_gpiochip_add_data(ofdev->dev.of_node, &chip->mmchip, chip);
 	if (ret)
 		return ret;
 
@@ -360,15 +341,14 @@ static struct platform_driver mpc52xx_simple_gpiochip_driver = {
 	.remove = mpc52xx_gpiochip_remove,
 };
 
+static struct platform_driver * const drivers[] = {
+	&mpc52xx_wkup_gpiochip_driver,
+	&mpc52xx_simple_gpiochip_driver,
+};
+
 static int __init mpc52xx_gpio_init(void)
 {
-	if (platform_driver_register(&mpc52xx_wkup_gpiochip_driver))
-		printk(KERN_ERR "Unable to register wakeup GPIO driver\n");
-
-	if (platform_driver_register(&mpc52xx_simple_gpiochip_driver))
-		printk(KERN_ERR "Unable to register simple GPIO driver\n");
-
-	return 0;
+	return platform_register_drivers(drivers, ARRAY_SIZE(drivers));
 }
 
 /* Make sure we get initialised before anyone else tries to use us */
@@ -376,9 +356,7 @@ subsys_initcall(mpc52xx_gpio_init);
 
 static void __exit mpc52xx_gpio_exit(void)
 {
-	platform_driver_unregister(&mpc52xx_wkup_gpiochip_driver);
-
-	platform_driver_unregister(&mpc52xx_simple_gpiochip_driver);
+	platform_unregister_drivers(drivers, ARRAY_SIZE(drivers));
 }
 module_exit(mpc52xx_gpio_exit);
 

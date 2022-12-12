@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * arch/powerpc/platforms/83xx/mpc837x_mds.c
  *
  * Copyright (C) 2007 Freescale Semiconductor, Inc. All rights reserved.
  *
  * MPC837x MDS board specific routines
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation;  either version 2 of the License, or (at your
- * option) any later version.
  */
 
 #include <linux/pci.h>
@@ -79,10 +75,7 @@ out:
  */
 static void __init mpc837x_mds_setup_arch(void)
 {
-	if (ppc_md.progress)
-		ppc_md.progress("mpc837x_mds_setup_arch()", 0);
-
-	mpc83xx_setup_pci();
+	mpc83xx_setup_arch();
 	mpc837xmds_usb_cfg();
 }
 
@@ -93,9 +86,7 @@ machine_device_initcall(mpc837x_mds, mpc83xx_declare_of_platform_devices);
  */
 static int __init mpc837x_mds_probe(void)
 {
-        unsigned long root = of_get_flat_dt_root();
-
-        return of_flat_dt_is_compatible(root, "fsl,mpc837xmds");
+	return of_machine_is_compatible("fsl,mpc837xmds");
 }
 
 define_machine(mpc837x_mds) {

@@ -123,11 +123,11 @@ static int ocfb_setupfb(struct ocfb_dev *fbdev)
 
 	/* Horizontal timings */
 	ocfb_writereg(fbdev, OCFB_HTIM, (var->hsync_len - 1) << 24 |
-		      (var->right_margin - 1) << 16 | (var->xres - 1));
+		      (var->left_margin - 1) << 16 | (var->xres - 1));
 
 	/* Vertical timings */
 	ocfb_writereg(fbdev, OCFB_VTIM, (var->vsync_len - 1) << 24 |
-		      (var->lower_margin - 1) << 16 | (var->yres - 1));
+		      (var->upper_margin - 1) << 16 | (var->yres - 1));
 
 	/* Total length of frame */
 	hlen = var->left_margin + var->right_margin + var->hsync_len +
@@ -285,7 +285,7 @@ static int ocfb_init_var(struct ocfb_dev *fbdev)
 	return 0;
 }
 
-static struct fb_ops ocfb_ops = {
+static const struct fb_ops ocfb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_setcolreg	= ocfb_setcolreg,
 	.fb_fillrect	= cfb_fillrect,
@@ -297,7 +297,6 @@ static int ocfb_probe(struct platform_device *pdev)
 {
 	int ret = 0;
 	struct ocfb_dev *fbdev;
-	struct resource *res;
 	int fbsize;
 
 	fbdev = devm_kzalloc(&pdev->dev, sizeof(*fbdev), GFP_KERNEL);
@@ -319,13 +318,7 @@ static int ocfb_probe(struct platform_device *pdev)
 	ocfb_init_var(fbdev);
 	ocfb_init_fix(fbdev);
 
-	/* Request I/O resource */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(&pdev->dev, "I/O resource request failed\n");
-		return -ENXIO;
-	}
-	fbdev->regs = devm_ioremap_resource(&pdev->dev, res);
+	fbdev->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(fbdev->regs))
 		return PTR_ERR(fbdev->regs);
 

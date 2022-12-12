@@ -1,22 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Driver for the Auvitek USB bridge
  *
  *  Copyright (c) 2008 Steven Toth <stoth@linuxtv.org>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include "au0828.h"
@@ -109,6 +95,15 @@ static struct tda18271_config hauppauge_woodbury_tunerconfig = {
 
 static void au0828_restart_dvb_streaming(struct work_struct *work);
 
+static void au0828_bulk_timeout(struct timer_list *t)
+{
+	struct au0828_dev *dev = from_timer(dev, t, bulk_timeout);
+
+	dprintk(1, "%s called\n", __func__);
+	dev->bulk_timeout_running = 0;
+	schedule_work(&dev->restart_streaming);
+}
+
 /*-------------------------------------------------------------------*/
 static void urb_completion(struct urb *purb)
 {
@@ -142,6 +137,13 @@ static void urb_completion(struct urb *purb)
 			ptr[0], purb->actual_length);
 		schedule_work(&dev->restart_streaming);
 		return;
+	} else if (dev->bulk_timeout_running == 1) {
+		/* The URB handler has fired, so cancel timer which would
+		 * restart endpoint if we hadn't
+		 */
+		dprintk(1, "%s cancelling bulk timeout\n", __func__);
+		dev->bulk_timeout_running = 0;
+		del_timer(&dev->bulk_timeout);
 	}
 
 	/* Feed the transport payload into the kernel demux */
@@ -164,6 +166,11 @@ static int stop_urb_transfer(struct au0828_dev *dev)
 	if (!dev->urb_streaming)
 		return 0;
 
+	if (dev->bulk_timeout_running == 1) {
+		dev->bulk_timeout_running = 0;
+		del_timer(&dev->bulk_timeout);
+	}
+
 	dev->urb_streaming = false;
 	for (i = 0; i < URB_COUNT; i++) {
 		if (dev->urbs[i]) {
@@ -181,7 +188,7 @@ static int stop_urb_transfer(struct au0828_dev *dev)
 static int start_urb_transfer(struct au0828_dev *dev)
 {
 	struct urb *purb;
-	int i, ret = -ENOMEM;
+	int i, ret;
 
 	dprintk(2, "%s()\n", __func__);
 
@@ -194,7 +201,7 @@ static int start_urb_transfer(struct au0828_dev *dev)
 
 		dev->urbs[i] = usb_alloc_urb(0, GFP_KERNEL);
 		if (!dev->urbs[i])
-			goto err;
+			return -ENOMEM;
 
 		purb = dev->urbs[i];
 
@@ -207,9 +214,10 @@ static int start_urb_transfer(struct au0828_dev *dev)
 		if (!purb->transfer_buffer) {
 			usb_free_urb(purb);
 			dev->urbs[i] = NULL;
+			ret = -ENOMEM;
 			pr_err("%s: failed big buffer allocation, err = %d\n",
 			       __func__, ret);
-			goto err;
+			return ret;
 		}
 
 		purb->status = -EINPROGRESS;
@@ -235,10 +243,12 @@ static int start_urb_transfer(struct au0828_dev *dev)
 	}
 
 	dev->urb_streaming = true;
-	ret = 0;
 
-err:
-	return ret;
+	/* If we don't valid data within 1 second, restart stream */
+	mod_timer(&dev->bulk_timeout, jiffies + (HZ));
+	dev->bulk_timeout_running = 1;
+
+	return 0;
 }
 
 static void au0828_start_transport(struct au0828_dev *dev)
@@ -415,6 +425,11 @@ static int dvb_register(struct au0828_dev *dev)
 		       result);
 		goto fail_adapter;
 	}
+
+#ifdef CONFIG_MEDIA_CONTROLLER_DVB
+	dvb->adapter.mdev = dev->media_dev;
+#endif
+
 	dvb->adapter.priv = dev;
 
 	/* register frontend */
@@ -480,8 +495,15 @@ static int dvb_register(struct au0828_dev *dev)
 
 	dvb->start_count = 0;
 	dvb->stop_count = 0;
+
+	result = dvb_create_media_graph(&dvb->adapter, false);
+	if (result < 0)
+		goto fail_create_graph;
+
 	return 0;
 
+fail_create_graph:
+	dvb_net_release(&dvb->net);
 fail_fe_conn:
 	dvb->demux.dmx.remove_frontend(&dvb->demux.dmx, &dvb->fe_mem);
 fail_fe_mem:
@@ -534,7 +556,7 @@ void au0828_dvb_unregister(struct au0828_dev *dev)
 	dvb->frontend = NULL;
 }
 
-/* All the DVB attach calls go here, this function get's modified
+/* All the DVB attach calls go here, this function gets modified
  * for each new card. No other function in this file needs
  * to change.
  */
@@ -615,6 +637,8 @@ int au0828_dvb_register(struct au0828_dev *dev)
 		dvb->frontend = NULL;
 		return ret;
 	}
+
+	timer_setup(&dev->bulk_timeout, au0828_bulk_timeout, 0);
 
 	return 0;
 }

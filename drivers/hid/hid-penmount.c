@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  HID driver for PenMount touchscreens
  *
@@ -8,10 +9,6 @@
  */
 
 /*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
  */
 
 #include <linux/module.h>
@@ -23,8 +20,12 @@ static int penmount_input_mapping(struct hid_device *hdev,
 		struct hid_usage *usage, unsigned long **bit, int *max)
 {
 	if ((usage->hid & HID_USAGE_PAGE) == HID_UP_BUTTON) {
-		hid_map_usage(hi, usage, bit, max, EV_KEY, BTN_TOUCH);
-		return 1;
+		if (((usage->hid - 1) & HID_USAGE) == 0) {
+			hid_map_usage(hi, usage, bit, max, EV_KEY, BTN_TOUCH);
+			return 1;
+		} else {
+			return -1;
+		}
 	}
 
 	return 0;

@@ -20,6 +20,8 @@
 
 #include <asm/mach/time.h>
 
+extern volatile int spear_pen_release;
+
 extern void spear13xx_timer_init(void);
 extern void spear3xx_timer_init(void);
 extern struct pl022_ssp_controller pl022_plat_data;
@@ -39,7 +41,7 @@ void spear_restart(enum reboot_mode, const char *);
 void spear13xx_secondary_startup(void);
 void spear13xx_cpu_die(unsigned int cpu);
 
-extern struct smp_operations spear13xx_smp_ops;
+extern const struct smp_operations spear13xx_smp_ops;
 
 #ifdef CONFIG_MACH_SPEAR1310
 void __init spear1310_clk_init(void __iomem *misc_base, void __iomem *ras_base);

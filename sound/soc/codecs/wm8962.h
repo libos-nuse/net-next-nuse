@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * wm8962.h  --  WM8962 ASoC driver
  *
  * Copyright 2010 Wolfson Microelectronics, plc
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _WM8962_H
@@ -16,9 +13,9 @@
 #include <asm/types.h>
 #include <sound/soc.h>
 
-#define WM8962_SYSCLK_MCLK 1
-#define WM8962_SYSCLK_FLL  2
-#define WM8962_SYSCLK_PLL3 3
+#define WM8962_SYSCLK_MCLK 0
+#define WM8962_SYSCLK_FLL  1
+#define WM8962_SYSCLK_PLL3 2
 
 #define WM8962_FLL  1
 
@@ -3779,6 +3776,6 @@
 #define WM8962_VSS_ENA_SHIFT                         0  /* VSS_ENA */
 #define WM8962_VSS_ENA_WIDTH                         1  /* VSS_ENA */
 
-int wm8962_mic_detect(struct snd_soc_codec *codec, struct snd_soc_jack *jack);
+int wm8962_mic_detect(struct snd_soc_component *component, struct snd_soc_jack *jack);
 
 #endif

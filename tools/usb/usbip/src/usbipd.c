@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2011 matt mooney <mfm@muteddisk.com>
  *               2005-2007 Takahiro Hirofuchi
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ * Copyright (C) 2015-2016 Samsung Electronics
+ *               Igor Kotrasinski <i.kotrasinsk@samsung.com>
+ *               Krzysztof Opasiak <k.opasiak@samsung.com>
  */
 
 #ifdef HAVE_CONFIG_H
@@ -41,6 +32,8 @@
 #include <poll.h>
 
 #include "usbip_host_driver.h"
+#include "usbip_host_common.h"
+#include "usbip_device_driver.h"
 #include "usbip_common.h"
 #include "usbip_network.h"
 #include "list.h"
@@ -64,6 +57,11 @@ static const char usbipd_help_string[] =
 	"	-6, --ipv6\n"
 	"		Bind to IPv6. Default is both.\n"
 	"\n"
+	"	-e, --device\n"
+	"		Run in device mode.\n"
+	"		Rather than drive an attached device, create\n"
+	"		a virtual UDC to bind gadgets to.\n"
+	"\n"
 	"	-D, --daemon\n"
 	"		Run as a daemon process.\n"
 	"\n"
@@ -83,6 +81,8 @@ static const char usbipd_help_string[] =
 	"	-v, --version\n"
 	"		Show version.\n";
 
+static struct usbip_host_driver *driver;
+
 static void usbipd_help(void)
 {
 	printf("%s\n", usbipd_help_string);
@@ -95,7 +95,7 @@ static int recv_request_import(int sockfd)
 	struct usbip_usb_device pdu_udev;
 	struct list_head *i;
 	int found = 0;
-	int error = 0;
+	int status = ST_OK;
 	int rc;
 
 	memset(&req, 0, sizeof(req));
@@ -107,7 +107,7 @@ static int recv_request_import(int sockfd)
 	}
 	PACK_OP_IMPORT_REQUEST(0, &req);
 
-	list_for_each(i, &host_driver->edev_list) {
+	list_for_each(i, &driver->edev_list) {
 		edev = list_entry(i, struct usbip_exported_device, node);
 		if (!strncmp(req.busid, edev->udev.busid, SYSFS_BUS_ID_SIZE)) {
 			info("found requested device: %s", req.busid);
@@ -121,22 +121,21 @@ static int recv_request_import(int sockfd)
 		usbip_net_set_nodelay(sockfd);
 
 		/* export device needs a TCP/IP socket descriptor */
-		rc = usbip_host_export_device(edev, sockfd);
-		if (rc < 0)
-			error = 1;
+		status = usbip_export_device(edev, sockfd);
+		if (status < 0)
+			status = ST_NA;
 	} else {
 		info("requested device not found: %s", req.busid);
-		error = 1;
+		status = ST_NODEV;
 	}
 
-	rc = usbip_net_send_op_common(sockfd, OP_REP_IMPORT,
-				      (!error ? ST_OK : ST_NA));
+	rc = usbip_net_send_op_common(sockfd, OP_REP_IMPORT, status);
 	if (rc < 0) {
 		dbg("usbip_net_send_op_common failed: %#0x", OP_REP_IMPORT);
 		return -1;
 	}
 
-	if (error) {
+	if (status) {
 		dbg("import request busid %s: failed", req.busid);
 		return -1;
 	}
@@ -164,10 +163,21 @@ static int send_reply_devlist(int connfd)
 	struct list_head *j;
 	int rc, i;
 
+	/*
+	 * Exclude devices that are already exported to a client from
+	 * the exportable device list to avoid:
+	 *	- import requests for devices that are exported only to
+	 *	  fail the request.
+	 *	- revealing devices that are imported by a client to
+	 *	  another client.
+	 */
+
 	reply.ndev = 0;
 	/* number of exported devices */
-	list_for_each(j, &host_driver->edev_list) {
-		reply.ndev += 1;
+	list_for_each(j, &driver->edev_list) {
+		edev = list_entry(j, struct usbip_exported_device, node);
+		if (edev->status != SDEV_ST_USED)
+			reply.ndev += 1;
 	}
 	info("exportable devices: %d", reply.ndev);
 
@@ -184,8 +194,11 @@ static int send_reply_devlist(int connfd)
 		return -1;
 	}
 
-	list_for_each(j, &host_driver->edev_list) {
+	list_for_each(j, &driver->edev_list) {
 		edev = list_entry(j, struct usbip_exported_device, node);
+		if (edev->status == SDEV_ST_USED)
+			continue;
+
 		dump_usb_device(&edev->udev);
 		memcpy(&pdu_udev, &edev->udev, sizeof(pdu_udev));
 		usbip_net_pack_usb_device(1, &pdu_udev);
@@ -239,14 +252,15 @@ static int recv_pdu(int connfd)
 {
 	uint16_t code = OP_UNSPEC;
 	int ret;
+	int status;
 
-	ret = usbip_net_recv_op_common(connfd, &code);
+	ret = usbip_net_recv_op_common(connfd, &code, &status);
 	if (ret < 0) {
 		dbg("could not receive opcode: %#0x", code);
 		return -1;
 	}
 
-	ret = usbip_host_refresh_device_list();
+	ret = usbip_refresh_device_list(driver);
 	if (ret < 0) {
 		dbg("could not refresh device list: %d", ret);
 		return -1;
@@ -386,13 +400,6 @@ static int listen_all_addrinfo(struct addrinfo *ai_head, int sockfdlist[],
 		 * (see do_standalone_mode()) */
 		usbip_net_set_v6only(sock);
 
-		if (sock >= FD_SETSIZE) {
-			err("FD_SETSIZE: %s: sock=%d, max=%d",
-			    ai_buf, sock, FD_SETSIZE);
-			close(sock);
-			continue;
-		}
-
 		ret = bind(sock, ai->ai_addr, ai->ai_addrlen);
 		if (ret < 0) {
 			err("bind: %s: %d (%s)",
@@ -451,7 +458,7 @@ static void set_signal(void)
 	sigaction(SIGTERM, &act, NULL);
 	sigaction(SIGINT, &act, NULL);
 	act.sa_handler = SIG_IGN;
-	sigaction(SIGCLD, &act, NULL);
+	sigaction(SIGCHLD, &act, NULL);
 }
 
 static const char *pid_file;
@@ -491,16 +498,13 @@ static int do_standalone_mode(int daemonize, int ipv4, int ipv6)
 	struct timespec timeout;
 	sigset_t sigmask;
 
-	if (usbip_host_driver_open()) {
-		err("please load " USBIP_CORE_MOD_NAME ".ko and "
-		    USBIP_HOST_DRV_NAME ".ko!");
+	if (usbip_driver_open(driver))
 		return -1;
-	}
 
 	if (daemonize) {
 		if (daemon(0, 0) < 0) {
 			err("daemonizing failed: %s", strerror(errno));
-			usbip_host_driver_close();
+			usbip_driver_close(driver);
 			return -1;
 		}
 		umask(0);
@@ -525,7 +529,7 @@ static int do_standalone_mode(int daemonize, int ipv4, int ipv6)
 
 	ai_head = do_getaddrinfo(NULL, family);
 	if (!ai_head) {
-		usbip_host_driver_close();
+		usbip_driver_close(driver);
 		return -1;
 	}
 	nsockfd = listen_all_addrinfo(ai_head, sockfdlist,
@@ -533,7 +537,7 @@ static int do_standalone_mode(int daemonize, int ipv4, int ipv6)
 	freeaddrinfo(ai_head);
 	if (nsockfd <= 0) {
 		err("failed to open a listening socket");
-		usbip_host_driver_close();
+		usbip_driver_close(driver);
 		return -1;
 	}
 
@@ -574,7 +578,7 @@ static int do_standalone_mode(int daemonize, int ipv4, int ipv6)
 
 	info("shutting down " PROGNAME);
 	free(fds);
-	usbip_host_driver_close();
+	usbip_driver_close(driver);
 
 	return 0;
 }
@@ -587,6 +591,7 @@ int main(int argc, char *argv[])
 		{ "daemon",   no_argument,       NULL, 'D' },
 		{ "daemon",   no_argument,       NULL, 'D' },
 		{ "debug",    no_argument,       NULL, 'd' },
+		{ "device",   no_argument,       NULL, 'e' },
 		{ "pid",      optional_argument, NULL, 'P' },
 		{ "tcp-port", required_argument, NULL, 't' },
 		{ "help",     no_argument,       NULL, 'h' },
@@ -613,8 +618,9 @@ int main(int argc, char *argv[])
 		err("not running as root?");
 
 	cmd = cmd_standalone_mode;
+	driver = &host_driver;
 	for (;;) {
-		opt = getopt_long(argc, argv, "46DdP::t:hv", longopts, NULL);
+		opt = getopt_long(argc, argv, "46DdeP::t:hv", longopts, NULL);
 
 		if (opt == -1)
 			break;
@@ -643,6 +649,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'v':
 			cmd = cmd_version;
+			break;
+		case 'e':
+			driver = &device_driver;
 			break;
 		case '?':
 			usbipd_help();

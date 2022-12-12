@@ -18,7 +18,7 @@
 #include <asm/compiler.h>
 #include <asm/hazards.h>
 
-#if defined(CONFIG_CPU_MIPSR2) || defined (CONFIG_CPU_MIPSR6)
+#if defined(CONFIG_CPU_HAS_DIEI)
 
 static inline void arch_local_irq_disable(void)
 {
@@ -41,7 +41,12 @@ static inline unsigned long arch_local_irq_save(void)
 	"	.set	push						\n"
 	"	.set	reorder						\n"
 	"	.set	noat						\n"
+#if defined(CONFIG_CPU_LOONGSON64) || defined(CONFIG_CPU_LOONGSON32)
+	"	mfc0	%[flags], $12					\n"
+	"	di							\n"
+#else
 	"	di	%[flags]					\n"
+#endif
 	"	andi	%[flags], 1					\n"
 	"	" __stringify(__irq_disable_hazard) "			\n"
 	"	.set	pop						\n"
@@ -84,42 +89,12 @@ static inline void arch_local_irq_restore(unsigned long flags)
 	: "memory");
 }
 
-static inline void __arch_local_irq_restore(unsigned long flags)
-{
-	__asm__ __volatile__(
-	"	.set	push						\n"
-	"	.set	noreorder					\n"
-	"	.set	noat						\n"
-#if defined(CONFIG_IRQ_MIPS_CPU)
-	/*
-	 * Slow, but doesn't suffer from a relatively unlikely race
-	 * condition we're having since days 1.
-	 */
-	"	beqz	%[flags], 1f					\n"
-	"	di							\n"
-	"	ei							\n"
-	"1:								\n"
-#else
-	/*
-	 * Fast, dangerous.  Life is fun, life is good.
-	 */
-	"	mfc0	$1, $12						\n"
-	"	ins	$1, %[flags], 0, 1				\n"
-	"	mtc0	$1, $12						\n"
-#endif
-	"	" __stringify(__irq_disable_hazard) "			\n"
-	"	.set	pop						\n"
-	: [flags] "=r" (flags)
-	: "0" (flags)
-	: "memory");
-}
 #else
 /* Functions that require preempt_{dis,en}able() are in mips-atomic.c */
 void arch_local_irq_disable(void);
 unsigned long arch_local_irq_save(void);
 void arch_local_irq_restore(unsigned long flags);
-void __arch_local_irq_restore(unsigned long flags);
-#endif /* CONFIG_CPU_MIPSR2 || CONFIG_CPU_MIPSR6 */
+#endif /* CONFIG_CPU_HAS_DIEI */
 
 static inline void arch_local_irq_enable(void)
 {
@@ -127,7 +102,7 @@ static inline void arch_local_irq_enable(void)
 	"	.set	push						\n"
 	"	.set	reorder						\n"
 	"	.set	noat						\n"
-#if   defined(CONFIG_CPU_MIPSR2) || defined(CONFIG_CPU_MIPSR6)
+#if defined(CONFIG_CPU_HAS_DIEI)
 	"	ei							\n"
 #else
 	"	mfc0	$1,$12						\n"
@@ -160,6 +135,11 @@ static inline unsigned long arch_local_save_flags(void)
 static inline int arch_irqs_disabled_flags(unsigned long flags)
 {
 	return !(flags & 1);
+}
+
+static inline int arch_irqs_disabled(void)
+{
+	return arch_irqs_disabled_flags(arch_local_save_flags());
 }
 
 #endif /* #ifndef __ASSEMBLY__ */

@@ -1,10 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright 2013 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef __DT_BINDINGS_CLOCK_VF610_H
@@ -194,7 +190,13 @@
 #define VF610_PLL7_BYPASS		181
 #define VF610_CLK_SNVS			182
 #define VF610_CLK_DAP			183
-#define VF610_CLK_OCOTP         184
-#define VF610_CLK_END			185
+#define VF610_CLK_OCOTP			184
+#define VF610_CLK_DDRMC			185
+#define VF610_CLK_WKPU			186
+#define VF610_CLK_TCON0			187
+#define VF610_CLK_TCON1			188
+#define VF610_CLK_CAAM			189
+#define VF610_CLK_CRC			190
+#define VF610_CLK_END			191
 
 #endif /* __DT_BINDINGS_CLOCK_VF610_H */

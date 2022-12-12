@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * H8S2678 clock driver
  *
@@ -5,8 +6,9 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/err.h>
 #include <linux/device.h>
+#include <linux/io.h>
+#include <linux/err.h>
 #include <linux/of_address.h>
 #include <linux/slab.h>
 
@@ -83,16 +85,16 @@ static const struct clk_ops pll_ops = {
 
 static void __init h8s2678_pll_clk_setup(struct device_node *node)
 {
-	int num_parents;
-	struct clk *clk;
+	unsigned int num_parents;
 	const char *clk_name = node->name;
 	const char *parent_name;
 	struct pll_clock *pll_clock;
 	struct clk_init_data init;
+	int ret;
 
 	num_parents = of_clk_get_parent_count(node);
-	if (num_parents < 1) {
-		pr_err("%s: no parent found", clk_name);
+	if (!num_parents) {
+		pr_err("%s: no parent found\n", clk_name);
 		return;
 	}
 
@@ -103,32 +105,32 @@ static void __init h8s2678_pll_clk_setup(struct device_node *node)
 
 	pll_clock->sckcr = of_iomap(node, 0);
 	if (pll_clock->sckcr == NULL) {
-		pr_err("%s: failed to map divide register", clk_name);
+		pr_err("%s: failed to map divide register\n", clk_name);
 		goto free_clock;
 	}
 
 	pll_clock->pllcr = of_iomap(node, 1);
 	if (pll_clock->pllcr == NULL) {
-		pr_err("%s: failed to map multiply register", clk_name);
+		pr_err("%s: failed to map multiply register\n", clk_name);
 		goto unmap_sckcr;
 	}
 
 	parent_name = of_clk_get_parent_name(node, 0);
 	init.name = clk_name;
 	init.ops = &pll_ops;
-	init.flags = CLK_IS_BASIC;
+	init.flags = 0;
 	init.parent_names = &parent_name;
 	init.num_parents = 1;
 	pll_clock->hw.init = &init;
 
-	clk = clk_register(NULL, &pll_clock->hw);
-	if (IS_ERR(clk)) {
-		pr_err("%s: failed to register %s div clock (%ld)\n",
-		       __func__, clk_name, PTR_ERR(clk));
+	ret = clk_hw_register(NULL, &pll_clock->hw);
+	if (ret) {
+		pr_err("%s: failed to register %s div clock (%d)\n",
+		       __func__, clk_name, ret);
 		goto unmap_pllcr;
 	}
 
-	of_clk_add_provider(node, of_clk_src_simple_get, clk);
+	of_clk_add_hw_provider(node, of_clk_hw_simple_get, &pll_clock->hw);
 	return;
 
 unmap_pllcr:

@@ -1,15 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014 Imagination Technologies
  * Authors:  Will Thomas, James Hartley
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  *
  *	Interface structure taken from omap-sham driver
  */
 
 #include <linux/clk.h>
+#include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
@@ -71,6 +69,7 @@
 #define DRIVER_FLAGS_MD5		BIT(21)
 
 #define IMG_HASH_QUEUE_LENGTH		20
+#define IMG_HASH_DMA_BURST		4
 #define IMG_HASH_DMA_THRESHOLD		64
 
 #ifdef __LITTLE_ENDIAN
@@ -102,8 +101,10 @@ struct img_hash_request_ctx {
 	unsigned long		op;
 
 	size_t			bufcnt;
-	u8 buffer[0] __aligned(sizeof(u32));
 	struct ahash_request	fallback_req;
+
+	/* Zero length buffer must remain last member of struct */
+	u8 buffer[] __aligned(sizeof(u32));
 };
 
 struct img_hash_ctx {
@@ -223,7 +224,7 @@ static int img_hash_xmit_dma(struct img_hash_dev *hdev, struct scatterlist *sg)
 	struct dma_async_tx_descriptor *desc;
 	struct img_hash_request_ctx *ctx = ahash_request_ctx(hdev->req);
 
-	ctx->dma_ct = dma_map_sg(hdev->dev, sg, 1, DMA_MEM_TO_DEV);
+	ctx->dma_ct = dma_map_sg(hdev->dev, sg, 1, DMA_TO_DEVICE);
 	if (ctx->dma_ct == 0) {
 		dev_err(hdev->dev, "Invalid DMA sg\n");
 		hdev->err = -EINVAL;
@@ -238,7 +239,7 @@ static int img_hash_xmit_dma(struct img_hash_dev *hdev, struct scatterlist *sg)
 	if (!desc) {
 		dev_err(hdev->dev, "Null DMA descriptor\n");
 		hdev->err = -EINVAL;
-		dma_unmap_sg(hdev->dev, sg, 1, DMA_MEM_TO_DEV);
+		dma_unmap_sg(hdev->dev, sg, 1, DMA_TO_DEVICE);
 		return -EINVAL;
 	}
 	desc->callback = img_hash_dma_callback;
@@ -330,17 +331,17 @@ static int img_hash_write_via_dma(struct img_hash_dev *hdev)
 static int img_hash_dma_init(struct img_hash_dev *hdev)
 {
 	struct dma_slave_config dma_conf;
-	int err = -EINVAL;
+	int err;
 
-	hdev->dma_lch = dma_request_slave_channel(hdev->dev, "tx");
-	if (!hdev->dma_lch) {
+	hdev->dma_lch = dma_request_chan(hdev->dev, "tx");
+	if (IS_ERR(hdev->dma_lch)) {
 		dev_err(hdev->dev, "Couldn't acquire a slave DMA channel.\n");
-		return -EBUSY;
+		return PTR_ERR(hdev->dma_lch);
 	}
 	dma_conf.direction = DMA_MEM_TO_DEV;
 	dma_conf.dst_addr = hdev->bus_addr;
 	dma_conf.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
-	dma_conf.dst_maxburst = 16;
+	dma_conf.dst_maxburst = IMG_HASH_DMA_BURST;
 	dma_conf.device_fc = false;
 
 	err = dmaengine_slave_config(hdev->dma_lch,  &dma_conf);
@@ -361,7 +362,7 @@ static void img_hash_dma_task(unsigned long d)
 	size_t nbytes, bleft, wsend, len, tbc;
 	struct scatterlist tsg;
 
-	if (!ctx->sg)
+	if (!hdev->req || !ctx->sg)
 		return;
 
 	addr = sg_virt(ctx->sg);
@@ -587,6 +588,32 @@ static int img_hash_finup(struct ahash_request *req)
 	return crypto_ahash_finup(&rctx->fallback_req);
 }
 
+static int img_hash_import(struct ahash_request *req, const void *in)
+{
+	struct img_hash_request_ctx *rctx = ahash_request_ctx(req);
+	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
+	struct img_hash_ctx *ctx = crypto_ahash_ctx(tfm);
+
+	ahash_request_set_tfm(&rctx->fallback_req, ctx->fallback);
+	rctx->fallback_req.base.flags = req->base.flags
+		& CRYPTO_TFM_REQ_MAY_SLEEP;
+
+	return crypto_ahash_import(&rctx->fallback_req, in);
+}
+
+static int img_hash_export(struct ahash_request *req, void *out)
+{
+	struct img_hash_request_ctx *rctx = ahash_request_ctx(req);
+	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
+	struct img_hash_ctx *ctx = crypto_ahash_ctx(tfm);
+
+	ahash_request_set_tfm(&rctx->fallback_req, ctx->fallback);
+	rctx->fallback_req.base.flags = req->base.flags
+		& CRYPTO_TFM_REQ_MAY_SLEEP;
+
+	return crypto_ahash_export(&rctx->fallback_req, out);
+}
+
 static int img_hash_digest(struct ahash_request *req)
 {
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
@@ -643,10 +670,9 @@ static int img_hash_digest(struct ahash_request *req)
 	return err;
 }
 
-static int img_hash_cra_init(struct crypto_tfm *tfm)
+static int img_hash_cra_init(struct crypto_tfm *tfm, const char *alg_name)
 {
 	struct img_hash_ctx *ctx = crypto_tfm_ctx(tfm);
-	const char *alg_name = crypto_tfm_alg_name(tfm);
 	int err = -ENOMEM;
 
 	ctx->fallback = crypto_alloc_ahash(alg_name, 0,
@@ -658,12 +684,33 @@ static int img_hash_cra_init(struct crypto_tfm *tfm)
 	}
 	crypto_ahash_set_reqsize(__crypto_ahash_cast(tfm),
 				 sizeof(struct img_hash_request_ctx) +
+				 crypto_ahash_reqsize(ctx->fallback) +
 				 IMG_HASH_DMA_THRESHOLD);
 
 	return 0;
 
 err:
 	return err;
+}
+
+static int img_hash_cra_md5_init(struct crypto_tfm *tfm)
+{
+	return img_hash_cra_init(tfm, "md5-generic");
+}
+
+static int img_hash_cra_sha1_init(struct crypto_tfm *tfm)
+{
+	return img_hash_cra_init(tfm, "sha1-generic");
+}
+
+static int img_hash_cra_sha224_init(struct crypto_tfm *tfm)
+{
+	return img_hash_cra_init(tfm, "sha224-generic");
+}
+
+static int img_hash_cra_sha256_init(struct crypto_tfm *tfm)
+{
+	return img_hash_cra_init(tfm, "sha256-generic");
 }
 
 static void img_hash_cra_exit(struct crypto_tfm *tfm)
@@ -711,9 +758,12 @@ static struct ahash_alg img_algs[] = {
 		.update = img_hash_update,
 		.final = img_hash_final,
 		.finup = img_hash_finup,
+		.export = img_hash_export,
+		.import = img_hash_import,
 		.digest = img_hash_digest,
 		.halg = {
 			.digestsize = MD5_DIGEST_SIZE,
+			.statesize = sizeof(struct md5_state),
 			.base = {
 				.cra_name = "md5",
 				.cra_driver_name = "img-md5",
@@ -723,7 +773,7 @@ static struct ahash_alg img_algs[] = {
 				CRYPTO_ALG_NEED_FALLBACK,
 				.cra_blocksize = MD5_HMAC_BLOCK_SIZE,
 				.cra_ctxsize = sizeof(struct img_hash_ctx),
-				.cra_init = img_hash_cra_init,
+				.cra_init = img_hash_cra_md5_init,
 				.cra_exit = img_hash_cra_exit,
 				.cra_module = THIS_MODULE,
 			}
@@ -734,9 +784,12 @@ static struct ahash_alg img_algs[] = {
 		.update = img_hash_update,
 		.final = img_hash_final,
 		.finup = img_hash_finup,
+		.export = img_hash_export,
+		.import = img_hash_import,
 		.digest = img_hash_digest,
 		.halg = {
 			.digestsize = SHA1_DIGEST_SIZE,
+			.statesize = sizeof(struct sha1_state),
 			.base = {
 				.cra_name = "sha1",
 				.cra_driver_name = "img-sha1",
@@ -746,7 +799,7 @@ static struct ahash_alg img_algs[] = {
 				CRYPTO_ALG_NEED_FALLBACK,
 				.cra_blocksize = SHA1_BLOCK_SIZE,
 				.cra_ctxsize = sizeof(struct img_hash_ctx),
-				.cra_init = img_hash_cra_init,
+				.cra_init = img_hash_cra_sha1_init,
 				.cra_exit = img_hash_cra_exit,
 				.cra_module = THIS_MODULE,
 			}
@@ -757,9 +810,12 @@ static struct ahash_alg img_algs[] = {
 		.update = img_hash_update,
 		.final = img_hash_final,
 		.finup = img_hash_finup,
+		.export = img_hash_export,
+		.import = img_hash_import,
 		.digest = img_hash_digest,
 		.halg = {
 			.digestsize = SHA224_DIGEST_SIZE,
+			.statesize = sizeof(struct sha256_state),
 			.base = {
 				.cra_name = "sha224",
 				.cra_driver_name = "img-sha224",
@@ -769,7 +825,7 @@ static struct ahash_alg img_algs[] = {
 				CRYPTO_ALG_NEED_FALLBACK,
 				.cra_blocksize = SHA224_BLOCK_SIZE,
 				.cra_ctxsize = sizeof(struct img_hash_ctx),
-				.cra_init = img_hash_cra_init,
+				.cra_init = img_hash_cra_sha224_init,
 				.cra_exit = img_hash_cra_exit,
 				.cra_module = THIS_MODULE,
 			}
@@ -780,9 +836,12 @@ static struct ahash_alg img_algs[] = {
 		.update = img_hash_update,
 		.final = img_hash_final,
 		.finup = img_hash_finup,
+		.export = img_hash_export,
+		.import = img_hash_import,
 		.digest = img_hash_digest,
 		.halg = {
 			.digestsize = SHA256_DIGEST_SIZE,
+			.statesize = sizeof(struct sha256_state),
 			.base = {
 				.cra_name = "sha256",
 				.cra_driver_name = "img-sha256",
@@ -792,7 +851,7 @@ static struct ahash_alg img_algs[] = {
 				CRYPTO_ALG_NEED_FALLBACK,
 				.cra_blocksize = SHA256_BLOCK_SIZE,
 				.cra_ctxsize = sizeof(struct img_hash_ctx),
-				.cra_init = img_hash_cra_init,
+				.cra_init = img_hash_cra_sha256_init,
 				.cra_exit = img_hash_cra_exit,
 				.cra_module = THIS_MODULE,
 			}
@@ -900,9 +959,7 @@ static int img_hash_probe(struct platform_device *pdev)
 	crypto_init_queue(&hdev->queue, IMG_HASH_QUEUE_LENGTH);
 
 	/* Register bank */
-	hash_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-
-	hdev->io_base = devm_ioremap_resource(dev, hash_res);
+	hdev->io_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(hdev->io_base)) {
 		err = PTR_ERR(hdev->io_base);
 		dev_err(dev, "can't ioremap, returned %d\n", err);
@@ -922,7 +979,6 @@ static int img_hash_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
-		dev_err(dev, "no IRQ resource info\n");
 		err = irq;
 		goto res_err;
 	}
@@ -971,7 +1027,7 @@ static int img_hash_probe(struct platform_device *pdev)
 	err = img_register_algs(hdev);
 	if (err)
 		goto err_algs;
-	dev_dbg(dev, "Img MD5/SHA1/SHA224/SHA256 Hardware accelerator initialized\n");
+	dev_info(dev, "Img MD5/SHA1/SHA224/SHA256 Hardware accelerator initialized\n");
 
 	return 0;
 
@@ -993,7 +1049,7 @@ res_err:
 
 static int img_hash_remove(struct platform_device *pdev)
 {
-	static struct img_hash_dev *hdev;
+	struct img_hash_dev *hdev;
 
 	hdev = platform_get_drvdata(pdev);
 	spin_lock(&img_hash.lock);
@@ -1013,11 +1069,46 @@ static int img_hash_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int img_hash_suspend(struct device *dev)
+{
+	struct img_hash_dev *hdev = dev_get_drvdata(dev);
+
+	clk_disable_unprepare(hdev->hash_clk);
+	clk_disable_unprepare(hdev->sys_clk);
+
+	return 0;
+}
+
+static int img_hash_resume(struct device *dev)
+{
+	struct img_hash_dev *hdev = dev_get_drvdata(dev);
+	int ret;
+
+	ret = clk_prepare_enable(hdev->hash_clk);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(hdev->sys_clk);
+	if (ret) {
+		clk_disable_unprepare(hdev->hash_clk);
+		return ret;
+	}
+
+	return 0;
+}
+#endif /* CONFIG_PM_SLEEP */
+
+static const struct dev_pm_ops img_hash_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(img_hash_suspend, img_hash_resume)
+};
+
 static struct platform_driver img_hash_driver = {
 	.probe		= img_hash_probe,
 	.remove		= img_hash_remove,
 	.driver		= {
 		.name	= "img-hash-accelerator",
+		.pm	= &img_hash_pm_ops,
 		.of_match_table	= of_match_ptr(img_hash_match),
 	}
 };

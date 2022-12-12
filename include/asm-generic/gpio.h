@@ -1,10 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_GENERIC_GPIO_H
 #define _ASM_GENERIC_GPIO_H
 
-#include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/errno.h>
-#include <linux/of.h>
 
 #ifdef CONFIG_GPIOLIB
 
@@ -26,7 +25,11 @@
  */
 
 #ifndef ARCH_NR_GPIOS
+#if defined(CONFIG_ARCH_NR_GPIO) && CONFIG_ARCH_NR_GPIO > 0
+#define ARCH_NR_GPIOS CONFIG_ARCH_NR_GPIO
+#else
 #define ARCH_NR_GPIOS		512
+#endif
 #endif
 
 /*
@@ -134,6 +137,8 @@ static inline void gpio_unexport(unsigned gpio)
 }
 
 #else	/* !CONFIG_GPIOLIB */
+
+#include <linux/kernel.h>
 
 static inline bool gpio_is_valid(int number)
 {

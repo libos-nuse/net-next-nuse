@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * cpfile.c - NILFS checkpoint file.
  *
  * Copyright (C) 2006-2008 Nippon Telegraph and Telephone Corporation.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
- *
- * Written by Koji Sato <koji@osrg.net>.
+ * Written by Koji Sato.
  */
 
 #include <linux/kernel.h>
@@ -25,7 +12,6 @@
 #include <linux/string.h>
 #include <linux/buffer_head.h>
 #include <linux/errno.h>
-#include <linux/nilfs2_fs.h>
 #include "mdt.h"
 #include "cpfile.h"
 
@@ -41,6 +27,7 @@ static unsigned long
 nilfs_cpfile_get_blkoff(const struct inode *cpfile, __u64 cno)
 {
 	__u64 tcno = cno + NILFS_MDT(cpfile)->mi_first_entry_offset - 1;
+
 	do_div(tcno, nilfs_cpfile_checkpoints_per_block(cpfile));
 	return (unsigned long)tcno;
 }
@@ -50,6 +37,7 @@ static unsigned long
 nilfs_cpfile_get_offset(const struct inode *cpfile, __u64 cno)
 {
 	__u64 tcno = cno + NILFS_MDT(cpfile)->mi_first_entry_offset - 1;
+
 	return do_div(tcno, nilfs_cpfile_checkpoints_per_block(cpfile));
 }
 
@@ -334,9 +322,9 @@ int nilfs_cpfile_delete_checkpoints(struct inode *cpfile,
 	int ret, ncps, nicps, nss, count, i;
 
 	if (unlikely(start == 0 || start > end)) {
-		printk(KERN_ERR "%s: invalid range of checkpoint numbers: "
-		       "[%llu, %llu)\n", __func__,
-		       (unsigned long long)start, (unsigned long long)end);
+		nilfs_err(cpfile->i_sb,
+			  "cannot delete checkpoints: invalid range [%llu, %llu)",
+			  (unsigned long long)start, (unsigned long long)end);
 		return -EINVAL;
 	}
 
@@ -388,9 +376,9 @@ int nilfs_cpfile_delete_checkpoints(struct inode *cpfile,
 								   cpfile, cno);
 					if (ret == 0)
 						continue;
-					printk(KERN_ERR
-					       "%s: cannot delete block\n",
-					       __func__);
+					nilfs_err(cpfile->i_sb,
+						  "error %d deleting checkpoint block",
+						  ret);
 					break;
 				}
 			}
@@ -433,7 +421,8 @@ static void nilfs_cpfile_checkpoint_to_cpinfo(struct inode *cpfile,
 }
 
 static ssize_t nilfs_cpfile_do_get_cpinfo(struct inode *cpfile, __u64 *cnop,
-					  void *buf, unsigned cisz, size_t nci)
+					  void *buf, unsigned int cisz,
+					  size_t nci)
 {
 	struct nilfs_checkpoint *cp;
 	struct nilfs_cpinfo *ci = buf;
@@ -484,7 +473,8 @@ static ssize_t nilfs_cpfile_do_get_cpinfo(struct inode *cpfile, __u64 *cnop,
 }
 
 static ssize_t nilfs_cpfile_do_get_ssinfo(struct inode *cpfile, __u64 *cnop,
-					  void *buf, unsigned cisz, size_t nci)
+					  void *buf, unsigned int cisz,
+					  size_t nci)
 {
 	struct buffer_head *bh;
 	struct nilfs_cpfile_header *header;
@@ -570,7 +560,7 @@ static ssize_t nilfs_cpfile_do_get_ssinfo(struct inode *cpfile, __u64 *cnop,
  */
 
 ssize_t nilfs_cpfile_get_cpinfo(struct inode *cpfile, __u64 *cnop, int mode,
-				void *buf, unsigned cisz, size_t nci)
+				void *buf, unsigned int cisz, size_t nci)
 {
 	switch (mode) {
 	case NILFS_CHECKPOINT:
@@ -870,8 +860,10 @@ int nilfs_cpfile_is_snapshot(struct inode *cpfile, __u64 cno)
 	void *kaddr;
 	int ret;
 
-	/* CP number is invalid if it's zero or larger than the
-	largest	exist one.*/
+	/*
+	 * CP number is invalid if it's zero or larger than the
+	 * largest existing one.
+	 */
 	if (cno == 0 || cno >= nilfs_mdt_cno(cpfile))
 		return -ENOENT;
 	down_read(&NILFS_MDT(cpfile)->mi_sem);
@@ -897,7 +889,7 @@ int nilfs_cpfile_is_snapshot(struct inode *cpfile, __u64 cno)
  * nilfs_cpfile_change_cpmode - change checkpoint mode
  * @cpfile: inode of checkpoint file
  * @cno: checkpoint number
- * @status: mode of checkpoint
+ * @mode: mode of checkpoint
  *
  * Description: nilfs_change_cpmode() changes the mode of the checkpoint
  * specified by @cno. The mode @mode is NILFS_CHECKPOINT or NILFS_SNAPSHOT.
@@ -938,12 +930,12 @@ int nilfs_cpfile_change_cpmode(struct inode *cpfile, __u64 cno, int mode)
 /**
  * nilfs_cpfile_get_stat - get checkpoint statistics
  * @cpfile: inode of checkpoint file
- * @stat: pointer to a structure of checkpoint statistics
+ * @cpstat: pointer to a structure of checkpoint statistics
  *
  * Description: nilfs_cpfile_get_stat() returns information about checkpoints.
  *
  * Return Value: On success, 0 is returned, and checkpoints information is
- * stored in the place pointed by @stat. On error, one of the following
+ * stored in the place pointed by @cpstat. On error, one of the following
  * negative error codes is returned.
  *
  * %-EIO - I/O error.
@@ -989,14 +981,10 @@ int nilfs_cpfile_read(struct super_block *sb, size_t cpsize,
 	int err;
 
 	if (cpsize > sb->s_blocksize) {
-		printk(KERN_ERR
-		       "NILFS: too large checkpoint size: %zu bytes.\n",
-		       cpsize);
+		nilfs_err(sb, "too large checkpoint size: %zu bytes", cpsize);
 		return -EINVAL;
 	} else if (cpsize < NILFS_MIN_CHECKPOINT_SIZE) {
-		printk(KERN_ERR
-		       "NILFS: too small checkpoint size: %zu bytes.\n",
-		       cpsize);
+		nilfs_err(sb, "too small checkpoint size: %zu bytes", cpsize);
 		return -EINVAL;
 	}
 

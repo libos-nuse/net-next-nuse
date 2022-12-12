@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * PowerMac G5 SMU driver
  *
  * Copyright 2004 J. Mayer <l_indien@magic.fr>
  * Copyright 2005 Benjamin Herrenschmidt, IBM Corp.
- *
- * Released under the term of the GNU GPL v2.
  */
 
 /*
@@ -23,7 +22,7 @@
 #include <linux/kernel.h>
 #include <linux/device.h>
 #include <linux/dmapool.h>
-#include <linux/bootmem.h>
+#include <linux/memblock.h>
 #include <linux/vmalloc.h>
 #include <linux/highmem.h>
 #include <linux/jiffies.h>
@@ -38,6 +37,7 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/slab.h>
+#include <linux/sched/signal.h>
 
 #include <asm/byteorder.h>
 #include <asm/io.h>
@@ -46,7 +46,7 @@
 #include <asm/pmac_feature.h>
 #include <asm/smu.h>
 #include <asm/sections.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #define VERSION "0.7"
 #define AUTHOR  "(c) 2005 Benjamin Herrenschmidt, IBM Corp."
@@ -99,8 +99,9 @@ static DEFINE_MUTEX(smu_mutex);
 static struct smu_device	*smu;
 static DEFINE_MUTEX(smu_part_access);
 static int smu_irq_inited;
+static unsigned long smu_cmdbuf_abs;
 
-static void smu_i2c_retry(unsigned long data);
+static void smu_i2c_retry(struct timer_list *t);
 
 /*
  * SMU driver low level stuff
@@ -131,7 +132,7 @@ static void smu_start_cmd(void)
 	/* Flush command and data to RAM */
 	faddr = (unsigned long)smu->cmd_buf;
 	fend = faddr + smu->cmd_buf->length + 2;
-	flush_inval_dcache_range(faddr, fend);
+	flush_dcache_range(faddr, fend);
 
 
 	/* We also disable NAP mode for the duration of the command
@@ -193,7 +194,7 @@ static irqreturn_t smu_db_intr(int irq, void *arg)
 		 * reply length (it's only 2 cache lines anyway)
 		 */
 		faddr = (unsigned long)smu->cmd_buf;
-		flush_inval_dcache_range(faddr, faddr + 256);
+		flush_dcache_range(faddr, faddr + 256);
 
 		/* Now check ack */
 		ack = (~cmd->cmd) & 0xff;
@@ -277,7 +278,7 @@ int smu_queue_cmd(struct smu_cmd *cmd)
 	spin_unlock_irqrestore(&smu->lock, flags);
 
 	/* Workaround for early calls when irq isn't available */
-	if (!smu_irq_inited || smu->db_irq == NO_IRQ)
+	if (!smu_irq_inited || !smu->db_irq)
 		smu_spinwait_cmd(cmd);
 
 	return 0;
@@ -479,20 +480,28 @@ int __init smu_init (void)
 
 	printk(KERN_INFO "SMU: Driver %s %s\n", VERSION, AUTHOR);
 
+	/*
+	 * SMU based G5s need some memory below 2Gb. Thankfully this is
+	 * called at a time where memblock is still available.
+	 */
+	smu_cmdbuf_abs = memblock_phys_alloc_range(4096, 4096, 0, 0x80000000UL);
 	if (smu_cmdbuf_abs == 0) {
-		printk(KERN_ERR "SMU: Command buffer not allocated !\n");
+		printk(KERN_ERR "SMU: Command buffer allocation failed !\n");
 		ret = -EINVAL;
 		goto fail_np;
 	}
 
-	smu = alloc_bootmem(sizeof(struct smu_device));
+	smu = memblock_alloc(sizeof(struct smu_device), SMP_CACHE_BYTES);
+	if (!smu)
+		panic("%s: Failed to allocate %zu bytes\n", __func__,
+		      sizeof(struct smu_device));
 
 	spin_lock_init(&smu->lock);
 	INIT_LIST_HEAD(&smu->cmd_list);
 	INIT_LIST_HEAD(&smu->cmd_i2c_list);
 	smu->of_node = np;
-	smu->db_irq = NO_IRQ;
-	smu->msg_irq = NO_IRQ;
+	smu->db_irq = 0;
+	smu->msg_irq = 0;
 
 	/* smu_cmdbuf_abs is in the low 2G of RAM, can be converted to a
 	 * 32 bits value safely
@@ -561,7 +570,7 @@ fail_msg_node:
 fail_db_node:
 	of_node_put(smu->db_node);
 fail_bootmem:
-	free_bootmem(__pa(smu), sizeof(struct smu_device));
+	memblock_free(__pa(smu), sizeof(struct smu_device));
 	smu = NULL;
 fail_np:
 	of_node_put(np);
@@ -574,44 +583,42 @@ static int smu_late_init(void)
 	if (!smu)
 		return 0;
 
-	init_timer(&smu->i2c_timer);
-	smu->i2c_timer.function = smu_i2c_retry;
-	smu->i2c_timer.data = (unsigned long)smu;
+	timer_setup(&smu->i2c_timer, smu_i2c_retry, 0);
 
 	if (smu->db_node) {
 		smu->db_irq = irq_of_parse_and_map(smu->db_node, 0);
-		if (smu->db_irq == NO_IRQ)
-			printk(KERN_ERR "smu: failed to map irq for node %s\n",
-			       smu->db_node->full_name);
+		if (!smu->db_irq)
+			printk(KERN_ERR "smu: failed to map irq for node %pOF\n",
+			       smu->db_node);
 	}
 	if (smu->msg_node) {
 		smu->msg_irq = irq_of_parse_and_map(smu->msg_node, 0);
-		if (smu->msg_irq == NO_IRQ)
-			printk(KERN_ERR "smu: failed to map irq for node %s\n",
-			       smu->msg_node->full_name);
+		if (!smu->msg_irq)
+			printk(KERN_ERR "smu: failed to map irq for node %pOF\n",
+			       smu->msg_node);
 	}
 
 	/*
 	 * Try to request the interrupts
 	 */
 
-	if (smu->db_irq != NO_IRQ) {
+	if (smu->db_irq) {
 		if (request_irq(smu->db_irq, smu_db_intr,
 				IRQF_SHARED, "SMU doorbell", smu) < 0) {
 			printk(KERN_WARNING "SMU: can't "
 			       "request interrupt %d\n",
 			       smu->db_irq);
-			smu->db_irq = NO_IRQ;
+			smu->db_irq = 0;
 		}
 	}
 
-	if (smu->msg_irq != NO_IRQ) {
+	if (smu->msg_irq) {
 		if (request_irq(smu->msg_irq, smu_msg_intr,
 				IRQF_SHARED, "SMU message", smu) < 0) {
 			printk(KERN_WARNING "SMU: can't "
 			       "request interrupt %d\n",
 			       smu->msg_irq);
-			smu->msg_irq = NO_IRQ;
+			smu->msg_irq = 0;
 		}
 	}
 
@@ -631,7 +638,7 @@ static void smu_expose_childs(struct work_struct *unused)
 {
 	struct device_node *np;
 
-	for (np = NULL; (np = of_get_next_child(smu->of_node, np)) != NULL;)
+	for_each_child_of_node(smu->of_node, np)
 		if (of_device_is_compatible(np, "smu-sensors"))
 			of_platform_device_create(np, "smu-sensors",
 						  &smu->of_dev->dev);
@@ -747,7 +754,7 @@ static void smu_i2c_complete_command(struct smu_i2c_cmd *cmd, int fail)
 }
 
 
-static void smu_i2c_retry(unsigned long data)
+static void smu_i2c_retry(struct timer_list *unused)
 {
 	struct smu_i2c_cmd	*cmd = smu->cmd_i2c_cur;
 
@@ -787,7 +794,7 @@ static void smu_i2c_low_completion(struct smu_cmd *scmd, void *misc)
 		BUG_ON(cmd != smu->cmd_i2c_cur);
 		if (!smu_irq_inited) {
 			mdelay(5);
-			smu_i2c_retry(0);
+			smu_i2c_retry(NULL);
 			return;
 		}
 		mod_timer(&smu->i2c_timer, jiffies + msecs_to_jiffies(5));
@@ -845,6 +852,7 @@ int smu_queue_i2c(struct smu_i2c_cmd *cmd)
 		break;
 	case SMU_I2C_TRANSFER_COMBINED:
 		cmd->info.devaddr &= 0xfe;
+		fallthrough;
 	case SMU_I2C_TRANSFER_STDSUB:
 		if (cmd->info.sublen > 3)
 			return -EINVAL;
@@ -1007,7 +1015,7 @@ static struct smu_sdbp_header *smu_create_sdb_partition(int id)
 /* Note: Only allowed to return error code in pointers (using ERR_PTR)
  * when interruptible is 1
  */
-const struct smu_sdbp_header *__smu_get_sdb_partition(int id,
+static const struct smu_sdbp_header *__smu_get_sdb_partition(int id,
 		unsigned int *size, int interruptible)
 {
 	char pname[32];
@@ -1239,10 +1247,10 @@ static ssize_t smu_read(struct file *file, char __user *buf,
 	return -EBADFD;
 }
 
-static unsigned int smu_fpoll(struct file *file, poll_table *wait)
+static __poll_t smu_fpoll(struct file *file, poll_table *wait)
 {
 	struct smu_private *pp = file->private_data;
-	unsigned int mask = 0;
+	__poll_t mask = 0;
 	unsigned long flags;
 
 	if (pp == 0)
@@ -1253,7 +1261,7 @@ static unsigned int smu_fpoll(struct file *file, poll_table *wait)
 
 		spin_lock_irqsave(&pp->lock, flags);
 		if (pp->busy && pp->cmd.status != 1)
-			mask |= POLLIN;
+			mask |= EPOLLIN;
 		spin_unlock_irqrestore(&pp->lock, flags);
 	}
 	if (pp->mode == smu_file_events) {

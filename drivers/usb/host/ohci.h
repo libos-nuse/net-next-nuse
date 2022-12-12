@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-1.0+ */
 /*
  * OHCI HCD (Host Controller Driver) for USB.
  *
@@ -161,7 +162,7 @@ struct td {
 
 
 /* map OHCI TD status codes (CC) to errno values */
-static const int cc_to_error [16] = {
+static const int __maybe_unused cc_to_error [16] = {
 	/* No  Error  */               0,
 	/* CRC Error  */               -EILSEQ,
 	/* Bit Stuff  */               -EPROTO,
@@ -336,7 +337,7 @@ typedef struct urb_priv {
 	u16			length;		// # tds in this request
 	u16			td_cnt;		// tds already serviced
 	struct list_head	pending;
-	struct td		*td [0];	// all TDs in this request
+	struct td		*td[];		// all TDs in this request
 
 } urb_priv_t;
 
@@ -384,6 +385,8 @@ struct ohci_hcd {
 
 	/*
 	 * memory management for queue data structures
+	 *
+	 * @td_cache and @ed_cache are %NULL if &usb_hcd.localmem_pool is used.
 	 */
 	struct dma_pool		*td_cache;
 	struct dma_pool		*ed_cache;
@@ -418,6 +421,7 @@ struct ohci_hcd {
 #define	OHCI_QUIRK_AMD_PLL	0x200			/* AMD PLL quirk*/
 #define	OHCI_QUIRK_AMD_PREFETCH	0x400			/* pre-fetch for ISO transfer */
 #define	OHCI_QUIRK_GLOBAL_SUSPEND	0x800		/* must suspend ports */
+#define	OHCI_QUIRK_QEMU		0x1000			/* relax timing expectations */
 
 	// there are also chip quirks/bugs in init logic
 
@@ -429,16 +433,13 @@ struct ohci_hcd {
 	struct work_struct	nec_work;	/* Worker for NEC quirk */
 
 	struct dentry		*debug_dir;
-	struct dentry		*debug_async;
-	struct dentry		*debug_periodic;
-	struct dentry		*debug_registers;
 
 	/* platform-specific data -- must come last */
-	unsigned long           priv[0] __aligned(sizeof(s64));
+	unsigned long           priv[] __aligned(sizeof(s64));
 
 };
 
-#ifdef CONFIG_PCI
+#ifdef CONFIG_USB_PCI
 static inline int quirk_nec(struct ohci_hcd *ohci)
 {
 	return ohci->flags & OHCI_QUIRK_NEC;
@@ -735,10 +736,8 @@ extern void	ohci_init_driver(struct hc_driver *drv,
 				const struct ohci_driver_overrides *over);
 extern int	ohci_restart(struct ohci_hcd *ohci);
 extern int	ohci_setup(struct usb_hcd *hcd);
-#ifdef CONFIG_PM
 extern int	ohci_suspend(struct usb_hcd *hcd, bool do_wakeup);
 extern int	ohci_resume(struct usb_hcd *hcd, bool hibernated);
-#endif
 extern int	ohci_hub_control(struct usb_hcd	*hcd, u16 typeReq, u16 wValue,
 				 u16 wIndex, char *buf, u16 wLength);
 extern int	ohci_hub_status_data(struct usb_hcd *hcd, char *buf);

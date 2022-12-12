@@ -246,7 +246,7 @@ static int ath9k_htc_set_channel(struct ath9k_htc_priv *priv,
 	struct ieee80211_conf *conf = &common->hw->conf;
 	bool fastcc;
 	struct ieee80211_channel *channel = hw->conf.chandef.chan;
-	struct ath9k_hw_cal_data *caldata = NULL;
+	struct ath9k_hw_cal_data *caldata;
 	enum htc_phymode mode;
 	__be16 htc_mode;
 	u8 cmd_rsp;
@@ -274,10 +274,7 @@ static int ath9k_htc_set_channel(struct ath9k_htc_priv *priv,
 		priv->ah->curchan->channel,
 		channel->center_freq, conf_is_ht(conf), conf_is_ht40(conf),
 		fastcc);
-
-	if (!fastcc)
-		caldata = &priv->caldata;
-
+	caldata = fastcc ? NULL : &priv->caldata;
 	ret = ath9k_hw_reset(ah, hchan, caldata, fastcc);
 	if (ret) {
 		ath_err(common,
@@ -834,7 +831,7 @@ void ath9k_htc_ani_work(struct work_struct *work)
 		if (longcal || shortcal)
 			common->ani.caldone =
 				ath9k_hw_calibrate(ah, ah->curchan,
-						   ah->rxchainmask, longcal);
+						ah->rxchainmask, longcal) > 0;
 
 		ath9k_htc_ps_restore(priv);
 	}
@@ -1254,6 +1251,7 @@ out:
 	FIF_OTHER_BSS |				\
 	FIF_BCN_PRBRESP_PROMISC |		\
 	FIF_PROBE_REQ |				\
+	FIF_MCAST_ACTION |			\
 	FIF_FCSFAIL)
 
 static void ath9k_htc_configure_filter(struct ieee80211_hw *hw,
@@ -1486,7 +1484,7 @@ static void ath9k_htc_set_bssid(struct ath9k_htc_priv *priv)
 
 static void ath9k_htc_bss_iter(void *data, u8 *mac, struct ieee80211_vif *vif)
 {
-	struct ath9k_htc_priv *priv = (struct ath9k_htc_priv *)data;
+	struct ath9k_htc_priv *priv = data;
 	struct ath_common *common = ath9k_hw_common(priv->ah);
 	struct ieee80211_bss_conf *bss_conf = &vif->bss_conf;
 
@@ -1657,13 +1655,14 @@ static void ath9k_htc_reset_tsf(struct ieee80211_hw *hw,
 
 static int ath9k_htc_ampdu_action(struct ieee80211_hw *hw,
 				  struct ieee80211_vif *vif,
-				  enum ieee80211_ampdu_mlme_action action,
-				  struct ieee80211_sta *sta,
-				  u16 tid, u16 *ssn, u8 buf_size, bool amsdu)
+				  struct ieee80211_ampdu_params *params)
 {
 	struct ath9k_htc_priv *priv = hw->priv;
 	struct ath9k_htc_sta *ista;
 	int ret = 0;
+	struct ieee80211_sta *sta = params->sta;
+	enum ieee80211_ampdu_mlme_action action = params->action;
+	u16 tid = params->tid;
 
 	mutex_lock(&priv->mutex);
 	ath9k_htc_ps_wakeup(priv);
@@ -1676,7 +1675,7 @@ static int ath9k_htc_ampdu_action(struct ieee80211_hw *hw,
 	case IEEE80211_AMPDU_TX_START:
 		ret = ath9k_htc_tx_aggr_oper(priv, vif, sta, action, tid);
 		if (!ret)
-			ieee80211_start_tx_ba_cb_irqsafe(vif, sta->addr, tid);
+			ret = IEEE80211_AMPDU_TX_START_IMMEDIATE;
 		break;
 	case IEEE80211_AMPDU_TX_STOP_CONT:
 	case IEEE80211_AMPDU_TX_STOP_FLUSH:
@@ -1685,6 +1684,10 @@ static int ath9k_htc_ampdu_action(struct ieee80211_hw *hw,
 		ieee80211_stop_tx_ba_cb_irqsafe(vif, sta->addr, tid);
 		break;
 	case IEEE80211_AMPDU_TX_OPERATIONAL:
+		if (tid >= ATH9K_HTC_MAX_TID) {
+			ret = -EINVAL;
+			break;
+		}
 		ista = (struct ath9k_htc_sta *) sta->drv_priv;
 		spin_lock_bh(&priv->tx.tx_lock);
 		ista->tid_state[tid] = AGGR_OPERATIONAL;
@@ -1769,8 +1772,8 @@ static int ath9k_htc_set_bitrate_mask(struct ieee80211_hw *hw,
 	memset(&tmask, 0, sizeof(struct ath9k_htc_target_rate_mask));
 
 	tmask.vif_index = avp->index;
-	tmask.band = IEEE80211_BAND_2GHZ;
-	tmask.mask = cpu_to_be32(mask->control[IEEE80211_BAND_2GHZ].legacy);
+	tmask.band = NL80211_BAND_2GHZ;
+	tmask.mask = cpu_to_be32(mask->control[NL80211_BAND_2GHZ].legacy);
 
 	WMI_CMD_BUF(WMI_BITRATE_MASK_CMDID, &tmask);
 	if (ret) {
@@ -1780,8 +1783,8 @@ static int ath9k_htc_set_bitrate_mask(struct ieee80211_hw *hw,
 		goto out;
 	}
 
-	tmask.band = IEEE80211_BAND_5GHZ;
-	tmask.mask = cpu_to_be32(mask->control[IEEE80211_BAND_5GHZ].legacy);
+	tmask.band = NL80211_BAND_5GHZ;
+	tmask.mask = cpu_to_be32(mask->control[NL80211_BAND_5GHZ].legacy);
 
 	WMI_CMD_BUF(WMI_BITRATE_MASK_CMDID, &tmask);
 	if (ret) {
@@ -1792,8 +1795,8 @@ static int ath9k_htc_set_bitrate_mask(struct ieee80211_hw *hw,
 	}
 
 	ath_dbg(common, CONFIG, "Set bitrate masks: 0x%x, 0x%x\n",
-		mask->control[IEEE80211_BAND_2GHZ].legacy,
-		mask->control[IEEE80211_BAND_5GHZ].legacy);
+		mask->control[NL80211_BAND_2GHZ].legacy,
+		mask->control[NL80211_BAND_5GHZ].legacy);
 out:
 	return ret;
 }

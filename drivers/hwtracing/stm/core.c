@@ -1,20 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * System Trace Module (STM) infrastructure
  * Copyright (c) 2014, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  *
  * STM class implements generic infrastructure for  System Trace Module devices
  * as defined in MIPI STPv2 specification.
  */
 
+#include <linux/pm_runtime.h>
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -26,6 +19,7 @@
 #include <linux/stm.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/vmalloc.h>
 #include "stm.h"
 
 #include <uapi/linux/stm.h>
@@ -67,9 +61,24 @@ static ssize_t channels_show(struct device *dev,
 
 static DEVICE_ATTR_RO(channels);
 
+static ssize_t hw_override_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	struct stm_device *stm = to_stm_device(dev);
+	int ret;
+
+	ret = sprintf(buf, "%u\n", stm->data->hw_override);
+
+	return ret;
+}
+
+static DEVICE_ATTR_RO(hw_override);
+
 static struct attribute *stm_attrs[] = {
 	&dev_attr_masters.attr,
 	&dev_attr_channels.attr,
+	&dev_attr_hw_override.attr,
 	NULL,
 };
 
@@ -79,13 +88,6 @@ static struct class stm_class = {
 	.name		= "stm",
 	.dev_groups	= stm_groups,
 };
-
-static int stm_dev_match(struct device *dev, const void *data)
-{
-	const char *name = data;
-
-	return sysfs_streq(name, dev_name(dev));
-}
 
 /**
  * stm_find_device() - find stm device by name
@@ -107,12 +109,13 @@ struct stm_device *stm_find_device(const char *buf)
 	if (!stm_core_up)
 		return NULL;
 
-	dev = class_find_device(&stm_class, NULL, buf, stm_dev_match);
+	dev = class_find_device_by_name(&stm_class, buf);
 	if (!dev)
 		return NULL;
 
 	stm = to_stm_device(dev);
 	if (!try_module_get(stm->owner)) {
+		/* matches class_find_device() above */
 		put_device(dev);
 		return NULL;
 	}
@@ -125,7 +128,7 @@ struct stm_device *stm_find_device(const char *buf)
  * @stm:	stm device, previously acquired by stm_find_device()
  *
  * This drops the module reference and device reference taken by
- * stm_find_device().
+ * stm_find_device() or stm_char_open().
  */
 void stm_put_device(struct stm_device *stm)
 {
@@ -156,11 +159,10 @@ stm_master(struct stm_device *stm, unsigned int idx)
 static int stp_master_alloc(struct stm_device *stm, unsigned int idx)
 {
 	struct stp_master *master;
-	size_t size;
 
-	size = ALIGN(stm->data->sw_nchannels, 8) / 8;
-	size += sizeof(struct stp_master);
-	master = kzalloc(size, GFP_ATOMIC);
+	master = kzalloc(struct_size(master, chan_map,
+				     BITS_TO_LONGS(stm->data->sw_nchannels)),
+			 GFP_ATOMIC);
 	if (!master)
 		return -ENOMEM;
 
@@ -185,6 +187,9 @@ static void stm_output_claim(struct stm_device *stm, struct stm_output *output)
 {
 	struct stp_master *master = stm_master(stm, output->master);
 
+	lockdep_assert_held(&stm->mc_lock);
+	lockdep_assert_held(&output->lock);
+
 	if (WARN_ON_ONCE(master->nr_free < output->nr_chans))
 		return;
 
@@ -199,11 +204,14 @@ stm_output_disclaim(struct stm_device *stm, struct stm_output *output)
 {
 	struct stp_master *master = stm_master(stm, output->master);
 
+	lockdep_assert_held(&stm->mc_lock);
+	lockdep_assert_held(&output->lock);
+
 	bitmap_release_region(&master->chan_map[0], output->channel,
 			      ilog2(output->nr_chans));
 
-	output->nr_chans = 0;
 	master->nr_free += output->nr_chans;
+	output->nr_chans = 0;
 }
 
 /*
@@ -228,12 +236,15 @@ static int find_free_channels(unsigned long *bitmap, unsigned int start,
 			;
 		if (i == width)
 			return pos;
+
+		/* step over [pos..pos+i) to continue search */
+		pos += i;
 	}
 
 	return -1;
 }
 
-static unsigned int
+static int
 stm_find_master_chan(struct stm_device *stm, unsigned int width,
 		     unsigned int *mstart, unsigned int mend,
 		     unsigned int *cstart, unsigned int cend)
@@ -277,33 +288,50 @@ static int stm_output_assign(struct stm_device *stm, unsigned int width,
 	if (width > stm->data->sw_nchannels)
 		return -EINVAL;
 
-	if (policy_node) {
-		stp_policy_node_get_ranges(policy_node,
-					   &midx, &mend, &cidx, &cend);
-	} else {
-		midx = stm->data->sw_start;
-		cidx = 0;
-		mend = stm->data->sw_end;
-		cend = stm->data->sw_nchannels - 1;
-	}
+	/* We no longer accept policy_node==NULL here */
+	if (WARN_ON_ONCE(!policy_node))
+		return -EINVAL;
+
+	/*
+	 * Also, the caller holds reference to policy_node, so it won't
+	 * disappear on us.
+	 */
+	stp_policy_node_get_ranges(policy_node, &midx, &mend, &cidx, &cend);
 
 	spin_lock(&stm->mc_lock);
+	spin_lock(&output->lock);
 	/* output is already assigned -- shouldn't happen */
 	if (WARN_ON_ONCE(output->nr_chans))
 		goto unlock;
 
 	ret = stm_find_master_chan(stm, width, &midx, mend, &cidx, cend);
-	if (ret)
+	if (ret < 0)
 		goto unlock;
 
 	output->master = midx;
 	output->channel = cidx;
 	output->nr_chans = width;
+	if (stm->pdrv->output_open) {
+		void *priv = stp_policy_node_priv(policy_node);
+
+		if (WARN_ON_ONCE(!priv))
+			goto unlock;
+
+		/* configfs subsys mutex is held by the caller */
+		ret = stm->pdrv->output_open(priv, output);
+		if (ret)
+			goto unlock;
+	}
+
 	stm_output_claim(stm, output);
 	dev_dbg(&stm->dev, "assigned %u:%u (+%u)\n", midx, cidx, width);
 
 	ret = 0;
 unlock:
+	if (ret)
+		output->nr_chans = 0;
+
+	spin_unlock(&output->lock);
 	spin_unlock(&stm->mc_lock);
 
 	return ret;
@@ -312,9 +340,18 @@ unlock:
 static void stm_output_free(struct stm_device *stm, struct stm_output *output)
 {
 	spin_lock(&stm->mc_lock);
+	spin_lock(&output->lock);
 	if (output->nr_chans)
 		stm_output_disclaim(stm, output);
+	if (stm->pdrv && stm->pdrv->output_close)
+		stm->pdrv->output_close(output);
+	spin_unlock(&output->lock);
 	spin_unlock(&stm->mc_lock);
+}
+
+static void stm_output_init(struct stm_output *output)
+{
+	spin_lock_init(&output->lock);
 }
 
 static int major_match(struct device *dev, const void *data)
@@ -324,12 +361,133 @@ static int major_match(struct device *dev, const void *data)
 	return MAJOR(dev->devt) == major;
 }
 
+/*
+ * Framing protocol management
+ * Modules can implement STM protocol drivers and (un-)register them
+ * with the STM class framework.
+ */
+static struct list_head stm_pdrv_head;
+static struct mutex stm_pdrv_mutex;
+
+struct stm_pdrv_entry {
+	struct list_head			entry;
+	const struct stm_protocol_driver	*pdrv;
+	const struct config_item_type		*node_type;
+};
+
+static const struct stm_pdrv_entry *
+__stm_lookup_protocol(const char *name)
+{
+	struct stm_pdrv_entry *pe;
+
+	/*
+	 * If no name is given (NULL or ""), fall back to "p_basic".
+	 */
+	if (!name || !*name)
+		name = "p_basic";
+
+	list_for_each_entry(pe, &stm_pdrv_head, entry) {
+		if (!strcmp(name, pe->pdrv->name))
+			return pe;
+	}
+
+	return NULL;
+}
+
+int stm_register_protocol(const struct stm_protocol_driver *pdrv)
+{
+	struct stm_pdrv_entry *pe = NULL;
+	int ret = -ENOMEM;
+
+	mutex_lock(&stm_pdrv_mutex);
+
+	if (__stm_lookup_protocol(pdrv->name)) {
+		ret = -EEXIST;
+		goto unlock;
+	}
+
+	pe = kzalloc(sizeof(*pe), GFP_KERNEL);
+	if (!pe)
+		goto unlock;
+
+	if (pdrv->policy_attr) {
+		pe->node_type = get_policy_node_type(pdrv->policy_attr);
+		if (!pe->node_type)
+			goto unlock;
+	}
+
+	list_add_tail(&pe->entry, &stm_pdrv_head);
+	pe->pdrv = pdrv;
+
+	ret = 0;
+unlock:
+	mutex_unlock(&stm_pdrv_mutex);
+
+	if (ret)
+		kfree(pe);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(stm_register_protocol);
+
+void stm_unregister_protocol(const struct stm_protocol_driver *pdrv)
+{
+	struct stm_pdrv_entry *pe, *iter;
+
+	mutex_lock(&stm_pdrv_mutex);
+
+	list_for_each_entry_safe(pe, iter, &stm_pdrv_head, entry) {
+		if (pe->pdrv == pdrv) {
+			list_del(&pe->entry);
+
+			if (pe->node_type) {
+				kfree(pe->node_type->ct_attrs);
+				kfree(pe->node_type);
+			}
+			kfree(pe);
+			break;
+		}
+	}
+
+	mutex_unlock(&stm_pdrv_mutex);
+}
+EXPORT_SYMBOL_GPL(stm_unregister_protocol);
+
+static bool stm_get_protocol(const struct stm_protocol_driver *pdrv)
+{
+	return try_module_get(pdrv->owner);
+}
+
+void stm_put_protocol(const struct stm_protocol_driver *pdrv)
+{
+	module_put(pdrv->owner);
+}
+
+int stm_lookup_protocol(const char *name,
+			const struct stm_protocol_driver **pdrv,
+			const struct config_item_type **node_type)
+{
+	const struct stm_pdrv_entry *pe;
+
+	mutex_lock(&stm_pdrv_mutex);
+
+	pe = __stm_lookup_protocol(name);
+	if (pe && pe->pdrv && stm_get_protocol(pe->pdrv)) {
+		*pdrv = pe->pdrv;
+		*node_type = pe->node_type;
+	}
+
+	mutex_unlock(&stm_pdrv_mutex);
+
+	return pe ? 0 : -ENOENT;
+}
+
 static int stm_char_open(struct inode *inode, struct file *file)
 {
 	struct stm_file *stmf;
 	struct device *dev;
 	unsigned int major = imajor(inode);
-	int err = -ENODEV;
+	int err = -ENOMEM;
 
 	dev = class_find_device(&stm_class, NULL, &major, major_match);
 	if (!dev)
@@ -337,8 +495,10 @@ static int stm_char_open(struct inode *inode, struct file *file)
 
 	stmf = kzalloc(sizeof(*stmf), GFP_KERNEL);
 	if (!stmf)
-		return -ENOMEM;
+		goto err_put_device;
 
+	err = -ENODEV;
+	stm_output_init(&stmf->output);
 	stmf->stm = to_stm_device(dev);
 
 	if (!try_module_get(stmf->stm->owner))
@@ -350,6 +510,9 @@ static int stm_char_open(struct inode *inode, struct file *file)
 
 err_free:
 	kfree(stmf);
+err_put_device:
+	/* matches class_find_device() above */
+	put_device(dev);
 
 	return err;
 }
@@ -357,45 +520,99 @@ err_free:
 static int stm_char_release(struct inode *inode, struct file *file)
 {
 	struct stm_file *stmf = file->private_data;
+	struct stm_device *stm = stmf->stm;
 
-	stm_output_free(stmf->stm, &stmf->output);
-	stm_put_device(stmf->stm);
+	if (stm->data->unlink)
+		stm->data->unlink(stm->data, stmf->output.master,
+				  stmf->output.channel);
+
+	stm_output_free(stm, &stmf->output);
+
+	/*
+	 * matches the stm_char_open()'s
+	 * class_find_device() + try_module_get()
+	 */
+	stm_put_device(stm);
 	kfree(stmf);
 
 	return 0;
 }
 
-static int stm_file_assign(struct stm_file *stmf, char *id, unsigned int width)
+static int
+stm_assign_first_policy(struct stm_device *stm, struct stm_output *output,
+			char **ids, unsigned int width)
 {
-	struct stm_device *stm = stmf->stm;
-	int ret;
+	struct stp_policy_node *pn;
+	int err, n;
 
-	stmf->policy_node = stp_policy_node_lookup(stm, id);
+	/*
+	 * On success, stp_policy_node_lookup() will return holding the
+	 * configfs subsystem mutex, which is then released in
+	 * stp_policy_node_put(). This allows the pdrv->output_open() in
+	 * stm_output_assign() to serialize against the attribute accessors.
+	 */
+	for (n = 0, pn = NULL; ids[n] && !pn; n++)
+		pn = stp_policy_node_lookup(stm, ids[n]);
 
-	ret = stm_output_assign(stm, width, stmf->policy_node, &stmf->output);
+	if (!pn)
+		return -EINVAL;
 
-	if (stmf->policy_node)
-		stp_policy_node_put(stmf->policy_node);
+	err = stm_output_assign(stm, width, pn, output);
 
-	return ret;
+	stp_policy_node_put(pn);
+
+	return err;
 }
 
-static void stm_write(struct stm_data *data, unsigned int master,
-		      unsigned int channel, const char *buf, size_t count)
+/**
+ * stm_data_write() - send the given payload as data packets
+ * @data:	stm driver's data
+ * @m:		STP master
+ * @c:		STP channel
+ * @ts_first:	timestamp the first packet
+ * @buf:	data payload buffer
+ * @count:	data payload size
+ */
+ssize_t notrace stm_data_write(struct stm_data *data, unsigned int m,
+			       unsigned int c, bool ts_first, const void *buf,
+			       size_t count)
 {
-	unsigned int flags = STP_PACKET_TIMESTAMPED;
-	const unsigned char *p = buf, nil = 0;
-	size_t pos;
+	unsigned int flags = ts_first ? STP_PACKET_TIMESTAMPED : 0;
 	ssize_t sz;
+	size_t pos;
 
-	for (pos = 0, p = buf; count > pos; pos += sz, p += sz) {
+	for (pos = 0, sz = 0; pos < count; pos += sz) {
 		sz = min_t(unsigned int, count - pos, 8);
-		sz = data->packet(data, master, channel, STP_PACKET_DATA, flags,
-				  sz, p);
-		flags = 0;
+		sz = data->packet(data, m, c, STP_PACKET_DATA, flags, sz,
+				  &((u8 *)buf)[pos]);
+		if (sz <= 0)
+			break;
+
+		if (ts_first) {
+			flags = 0;
+			ts_first = false;
+		}
 	}
 
-	data->packet(data, master, channel, STP_PACKET_FLAG, 0, 0, &nil);
+	return sz < 0 ? sz : pos;
+}
+EXPORT_SYMBOL_GPL(stm_data_write);
+
+static ssize_t notrace
+stm_write(struct stm_device *stm, struct stm_output *output,
+	  unsigned int chan, const char *buf, size_t count)
+{
+	int err;
+
+	/* stm->pdrv is serialized against policy_mutex */
+	if (!stm->pdrv)
+		return -ENODEV;
+
+	err = stm->pdrv->write(stm->data, output, chan, buf, count);
+	if (err < 0)
+		return err;
+
+	return err;
 }
 
 static ssize_t stm_char_write(struct file *file, const char __user *buf,
@@ -406,17 +623,25 @@ static ssize_t stm_char_write(struct file *file, const char __user *buf,
 	char *kbuf;
 	int err;
 
+	if (count + 1 > PAGE_SIZE)
+		count = PAGE_SIZE - 1;
+
 	/*
-	 * if no m/c have been assigned to this writer up to this
-	 * point, use "default" policy entry
+	 * If no m/c have been assigned to this writer up to this
+	 * point, try to use the task name and "default" policy entries.
 	 */
 	if (!stmf->output.nr_chans) {
-		err = stm_file_assign(stmf, "default", 1);
+		char comm[sizeof(current->comm)];
+		char *ids[] = { comm, "default", NULL };
+
+		get_task_comm(comm, current);
+
+		err = stm_assign_first_policy(stmf->stm, &stmf->output, ids, 1);
 		/*
 		 * EBUSY means that somebody else just assigned this
 		 * output, which is just fine for write()
 		 */
-		if (err && err != -EBUSY)
+		if (err)
 			return err;
 	}
 
@@ -430,13 +655,38 @@ static ssize_t stm_char_write(struct file *file, const char __user *buf,
 		return -EFAULT;
 	}
 
-	stm_write(stm->data, stmf->output.master, stmf->output.channel, kbuf,
-		  count);
+	pm_runtime_get_sync(&stm->dev);
 
+	count = stm_write(stm, &stmf->output, 0, kbuf, count);
+
+	pm_runtime_mark_last_busy(&stm->dev);
+	pm_runtime_put_autosuspend(&stm->dev);
 	kfree(kbuf);
 
 	return count;
 }
+
+static void stm_mmap_open(struct vm_area_struct *vma)
+{
+	struct stm_file *stmf = vma->vm_file->private_data;
+	struct stm_device *stm = stmf->stm;
+
+	pm_runtime_get(&stm->dev);
+}
+
+static void stm_mmap_close(struct vm_area_struct *vma)
+{
+	struct stm_file *stmf = vma->vm_file->private_data;
+	struct stm_device *stm = stmf->stm;
+
+	pm_runtime_mark_last_busy(&stm->dev);
+	pm_runtime_put_autosuspend(&stm->dev);
+}
+
+static const struct vm_operations_struct stm_mmap_vmops = {
+	.open	= stm_mmap_open,
+	.close	= stm_mmap_close,
+};
 
 static int stm_char_mmap(struct file *file, struct vm_area_struct *vma)
 {
@@ -462,8 +712,11 @@ static int stm_char_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!phys)
 		return -EINVAL;
 
+	pm_runtime_get_sync(&stm->dev);
+
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 	vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_ops = &stm_mmap_vmops;
 	vm_iomap_memory(vma, phys, size);
 
 	return 0;
@@ -473,7 +726,8 @@ static int stm_char_policy_set_ioctl(struct stm_file *stmf, void __user *arg)
 {
 	struct stm_device *stm = stmf->stm;
 	struct stp_policy_id *id;
-	int ret = -EINVAL;
+	char *ids[] = { NULL, NULL };
+	int ret = -EINVAL, wlimit = 1;
 	u32 size;
 
 	if (stmf->output.nr_chans)
@@ -482,7 +736,7 @@ static int stm_char_policy_set_ioctl(struct stm_file *stmf, void __user *arg)
 	if (copy_from_user(&size, arg, sizeof(size)))
 		return -EFAULT;
 
-	if (size >= PATH_MAX + sizeof(*id))
+	if (size < sizeof(*id) || size >= PATH_MAX + sizeof(*id))
 		return -EINVAL;
 
 	/*
@@ -501,24 +755,24 @@ static int stm_char_policy_set_ioctl(struct stm_file *stmf, void __user *arg)
 	if (id->__reserved_0 || id->__reserved_1)
 		goto err_free;
 
-	if (id->width < 1 ||
-	    id->width > PAGE_SIZE / stm->data->sw_mmiosz)
+	if (stm->data->sw_mmiosz)
+		wlimit = PAGE_SIZE / stm->data->sw_mmiosz;
+
+	if (id->width < 1 || id->width > wlimit)
 		goto err_free;
 
-	ret = stm_file_assign(stmf, id->id, id->width);
+	ids[0] = id->id;
+	ret = stm_assign_first_policy(stmf->stm, &stmf->output, ids,
+				      id->width);
 	if (ret)
 		goto err_free;
-
-	ret = 0;
 
 	if (stm->data->link)
 		ret = stm->data->link(stm->data, stmf->output.master,
 				      stmf->output.channel);
 
-	if (ret) {
+	if (ret)
 		stm_output_free(stmf->stm, &stmf->output);
-		stm_put_device(stmf->stm);
-	}
 
 err_free:
 	kfree(id);
@@ -578,23 +832,13 @@ stm_char_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return err;
 }
 
-#ifdef CONFIG_COMPAT
-static long
-stm_char_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-	return stm_char_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
-}
-#else
-#define stm_char_compat_ioctl	NULL
-#endif
-
 static const struct file_operations stm_fops = {
 	.open		= stm_char_open,
 	.release	= stm_char_release,
 	.write		= stm_char_write,
 	.mmap		= stm_char_mmap,
 	.unlocked_ioctl	= stm_char_ioctl,
-	.compat_ioctl	= stm_char_compat_ioctl,
+	.compat_ioctl	= compat_ptr_ioctl,
 	.llseek		= no_llseek,
 };
 
@@ -602,7 +846,7 @@ static void stm_device_release(struct device *dev)
 {
 	struct stm_device *stm = to_stm_device(dev);
 
-	kfree(stm);
+	vfree(stm);
 }
 
 int stm_register_device(struct device *parent, struct stm_data *stm_data,
@@ -618,8 +862,8 @@ int stm_register_device(struct device *parent, struct stm_data *stm_data,
 	if (!stm_data->packet || !stm_data->sw_nchannels)
 		return -EINVAL;
 
-	nmasters = stm_data->sw_end - stm_data->sw_start;
-	stm = kzalloc(sizeof(*stm) + nmasters * sizeof(void *), GFP_KERNEL);
+	nmasters = stm_data->sw_end - stm_data->sw_start + 1;
+	stm = vzalloc(sizeof(*stm) + nmasters * sizeof(void *));
 	if (!stm)
 		return -ENOMEM;
 
@@ -633,6 +877,18 @@ int stm_register_device(struct device *parent, struct stm_data *stm_data,
 	stm->dev.parent = parent;
 	stm->dev.release = stm_device_release;
 
+	mutex_init(&stm->link_mutex);
+	spin_lock_init(&stm->link_lock);
+	INIT_LIST_HEAD(&stm->link_list);
+
+	/* initialize the object before it is accessible via sysfs */
+	spin_lock_init(&stm->mc_lock);
+	mutex_init(&stm->policy_mutex);
+	stm->sw_nmasters = nmasters;
+	stm->owner = owner;
+	stm->data = stm_data;
+	stm_data->stm = stm;
+
 	err = kobject_set_name(&stm->dev.kobj, "%s", stm_data->name);
 	if (err)
 		goto err_device;
@@ -641,41 +897,56 @@ int stm_register_device(struct device *parent, struct stm_data *stm_data,
 	if (err)
 		goto err_device;
 
-	spin_lock_init(&stm->link_lock);
-	INIT_LIST_HEAD(&stm->link_list);
-
-	spin_lock_init(&stm->mc_lock);
-	mutex_init(&stm->policy_mutex);
-	stm->sw_nmasters = nmasters;
-	stm->owner = owner;
-	stm->data = stm_data;
-	stm_data->stm = stm;
+	/*
+	 * Use delayed autosuspend to avoid bouncing back and forth
+	 * on recurring character device writes, with the initial
+	 * delay time of 2 seconds.
+	 */
+	pm_runtime_no_callbacks(&stm->dev);
+	pm_runtime_use_autosuspend(&stm->dev);
+	pm_runtime_set_autosuspend_delay(&stm->dev, 2000);
+	pm_runtime_set_suspended(&stm->dev);
+	pm_runtime_enable(&stm->dev);
 
 	return 0;
 
 err_device:
+	unregister_chrdev(stm->major, stm_data->name);
+
+	/* matches device_initialize() above */
 	put_device(&stm->dev);
 err_free:
-	kfree(stm);
+	vfree(stm);
 
 	return err;
 }
 EXPORT_SYMBOL_GPL(stm_register_device);
 
-static void __stm_source_link_drop(struct stm_source_device *src,
-				   struct stm_device *stm);
+static int __stm_source_link_drop(struct stm_source_device *src,
+				  struct stm_device *stm);
 
 void stm_unregister_device(struct stm_data *stm_data)
 {
 	struct stm_device *stm = stm_data->stm;
 	struct stm_source_device *src, *iter;
-	int i;
+	int i, ret;
 
-	spin_lock(&stm->link_lock);
+	pm_runtime_dont_use_autosuspend(&stm->dev);
+	pm_runtime_disable(&stm->dev);
+
+	mutex_lock(&stm->link_mutex);
 	list_for_each_entry_safe(src, iter, &stm->link_list, link_entry) {
-		__stm_source_link_drop(src, stm);
+		ret = __stm_source_link_drop(src, stm);
+		/*
+		 * src <-> stm link must not change under the same
+		 * stm::link_mutex, so complain loudly if it has;
+		 * also in this situation ret!=0 means this src is
+		 * not connected to this stm and it should be otherwise
+		 * safe to proceed with the tear-down of stm.
+		 */
+		WARN_ON_ONCE(ret);
 	}
-	spin_unlock(&stm->link_lock);
+	mutex_unlock(&stm->link_mutex);
 
 	synchronize_srcu(&stm_source_srcu);
 
@@ -686,13 +957,24 @@ void stm_unregister_device(struct stm_data *stm_data)
 		stp_policy_unbind(stm->policy);
 	mutex_unlock(&stm->policy_mutex);
 
-	for (i = 0; i < stm->sw_nmasters; i++)
+	for (i = stm->data->sw_start; i <= stm->data->sw_end; i++)
 		stp_master_free(stm, i);
 
 	device_unregister(&stm->dev);
 	stm_data->stm = NULL;
 }
 EXPORT_SYMBOL_GPL(stm_unregister_device);
+
+/*
+ * stm::link_list access serialization uses a spinlock and a mutex; holding
+ * either of them guarantees that the list is stable; modification requires
+ * holding both of them.
+ *
+ * Lock ordering is as follows:
+ *   stm::link_mutex
+ *     stm::link_lock
+ *       src::link_lock
+ */
 
 /**
  * stm_source_link_add() - connect an stm_source device to an stm device
@@ -707,9 +989,10 @@ EXPORT_SYMBOL_GPL(stm_unregister_device);
 static int stm_source_link_add(struct stm_source_device *src,
 			       struct stm_device *stm)
 {
-	char *id;
-	int err;
+	char *ids[] = { NULL, "default", NULL };
+	int err = -ENOMEM;
 
+	mutex_lock(&stm->link_mutex);
 	spin_lock(&stm->link_lock);
 	spin_lock(&src->link_lock);
 
@@ -719,20 +1002,15 @@ static int stm_source_link_add(struct stm_source_device *src,
 
 	spin_unlock(&src->link_lock);
 	spin_unlock(&stm->link_lock);
+	mutex_unlock(&stm->link_mutex);
 
-	id = kstrdup(src->data->name, GFP_KERNEL);
-	if (id) {
-		src->policy_node =
-			stp_policy_node_lookup(stm, id);
+	ids[0] = kstrdup(src->data->name, GFP_KERNEL);
+	if (!ids[0])
+		goto fail_detach;
 
-		kfree(id);
-	}
-
-	err = stm_output_assign(stm, src->data->nr_chans,
-				src->policy_node, &src->output);
-
-	if (src->policy_node)
-		stp_policy_node_put(src->policy_node);
+	err = stm_assign_first_policy(stm, &src->output, ids,
+				      src->data->nr_chans);
+	kfree(ids[0]);
 
 	if (err)
 		goto fail_detach;
@@ -753,9 +1031,9 @@ static int stm_source_link_add(struct stm_source_device *src,
 
 fail_free_output:
 	stm_output_free(stm, &src->output);
-	stm_put_device(stm);
 
 fail_detach:
+	mutex_lock(&stm->link_mutex);
 	spin_lock(&stm->link_lock);
 	spin_lock(&src->link_lock);
 
@@ -764,6 +1042,7 @@ fail_detach:
 
 	spin_unlock(&src->link_lock);
 	spin_unlock(&stm->link_lock);
+	mutex_unlock(&stm->link_mutex);
 
 	return err;
 }
@@ -776,28 +1055,57 @@ fail_detach:
  * If @stm is @src::link, disconnect them from one another and put the
  * reference on the @stm device.
  *
- * Caller must hold stm::link_lock.
+ * Caller must hold stm::link_mutex.
  */
-static void __stm_source_link_drop(struct stm_source_device *src,
-				   struct stm_device *stm)
+static int __stm_source_link_drop(struct stm_source_device *src,
+				  struct stm_device *stm)
 {
 	struct stm_device *link;
+	int ret = 0;
 
+	lockdep_assert_held(&stm->link_mutex);
+
+	/* for stm::link_list modification, we hold both mutex and spinlock */
+	spin_lock(&stm->link_lock);
 	spin_lock(&src->link_lock);
 	link = srcu_dereference_check(src->link, &stm_source_srcu, 1);
-	if (WARN_ON_ONCE(link != stm)) {
-		spin_unlock(&src->link_lock);
-		return;
+
+	/*
+	 * The linked device may have changed since we last looked, because
+	 * we weren't holding the src::link_lock back then; if this is the
+	 * case, tell the caller to retry.
+	 */
+	if (link != stm) {
+		ret = -EAGAIN;
+		goto unlock;
 	}
 
 	stm_output_free(link, &src->output);
-	/* caller must hold stm::link_lock */
 	list_del_init(&src->link_entry);
+	pm_runtime_mark_last_busy(&link->dev);
+	pm_runtime_put_autosuspend(&link->dev);
 	/* matches stm_find_device() from stm_source_link_store() */
 	stm_put_device(link);
 	rcu_assign_pointer(src->link, NULL);
 
+unlock:
 	spin_unlock(&src->link_lock);
+	spin_unlock(&stm->link_lock);
+
+	/*
+	 * Call the unlink callbacks for both source and stm, when we know
+	 * that we have actually performed the unlinking.
+	 */
+	if (!ret) {
+		if (src->data->unlink)
+			src->data->unlink(src->data);
+
+		if (stm->data->unlink)
+			stm->data->unlink(stm->data, src->output.master,
+					  src->output.channel);
+	}
+
+	return ret;
 }
 
 /**
@@ -813,21 +1121,29 @@ static void __stm_source_link_drop(struct stm_source_device *src,
 static void stm_source_link_drop(struct stm_source_device *src)
 {
 	struct stm_device *stm;
-	int idx;
+	int idx, ret;
 
+retry:
 	idx = srcu_read_lock(&stm_source_srcu);
+	/*
+	 * The stm device will be valid for the duration of this
+	 * read section, but the link may change before we grab
+	 * the src::link_lock in __stm_source_link_drop().
+	 */
 	stm = srcu_dereference(src->link, &stm_source_srcu);
 
+	ret = 0;
 	if (stm) {
-		if (src->data->unlink)
-			src->data->unlink(src->data);
-
-		spin_lock(&stm->link_lock);
-		__stm_source_link_drop(src, stm);
-		spin_unlock(&stm->link_lock);
+		mutex_lock(&stm->link_mutex);
+		ret = __stm_source_link_drop(src, stm);
+		mutex_unlock(&stm->link_mutex);
 	}
 
 	srcu_read_unlock(&stm_source_srcu, idx);
+
+	/* if it did change, retry */
+	if (ret == -EAGAIN)
+		goto retry;
 }
 
 static ssize_t stm_source_link_show(struct device *dev,
@@ -861,9 +1177,14 @@ static ssize_t stm_source_link_store(struct device *dev,
 	if (!link)
 		return -EINVAL;
 
+	pm_runtime_get(&link->dev);
+
 	err = stm_source_link_add(src, link);
-	if (err)
+	if (err) {
+		pm_runtime_put_autosuspend(&link->dev);
+		/* matches the stm_find_device() above */
 		stm_put_device(link);
+	}
 
 	return err ? : count;
 }
@@ -921,10 +1242,14 @@ int stm_source_register_device(struct device *parent,
 	if (err)
 		goto err;
 
+	pm_runtime_no_callbacks(&src->dev);
+	pm_runtime_forbid(&src->dev);
+
 	err = device_add(&src->dev);
 	if (err)
 		goto err;
 
+	stm_output_init(&src->output);
 	spin_lock_init(&src->link_lock);
 	INIT_LIST_HEAD(&src->link_entry);
 	src->data = data;
@@ -934,7 +1259,6 @@ int stm_source_register_device(struct device *parent,
 
 err:
 	put_device(&src->dev);
-	kfree(src);
 
 	return err;
 }
@@ -952,12 +1276,13 @@ void stm_source_unregister_device(struct stm_source_data *data)
 
 	stm_source_link_drop(src);
 
-	device_destroy(&stm_source_class, src->dev.devt);
+	device_unregister(&src->dev);
 }
 EXPORT_SYMBOL_GPL(stm_source_unregister_device);
 
-int stm_source_write(struct stm_source_data *data, unsigned int chan,
-		     const char *buf, size_t count)
+int notrace stm_source_write(struct stm_source_data *data,
+			     unsigned int chan,
+			     const char *buf, size_t count)
 {
 	struct stm_source_device *src = data->src;
 	struct stm_device *stm;
@@ -973,9 +1298,7 @@ int stm_source_write(struct stm_source_data *data, unsigned int chan,
 
 	stm = srcu_dereference(src->link, &stm_source_srcu);
 	if (stm)
-		stm_write(stm->data, src->output.master,
-			  src->output.channel + chan,
-			  buf, count);
+		count = stm_write(stm, &src->output, chan, buf, count);
 	else
 		count = -ENODEV;
 
@@ -1002,7 +1325,15 @@ static int __init stm_core_init(void)
 		goto err_src;
 
 	init_srcu_struct(&stm_source_srcu);
+	INIT_LIST_HEAD(&stm_pdrv_head);
+	mutex_init(&stm_pdrv_mutex);
 
+	/*
+	 * So as to not confuse existing users with a requirement
+	 * to load yet another module, do it here.
+	 */
+	if (IS_ENABLED(CONFIG_STM_PROTO_BASIC))
+		(void)request_module_nowait("stm_p_basic");
 	stm_core_up++;
 
 	return 0;

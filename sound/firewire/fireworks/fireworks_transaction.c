@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * fireworks_transaction.c - a part of driver for Fireworks based devices
  *
  * Copyright (c) 2013-2014 Takashi Sakamoto
- *
- * Licensed under the terms of the GNU General Public License, version 2.
  */
 
 /*
@@ -121,10 +120,10 @@ copy_resp_to_buf(struct snd_efw *efw, void *data, size_t length, int *rcode)
 	size_t capacity, till_end;
 	struct snd_efw_transaction *t;
 
-	spin_lock_irq(&efw->lock);
-
 	t = (struct snd_efw_transaction *)data;
 	length = min_t(size_t, be32_to_cpu(t->length) * sizeof(u32), length);
+
+	spin_lock(&efw->lock);
 
 	if (efw->push_ptr < efw->pull_ptr)
 		capacity = (unsigned int)(efw->pull_ptr - efw->push_ptr);
@@ -155,7 +154,6 @@ copy_resp_to_buf(struct snd_efw *efw, void *data, size_t length, int *rcode)
 	}
 
 	/* for hwdep */
-	efw->resp_queues++;
 	wake_up(&efw->hwdep_wait);
 
 	*rcode = RCODE_COMPLETE;
@@ -192,7 +190,7 @@ handle_resp_for_user(struct fw_card *card, int generation, int source,
 
 	copy_resp_to_buf(efw, data, length, rcode);
 end:
-	spin_unlock_irq(&instances_lock);
+	spin_unlock(&instances_lock);
 }
 
 static void

@@ -66,7 +66,6 @@ struct mpc52xx_fec_priv {
 	/* MDIO link details */
 	unsigned int mdio_speed;
 	struct device_node *phy_node;
-	struct phy_device *phydev;
 	enum phy_state link;
 	int seven_wire_mode;
 };
@@ -75,7 +74,7 @@ struct mpc52xx_fec_priv {
 static irqreturn_t mpc52xx_fec_interrupt(int, void *);
 static irqreturn_t mpc52xx_fec_rx_interrupt(int, void *);
 static irqreturn_t mpc52xx_fec_tx_interrupt(int, void *);
-static void mpc52xx_fec_stop(struct net_device *dev);
+static void mpc52xx_fec_stop(struct net_device *dev, bool may_sleep);
 static void mpc52xx_fec_start(struct net_device *dev);
 static void mpc52xx_fec_reset(struct net_device *dev);
 
@@ -85,7 +84,7 @@ static int debug = -1;	/* the above default */
 module_param(debug, int, 0);
 MODULE_PARM_DESC(debug, "debugging messages level");
 
-static void mpc52xx_fec_tx_timeout(struct net_device *dev)
+static void mpc52xx_fec_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
 	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
 	unsigned long flags;
@@ -165,7 +164,7 @@ static int mpc52xx_fec_alloc_rx_buffers(struct net_device *dev, struct bcom_task
 static void mpc52xx_fec_adjust_link(struct net_device *dev)
 {
 	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
-	struct phy_device *phydev = priv->phydev;
+	struct phy_device *phydev = dev->phydev;
 	int new_state = 0;
 
 	if (phydev->link != PHY_DOWN) {
@@ -215,16 +214,17 @@ static void mpc52xx_fec_adjust_link(struct net_device *dev)
 static int mpc52xx_fec_open(struct net_device *dev)
 {
 	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
+	struct phy_device *phydev = NULL;
 	int err = -EBUSY;
 
 	if (priv->phy_node) {
-		priv->phydev = of_phy_connect(priv->ndev, priv->phy_node,
-					      mpc52xx_fec_adjust_link, 0, 0);
-		if (!priv->phydev) {
+		phydev = of_phy_connect(priv->ndev, priv->phy_node,
+					mpc52xx_fec_adjust_link, 0, 0);
+		if (!phydev) {
 			dev_err(&dev->dev, "of_phy_connect failed\n");
 			return -ENODEV;
 		}
-		phy_start(priv->phydev);
+		phy_start(phydev);
 	}
 
 	if (request_irq(dev->irq, mpc52xx_fec_interrupt, IRQF_SHARED,
@@ -268,10 +268,9 @@ static int mpc52xx_fec_open(struct net_device *dev)
  free_ctrl_irq:
 	free_irq(dev->irq, dev);
  free_phy:
-	if (priv->phydev) {
-		phy_stop(priv->phydev);
-		phy_disconnect(priv->phydev);
-		priv->phydev = NULL;
+	if (phydev) {
+		phy_stop(phydev);
+		phy_disconnect(phydev);
 	}
 
 	return err;
@@ -280,10 +279,11 @@ static int mpc52xx_fec_open(struct net_device *dev)
 static int mpc52xx_fec_close(struct net_device *dev)
 {
 	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
+	struct phy_device *phydev = dev->phydev;
 
 	netif_stop_queue(dev);
 
-	mpc52xx_fec_stop(dev);
+	mpc52xx_fec_stop(dev, true);
 
 	mpc52xx_fec_free_rx_buffers(dev, priv->rx_dmatsk);
 
@@ -291,11 +291,10 @@ static int mpc52xx_fec_close(struct net_device *dev)
 	free_irq(priv->r_irq, dev);
 	free_irq(priv->t_irq, dev);
 
-	if (priv->phydev) {
+	if (phydev) {
 		/* power down phy */
-		phy_stop(priv->phydev);
-		phy_disconnect(priv->phydev);
-		priv->phydev = NULL;
+		phy_stop(phydev);
+		phy_disconnect(phydev);
 	}
 
 	return 0;
@@ -306,7 +305,8 @@ static int mpc52xx_fec_close(struct net_device *dev)
  * invariant will hold if you make sure that the netif_*_queue()
  * calls are done at the proper times.
  */
-static int mpc52xx_fec_start_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t
+mpc52xx_fec_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
 	struct bcom_fec_bd *bd;
@@ -369,7 +369,7 @@ static irqreturn_t mpc52xx_fec_tx_interrupt(int irq, void *dev_id)
 		dma_unmap_single(dev->dev.parent, bd->skb_pa, skb->len,
 				 DMA_TO_DEVICE);
 
-		dev_kfree_skb_irq(skb);
+		dev_consume_skb_irq(skb);
 	}
 	spin_unlock(&priv->lock);
 
@@ -693,7 +693,7 @@ static void mpc52xx_fec_start(struct net_device *dev)
  *
  * stop all activity on fec and empty dma buffers
  */
-static void mpc52xx_fec_stop(struct net_device *dev)
+static void mpc52xx_fec_stop(struct net_device *dev, bool may_sleep)
 {
 	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
 	struct mpc52xx_fec __iomem *fec = priv->fec;
@@ -706,7 +706,7 @@ static void mpc52xx_fec_stop(struct net_device *dev)
 	bcom_disable(priv->rx_dmatsk);
 
 	/* Wait for tx queue to drain, but only if we're in process context */
-	if (!in_interrupt()) {
+	if (may_sleep) {
 		timeout = jiffies + msecs_to_jiffies(2000);
 		while (time_before(jiffies, timeout) &&
 				!bcom_queue_empty(priv->tx_dmatsk))
@@ -738,7 +738,7 @@ static void mpc52xx_fec_reset(struct net_device *dev)
 	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
 	struct mpc52xx_fec __iomem *fec = priv->fec;
 
-	mpc52xx_fec_stop(dev);
+	mpc52xx_fec_stop(dev, false);
 
 	out_be32(&fec->rfifo_status, in_be32(&fec->rfifo_status));
 	out_be32(&fec->reset_cntrl, FEC_RESET_CNTRL_RESET_FIFO);
@@ -763,26 +763,6 @@ static void mpc52xx_fec_reset(struct net_device *dev)
 
 /* ethtool interface */
 
-static int mpc52xx_fec_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
-{
-	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
-
-	if (!priv->phydev)
-		return -ENODEV;
-
-	return phy_ethtool_gset(priv->phydev, cmd);
-}
-
-static int mpc52xx_fec_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
-{
-	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
-
-	if (!priv->phydev)
-		return -ENODEV;
-
-	return phy_ethtool_sset(priv->phydev, cmd);
-}
-
 static u32 mpc52xx_fec_get_msglevel(struct net_device *dev)
 {
 	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
@@ -796,24 +776,14 @@ static void mpc52xx_fec_set_msglevel(struct net_device *dev, u32 level)
 }
 
 static const struct ethtool_ops mpc52xx_fec_ethtool_ops = {
-	.get_settings = mpc52xx_fec_get_settings,
-	.set_settings = mpc52xx_fec_set_settings,
 	.get_link = ethtool_op_get_link,
 	.get_msglevel = mpc52xx_fec_get_msglevel,
 	.set_msglevel = mpc52xx_fec_set_msglevel,
 	.get_ts_info = ethtool_op_get_ts_info,
+	.get_link_ksettings = phy_ethtool_get_link_ksettings,
+	.set_link_ksettings = phy_ethtool_set_link_ksettings,
 };
 
-
-static int mpc52xx_fec_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
-{
-	struct mpc52xx_fec_priv *priv = netdev_priv(dev);
-
-	if (!priv->phydev)
-		return -ENOTSUPP;
-
-	return phy_mii_ioctl(priv->phydev, rq, cmd);
-}
 
 static const struct net_device_ops mpc52xx_fec_netdev_ops = {
 	.ndo_open = mpc52xx_fec_open,
@@ -822,8 +792,7 @@ static const struct net_device_ops mpc52xx_fec_netdev_ops = {
 	.ndo_set_rx_mode = mpc52xx_fec_set_multicast_list,
 	.ndo_set_mac_address = mpc52xx_fec_set_mac_address,
 	.ndo_validate_addr = eth_validate_addr,
-	.ndo_do_ioctl = mpc52xx_fec_ioctl,
-	.ndo_change_mtu = eth_change_mtu,
+	.ndo_do_ioctl = phy_do_ioctl,
 	.ndo_tx_timeout = mpc52xx_fec_tx_timeout,
 	.ndo_get_stats = mpc52xx_fec_get_stats,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -923,8 +892,8 @@ static int mpc52xx_fec_probe(struct platform_device *op)
 	 * First try to read MAC address from DT
 	 */
 	mac_addr = of_get_mac_address(np);
-	if (mac_addr) {
-		memcpy(ndev->dev_addr, mac_addr, ETH_ALEN);
+	if (!IS_ERR(mac_addr)) {
+		ether_addr_copy(ndev->dev_addr, mac_addr);
 	} else {
 		struct mpc52xx_fec __iomem *fec = priv->fec;
 
@@ -982,8 +951,8 @@ static int mpc52xx_fec_probe(struct platform_device *op)
 
 	/* We're done ! */
 	platform_set_drvdata(op, ndev);
-	netdev_info(ndev, "%s MAC %pM\n",
-		    op->dev.of_node->full_name, ndev->dev_addr);
+	netdev_info(ndev, "%pOF MAC %pM\n",
+		    op->dev.of_node, ndev->dev_addr);
 
 	return 0;
 

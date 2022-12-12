@@ -4,7 +4,7 @@
 #define smp_store_release(p, v)						\
 	do {								\
 		smp_mb();						\
-		ACCESS_ONCE(*p) = (v);					\
+		WRITE_ONCE(*p,v);					\
 	} while (0)
 
 #undef smp_load_acquire

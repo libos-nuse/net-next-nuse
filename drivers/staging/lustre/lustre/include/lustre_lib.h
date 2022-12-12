@@ -153,9 +153,9 @@ struct obd_ioctl_data {
 
 	/* buffers the kernel will treat as user pointers */
 	__u32  ioc_plen1;
-	char  *ioc_pbuf1;
+	void __user *ioc_pbuf1;
 	__u32  ioc_plen2;
-	char  *ioc_pbuf2;
+	void __user *ioc_pbuf2;
 
 	/* inline buffers for various arguments */
 	__u32  ioc_inllen1;
@@ -252,8 +252,8 @@ static inline int obd_ioctl_is_invalid(struct obd_ioctl_data *data)
 #include "obd_support.h"
 
 /* function defined in lustre/obdclass/<platform>/<platform>-module.c */
-int obd_ioctl_getdata(char **buf, int *len, void *arg);
-int obd_ioctl_popdata(void *arg, void *data, int len);
+int obd_ioctl_getdata(char **buf, int *len, void __user *arg);
+int obd_ioctl_popdata(void __user *arg, void *data, int len);
 
 static inline void obd_ioctl_freedata(char *buf, int len)
 {
@@ -280,16 +280,16 @@ static inline void obd_ioctl_freedata(char *buf, int len)
 #define OBD_IOC_DATA_TYPE long
 
 #define OBD_IOC_CREATE		 _IOWR('f', 101, OBD_IOC_DATA_TYPE)
-#define OBD_IOC_DESTROY		_IOW ('f', 104, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_DESTROY		_IOW('f', 104, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_PREALLOCATE	    _IOWR('f', 105, OBD_IOC_DATA_TYPE)
 
-#define OBD_IOC_SETATTR		_IOW ('f', 107, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_SETATTR		_IOW('f', 107, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_GETATTR		_IOWR ('f', 108, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_READ		   _IOWR('f', 109, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_WRITE		  _IOWR('f', 110, OBD_IOC_DATA_TYPE)
 
 #define OBD_IOC_STATFS		 _IOWR('f', 113, OBD_IOC_DATA_TYPE)
-#define OBD_IOC_SYNC		   _IOW ('f', 114, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_SYNC		   _IOW('f', 114, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_READ2		  _IOWR('f', 115, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_FORMAT		 _IOWR('f', 116, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_PARTITION	      _IOWR('f', 117, OBD_IOC_DATA_TYPE)
@@ -308,13 +308,13 @@ static inline void obd_ioctl_freedata(char *buf, int len)
 #define OBD_IOC_GETDTNAME	       OBD_IOC_GETNAME
 
 #define OBD_IOC_LOV_GET_CONFIG	 _IOWR('f', 132, OBD_IOC_DATA_TYPE)
-#define OBD_IOC_CLIENT_RECOVER	 _IOW ('f', 133, OBD_IOC_DATA_TYPE)
-#define OBD_IOC_PING_TARGET	    _IOW ('f', 136, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_CLIENT_RECOVER	 _IOW('f', 133, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_PING_TARGET	    _IOW('f', 136, OBD_IOC_DATA_TYPE)
 
 #define OBD_IOC_DEC_FS_USE_COUNT       _IO  ('f', 139)
-#define OBD_IOC_NO_TRANSNO	     _IOW ('f', 140, OBD_IOC_DATA_TYPE)
-#define OBD_IOC_SET_READONLY	   _IOW ('f', 141, OBD_IOC_DATA_TYPE)
-#define OBD_IOC_ABORT_RECOVERY	 _IOR ('f', 142, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_NO_TRANSNO	     _IOW('f', 140, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_SET_READONLY	   _IOW('f', 141, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_ABORT_RECOVERY	 _IOR('f', 142, OBD_IOC_DATA_TYPE)
 
 #define OBD_IOC_ROOT_SQUASH	    _IOWR('f', 143, OBD_IOC_DATA_TYPE)
 
@@ -324,27 +324,27 @@ static inline void obd_ioctl_freedata(char *buf, int len)
 
 #define OBD_IOC_CLOSE_UUID	     _IOWR ('f', 147, OBD_IOC_DATA_TYPE)
 
-#define OBD_IOC_CHANGELOG_SEND	 _IOW ('f', 148, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_CHANGELOG_SEND	 _IOW('f', 148, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_GETDEVICE	      _IOWR ('f', 149, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_FID2PATH	       _IOWR ('f', 150, OBD_IOC_DATA_TYPE)
 /* see also <lustre/lustre_user.h> for ioctls 151-153 */
 /* OBD_IOC_LOV_SETSTRIPE: See also LL_IOC_LOV_SETSTRIPE */
-#define OBD_IOC_LOV_SETSTRIPE	  _IOW ('f', 154, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_LOV_SETSTRIPE	  _IOW('f', 154, OBD_IOC_DATA_TYPE)
 /* OBD_IOC_LOV_GETSTRIPE: See also LL_IOC_LOV_GETSTRIPE */
-#define OBD_IOC_LOV_GETSTRIPE	  _IOW ('f', 155, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_LOV_GETSTRIPE	  _IOW('f', 155, OBD_IOC_DATA_TYPE)
 /* OBD_IOC_LOV_SETEA: See also LL_IOC_LOV_SETEA */
-#define OBD_IOC_LOV_SETEA	      _IOW ('f', 156, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_LOV_SETEA	      _IOW('f', 156, OBD_IOC_DATA_TYPE)
 /* see <lustre/lustre_user.h> for ioctls 157-159 */
 /* OBD_IOC_QUOTACHECK: See also LL_IOC_QUOTACHECK */
-#define OBD_IOC_QUOTACHECK	     _IOW ('f', 160, int)
+#define OBD_IOC_QUOTACHECK	     _IOW('f', 160, int)
 /* OBD_IOC_POLL_QUOTACHECK: See also LL_IOC_POLL_QUOTACHECK */
-#define OBD_IOC_POLL_QUOTACHECK	_IOR ('f', 161, struct if_quotacheck *)
+#define OBD_IOC_POLL_QUOTACHECK	_IOR('f', 161, struct if_quotacheck *)
 /* OBD_IOC_QUOTACTL: See also LL_IOC_QUOTACTL */
 #define OBD_IOC_QUOTACTL	       _IOWR('f', 162, struct if_quotactl)
 /* see  also <lustre/lustre_user.h> for ioctls 163-176 */
-#define OBD_IOC_CHANGELOG_REG	  _IOW ('f', 177, struct obd_ioctl_data)
-#define OBD_IOC_CHANGELOG_DEREG	_IOW ('f', 178, struct obd_ioctl_data)
-#define OBD_IOC_CHANGELOG_CLEAR	_IOW ('f', 179, struct obd_ioctl_data)
+#define OBD_IOC_CHANGELOG_REG	  _IOW('f', 177, struct obd_ioctl_data)
+#define OBD_IOC_CHANGELOG_DEREG	_IOW('f', 178, struct obd_ioctl_data)
+#define OBD_IOC_CHANGELOG_CLEAR	_IOW('f', 179, struct obd_ioctl_data)
 #define OBD_IOC_RECORD		 _IOWR('f', 180, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_ENDRECORD	      _IOWR('f', 181, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_PARSE		  _IOWR('f', 182, OBD_IOC_DATA_TYPE)
@@ -352,7 +352,7 @@ static inline void obd_ioctl_freedata(char *buf, int len)
 #define OBD_IOC_PROCESS_CFG	    _IOWR('f', 184, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_DUMP_LOG	       _IOWR('f', 185, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_CLEAR_LOG	      _IOWR('f', 186, OBD_IOC_DATA_TYPE)
-#define OBD_IOC_PARAM		  _IOW ('f', 187, OBD_IOC_DATA_TYPE)
+#define OBD_IOC_PARAM		  _IOW('f', 187, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_POOL		   _IOWR('f', 188, OBD_IOC_DATA_TYPE)
 #define OBD_IOC_REPLACE_NIDS	   _IOWR('f', 189, OBD_IOC_DATA_TYPE)
 
@@ -365,10 +365,10 @@ static inline void obd_ioctl_freedata(char *buf, int len)
 /* OBD_IOC_LLOG_CATINFO is deprecated */
 #define OBD_IOC_LLOG_CATINFO	   _IOWR('f', 196, OBD_IOC_DATA_TYPE)
 
-#define ECHO_IOC_GET_STRIPE	    _IOWR('f', 200, OBD_IOC_DATA_TYPE)
-#define ECHO_IOC_SET_STRIPE	    _IOWR('f', 201, OBD_IOC_DATA_TYPE)
-#define ECHO_IOC_ENQUEUE	       _IOWR('f', 202, OBD_IOC_DATA_TYPE)
-#define ECHO_IOC_CANCEL		_IOWR('f', 203, OBD_IOC_DATA_TYPE)
+/*	#define ECHO_IOC_GET_STRIPE    _IOWR('f', 200, OBD_IOC_DATA_TYPE) */
+/*	#define ECHO_IOC_SET_STRIPE    _IOWR('f', 201, OBD_IOC_DATA_TYPE) */
+/*	#define ECHO_IOC_ENQUEUE       _IOWR('f', 202, OBD_IOC_DATA_TYPE) */
+/*	#define ECHO_IOC_CANCEL        _IOWR('f', 203, OBD_IOC_DATA_TYPE) */
 
 #define OBD_IOC_GET_OBJ_VERSION	_IOR('f', 210, OBD_IOC_DATA_TYPE)
 
@@ -387,7 +387,8 @@ static inline void obd_ioctl_freedata(char *buf, int len)
  */
 
 /* Until such time as we get_info the per-stripe maximum from the OST,
- * we define this to be 2T - 4k, which is the ext3 maxbytes. */
+ * we define this to be 2T - 4k, which is the ext3 maxbytes.
+ */
 #define LUSTRE_STRIPE_MAXBYTES 0x1fffffff000ULL
 
 /* Special values for remove LOV EA from disk */
@@ -521,6 +522,28 @@ struct l_wait_info {
 			   sigmask(SIGTERM) | sigmask(SIGQUIT) |	\
 			   sigmask(SIGALRM))
 
+/**
+ * wait_queue_t of Linux (version < 2.6.34) is a FIFO list for exclusively
+ * waiting threads, which is not always desirable because all threads will
+ * be waken up again and again, even user only needs a few of them to be
+ * active most time. This is not good for performance because cache can
+ * be polluted by different threads.
+ *
+ * LIFO list can resolve this problem because we always wakeup the most
+ * recent active thread by default.
+ *
+ * NB: please don't call non-exclusive & exclusive wait on the same
+ * waitq if add_wait_queue_exclusive_head is used.
+ */
+#define add_wait_queue_exclusive_head(waitq, link)		\
+{								\
+	unsigned long flags;					\
+								\
+	spin_lock_irqsave(&((waitq)->lock), flags);		\
+	__add_wait_queue_exclusive(waitq, link);		\
+	spin_unlock_irqrestore(&((waitq)->lock), flags);	\
+}
+
 /*
  * wait for @condition to become true, but no longer than timeout, specified
  * by @info.
@@ -540,7 +563,7 @@ do {									   \
 	l_add_wait(&wq, &__wait);					      \
 									       \
 	/* Block all signals (just the non-fatal ones if no timeout). */       \
-	if (info->lwi_on_signal != NULL && (__timeout == 0 || __allow_intr))   \
+	if (info->lwi_on_signal && (__timeout == 0 || __allow_intr))   \
 		__blocked = cfs_block_sigsinv(LUSTRE_FATAL_SIGS);	      \
 	else								   \
 		__blocked = cfs_block_sigsinv(0);			      \
@@ -562,13 +585,13 @@ do {									   \
 			__timeout = cfs_time_sub(__timeout,		    \
 					    cfs_time_sub(interval, remaining));\
 			if (__timeout == 0) {				  \
-				if (info->lwi_on_timeout == NULL ||	    \
+				if (!info->lwi_on_timeout ||		      \
 				    info->lwi_on_timeout(info->lwi_cb_data)) { \
 					ret = -ETIMEDOUT;		      \
 					break;				 \
 				}					      \
 				/* Take signals after the timeout expires. */  \
-				if (info->lwi_on_signal != NULL)	       \
+				if (info->lwi_on_signal)		       \
 				    (void)cfs_block_sigsinv(LUSTRE_FATAL_SIGS);\
 			}						      \
 		}							      \
@@ -577,8 +600,8 @@ do {									   \
 									       \
 		if (condition)						 \
 			break;						 \
-		if (cfs_signal_pending()) {				    \
-			if (info->lwi_on_signal != NULL &&		     \
+		if (signal_pending(current)) {				    \
+			if (info->lwi_on_signal &&		     \
 			    (__timeout == 0 || __allow_intr)) {		\
 				if (info->lwi_on_signal != LWI_ON_SIGNAL_NOOP) \
 					info->lwi_on_signal(info->lwi_cb_data);\

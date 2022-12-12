@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2010 2011 Mark Nelson and Tseng-Hui (Frank) Lin, IBM Corporation
- *
- *  This program is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU General Public License
- *  as published by the Free Software Foundation; either version
- *  2 of the License, or (at your option) any later version.
  */
 
 #include <linux/errno.h>
@@ -113,7 +109,7 @@ static struct pseries_io_event * ioei_find_event(struct rtas_error_log *elog)
  * - The owner of an event is determined by combinations of scope,
  *   event type, and sub-type. There is no easy way to pre-sort clients
  *   by scope or event type alone. For example, Torrent ISR route change
- *   event is reported with scope 0x00 (Not Applicatable) rather than
+ *   event is reported with scope 0x00 (Not Applicable) rather than
  *   0x3B (Torrent-hub). It is better to let the clients to identify
  *   who owns the event.
  */

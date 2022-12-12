@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Watchdog driver for CSR SiRFprimaII and SiRFatlasVI
  *
  * Copyright (c) 2013 Cambridge Silicon Radio Limited, a CSR plc group company.
- *
- * Licensed under GPLv2 or later.
  */
 
 #include <linux/module.h>
@@ -29,7 +28,7 @@
 #define SIRFSOC_WDT_MAX_TIMEOUT		(10 * 60)	/* 10 mins */
 #define SIRFSOC_WDT_DEFAULT_TIMEOUT	30		/* 30 secs */
 
-static unsigned int timeout = SIRFSOC_WDT_DEFAULT_TIMEOUT;
+static unsigned int timeout;
 static bool nowayout = WATCHDOG_NOWAYOUT;
 
 module_param(timeout, uint, 0);
@@ -39,13 +38,18 @@ MODULE_PARM_DESC(timeout, "Default watchdog timeout (in seconds)");
 MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started (default="
 			__MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
 
+static void __iomem *sirfsoc_wdt_base(struct watchdog_device *wdd)
+{
+	return (void __iomem __force *)watchdog_get_drvdata(wdd);
+}
+
 static unsigned int sirfsoc_wdt_gettimeleft(struct watchdog_device *wdd)
 {
 	u32 counter, match;
 	void __iomem *wdt_base;
 	int time_left;
 
-	wdt_base = watchdog_get_drvdata(wdd);
+	wdt_base = sirfsoc_wdt_base(wdd);
 	counter = readl(wdt_base + SIRFSOC_TIMER_COUNTER_LO);
 	match = readl(wdt_base +
 		SIRFSOC_TIMER_MATCH_0 + (SIRFSOC_TIMER_WDT_INDEX << 2));
@@ -61,7 +65,7 @@ static int sirfsoc_wdt_updatetimeout(struct watchdog_device *wdd)
 	void __iomem *wdt_base;
 
 	timeout_ticks = wdd->timeout * CLOCK_FREQ;
-	wdt_base = watchdog_get_drvdata(wdd);
+	wdt_base = sirfsoc_wdt_base(wdd);
 
 	/* Enable the latch before reading the LATCH_LO register */
 	writel(1, wdt_base + SIRFSOC_TIMER_LATCH);
@@ -79,7 +83,7 @@ static int sirfsoc_wdt_updatetimeout(struct watchdog_device *wdd)
 
 static int sirfsoc_wdt_enable(struct watchdog_device *wdd)
 {
-	void __iomem *wdt_base = watchdog_get_drvdata(wdd);
+	void __iomem *wdt_base = sirfsoc_wdt_base(wdd);
 	sirfsoc_wdt_updatetimeout(wdd);
 
 	/*
@@ -96,7 +100,7 @@ static int sirfsoc_wdt_enable(struct watchdog_device *wdd)
 
 static int sirfsoc_wdt_disable(struct watchdog_device *wdd)
 {
-	void __iomem *wdt_base = watchdog_get_drvdata(wdd);
+	void __iomem *wdt_base = sirfsoc_wdt_base(wdd);
 
 	writel(0, wdt_base + SIRFSOC_TIMER_WATCHDOG_EN);
 	writel(readl(wdt_base + SIRFSOC_TIMER_INT_EN)
@@ -122,7 +126,7 @@ static const struct watchdog_info sirfsoc_wdt_ident = {
 	.identity         =	"SiRFSOC Watchdog",
 };
 
-static struct watchdog_ops sirfsoc_wdt_ops = {
+static const struct watchdog_ops sirfsoc_wdt_ops = {
 	.owner = THIS_MODULE,
 	.start = sirfsoc_wdt_enable,
 	.stop = sirfsoc_wdt_disable,
@@ -141,40 +145,28 @@ static struct watchdog_device sirfsoc_wdd = {
 
 static int sirfsoc_wdt_probe(struct platform_device *pdev)
 {
-	struct resource *res;
+	struct device *dev = &pdev->dev;
 	int ret;
 	void __iomem *base;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base = devm_ioremap_resource(&pdev->dev, res);
+	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	watchdog_set_drvdata(&sirfsoc_wdd, base);
+	watchdog_set_drvdata(&sirfsoc_wdd, (__force void *)base);
 
-	watchdog_init_timeout(&sirfsoc_wdd, timeout, &pdev->dev);
+	watchdog_init_timeout(&sirfsoc_wdd, timeout, dev);
 	watchdog_set_nowayout(&sirfsoc_wdd, nowayout);
-	sirfsoc_wdd.parent = &pdev->dev;
+	sirfsoc_wdd.parent = dev;
 
-	ret = watchdog_register_device(&sirfsoc_wdd);
+	watchdog_stop_on_reboot(&sirfsoc_wdd);
+	watchdog_stop_on_unregister(&sirfsoc_wdd);
+	ret = devm_watchdog_register_device(dev, &sirfsoc_wdd);
 	if (ret)
 		return ret;
 
 	platform_set_drvdata(pdev, &sirfsoc_wdd);
 
-	return 0;
-}
-
-static void sirfsoc_wdt_shutdown(struct platform_device *pdev)
-{
-	struct watchdog_device *wdd = platform_get_drvdata(pdev);
-
-	sirfsoc_wdt_disable(wdd);
-}
-
-static int sirfsoc_wdt_remove(struct platform_device *pdev)
-{
-	sirfsoc_wdt_shutdown(pdev);
 	return 0;
 }
 
@@ -215,8 +207,6 @@ static struct platform_driver sirfsoc_wdt_driver = {
 		.of_match_table	= sirfsoc_wdt_of_match,
 	},
 	.probe = sirfsoc_wdt_probe,
-	.remove = sirfsoc_wdt_remove,
-	.shutdown = sirfsoc_wdt_shutdown,
 };
 module_platform_driver(sirfsoc_wdt_driver);
 

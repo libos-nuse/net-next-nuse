@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * I2C driver for the Renesas EMEV2 SoC
  *
  * Copyright (C) 2015 Wolfram Sang <wsa@sang-engineering.com>
  * Copyright 2013 Codethink Ltd.
  * Copyright 2010-2015 Renesas Electronics Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -71,6 +68,8 @@ struct em_i2c_device {
 	struct i2c_adapter adap;
 	struct completion msg_done;
 	struct clk *sclk;
+	struct i2c_client *slave;
+	int irq;
 };
 
 static inline void em_clear_set_bit(struct em_i2c_device *priv, u8 clear, u8 set, u8 reg)
@@ -148,7 +147,7 @@ static int __em_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg *msg,
 	em_clear_set_bit(priv, 0, I2C_BIT_STT0, I2C_OFS_IICC0);
 
 	/* Send slave address and R/W type */
-	writeb((msg->addr << 1) | read, priv->base + I2C_OFS_IIC0);
+	writeb(i2c_8bit_addr_from_msg(msg), priv->base + I2C_OFS_IIC0);
 
 	/* Wait for transaction */
 	status = em_i2c_wait_for_event(priv);
@@ -226,36 +225,149 @@ static int em_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs,
 	return num;
 }
 
+static bool em_i2c_slave_irq(struct em_i2c_device *priv)
+{
+	u8 status, value;
+	enum i2c_slave_event event;
+	int ret;
+
+	if (!priv->slave)
+		return false;
+
+	status = readb(priv->base + I2C_OFS_IICSE0);
+
+	/* Extension code, do not participate */
+	if (status & I2C_BIT_EXC0) {
+		em_clear_set_bit(priv, 0, I2C_BIT_LREL0, I2C_OFS_IICC0);
+		return true;
+	}
+
+	/* Stop detected, we don't know if it's for slave or master */
+	if (status & I2C_BIT_SPD0) {
+		/* Notify slave device */
+		i2c_slave_event(priv->slave, I2C_SLAVE_STOP, &value);
+		/* Pretend we did not handle the interrupt */
+		return false;
+	}
+
+	/* Only handle interrupts addressed to us */
+	if (!(status & I2C_BIT_COI0))
+		return false;
+
+	/* Enable stop interrupts */
+	em_clear_set_bit(priv, 0, I2C_BIT_SPIE0, I2C_OFS_IICC0);
+
+	/* Transmission or Reception */
+	if (status & I2C_BIT_TRC0) {
+		if (status & I2C_BIT_ACKD0) {
+			/* 9 bit interrupt mode */
+			em_clear_set_bit(priv, 0, I2C_BIT_WTIM0, I2C_OFS_IICC0);
+
+			/* Send data */
+			event = status & I2C_BIT_STD0 ?
+				I2C_SLAVE_READ_REQUESTED :
+				I2C_SLAVE_READ_PROCESSED;
+			i2c_slave_event(priv->slave, event, &value);
+			writeb(value, priv->base + I2C_OFS_IIC0);
+		} else {
+			/* NACK, stop transmitting */
+			em_clear_set_bit(priv, 0, I2C_BIT_LREL0, I2C_OFS_IICC0);
+		}
+	} else {
+		/* 8 bit interrupt mode */
+		em_clear_set_bit(priv, I2C_BIT_WTIM0, I2C_BIT_ACKE0,
+				I2C_OFS_IICC0);
+		em_clear_set_bit(priv, I2C_BIT_WTIM0, I2C_BIT_WREL0,
+				I2C_OFS_IICC0);
+
+		if (status & I2C_BIT_STD0) {
+			i2c_slave_event(priv->slave, I2C_SLAVE_WRITE_REQUESTED,
+					&value);
+		} else {
+			/* Recv data */
+			value = readb(priv->base + I2C_OFS_IIC0);
+			ret = i2c_slave_event(priv->slave,
+					I2C_SLAVE_WRITE_RECEIVED, &value);
+			if (ret < 0)
+				em_clear_set_bit(priv, I2C_BIT_ACKE0, 0,
+						I2C_OFS_IICC0);
+		}
+	}
+
+	return true;
+}
+
 static irqreturn_t em_i2c_irq_handler(int this_irq, void *dev_id)
 {
 	struct em_i2c_device *priv = dev_id;
 
+	if (em_i2c_slave_irq(priv))
+		return IRQ_HANDLED;
+
 	complete(&priv->msg_done);
+
 	return IRQ_HANDLED;
 }
 
 static u32 em_i2c_func(struct i2c_adapter *adap)
 {
-	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
+	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL | I2C_FUNC_SLAVE;
 }
 
-static struct i2c_algorithm em_i2c_algo = {
+static int em_i2c_reg_slave(struct i2c_client *slave)
+{
+	struct em_i2c_device *priv = i2c_get_adapdata(slave->adapter);
+
+	if (priv->slave)
+		return -EBUSY;
+
+	if (slave->flags & I2C_CLIENT_TEN)
+		return -EAFNOSUPPORT;
+
+	priv->slave = slave;
+
+	/* Set slave address */
+	writeb(slave->addr << 1, priv->base + I2C_OFS_SVA0);
+
+	return 0;
+}
+
+static int em_i2c_unreg_slave(struct i2c_client *slave)
+{
+	struct em_i2c_device *priv = i2c_get_adapdata(slave->adapter);
+
+	WARN_ON(!priv->slave);
+
+	writeb(0, priv->base + I2C_OFS_SVA0);
+
+	/*
+	 * Wait for interrupt to finish. New slave irqs cannot happen because we
+	 * cleared the slave address and, thus, only extension codes will be
+	 * detected which do not use the slave ptr.
+	 */
+	synchronize_irq(priv->irq);
+	priv->slave = NULL;
+
+	return 0;
+}
+
+static const struct i2c_algorithm em_i2c_algo = {
 	.master_xfer = em_i2c_xfer,
 	.functionality = em_i2c_func,
+	.reg_slave      = em_i2c_reg_slave,
+	.unreg_slave    = em_i2c_unreg_slave,
 };
 
 static int em_i2c_probe(struct platform_device *pdev)
 {
 	struct em_i2c_device *priv;
-	struct resource *r;
-	int irq, ret;
+	int ret;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
-	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	priv->base = devm_ioremap_resource(&pdev->dev, r);
+	priv->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(priv->base))
 		return PTR_ERR(priv->base);
 
@@ -265,7 +377,9 @@ static int em_i2c_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->sclk))
 		return PTR_ERR(priv->sclk);
 
-	clk_prepare_enable(priv->sclk);
+	ret = clk_prepare_enable(priv->sclk);
+	if (ret)
+		return ret;
 
 	priv->adap.timeout = msecs_to_jiffies(100);
 	priv->adap.retries = 5;
@@ -281,8 +395,11 @@ static int em_i2c_probe(struct platform_device *pdev)
 
 	em_i2c_reset(&priv->adap);
 
-	irq = platform_get_irq(pdev, 0);
-	ret = devm_request_irq(&pdev->dev, irq, em_i2c_irq_handler, 0,
+	ret = platform_get_irq(pdev, 0);
+	if (ret < 0)
+		goto err_clk;
+	priv->irq = ret;
+	ret = devm_request_irq(&pdev->dev, priv->irq, em_i2c_irq_handler, 0,
 				"em_i2c", priv);
 	if (ret)
 		goto err_clk;
@@ -292,7 +409,8 @@ static int em_i2c_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_clk;
 
-	dev_info(&pdev->dev, "Added i2c controller %d, irq %d\n", priv->adap.nr, irq);
+	dev_info(&pdev->dev, "Added i2c controller %d, irq %d\n", priv->adap.nr,
+		 priv->irq);
 
 	return 0;
 
@@ -327,6 +445,7 @@ static struct platform_driver em_i2c_driver = {
 module_platform_driver(em_i2c_driver);
 
 MODULE_DESCRIPTION("EMEV2 I2C bus driver");
-MODULE_AUTHOR("Ian Molton and Wolfram Sang <wsa@sang-engineering.com>");
+MODULE_AUTHOR("Ian Molton");
+MODULE_AUTHOR("Wolfram Sang <wsa@sang-engineering.com>");
 MODULE_LICENSE("GPL v2");
 MODULE_DEVICE_TABLE(of, em_i2c_ids);

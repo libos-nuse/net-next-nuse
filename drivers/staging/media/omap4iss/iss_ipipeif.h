@@ -1,14 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * TI OMAP4 ISS V4L2 Driver - ISP IPIPEIF module
  *
  * Copyright (C) 2012 Texas Instruments, Inc.
  *
  * Author: Sergio Aguirre <sergio.a.aguirre@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef OMAP4_ISS_IPIPEIF_H
@@ -78,6 +74,7 @@ struct iss_ipipeif_device {
 struct iss_device;
 
 int omap4iss_ipipeif_init(struct iss_device *iss);
+int omap4iss_ipipeif_create_links(struct iss_device *iss);
 void omap4iss_ipipeif_cleanup(struct iss_device *iss);
 int omap4iss_ipipeif_register_entities(struct iss_ipipeif_device *ipipeif,
 				       struct v4l2_device *vdev);

@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Driver for the Intel integrated DMA 64-bit
  *
  * Copyright (C) 2015 Intel Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __DMA_IDMA64_H__
@@ -16,7 +13,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 
-#include <asm-generic/io-64-nonatomic-lo-hi.h>
+#include <linux/io-64-nonatomic-lo-hi.h>
 
 #include "virt-dma.h"
 
@@ -54,7 +51,8 @@
 #define IDMA64C_CTLL_LLP_S_EN		(1 << 28)	/* src block chain */
 
 /* Bitfields in CTL_HI */
-#define IDMA64C_CTLH_BLOCK_TS(x)	((x) & ((1 << 17) - 1))
+#define IDMA64C_CTLH_BLOCK_TS_MASK	((1 << 17) - 1)
+#define IDMA64C_CTLH_BLOCK_TS(x)	((x) & IDMA64C_CTLH_BLOCK_TS_MASK)
 #define IDMA64C_CTLH_DONE		(1 << 17)
 
 /* Bitfields in CFG_LO */
@@ -70,7 +68,7 @@
 #define IDMA64C_CFGH_SRC_PER(x)		((x) << 0)	/* src peripheral */
 #define IDMA64C_CFGH_DST_PER(x)		((x) << 4)	/* dst peripheral */
 #define IDMA64C_CFGH_RD_ISSUE_THD(x)	((x) << 8)
-#define IDMA64C_CFGH_RW_ISSUE_THD(x)	((x) << 18)
+#define IDMA64C_CFGH_WR_ISSUE_THD(x)	((x) << 18)
 
 /* Interrupt registers */
 
@@ -215,12 +213,14 @@ static inline void idma64_writel(struct idma64 *idma64, int offset, u32 value)
 /**
  * struct idma64_chip - representation of iDMA 64-bit controller hardware
  * @dev:		struct device of the DMA controller
+ * @sysdev:		struct device of the physical device that does DMA
  * @irq:		irq line
  * @regs:		memory mapped I/O space
  * @idma64:		struct idma64 that is filed by idma64_probe()
  */
 struct idma64_chip {
 	struct device	*dev;
+	struct device	*sysdev;
 	int		irq;
 	void __iomem	*regs;
 	struct idma64	*idma64;

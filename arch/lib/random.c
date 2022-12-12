@@ -14,6 +14,11 @@ u32 random32(void)
 	return lib_random();
 }
 
+u32 get_random_u32(void)
+{
+	return random32();
+}
+
 void get_random_bytes(void *buf, int nbytes)
 {
 	char *p = (char *)buf;
@@ -26,19 +31,28 @@ void srandom32(u32 entropy)
 {
 }
 
-u32 prandom_u32(void)
-{
-	return lib_random();
-}
-void prandom_seed(u32 entropy)
-{
+void prandom_seed(u32 entropy){
+	
 }
 
 void prandom_bytes(void *buf, size_t bytes)
 {
-	return get_random_bytes(buf, bytes);
+	get_random_bytes(buf,bytes);
+}
+u32 prandom_u32(void)
+{
+	return random32();
 }
 
+int get_random_bytes_arch(void *buf, int nbytes)
+{
+	return 0;
+}
+
+int add_random_ready_callback(struct random_ready_callback *rdy)
+{
+	return 0;
+}
 #include <linux/sysctl.h>
 
 static int nothing;

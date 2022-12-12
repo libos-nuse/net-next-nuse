@@ -26,18 +26,13 @@
  */
 
 #include <linux/acpi.h>
+#include <linux/dmi.h>
 #include <acpi/video.h>
 
 #include <drm/drmP.h>
 #include <drm/i915_drm.h>
 #include "i915_drv.h"
 #include "intel_drv.h"
-
-#define PCI_ASLE		0xe4
-#define PCI_ASLS		0xfc
-#define PCI_SWSCI		0xe8
-#define PCI_SWSCI_SCISEL	(1 << 15)
-#define PCI_SWSCI_GSSCIE	(1 << 0)
 
 #define OPREGION_HEADER_OFFSET 0
 #define OPREGION_ACPI_OFFSET   0x100
@@ -46,6 +41,7 @@
 #define OPREGION_SWSCI_OFFSET  0x200
 #define OPREGION_ASLE_OFFSET   0x300
 #define OPREGION_VBT_OFFSET    0x400
+#define OPREGION_ASLE_EXT_OFFSET	0x1C00
 
 #define OPREGION_SIGNATURE "IntelGraphicsMem"
 #define MBOX_ACPI      (1<<0)
@@ -120,7 +116,16 @@ struct opregion_asle {
 	u64 fdss;
 	u32 fdsp;
 	u32 stat;
-	u8 rsvd[70];
+	u64 rvda;	/* Physical address of raw vbt data */
+	u32 rvds;	/* Size of raw vbt data */
+	u8 rsvd[58];
+} __packed;
+
+/* OpRegion mailbox #5: ASLE ext */
+struct opregion_asle_ext {
+	u32 phed;	/* Panel Header */
+	u8 bddc[256];	/* Panel EDID */
+	u8 rsvd[764];
 } __packed;
 
 /* Driver readiness indicator */
@@ -235,13 +240,12 @@ struct opregion_asle {
 
 #define MAX_DSLP	1500
 
-#ifdef CONFIG_ACPI
 static int swsci(struct drm_device *dev, u32 function, u32 parm, u32 *parm_out)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct opregion_swsci *swsci = dev_priv->opregion.swsci;
 	u32 main_function, sub_function, scic;
-	u16 pci_swsci;
+	u16 swsci_val;
 	u32 dslp;
 
 	if (!swsci)
@@ -289,16 +293,16 @@ static int swsci(struct drm_device *dev, u32 function, u32 parm, u32 *parm_out)
 	swsci->scic = scic;
 
 	/* Ensure SCI event is selected and event trigger is cleared. */
-	pci_read_config_word(dev->pdev, PCI_SWSCI, &pci_swsci);
-	if (!(pci_swsci & PCI_SWSCI_SCISEL) || (pci_swsci & PCI_SWSCI_GSSCIE)) {
-		pci_swsci |= PCI_SWSCI_SCISEL;
-		pci_swsci &= ~PCI_SWSCI_GSSCIE;
-		pci_write_config_word(dev->pdev, PCI_SWSCI, pci_swsci);
+	pci_read_config_word(dev->pdev, SWSCI, &swsci_val);
+	if (!(swsci_val & SWSCI_SCISEL) || (swsci_val & SWSCI_GSSCIE)) {
+		swsci_val |= SWSCI_SCISEL;
+		swsci_val &= ~SWSCI_GSSCIE;
+		pci_write_config_word(dev->pdev, SWSCI, swsci_val);
 	}
 
 	/* Use event trigger to tell bios to check the mail. */
-	pci_swsci |= PCI_SWSCI_GSSCIE;
-	pci_write_config_word(dev->pdev, PCI_SWSCI, pci_swsci);
+	swsci_val |= SWSCI_GSSCIE;
+	pci_write_config_word(dev->pdev, SWSCI, swsci_val);
 
 	/* Poll for the result. */
 #define C (((scic = swsci->scic) & SWSCI_SCIC_INDICATOR) == 0)
@@ -411,7 +415,7 @@ int intel_opregion_notify_adapter(struct drm_device *dev, pci_power_t state)
 static u32 asle_set_backlight(struct drm_device *dev, u32 bclp)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
-	struct intel_connector *intel_connector;
+	struct intel_connector *connector;
 	struct opregion_asle *asle = dev_priv->opregion.asle;
 
 	DRM_DEBUG_DRIVER("bclp = 0x%08x\n", bclp);
@@ -435,8 +439,8 @@ static u32 asle_set_backlight(struct drm_device *dev, u32 bclp)
 	 * only one).
 	 */
 	DRM_DEBUG_KMS("updating opregion backlight %d/255\n", bclp);
-	list_for_each_entry(intel_connector, &dev->mode_config.connector_list, base.head)
-		intel_panel_set_backlight_acpi(intel_connector, bclp, 255);
+	for_each_intel_connector(dev, connector)
+		intel_panel_set_backlight_acpi(connector, bclp, 255);
 	asle->cblv = DIV_ROUND_UP(bclp * 100, 255) | ASLE_CBLV_VALID;
 
 	drm_modeset_unlock(&dev->mode_config.connection_mutex);
@@ -682,7 +686,7 @@ static void intel_didl_outputs(struct drm_device *dev)
 	}
 
 	if (!acpi_video_bus) {
-		DRM_ERROR("No ACPI video bus found\n");
+		DRM_DEBUG_KMS("No ACPI video bus found\n");
 		return;
 	}
 
@@ -826,6 +830,10 @@ void intel_opregion_fini(struct drm_device *dev)
 
 	/* just clear all opregion memory pointers now */
 	memunmap(opregion->header);
+	if (opregion->rvda) {
+		memunmap(opregion->rvda);
+		opregion->rvda = NULL;
+	}
 	opregion->header = NULL;
 	opregion->acpi = NULL;
 	opregion->swsci = NULL;
@@ -890,9 +898,25 @@ static void swsci_setup(struct drm_device *dev)
 			 opregion->swsci_gbda_sub_functions,
 			 opregion->swsci_sbcb_sub_functions);
 }
-#else /* CONFIG_ACPI */
-static inline void swsci_setup(struct drm_device *dev) {}
-#endif  /* CONFIG_ACPI */
+
+static int intel_no_opregion_vbt_callback(const struct dmi_system_id *id)
+{
+	DRM_DEBUG_KMS("Falling back to manually reading VBT from "
+		      "VBIOS ROM for %s\n", id->ident);
+	return 1;
+}
+
+static const struct dmi_system_id intel_no_opregion_vbt[] = {
+	{
+		.callback = intel_no_opregion_vbt_callback,
+		.ident = "ThinkCentre A57",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "97027RG"),
+		},
+	},
+	{ }
+};
 
 int intel_opregion_setup(struct drm_device *dev)
 {
@@ -907,17 +931,16 @@ int intel_opregion_setup(struct drm_device *dev)
 	BUILD_BUG_ON(sizeof(struct opregion_acpi) != 0x100);
 	BUILD_BUG_ON(sizeof(struct opregion_swsci) != 0x100);
 	BUILD_BUG_ON(sizeof(struct opregion_asle) != 0x100);
+	BUILD_BUG_ON(sizeof(struct opregion_asle_ext) != 0x400);
 
-	pci_read_config_dword(dev->pdev, PCI_ASLS, &asls);
+	pci_read_config_dword(dev->pdev, ASLS, &asls);
 	DRM_DEBUG_DRIVER("graphic opregion physical addr: 0x%x\n", asls);
 	if (asls == 0) {
 		DRM_DEBUG_DRIVER("ACPI OpRegion not supported!\n");
 		return -ENOTSUPP;
 	}
 
-#ifdef CONFIG_ACPI
 	INIT_WORK(&opregion->asle_work, asle_work);
-#endif
 
 	base = memremap(asls, OPREGION_SIZE, MEMREMAP_WB);
 	if (!base)
@@ -931,8 +954,6 @@ int intel_opregion_setup(struct drm_device *dev)
 		goto err_out;
 	}
 	opregion->header = base;
-	opregion->vbt = base + OPREGION_VBT_OFFSET;
-
 	opregion->lid_state = base + ACPI_CLID;
 
 	mboxes = opregion->header->mboxes;
@@ -946,6 +967,7 @@ int intel_opregion_setup(struct drm_device *dev)
 		opregion->swsci = base + OPREGION_SWSCI_OFFSET;
 		swsci_setup(dev);
 	}
+
 	if (mboxes & MBOX_ASLE) {
 		DRM_DEBUG_DRIVER("ASLE supported\n");
 		opregion->asle = base + OPREGION_ASLE_OFFSET;
@@ -953,9 +975,68 @@ int intel_opregion_setup(struct drm_device *dev)
 		opregion->asle->ardy = ASLE_ARDY_NOT_READY;
 	}
 
+	if (mboxes & MBOX_ASLE_EXT)
+		DRM_DEBUG_DRIVER("ASLE extension supported\n");
+
+	if (!dmi_check_system(intel_no_opregion_vbt)) {
+		const void *vbt = NULL;
+		u32 vbt_size = 0;
+
+		if (opregion->header->opregion_ver >= 2 && opregion->asle &&
+		    opregion->asle->rvda && opregion->asle->rvds) {
+			opregion->rvda = memremap(opregion->asle->rvda,
+						  opregion->asle->rvds,
+						  MEMREMAP_WB);
+			vbt = opregion->rvda;
+			vbt_size = opregion->asle->rvds;
+		}
+
+		if (intel_bios_is_valid_vbt(vbt, vbt_size)) {
+			DRM_DEBUG_KMS("Found valid VBT in ACPI OpRegion (RVDA)\n");
+			opregion->vbt = vbt;
+			opregion->vbt_size = vbt_size;
+		} else {
+			vbt = base + OPREGION_VBT_OFFSET;
+			vbt_size = OPREGION_ASLE_EXT_OFFSET - OPREGION_VBT_OFFSET;
+			if (intel_bios_is_valid_vbt(vbt, vbt_size)) {
+				DRM_DEBUG_KMS("Found valid VBT in ACPI OpRegion (Mailbox #4)\n");
+				opregion->vbt = vbt;
+				opregion->vbt_size = vbt_size;
+			}
+		}
+	}
+
 	return 0;
 
 err_out:
 	memunmap(base);
 	return err;
+}
+
+int
+intel_opregion_get_panel_type(struct drm_device *dev)
+{
+	u32 panel_details;
+	int ret;
+
+	ret = swsci(dev, SWSCI_GBDA_PANEL_DETAILS, 0x0, &panel_details);
+	if (ret) {
+		DRM_DEBUG_KMS("Failed to get panel details from OpRegion (%d)\n",
+			      ret);
+		return ret;
+	}
+
+	ret = (panel_details >> 8) & 0xff;
+	if (ret > 0x10) {
+		DRM_DEBUG_KMS("Invalid OpRegion panel type 0x%x\n", ret);
+		return -EINVAL;
+	}
+
+	/* fall back to VBT panel type? */
+	if (ret == 0x0) {
+		DRM_DEBUG_KMS("No panel type in OpRegion\n");
+		return -ENODEV;
+	}
+
+	return ret - 1;
 }

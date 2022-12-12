@@ -1,13 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/socket.h>
 #include <linux/skbuff.h>
 #include <linux/ip.h>
+#include <linux/icmp.h>
 #include <linux/udp.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <net/genetlink.h>
 #include <net/gue.h>
+#include <net/fou.h>
 #include <net/ip.h>
 #include <net/protocol.h>
 #include <net/udp.h>
@@ -21,8 +24,8 @@ struct fou {
 	u8 protocol;
 	u8 flags;
 	__be16 port;
+	u8 family;
 	u16 type;
-	struct udp_offload udp_offloads;
 	struct list_head list;
 	struct rcu_head rcu;
 };
@@ -48,17 +51,21 @@ static inline struct fou *fou_from_sock(struct sock *sk)
 	return sk->sk_user_data;
 }
 
-static void fou_recv_pull(struct sk_buff *skb, size_t len)
+static int fou_recv_pull(struct sk_buff *skb, struct fou *fou, size_t len)
 {
-	struct iphdr *iph = ip_hdr(skb);
-
 	/* Remove 'len' bytes from the packet (UDP header and
 	 * FOU header if present).
 	 */
-	iph->tot_len = htons(ntohs(iph->tot_len) - len);
+	if (fou->family == AF_INET)
+		ip_hdr(skb)->tot_len = htons(ntohs(ip_hdr(skb)->tot_len) - len);
+	else
+		ipv6_hdr(skb)->payload_len =
+		    htons(ntohs(ipv6_hdr(skb)->payload_len) - len);
+
 	__skb_pull(skb, len);
 	skb_postpull_rcsum(skb, udp_hdr(skb), len);
 	skb_reset_transport_header(skb);
+	return iptunnel_pull_offloads(skb);
 }
 
 static int fou_udp_recv(struct sock *sk, struct sk_buff *skb)
@@ -68,9 +75,14 @@ static int fou_udp_recv(struct sock *sk, struct sk_buff *skb)
 	if (!fou)
 		return 1;
 
-	fou_recv_pull(skb, sizeof(struct udphdr));
+	if (fou_recv_pull(skb, fou, sizeof(struct udphdr)))
+		goto drop;
 
 	return -fou->protocol;
+
+drop:
+	kfree_skb(skb);
+	return 0;
 }
 
 static struct guehdr *gue_remcsum(struct sk_buff *skb, struct guehdr *guehdr,
@@ -110,6 +122,7 @@ static int gue_udp_recv(struct sock *sk, struct sk_buff *skb)
 	struct guehdr *guehdr;
 	void *data;
 	u16 doffset = 0;
+	u8 proto_ctype;
 
 	if (!fou)
 		return 1;
@@ -120,6 +133,36 @@ static int gue_udp_recv(struct sock *sk, struct sk_buff *skb)
 
 	guehdr = (struct guehdr *)&udp_hdr(skb)[1];
 
+	switch (guehdr->version) {
+	case 0: /* Full GUE header present */
+		break;
+
+	case 1: {
+		/* Direct encapsulation of IPv4 or IPv6 */
+
+		int prot;
+
+		switch (((struct iphdr *)guehdr)->version) {
+		case 4:
+			prot = IPPROTO_IPIP;
+			break;
+		case 6:
+			prot = IPPROTO_IPV6;
+			break;
+		default:
+			goto drop;
+		}
+
+		if (fou_recv_pull(skb, fou, sizeof(struct udphdr)))
+			goto drop;
+
+		return -prot;
+	}
+
+	default: /* Undefined version */
+		goto drop;
+	}
+
 	optlen = guehdr->hlen << 2;
 	len += optlen;
 
@@ -129,14 +172,16 @@ static int gue_udp_recv(struct sock *sk, struct sk_buff *skb)
 	/* guehdr may change after pull */
 	guehdr = (struct guehdr *)&udp_hdr(skb)[1];
 
-	hdrlen = sizeof(struct guehdr) + optlen;
-
-	if (guehdr->version != 0 || validate_gue_flags(guehdr, optlen))
+	if (validate_gue_flags(guehdr, optlen))
 		goto drop;
 
 	hdrlen = sizeof(struct guehdr) + optlen;
 
-	ip_hdr(skb)->tot_len = htons(ntohs(ip_hdr(skb)->tot_len) - len);
+	if (fou->family == AF_INET)
+		ip_hdr(skb)->tot_len = htons(ntohs(ip_hdr(skb)->tot_len) - len);
+	else
+		ipv6_hdr(skb)->payload_len =
+		    htons(ntohs(ipv6_hdr(skb)->payload_len) - len);
 
 	/* Pull csum through the guehdr now . This can be used if
 	 * there is a remote checksum offload.
@@ -167,24 +212,39 @@ static int gue_udp_recv(struct sock *sk, struct sk_buff *skb)
 	if (unlikely(guehdr->control))
 		return gue_control_message(skb, guehdr);
 
+	proto_ctype = guehdr->proto_ctype;
 	__skb_pull(skb, sizeof(struct udphdr) + hdrlen);
 	skb_reset_transport_header(skb);
 
-	return -guehdr->proto_ctype;
+	if (iptunnel_pull_offloads(skb))
+		goto drop;
+
+	return -proto_ctype;
 
 drop:
 	kfree_skb(skb);
 	return 0;
 }
 
-static struct sk_buff **fou_gro_receive(struct sk_buff **head,
-					struct sk_buff *skb,
-					struct udp_offload *uoff)
+static struct sk_buff *fou_gro_receive(struct sock *sk,
+				       struct list_head *head,
+				       struct sk_buff *skb)
 {
-	const struct net_offload *ops;
-	struct sk_buff **pp = NULL;
-	u8 proto = NAPI_GRO_CB(skb)->proto;
+	u8 proto = fou_from_sock(sk)->protocol;
 	const struct net_offload **offloads;
+	const struct net_offload *ops;
+	struct sk_buff *pp = NULL;
+
+	/* We can clear the encap_mark for FOU as we are essentially doing
+	 * one of two possible things.  We are either adding an L4 tunnel
+	 * header to the outer L3 tunnel header, or we are simply
+	 * treating the GRE tunnel header as though it is a UDP protocol
+	 * specific header such as VXLAN or GENEVE.
+	 */
+	NAPI_GRO_CB(skb)->encap_mark = 0;
+
+	/* Flag this frame as already having an outer encap header */
+	NAPI_GRO_CB(skb)->is_fou = 1;
 
 	rcu_read_lock();
 	offloads = NAPI_GRO_CB(skb)->is_ipv6 ? inet6_offloads : inet_offloads;
@@ -192,7 +252,7 @@ static struct sk_buff **fou_gro_receive(struct sk_buff **head,
 	if (!ops || !ops->callbacks.gro_receive)
 		goto out_unlock;
 
-	pp = ops->callbacks.gro_receive(head, skb);
+	pp = call_gro_receive(ops->callbacks.gro_receive, head, skb);
 
 out_unlock:
 	rcu_read_unlock();
@@ -200,15 +260,13 @@ out_unlock:
 	return pp;
 }
 
-static int fou_gro_complete(struct sk_buff *skb, int nhoff,
-			    struct udp_offload *uoff)
+static int fou_gro_complete(struct sock *sk, struct sk_buff *skb,
+			    int nhoff)
 {
 	const struct net_offload *ops;
-	u8 proto = NAPI_GRO_CB(skb)->proto;
+	u8 proto = fou_from_sock(sk)->protocol;
 	int err = -ENOSYS;
 	const struct net_offload **offloads;
-
-	udp_tunnel_gro_complete(skb, nhoff);
 
 	rcu_read_lock();
 	offloads = NAPI_GRO_CB(skb)->is_ipv6 ? inet6_offloads : inet_offloads;
@@ -217,6 +275,8 @@ static int fou_gro_complete(struct sk_buff *skb, int nhoff,
 		goto out_unlock;
 
 	err = ops->callbacks.gro_complete(skb, nhoff);
+
+	skb_set_inner_mac_header(skb, nhoff);
 
 out_unlock:
 	rcu_read_unlock();
@@ -247,21 +307,22 @@ static struct guehdr *gue_gro_remcsum(struct sk_buff *skb, unsigned int off,
 	return guehdr;
 }
 
-static struct sk_buff **gue_gro_receive(struct sk_buff **head,
-					struct sk_buff *skb,
-					struct udp_offload *uoff)
+static struct sk_buff *gue_gro_receive(struct sock *sk,
+				       struct list_head *head,
+				       struct sk_buff *skb)
 {
 	const struct net_offload **offloads;
 	const struct net_offload *ops;
-	struct sk_buff **pp = NULL;
+	struct sk_buff *pp = NULL;
 	struct sk_buff *p;
 	struct guehdr *guehdr;
 	size_t len, optlen, hdrlen, off;
 	void *data;
 	u16 doffset = 0;
 	int flush = 1;
-	struct fou *fou = container_of(uoff, struct fou, udp_offloads);
+	struct fou *fou = fou_from_sock(sk);
 	struct gro_remcsum grc;
+	u8 proto;
 
 	skb_gro_remcsum_init(&grc);
 
@@ -273,6 +334,25 @@ static struct sk_buff **gue_gro_receive(struct sk_buff **head,
 		guehdr = skb_gro_header_slow(skb, len, off);
 		if (unlikely(!guehdr))
 			goto out;
+	}
+
+	switch (guehdr->version) {
+	case 0:
+		break;
+	case 1:
+		switch (((struct iphdr *)guehdr)->version) {
+		case 4:
+			proto = IPPROTO_IPIP;
+			break;
+		case 6:
+			proto = IPPROTO_IPV6;
+			break;
+		default:
+			goto out;
+		}
+		goto next_proto;
+	default:
+		goto out;
 	}
 
 	optlen = guehdr->hlen << 2;
@@ -319,9 +399,7 @@ static struct sk_buff **gue_gro_receive(struct sk_buff **head,
 
 	skb_gro_pull(skb, hdrlen);
 
-	flush = 0;
-
-	for (p = *head; p; p = p->next) {
+	list_for_each_entry(p, head, list) {
 		const struct guehdr *guehdr2;
 
 		if (!NAPI_GRO_CB(p)->same_flow)
@@ -345,36 +423,67 @@ static struct sk_buff **gue_gro_receive(struct sk_buff **head,
 		}
 	}
 
+	proto = guehdr->proto_ctype;
+
+next_proto:
+
+	/* We can clear the encap_mark for GUE as we are essentially doing
+	 * one of two possible things.  We are either adding an L4 tunnel
+	 * header to the outer L3 tunnel header, or we are simply
+	 * treating the GRE tunnel header as though it is a UDP protocol
+	 * specific header such as VXLAN or GENEVE.
+	 */
+	NAPI_GRO_CB(skb)->encap_mark = 0;
+
+	/* Flag this frame as already having an outer encap header */
+	NAPI_GRO_CB(skb)->is_fou = 1;
+
 	rcu_read_lock();
 	offloads = NAPI_GRO_CB(skb)->is_ipv6 ? inet6_offloads : inet_offloads;
-	ops = rcu_dereference(offloads[guehdr->proto_ctype]);
+	ops = rcu_dereference(offloads[proto]);
 	if (WARN_ON_ONCE(!ops || !ops->callbacks.gro_receive))
 		goto out_unlock;
 
-	pp = ops->callbacks.gro_receive(head, skb);
+	pp = call_gro_receive(ops->callbacks.gro_receive, head, skb);
+	flush = 0;
 
 out_unlock:
 	rcu_read_unlock();
 out:
-	NAPI_GRO_CB(skb)->flush |= flush;
-	skb_gro_remcsum_cleanup(skb, &grc);
+	skb_gro_flush_final_remcsum(skb, pp, flush, &grc);
 
 	return pp;
 }
 
-static int gue_gro_complete(struct sk_buff *skb, int nhoff,
-			    struct udp_offload *uoff)
+static int gue_gro_complete(struct sock *sk, struct sk_buff *skb, int nhoff)
 {
 	const struct net_offload **offloads;
 	struct guehdr *guehdr = (struct guehdr *)(skb->data + nhoff);
 	const struct net_offload *ops;
-	unsigned int guehlen;
+	unsigned int guehlen = 0;
 	u8 proto;
 	int err = -ENOENT;
 
-	proto = guehdr->proto_ctype;
-
-	guehlen = sizeof(*guehdr) + (guehdr->hlen << 2);
+	switch (guehdr->version) {
+	case 0:
+		proto = guehdr->proto_ctype;
+		guehlen = sizeof(*guehdr) + (guehdr->hlen << 2);
+		break;
+	case 1:
+		switch (((struct iphdr *)guehdr)->version) {
+		case 4:
+			proto = IPPROTO_IPIP;
+			break;
+		case 6:
+			proto = IPPROTO_IPV6;
+			break;
+		default:
+			return err;
+		}
+		break;
+	default:
+		return err;
+	}
 
 	rcu_read_lock();
 	offloads = NAPI_GRO_CB(skb)->is_ipv6 ? inet6_offloads : inet_offloads;
@@ -384,19 +493,52 @@ static int gue_gro_complete(struct sk_buff *skb, int nhoff,
 
 	err = ops->callbacks.gro_complete(skb, nhoff + guehlen);
 
+	skb_set_inner_mac_header(skb, nhoff + guehlen);
+
 out_unlock:
 	rcu_read_unlock();
 	return err;
 }
 
-static int fou_add_to_port_list(struct net *net, struct fou *fou)
+static bool fou_cfg_cmp(struct fou *fou, struct fou_cfg *cfg)
+{
+	struct sock *sk = fou->sock->sk;
+	struct udp_port_cfg *udp_cfg = &cfg->udp_config;
+
+	if (fou->family != udp_cfg->family ||
+	    fou->port != udp_cfg->local_udp_port ||
+	    sk->sk_dport != udp_cfg->peer_udp_port ||
+	    sk->sk_bound_dev_if != udp_cfg->bind_ifindex)
+		return false;
+
+	if (fou->family == AF_INET) {
+		if (sk->sk_rcv_saddr != udp_cfg->local_ip.s_addr ||
+		    sk->sk_daddr != udp_cfg->peer_ip.s_addr)
+			return false;
+		else
+			return true;
+#if IS_ENABLED(CONFIG_IPV6)
+	} else {
+		if (ipv6_addr_cmp(&sk->sk_v6_rcv_saddr, &udp_cfg->local_ip6) ||
+		    ipv6_addr_cmp(&sk->sk_v6_daddr, &udp_cfg->peer_ip6))
+			return false;
+		else
+			return true;
+#endif
+	}
+
+	return false;
+}
+
+static int fou_add_to_port_list(struct net *net, struct fou *fou,
+				struct fou_cfg *cfg)
 {
 	struct fou_net *fn = net_generic(net, fou_net_id);
 	struct fou *fout;
 
 	mutex_lock(&fn->fou_lock);
 	list_for_each_entry(fout, &fn->fou_list, list) {
-		if (fou->port == fout->port) {
+		if (fou_cfg_cmp(fout, cfg)) {
 			mutex_unlock(&fn->fou_lock);
 			return -EALREADY;
 		}
@@ -411,36 +553,11 @@ static int fou_add_to_port_list(struct net *net, struct fou *fou)
 static void fou_release(struct fou *fou)
 {
 	struct socket *sock = fou->sock;
-	struct sock *sk = sock->sk;
 
-	if (sk->sk_family == AF_INET)
-		udp_del_offload(&fou->udp_offloads);
 	list_del(&fou->list);
 	udp_tunnel_sock_release(sock);
 
 	kfree_rcu(fou, rcu);
-}
-
-static int fou_encap_init(struct sock *sk, struct fou *fou, struct fou_cfg *cfg)
-{
-	udp_sk(sk)->encap_rcv = fou_udp_recv;
-	fou->protocol = cfg->protocol;
-	fou->udp_offloads.callbacks.gro_receive = fou_gro_receive;
-	fou->udp_offloads.callbacks.gro_complete = fou_gro_complete;
-	fou->udp_offloads.port = cfg->udp_config.local_udp_port;
-	fou->udp_offloads.ipproto = cfg->protocol;
-
-	return 0;
-}
-
-static int gue_encap_init(struct sock *sk, struct fou *fou, struct fou_cfg *cfg)
-{
-	udp_sk(sk)->encap_rcv = gue_udp_recv;
-	fou->udp_offloads.callbacks.gro_receive = gue_gro_receive;
-	fou->udp_offloads.callbacks.gro_complete = gue_gro_complete;
-	fou->udp_offloads.port = cfg->udp_config.local_udp_port;
-
-	return 0;
 }
 
 static int fou_create(struct net *net, struct fou_cfg *cfg,
@@ -449,6 +566,7 @@ static int fou_create(struct net *net, struct fou_cfg *cfg,
 	struct socket *sock = NULL;
 	struct fou *fou = NULL;
 	struct sock *sk;
+	struct udp_tunnel_sock_cfg tunnel_cfg;
 	int err;
 
 	/* Open UDP socket */
@@ -465,45 +583,40 @@ static int fou_create(struct net *net, struct fou_cfg *cfg,
 
 	sk = sock->sk;
 
-	fou->flags = cfg->flags;
 	fou->port = cfg->udp_config.local_udp_port;
+	fou->family = cfg->udp_config.family;
+	fou->flags = cfg->flags;
+	fou->type = cfg->type;
+	fou->sock = sock;
+
+	memset(&tunnel_cfg, 0, sizeof(tunnel_cfg));
+	tunnel_cfg.encap_type = 1;
+	tunnel_cfg.sk_user_data = fou;
+	tunnel_cfg.encap_destroy = NULL;
 
 	/* Initial for fou type */
 	switch (cfg->type) {
 	case FOU_ENCAP_DIRECT:
-		err = fou_encap_init(sk, fou, cfg);
-		if (err)
-			goto error;
+		tunnel_cfg.encap_rcv = fou_udp_recv;
+		tunnel_cfg.gro_receive = fou_gro_receive;
+		tunnel_cfg.gro_complete = fou_gro_complete;
+		fou->protocol = cfg->protocol;
 		break;
 	case FOU_ENCAP_GUE:
-		err = gue_encap_init(sk, fou, cfg);
-		if (err)
-			goto error;
+		tunnel_cfg.encap_rcv = gue_udp_recv;
+		tunnel_cfg.gro_receive = gue_gro_receive;
+		tunnel_cfg.gro_complete = gue_gro_complete;
 		break;
 	default:
 		err = -EINVAL;
 		goto error;
 	}
 
-	fou->type = cfg->type;
-
-	udp_sk(sk)->encap_type = 1;
-	udp_encap_enable();
-
-	sk->sk_user_data = fou;
-	fou->sock = sock;
-
-	inet_inc_convert_csum(sk);
+	setup_udp_tunnel_sock(net, sock, &tunnel_cfg);
 
 	sk->sk_allocation = GFP_ATOMIC;
 
-	if (cfg->udp_config.family == AF_INET) {
-		err = udp_add_offload(&fou->udp_offloads);
-		if (err)
-			goto error;
-	}
-
-	err = fou_add_to_port_list(net, fou);
+	err = fou_add_to_port_list(net, fou, cfg);
 	if (err)
 		goto error;
 
@@ -523,13 +636,12 @@ error:
 static int fou_destroy(struct net *net, struct fou_cfg *cfg)
 {
 	struct fou_net *fn = net_generic(net, fou_net_id);
-	__be16 port = cfg->udp_config.local_udp_port;
 	int err = -EINVAL;
 	struct fou *fou;
 
 	mutex_lock(&fn->fou_lock);
 	list_for_each_entry(fou, &fn->fou_list, list) {
-		if (fou->port == port) {
+		if (fou_cfg_cmp(fou, cfg)) {
 			fou_release(fou);
 			err = 0;
 			break;
@@ -540,26 +652,30 @@ static int fou_destroy(struct net *net, struct fou_cfg *cfg)
 	return err;
 }
 
-static struct genl_family fou_nl_family = {
-	.id		= GENL_ID_GENERATE,
-	.hdrsize	= 0,
-	.name		= FOU_GENL_NAME,
-	.version	= FOU_GENL_VERSION,
-	.maxattr	= FOU_ATTR_MAX,
-	.netnsok	= true,
-};
+static struct genl_family fou_nl_family;
 
-static struct nla_policy fou_nl_policy[FOU_ATTR_MAX + 1] = {
-	[FOU_ATTR_PORT] = { .type = NLA_U16, },
-	[FOU_ATTR_AF] = { .type = NLA_U8, },
-	[FOU_ATTR_IPPROTO] = { .type = NLA_U8, },
-	[FOU_ATTR_TYPE] = { .type = NLA_U8, },
-	[FOU_ATTR_REMCSUM_NOPARTIAL] = { .type = NLA_FLAG, },
+static const struct nla_policy fou_nl_policy[FOU_ATTR_MAX + 1] = {
+	[FOU_ATTR_PORT]			= { .type = NLA_U16, },
+	[FOU_ATTR_AF]			= { .type = NLA_U8, },
+	[FOU_ATTR_IPPROTO]		= { .type = NLA_U8, },
+	[FOU_ATTR_TYPE]			= { .type = NLA_U8, },
+	[FOU_ATTR_REMCSUM_NOPARTIAL]	= { .type = NLA_FLAG, },
+	[FOU_ATTR_LOCAL_V4]		= { .type = NLA_U32, },
+	[FOU_ATTR_PEER_V4]		= { .type = NLA_U32, },
+	[FOU_ATTR_LOCAL_V6]		= { .len = sizeof(struct in6_addr), },
+	[FOU_ATTR_PEER_V6]		= { .len = sizeof(struct in6_addr), },
+	[FOU_ATTR_PEER_PORT]		= { .type = NLA_U16, },
+	[FOU_ATTR_IFINDEX]		= { .type = NLA_S32, },
 };
 
 static int parse_nl_config(struct genl_info *info,
 			   struct fou_cfg *cfg)
 {
+	bool has_local = false, has_peer = false;
+	struct nlattr *attr;
+	int ifindex;
+	__be16 port;
+
 	memset(cfg, 0, sizeof(*cfg));
 
 	cfg->udp_config.family = AF_INET;
@@ -567,15 +683,21 @@ static int parse_nl_config(struct genl_info *info,
 	if (info->attrs[FOU_ATTR_AF]) {
 		u8 family = nla_get_u8(info->attrs[FOU_ATTR_AF]);
 
-		if (family != AF_INET)
-			return -EINVAL;
+		switch (family) {
+		case AF_INET:
+			break;
+		case AF_INET6:
+			cfg->udp_config.ipv6_v6only = 1;
+			break;
+		default:
+			return -EAFNOSUPPORT;
+		}
 
 		cfg->udp_config.family = family;
 	}
 
 	if (info->attrs[FOU_ATTR_PORT]) {
-		__be16 port = nla_get_be16(info->attrs[FOU_ATTR_PORT]);
-
+		port = nla_get_be16(info->attrs[FOU_ATTR_PORT]);
 		cfg->udp_config.local_udp_port = port;
 	}
 
@@ -587,6 +709,52 @@ static int parse_nl_config(struct genl_info *info,
 
 	if (info->attrs[FOU_ATTR_REMCSUM_NOPARTIAL])
 		cfg->flags |= FOU_F_REMCSUM_NOPARTIAL;
+
+	if (cfg->udp_config.family == AF_INET) {
+		if (info->attrs[FOU_ATTR_LOCAL_V4]) {
+			attr = info->attrs[FOU_ATTR_LOCAL_V4];
+			cfg->udp_config.local_ip.s_addr = nla_get_in_addr(attr);
+			has_local = true;
+		}
+
+		if (info->attrs[FOU_ATTR_PEER_V4]) {
+			attr = info->attrs[FOU_ATTR_PEER_V4];
+			cfg->udp_config.peer_ip.s_addr = nla_get_in_addr(attr);
+			has_peer = true;
+		}
+#if IS_ENABLED(CONFIG_IPV6)
+	} else {
+		if (info->attrs[FOU_ATTR_LOCAL_V6]) {
+			attr = info->attrs[FOU_ATTR_LOCAL_V6];
+			cfg->udp_config.local_ip6 = nla_get_in6_addr(attr);
+			has_local = true;
+		}
+
+		if (info->attrs[FOU_ATTR_PEER_V6]) {
+			attr = info->attrs[FOU_ATTR_PEER_V6];
+			cfg->udp_config.peer_ip6 = nla_get_in6_addr(attr);
+			has_peer = true;
+		}
+#endif
+	}
+
+	if (has_peer) {
+		if (info->attrs[FOU_ATTR_PEER_PORT]) {
+			port = nla_get_be16(info->attrs[FOU_ATTR_PEER_PORT]);
+			cfg->udp_config.peer_udp_port = port;
+		} else {
+			return -EINVAL;
+		}
+	}
+
+	if (info->attrs[FOU_ATTR_IFINDEX]) {
+		if (!has_local)
+			return -EINVAL;
+
+		ifindex = nla_get_s32(info->attrs[FOU_ATTR_IFINDEX]);
+
+		cfg->udp_config.bind_ifindex = ifindex;
+	}
 
 	return 0;
 }
@@ -619,15 +787,37 @@ static int fou_nl_cmd_rm_port(struct sk_buff *skb, struct genl_info *info)
 
 static int fou_fill_info(struct fou *fou, struct sk_buff *msg)
 {
+	struct sock *sk = fou->sock->sk;
+
 	if (nla_put_u8(msg, FOU_ATTR_AF, fou->sock->sk->sk_family) ||
 	    nla_put_be16(msg, FOU_ATTR_PORT, fou->port) ||
+	    nla_put_be16(msg, FOU_ATTR_PEER_PORT, sk->sk_dport) ||
 	    nla_put_u8(msg, FOU_ATTR_IPPROTO, fou->protocol) ||
-	    nla_put_u8(msg, FOU_ATTR_TYPE, fou->type))
+	    nla_put_u8(msg, FOU_ATTR_TYPE, fou->type) ||
+	    nla_put_s32(msg, FOU_ATTR_IFINDEX, sk->sk_bound_dev_if))
 		return -1;
 
 	if (fou->flags & FOU_F_REMCSUM_NOPARTIAL)
 		if (nla_put_flag(msg, FOU_ATTR_REMCSUM_NOPARTIAL))
 			return -1;
+
+	if (fou->sock->sk->sk_family == AF_INET) {
+		if (nla_put_in_addr(msg, FOU_ATTR_LOCAL_V4, sk->sk_rcv_saddr))
+			return -1;
+
+		if (nla_put_in_addr(msg, FOU_ATTR_PEER_V4, sk->sk_daddr))
+			return -1;
+#if IS_ENABLED(CONFIG_IPV6)
+	} else {
+		if (nla_put_in6_addr(msg, FOU_ATTR_LOCAL_V6,
+				     &sk->sk_v6_rcv_saddr))
+			return -1;
+
+		if (nla_put_in6_addr(msg, FOU_ATTR_PEER_V6, &sk->sk_v6_daddr))
+			return -1;
+#endif
+	}
+
 	return 0;
 }
 
@@ -659,6 +849,7 @@ static int fou_nl_cmd_get_port(struct sk_buff *skb, struct genl_info *info)
 	struct fou_cfg cfg;
 	struct fou *fout;
 	__be16 port;
+	u8 family;
 	int ret;
 
 	ret = parse_nl_config(info, &cfg);
@@ -668,6 +859,10 @@ static int fou_nl_cmd_get_port(struct sk_buff *skb, struct genl_info *info)
 	if (port == 0)
 		return -EINVAL;
 
+	family = cfg.udp_config.family;
+	if (family != AF_INET && family != AF_INET6)
+		return -EINVAL;
+
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!msg)
 		return -ENOMEM;
@@ -675,7 +870,7 @@ static int fou_nl_cmd_get_port(struct sk_buff *skb, struct genl_info *info)
 	ret = -ESRCH;
 	mutex_lock(&fn->fou_lock);
 	list_for_each_entry(fout, &fn->fou_list, list) {
-		if (port == fout->port) {
+		if (fou_cfg_cmp(fout, &cfg)) {
 			ret = fou_dump_info(fout, info->snd_portid,
 					    info->snd_seq, 0, msg,
 					    info->genlhdr->cmd);
@@ -716,25 +911,37 @@ static int fou_nl_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	return skb->len;
 }
 
-static const struct genl_ops fou_nl_ops[] = {
+static const struct genl_small_ops fou_nl_ops[] = {
 	{
 		.cmd = FOU_CMD_ADD,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.doit = fou_nl_cmd_add_port,
-		.policy = fou_nl_policy,
 		.flags = GENL_ADMIN_PERM,
 	},
 	{
 		.cmd = FOU_CMD_DEL,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.doit = fou_nl_cmd_rm_port,
-		.policy = fou_nl_policy,
 		.flags = GENL_ADMIN_PERM,
 	},
 	{
 		.cmd = FOU_CMD_GET,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.doit = fou_nl_cmd_get_port,
 		.dumpit = fou_nl_dump,
-		.policy = fou_nl_policy,
 	},
+};
+
+static struct genl_family fou_nl_family __ro_after_init = {
+	.hdrsize	= 0,
+	.name		= FOU_GENL_NAME,
+	.version	= FOU_GENL_VERSION,
+	.maxattr	= FOU_ATTR_MAX,
+	.policy = fou_nl_policy,
+	.netnsok	= true,
+	.module		= THIS_MODULE,
+	.small_ops	= fou_nl_ops,
+	.n_small_ops	= ARRAY_SIZE(fou_nl_ops),
 };
 
 size_t fou_encap_hlen(struct ip_tunnel_encap *e)
@@ -761,60 +968,33 @@ size_t gue_encap_hlen(struct ip_tunnel_encap *e)
 }
 EXPORT_SYMBOL(gue_encap_hlen);
 
-static void fou_build_udp(struct sk_buff *skb, struct ip_tunnel_encap *e,
-			  struct flowi4 *fl4, u8 *protocol, __be16 sport)
+int __fou_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
+		       u8 *protocol, __be16 *sport, int type)
 {
-	struct udphdr *uh;
+	int err;
 
-	skb_push(skb, sizeof(struct udphdr));
-	skb_reset_transport_header(skb);
+	err = iptunnel_handle_offloads(skb, type);
+	if (err)
+		return err;
 
-	uh = udp_hdr(skb);
-
-	uh->dest = e->dport;
-	uh->source = sport;
-	uh->len = htons(skb->len);
-	uh->check = 0;
-	udp_set_csum(!(e->flags & TUNNEL_ENCAP_FLAG_CSUM), skb,
-		     fl4->saddr, fl4->daddr, skb->len);
-
-	*protocol = IPPROTO_UDP;
-}
-
-int fou_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
-		     u8 *protocol, struct flowi4 *fl4)
-{
-	bool csum = !!(e->flags & TUNNEL_ENCAP_FLAG_CSUM);
-	int type = csum ? SKB_GSO_UDP_TUNNEL_CSUM : SKB_GSO_UDP_TUNNEL;
-	__be16 sport;
-
-	skb = iptunnel_handle_offloads(skb, csum, type);
-
-	if (IS_ERR(skb))
-		return PTR_ERR(skb);
-
-	sport = e->sport ? : udp_flow_src_port(dev_net(skb->dev),
-					       skb, 0, 0, false);
-	fou_build_udp(skb, e, fl4, protocol, sport);
+	*sport = e->sport ? : udp_flow_src_port(dev_net(skb->dev),
+						skb, 0, 0, false);
 
 	return 0;
 }
-EXPORT_SYMBOL(fou_build_header);
+EXPORT_SYMBOL(__fou_build_header);
 
-int gue_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
-		     u8 *protocol, struct flowi4 *fl4)
+int __gue_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
+		       u8 *protocol, __be16 *sport, int type)
 {
-	bool csum = !!(e->flags & TUNNEL_ENCAP_FLAG_CSUM);
-	int type = csum ? SKB_GSO_UDP_TUNNEL_CSUM : SKB_GSO_UDP_TUNNEL;
 	struct guehdr *guehdr;
 	size_t hdrlen, optlen = 0;
-	__be16 sport;
 	void *data;
 	bool need_priv = false;
+	int err;
 
 	if ((e->flags & TUNNEL_ENCAP_FLAG_REMCSUM) &&
 	    skb->ip_summed == CHECKSUM_PARTIAL) {
-		csum = false;
 		optlen += GUE_PLEN_REMCSUM;
 		type |= SKB_GSO_TUNNEL_REMCSUM;
 		need_priv = true;
@@ -822,14 +1002,13 @@ int gue_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
 
 	optlen += need_priv ? GUE_LEN_PRIV : 0;
 
-	skb = iptunnel_handle_offloads(skb, csum, type);
-
-	if (IS_ERR(skb))
-		return PTR_ERR(skb);
+	err = iptunnel_handle_offloads(skb, type);
+	if (err)
+		return err;
 
 	/* Get source port (based on flow hash) before skb_push */
-	sport = e->sport ? : udp_flow_src_port(dev_net(skb->dev),
-					       skb, 0, 0, false);
+	*sport = e->sport ? : udp_flow_src_port(dev_net(skb->dev),
+						skb, 0, 0, false);
 
 	hdrlen = sizeof(struct guehdr) + optlen;
 
@@ -874,22 +1053,154 @@ int gue_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
 
 	}
 
+	return 0;
+}
+EXPORT_SYMBOL(__gue_build_header);
+
+#ifdef CONFIG_NET_FOU_IP_TUNNELS
+
+static void fou_build_udp(struct sk_buff *skb, struct ip_tunnel_encap *e,
+			  struct flowi4 *fl4, u8 *protocol, __be16 sport)
+{
+	struct udphdr *uh;
+
+	skb_push(skb, sizeof(struct udphdr));
+	skb_reset_transport_header(skb);
+
+	uh = udp_hdr(skb);
+
+	uh->dest = e->dport;
+	uh->source = sport;
+	uh->len = htons(skb->len);
+	udp_set_csum(!(e->flags & TUNNEL_ENCAP_FLAG_CSUM), skb,
+		     fl4->saddr, fl4->daddr, skb->len);
+
+	*protocol = IPPROTO_UDP;
+}
+
+static int fou_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
+			    u8 *protocol, struct flowi4 *fl4)
+{
+	int type = e->flags & TUNNEL_ENCAP_FLAG_CSUM ? SKB_GSO_UDP_TUNNEL_CSUM :
+						       SKB_GSO_UDP_TUNNEL;
+	__be16 sport;
+	int err;
+
+	err = __fou_build_header(skb, e, protocol, &sport, type);
+	if (err)
+		return err;
+
 	fou_build_udp(skb, e, fl4, protocol, sport);
 
 	return 0;
 }
-EXPORT_SYMBOL(gue_build_header);
 
-#ifdef CONFIG_NET_FOU_IP_TUNNELS
+static int gue_build_header(struct sk_buff *skb, struct ip_tunnel_encap *e,
+			    u8 *protocol, struct flowi4 *fl4)
+{
+	int type = e->flags & TUNNEL_ENCAP_FLAG_CSUM ? SKB_GSO_UDP_TUNNEL_CSUM :
+						       SKB_GSO_UDP_TUNNEL;
+	__be16 sport;
+	int err;
+
+	err = __gue_build_header(skb, e, protocol, &sport, type);
+	if (err)
+		return err;
+
+	fou_build_udp(skb, e, fl4, protocol, sport);
+
+	return 0;
+}
+
+static int gue_err_proto_handler(int proto, struct sk_buff *skb, u32 info)
+{
+	const struct net_protocol *ipprot = rcu_dereference(inet_protos[proto]);
+
+	if (ipprot && ipprot->err_handler) {
+		if (!ipprot->err_handler(skb, info))
+			return 0;
+	}
+
+	return -ENOENT;
+}
+
+static int gue_err(struct sk_buff *skb, u32 info)
+{
+	int transport_offset = skb_transport_offset(skb);
+	struct guehdr *guehdr;
+	size_t len, optlen;
+	int ret;
+
+	len = sizeof(struct udphdr) + sizeof(struct guehdr);
+	if (!pskb_may_pull(skb, transport_offset + len))
+		return -EINVAL;
+
+	guehdr = (struct guehdr *)&udp_hdr(skb)[1];
+
+	switch (guehdr->version) {
+	case 0: /* Full GUE header present */
+		break;
+	case 1: {
+		/* Direct encapsulation of IPv4 or IPv6 */
+		skb_set_transport_header(skb, -(int)sizeof(struct icmphdr));
+
+		switch (((struct iphdr *)guehdr)->version) {
+		case 4:
+			ret = gue_err_proto_handler(IPPROTO_IPIP, skb, info);
+			goto out;
+#if IS_ENABLED(CONFIG_IPV6)
+		case 6:
+			ret = gue_err_proto_handler(IPPROTO_IPV6, skb, info);
+			goto out;
+#endif
+		default:
+			ret = -EOPNOTSUPP;
+			goto out;
+		}
+	}
+	default: /* Undefined version */
+		return -EOPNOTSUPP;
+	}
+
+	if (guehdr->control)
+		return -ENOENT;
+
+	optlen = guehdr->hlen << 2;
+
+	if (!pskb_may_pull(skb, transport_offset + len + optlen))
+		return -EINVAL;
+
+	guehdr = (struct guehdr *)&udp_hdr(skb)[1];
+	if (validate_gue_flags(guehdr, optlen))
+		return -EINVAL;
+
+	/* Handling exceptions for direct UDP encapsulation in GUE would lead to
+	 * recursion. Besides, this kind of encapsulation can't even be
+	 * configured currently. Discard this.
+	 */
+	if (guehdr->proto_ctype == IPPROTO_UDP ||
+	    guehdr->proto_ctype == IPPROTO_UDPLITE)
+		return -EOPNOTSUPP;
+
+	skb_set_transport_header(skb, -(int)sizeof(struct icmphdr));
+	ret = gue_err_proto_handler(guehdr->proto_ctype, skb, info);
+
+out:
+	skb_set_transport_header(skb, transport_offset);
+	return ret;
+}
+
 
 static const struct ip_tunnel_encap_ops fou_iptun_ops = {
 	.encap_hlen = fou_encap_hlen,
 	.build_header = fou_build_header,
+	.err_handler = gue_err,
 };
 
 static const struct ip_tunnel_encap_ops gue_iptun_ops = {
 	.encap_hlen = gue_encap_hlen,
 	.build_header = gue_build_header,
+	.err_handler = gue_err,
 };
 
 static int ip_tunnel_encap_add_fou_ops(void)
@@ -967,8 +1278,7 @@ static int __init fou_init(void)
 	if (ret)
 		goto exit;
 
-	ret = genl_register_family_with_ops(&fou_nl_family,
-					    fou_nl_ops);
+	ret = genl_register_family(&fou_nl_family);
 	if (ret < 0)
 		goto unregister;
 
@@ -994,3 +1304,4 @@ module_init(fou_init);
 module_exit(fou_fini);
 MODULE_AUTHOR("Tom Herbert <therbert@google.com>");
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("Foo over UDP");

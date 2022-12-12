@@ -14,7 +14,8 @@
 
 int modules_disabled = 0;
 char modprobe_path[KMOD_PATH_LEN] = "/sbin/modprobe";
-
+int watermark_boost_factor;
+int watermark_scale_factor;
 static struct module_version_attribute g_empty_attr_buffer;
 /* we make the array empty by default because, really, we don't need */
 /* to look at the builtin params */
@@ -27,6 +28,8 @@ const struct module_version_attribute *__stop___modver[] = {
 
 struct module_attribute module_uevent;
 struct ctl_table usermodehelper_table[] = {};
+
+struct static_key_false init_on_alloc;
 
 int __request_module(bool wait, const char *fmt, ...)
 {

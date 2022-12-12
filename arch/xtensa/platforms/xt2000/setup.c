@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * arch/xtensa/platforms/xt2000/setup.c
  *
@@ -7,12 +8,6 @@
  *		Joe Taylor <joe@tensilica.com>
  *
  * Copyright 2001 - 2004 Tensilica Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
- *
  */
 #include <linux/stddef.h>
 #include <linux/kernel.h>
@@ -64,26 +59,7 @@ void platform_restart(void)
 {
 	/* Flush and reset the mmu, simulate a processor reset, and
 	 * jump to the reset vector. */
-
-	__asm__ __volatile__ ("movi	a2, 15\n\t"
-			      "wsr	a2, icountlevel\n\t"
-			      "movi	a2, 0\n\t"
-			      "wsr	a2, icount\n\t"
-#if XCHAL_NUM_IBREAK > 0
-			      "wsr	a2, ibreakenable\n\t"
-#endif
-#if XCHAL_HAVE_LOOPS
-			      "wsr	a2, lcount\n\t"
-#endif
-			      "movi	a2, 0x1f\n\t"
-			      "wsr	a2, ps\n\t"
-			      "isync\n\t"
-			      "jx	%0\n\t"
-			      :
-			      : "a" (XCHAL_RESET_VECTOR_VADDR)
-			      : "a2"
-			      );
-
+	cpu_reset();
 	/* control never gets here */
 }
 
@@ -113,7 +89,6 @@ void platform_heartbeat(void)
 }
 
 //#define RS_TABLE_SIZE 2
-//#define STD_COM_FLAGS (ASYNC_BOOT_AUTOCONF|ASYNC_SKIP_TEST)
 
 #define _SERIAL_PORT(_base,_irq)					\
 {									\

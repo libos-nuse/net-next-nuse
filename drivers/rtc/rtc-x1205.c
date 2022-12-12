@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * An i2c driver for the Xicor/Intersil X1205 RTC
  * Copyright 2004 Karen Spearel
@@ -11,10 +12,6 @@
  *
  * Information and datasheet:
  * http://www.intersil.com/cda/deviceinfo/0,1477,X1205,00.html
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/i2c.h>
@@ -23,8 +20,6 @@
 #include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/bitops.h>
-
-#define DRV_VERSION "1.0.8"
 
 /* offsets into CCR area */
 
@@ -634,8 +629,6 @@ static int x1205_probe(struct i2c_client *client,
 	if (x1205_validate_client(client) < 0)
 		return -ENODEV;
 
-	dev_info(&client->dev, "chip found, driver version " DRV_VERSION "\n");
-
 	rtc = devm_rtc_device_register(&client->dev, x1205_driver.driver.name,
 					&x1205_rtc_ops, THIS_MODULE);
 
@@ -677,9 +670,16 @@ static const struct i2c_device_id x1205_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, x1205_id);
 
+static const struct of_device_id x1205_dt_ids[] = {
+	{ .compatible = "xircom,x1205", },
+	{},
+};
+MODULE_DEVICE_TABLE(of, x1205_dt_ids);
+
 static struct i2c_driver x1205_driver = {
 	.driver		= {
 		.name	= "rtc-x1205",
+		.of_match_table = x1205_dt_ids,
 	},
 	.probe		= x1205_probe,
 	.remove		= x1205_remove,
@@ -693,4 +693,3 @@ MODULE_AUTHOR(
 	"Alessandro Zummo <a.zummo@towertech.it>");
 MODULE_DESCRIPTION("Xicor/Intersil X1205 RTC driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(DRV_VERSION);

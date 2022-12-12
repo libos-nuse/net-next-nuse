@@ -1,22 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Freescale Integrated Flash Controller
  *
  * Copyright 2011 Freescale Semiconductor, Inc
  *
  * Author: Dipen Dudhat <dipen.dudhat@freescale.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #ifndef __ASM_FSL_IFC_H
@@ -39,6 +26,10 @@
 #define FSL_IFC_VERSION_MASK	0x0F0F0000
 #define FSL_IFC_VERSION_1_0_0	0x01000000
 #define FSL_IFC_VERSION_1_1_0	0x01010000
+#define FSL_IFC_VERSION_2_0_0	0x02000000
+
+#define PGOFFSET_64K	(64*1024)
+#define PGOFFSET_4K	(4*1024)
 
 /*
  * CSPR - Chip Select Property Register
@@ -270,6 +261,8 @@
  */
 /* Auto Boot Mode */
 #define IFC_NAND_NCFGR_BOOT		0x80000000
+/* SRAM Initialization */
+#define IFC_NAND_NCFGR_SRAM_INIT_EN	0x20000000
 /* Addressing Mode-ROW0+n/COL0 */
 #define IFC_NAND_NCFGR_ADDR_MODE_RC0	0x00000000
 /* Addressing Mode-ROW0+n/COL0+n */
@@ -723,20 +716,26 @@ struct fsl_ifc_nand {
 	__be32 nand_evter_en;
 	u32 res17[0x2];
 	__be32 nand_evter_intr_en;
-	u32 res18[0x2];
+	__be32 nand_vol_addr_stat;
+	u32 res18;
 	__be32 nand_erattr0;
 	__be32 nand_erattr1;
 	u32 res19[0x10];
 	__be32 nand_fsr;
 	u32 res20;
-	__be32 nand_eccstat[4];
-	u32 res21[0x20];
+	__be32 nand_eccstat[8];
+	u32 res21[0x1c];
 	__be32 nanndcr;
 	u32 res22[0x2];
 	__be32 nand_autoboot_trgr;
 	u32 res23;
 	__be32 nand_mdr;
-	u32 res24[0x5C];
+	u32 res24[0x1C];
+	__be32 nand_dll_lowcfg0;
+	__be32 nand_dll_lowcfg1;
+	u32 res25;
+	__be32 nand_dll_lowstat;
+	u32 res26[0x3c];
 };
 
 /*
@@ -771,13 +770,12 @@ struct fsl_ifc_gpcm {
 	__be32 gpcm_erattr1;
 	__be32 gpcm_erattr2;
 	__be32 gpcm_stat;
-	u32 res4[0x1F3];
 };
 
 /*
  * IFC Controller Registers
  */
-struct fsl_ifc_regs {
+struct fsl_ifc_global {
 	__be32 ifc_rev;
 	u32 res1[0x2];
 	struct {
@@ -803,21 +801,26 @@ struct fsl_ifc_regs {
 	} ftim_cs[FSL_IFC_BANK_COUNT];
 	u32 res9[0x30];
 	__be32 rb_stat;
-	u32 res10[0x2];
+	__be32 rb_map;
+	__be32 wb_map;
 	__be32 ifc_gcr;
-	u32 res11[0x2];
+	u32 res10[0x2];
 	__be32 cm_evter_stat;
-	u32 res12[0x2];
+	u32 res11[0x2];
 	__be32 cm_evter_en;
-	u32 res13[0x2];
+	u32 res12[0x2];
 	__be32 cm_evter_intr_en;
-	u32 res14[0x2];
+	u32 res13[0x2];
 	__be32 cm_erattr0;
 	__be32 cm_erattr1;
-	u32 res15[0x2];
+	u32 res14[0x2];
 	__be32 ifc_ccr;
 	__be32 ifc_csr;
-	u32 res16[0x2EB];
+	__be32 ddr_ccr_low;
+};
+
+
+struct fsl_ifc_runtime {
 	struct fsl_ifc_nand ifc_nand;
 	struct fsl_ifc_nor ifc_nor;
 	struct fsl_ifc_gpcm ifc_gpcm;
@@ -831,7 +834,8 @@ extern int fsl_ifc_find(phys_addr_t addr_base);
 struct fsl_ifc_ctrl {
 	/* device info */
 	struct device			*dev;
-	struct fsl_ifc_regs __iomem	*regs;
+	struct fsl_ifc_global __iomem	*gregs;
+	struct fsl_ifc_runtime __iomem	*rregs;
 	int				irq;
 	int				nand_irq;
 	spinlock_t			lock;

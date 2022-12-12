@@ -25,9 +25,13 @@
  * Jackie Li<yaodong.li@intel.com>
  */
 
+#include <linux/delay.h>
+
+#include <drm/drm_simple_kms_helper.h>
+
 #include "mdfld_dsi_dpi.h"
-#include "mdfld_output.h"
 #include "mdfld_dsi_pkg_sender.h"
+#include "mdfld_output.h"
 #include "psb_drv.h"
 #include "tc35876x-dsi-lvds.h"
 
@@ -821,13 +825,17 @@ void mdfld_dsi_dpi_mode_set(struct drm_encoder *encoder,
 	struct drm_device *dev = dsi_config->dev;
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	int pipe = mdfld_dsi_encoder_get_pipe(dsi_encoder);
-
 	u32 pipeconf_reg = PIPEACONF;
 	u32 dspcntr_reg = DSPACNTR;
+	u32 pipeconf, dspcntr;
 
-	u32 pipeconf = dev_priv->pipeconf[pipe];
-	u32 dspcntr = dev_priv->dspcntr[pipe];
 	u32 mipi = MIPI_PORT_EN | PASS_FROM_SPHY_TO_AFE | SEL_FLOPPED_HSTX;
+
+	if (WARN_ON(pipe < 0))
+		return;
+
+	pipeconf = dev_priv->pipeconf[pipe];
+	dspcntr = dev_priv->dspcntr[pipe];
 
 	if (pipe) {
 		pipeconf_reg = PIPECCONF;
@@ -947,7 +955,7 @@ struct mdfld_dsi_encoder *mdfld_dsi_dpi_init(struct drm_device *dev,
 
 		/* panel hard-reset */
 		if (p_funcs->reset) {
-			ret = p_funcs->reset(pipe);
+			ret = p_funcs->reset(dev, pipe);
 			if (ret) {
 				DRM_ERROR("Panel %d hard-reset failed\n", pipe);
 				return NULL;
@@ -975,11 +983,7 @@ struct mdfld_dsi_encoder *mdfld_dsi_dpi_init(struct drm_device *dev,
 		return NULL;
 	}
 
-	if (dsi_connector->pipe)
-		dpi_output->panel_on = 0;
-	else
-		dpi_output->panel_on = 0;
-
+	dpi_output->panel_on = 0;
 	dpi_output->dev = dev;
 	if (mdfld_get_panel_type(dev, pipe) != TC35876X)
 		dpi_output->p_funcs = p_funcs;
@@ -991,23 +995,20 @@ struct mdfld_dsi_encoder *mdfld_dsi_dpi_init(struct drm_device *dev,
 	/*create drm encoder object*/
 	connector = &dsi_connector->base.base;
 	encoder = &dpi_output->base.base.base;
-	drm_encoder_init(dev,
-			encoder,
-			p_funcs->encoder_funcs,
-			DRM_MODE_ENCODER_LVDS);
+	drm_simple_encoder_init(dev, encoder, DRM_MODE_ENCODER_LVDS);
 	drm_encoder_helper_add(encoder,
 				p_funcs->encoder_helper_funcs);
 
 	/*attach to given connector*/
-	drm_mode_connector_attach_encoder(connector, encoder);
+	drm_connector_attach_encoder(connector, encoder);
 
 	/*set possible crtcs and clones*/
 	if (dsi_connector->pipe) {
 		encoder->possible_crtcs = (1 << 2);
-		encoder->possible_clones = (1 << 1);
+		encoder->possible_clones = 0;
 	} else {
 		encoder->possible_crtcs = (1 << 0);
-		encoder->possible_clones = (1 << 0);
+		encoder->possible_clones = 0;
 	}
 
 	dsi_connector->base.encoder = &dpi_output->base.base;

@@ -1,19 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /**
  * opt3001.c - Texas Instruments OPT3001 Light Sensor
  *
- * Copyright (C) 2014 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2014 Texas Instruments Incorporated - https://www.ti.com
  *
  * Author: Andreas Dannenberg <dannenberg@ti.com>
  * Based on previous work from: Felipe Balbi <balbi@ti.com>
- *
- * This program is free software: you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 of the License
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #include <linux/bitops.h>
@@ -24,6 +16,7 @@
 #include <linux/irq.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/types.h>
@@ -65,19 +58,25 @@
 #define OPT3001_REG_EXPONENT(n)		((n) >> 12)
 #define OPT3001_REG_MANTISSA(n)		((n) & 0xfff)
 
+#define OPT3001_INT_TIME_LONG		800000
+#define OPT3001_INT_TIME_SHORT		100000
+
 /*
  * Time to wait for conversion result to be ready. The device datasheet
- * worst-case max value is 880ms. Add some slack to be on the safe side.
+ * sect. 6.5 states results are ready after total integration time plus 3ms.
+ * This results in worst-case max values of 113ms or 883ms, respectively.
+ * Add some slack to be on the safe side.
  */
-#define OPT3001_RESULT_READY_TIMEOUT	msecs_to_jiffies(1000)
+#define OPT3001_RESULT_READY_SHORT	150
+#define OPT3001_RESULT_READY_LONG	1000
 
 struct opt3001 {
 	struct i2c_client	*client;
 	struct device		*dev;
 
 	struct mutex		lock;
-	u16			ok_to_ignore_lock:1;
-	u16			result_ready:1;
+	bool			ok_to_ignore_lock;
+	bool			result_ready;
 	wait_queue_head_t	result_ready_queue;
 	u16			result;
 
@@ -89,6 +88,8 @@ struct opt3001 {
 
 	u8			high_thresh_exp;
 	u8			low_thresh_exp;
+
+	bool			use_irq;
 };
 
 struct opt3001_scale {
@@ -227,25 +228,29 @@ static int opt3001_get_lux(struct opt3001 *opt, int *val, int *val2)
 	u16 reg;
 	u8 exponent;
 	u16 value;
+	long timeout;
 
-	/*
-	 * Enable the end-of-conversion interrupt mechanism. Note that doing
-	 * so will overwrite the low-level limit value however we will restore
-	 * this value later on.
-	 */
-	ret = i2c_smbus_write_word_swapped(opt->client, OPT3001_LOW_LIMIT,
-			OPT3001_LOW_LIMIT_EOC_ENABLE);
-	if (ret < 0) {
-		dev_err(opt->dev, "failed to write register %02x\n",
-				OPT3001_LOW_LIMIT);
-		return ret;
+	if (opt->use_irq) {
+		/*
+		 * Enable the end-of-conversion interrupt mechanism. Note that
+		 * doing so will overwrite the low-level limit value however we
+		 * will restore this value later on.
+		 */
+		ret = i2c_smbus_write_word_swapped(opt->client,
+					OPT3001_LOW_LIMIT,
+					OPT3001_LOW_LIMIT_EOC_ENABLE);
+		if (ret < 0) {
+			dev_err(opt->dev, "failed to write register %02x\n",
+					OPT3001_LOW_LIMIT);
+			return ret;
+		}
+
+		/* Allow IRQ to access the device despite lock being set */
+		opt->ok_to_ignore_lock = true;
 	}
 
-	/* Reset data-ready indicator flag (will be set in the IRQ routine) */
+	/* Reset data-ready indicator flag */
 	opt->result_ready = false;
-
-	/* Allow IRQ to access the device despite lock being set */
-	opt->ok_to_ignore_lock = true;
 
 	/* Configure for single-conversion mode and start a new conversion */
 	ret = i2c_smbus_read_word_swapped(opt->client, OPT3001_CONFIGURATION);
@@ -266,32 +271,69 @@ static int opt3001_get_lux(struct opt3001 *opt, int *val, int *val2)
 		goto err;
 	}
 
-	/* Wait for the IRQ to indicate the conversion is complete */
-	ret = wait_event_timeout(opt->result_ready_queue, opt->result_ready,
-			OPT3001_RESULT_READY_TIMEOUT);
+	if (opt->use_irq) {
+		/* Wait for the IRQ to indicate the conversion is complete */
+		ret = wait_event_timeout(opt->result_ready_queue,
+				opt->result_ready,
+				msecs_to_jiffies(OPT3001_RESULT_READY_LONG));
+	} else {
+		/* Sleep for result ready time */
+		timeout = (opt->int_time == OPT3001_INT_TIME_SHORT) ?
+			OPT3001_RESULT_READY_SHORT : OPT3001_RESULT_READY_LONG;
+		msleep(timeout);
+
+		/* Check result ready flag */
+		ret = i2c_smbus_read_word_swapped(opt->client,
+						  OPT3001_CONFIGURATION);
+		if (ret < 0) {
+			dev_err(opt->dev, "failed to read register %02x\n",
+				OPT3001_CONFIGURATION);
+			goto err;
+		}
+
+		if (!(ret & OPT3001_CONFIGURATION_CRF)) {
+			ret = -ETIMEDOUT;
+			goto err;
+		}
+
+		/* Obtain value */
+		ret = i2c_smbus_read_word_swapped(opt->client, OPT3001_RESULT);
+		if (ret < 0) {
+			dev_err(opt->dev, "failed to read register %02x\n",
+				OPT3001_RESULT);
+			goto err;
+		}
+		opt->result = ret;
+		opt->result_ready = true;
+	}
 
 err:
-	/* Disallow IRQ to access the device while lock is active */
-	opt->ok_to_ignore_lock = false;
+	if (opt->use_irq)
+		/* Disallow IRQ to access the device while lock is active */
+		opt->ok_to_ignore_lock = false;
 
 	if (ret == 0)
 		return -ETIMEDOUT;
 	else if (ret < 0)
 		return ret;
 
-	/*
-	 * Disable the end-of-conversion interrupt mechanism by restoring the
-	 * low-level limit value (clearing OPT3001_LOW_LIMIT_EOC_ENABLE). Note
-	 * that selectively clearing those enable bits would affect the actual
-	 * limit value due to bit-overlap and therefore can't be done.
-	 */
-	value = (opt->low_thresh_exp << 12) | opt->low_thresh_mantissa;
-	ret = i2c_smbus_write_word_swapped(opt->client, OPT3001_LOW_LIMIT,
-			value);
-	if (ret < 0) {
-		dev_err(opt->dev, "failed to write register %02x\n",
-				OPT3001_LOW_LIMIT);
-		return ret;
+	if (opt->use_irq) {
+		/*
+		 * Disable the end-of-conversion interrupt mechanism by
+		 * restoring the low-level limit value (clearing
+		 * OPT3001_LOW_LIMIT_EOC_ENABLE). Note that selectively clearing
+		 * those enable bits would affect the actual limit value due to
+		 * bit-overlap and therefore can't be done.
+		 */
+		value = (opt->low_thresh_exp << 12) | opt->low_thresh_mantissa;
+		ret = i2c_smbus_write_word_swapped(opt->client,
+						   OPT3001_LOW_LIMIT,
+						   value);
+		if (ret < 0) {
+			dev_err(opt->dev, "failed to write register %02x\n",
+					OPT3001_LOW_LIMIT);
+			return ret;
+		}
 	}
 
 	exponent = OPT3001_REG_EXPONENT(opt->result);
@@ -325,13 +367,13 @@ static int opt3001_set_int_time(struct opt3001 *opt, int time)
 	reg = ret;
 
 	switch (time) {
-	case 100000:
+	case OPT3001_INT_TIME_SHORT:
 		reg &= ~OPT3001_CONFIGURATION_CT;
-		opt->int_time = 100000;
+		opt->int_time = OPT3001_INT_TIME_SHORT;
 		break;
-	case 800000:
+	case OPT3001_INT_TIME_LONG:
 		reg |= OPT3001_CONFIGURATION_CT;
-		opt->int_time = 800000;
+		opt->int_time = OPT3001_INT_TIME_LONG;
 		break;
 	default:
 		return -EINVAL;
@@ -536,7 +578,6 @@ err:
 }
 
 static const struct iio_info opt3001_info = {
-	.driver_module = THIS_MODULE,
 	.attrs = &opt3001_attribute_group,
 	.read_raw = opt3001_read_raw,
 	.write_raw = opt3001_write_raw,
@@ -597,9 +638,9 @@ static int opt3001_configure(struct opt3001 *opt)
 
 	/* Reflect status of the device's integration time setting */
 	if (reg & OPT3001_CONFIGURATION_CT)
-		opt->int_time = 800000;
+		opt->int_time = OPT3001_INT_TIME_LONG;
 	else
-		opt->int_time = 100000;
+		opt->int_time = OPT3001_INT_TIME_SHORT;
 
 	/* Ensure device is in shutdown initially */
 	opt3001_set_mode(opt, &reg, OPT3001_CONFIGURATION_M_SHUTDOWN);
@@ -646,6 +687,7 @@ static irqreturn_t opt3001_irq(int irq, void *_iio)
 	struct iio_dev *iio = _iio;
 	struct opt3001 *opt = iio_priv(iio);
 	int ret;
+	bool wake_result_ready_queue = false;
 
 	if (!opt->ok_to_ignore_lock)
 		mutex_lock(&opt->lock);
@@ -664,13 +706,13 @@ static irqreturn_t opt3001_irq(int irq, void *_iio)
 					IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
 							IIO_EV_TYPE_THRESH,
 							IIO_EV_DIR_RISING),
-					iio_get_time_ns());
+					iio_get_time_ns(iio));
 		if (ret & OPT3001_CONFIGURATION_FL)
 			iio_push_event(iio,
 					IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
 							IIO_EV_TYPE_THRESH,
 							IIO_EV_DIR_FALLING),
-					iio_get_time_ns());
+					iio_get_time_ns(iio));
 	} else if (ret & OPT3001_CONFIGURATION_CRF) {
 		ret = i2c_smbus_read_word_swapped(opt->client, OPT3001_RESULT);
 		if (ret < 0) {
@@ -680,12 +722,15 @@ static irqreturn_t opt3001_irq(int irq, void *_iio)
 		}
 		opt->result = ret;
 		opt->result_ready = true;
-		wake_up(&opt->result_ready_queue);
+		wake_result_ready_queue = true;
 	}
 
 out:
 	if (!opt->ok_to_ignore_lock)
 		mutex_unlock(&opt->lock);
+
+	if (wake_result_ready_queue)
+		wake_up(&opt->result_ready_queue);
 
 	return IRQ_HANDLED;
 }
@@ -723,7 +768,6 @@ static int opt3001_probe(struct i2c_client *client,
 	iio->name = client->name;
 	iio->channels = opt3001_channels;
 	iio->num_channels = ARRAY_SIZE(opt3001_channels);
-	iio->dev.parent = dev;
 	iio->modes = INDIO_DIRECT_MODE;
 	iio->info = &opt3001_info;
 
@@ -733,12 +777,18 @@ static int opt3001_probe(struct i2c_client *client,
 		return ret;
 	}
 
-	ret = request_threaded_irq(irq, NULL, opt3001_irq,
-			IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-			"opt3001", iio);
-	if (ret) {
-		dev_err(dev, "failed to request IRQ #%d\n", irq);
-		return ret;
+	/* Make use of INT pin only if valid IRQ no. is given */
+	if (irq > 0) {
+		ret = request_threaded_irq(irq, NULL, opt3001_irq,
+				IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+				"opt3001", iio);
+		if (ret) {
+			dev_err(dev, "failed to request IRQ #%d\n", irq);
+			return ret;
+		}
+		opt->use_irq = true;
+	} else {
+		dev_dbg(opt->dev, "enabling interrupt-less operation\n");
 	}
 
 	return 0;
@@ -751,7 +801,8 @@ static int opt3001_remove(struct i2c_client *client)
 	int ret;
 	u16 reg;
 
-	free_irq(client->irq, iio);
+	if (opt->use_irq)
+		free_irq(client->irq, iio);
 
 	ret = i2c_smbus_read_word_swapped(opt->client, OPT3001_CONFIGURATION);
 	if (ret < 0) {
@@ -784,6 +835,7 @@ static const struct of_device_id opt3001_of_match[] = {
 	{ .compatible = "ti,opt3001" },
 	{ }
 };
+MODULE_DEVICE_TABLE(of, opt3001_of_match);
 
 static struct i2c_driver opt3001_driver = {
 	.probe = opt3001_probe,
@@ -792,7 +844,7 @@ static struct i2c_driver opt3001_driver = {
 
 	.driver = {
 		.name = "opt3001",
-		.of_match_table = of_match_ptr(opt3001_of_match),
+		.of_match_table = opt3001_of_match,
 	},
 };
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
 
   Broadcom B43 wireless driver
@@ -9,20 +10,6 @@
   Copyright (c) 2005 Danny van Dyk <kugelfang@gentoo.org>
   Copyright (c) 2005 Andreas Jaggi <andreas.jaggi@waterwave.ch>
 
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; see the file COPYING.  If not, write to
-  the Free Software Foundation, Inc., 51 Franklin Steet, Fifth Floor,
-  Boston, MA 02110-1301, USA.
 
 */
 
@@ -131,7 +118,7 @@ static int b43_register_led(struct b43_wldev *dev, struct b43_led *led,
 	led->wl = dev->wl;
 	led->index = led_index;
 	led->activelow = activelow;
-	strncpy(led->name, name, sizeof(led->name));
+	strlcpy(led->name, name, sizeof(led->name));
 	atomic_set(&led->state, 0);
 
 	led->led_dev.name = led->name;
@@ -222,7 +209,7 @@ static void b43_led_get_sprominfo(struct b43_wldev *dev,
 	sprom[2] = dev->dev->bus_sprom->gpio2;
 	sprom[3] = dev->dev->bus_sprom->gpio3;
 
-	if (sprom[led_index] == 0xFF) {
+	if ((sprom[0] & sprom[1] & sprom[2] & sprom[3]) == 0xff) {
 		/* There is no LED information in the SPROM
 		 * for this LED. Hardcode it here. */
 		*activelow = false;
@@ -250,7 +237,11 @@ static void b43_led_get_sprominfo(struct b43_wldev *dev,
 			return;
 		}
 	} else {
-		*behaviour = sprom[led_index] & B43_LED_BEHAVIOUR;
+		/* keep LED disabled if no mapping is defined */
+		if (sprom[led_index] == 0xff)
+			*behaviour = B43_LED_OFF;
+		else
+			*behaviour = sprom[led_index] & B43_LED_BEHAVIOUR;
 		*activelow = !!(sprom[led_index] & B43_LED_ACTIVELOW);
 	}
 }

@@ -1,20 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * SS4200-E Hardware API
  * Copyright (c) 2009, Intel Corporation.
  * Copyright IBM Corporation, 2009
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  *
  * Author: Dave Hansen <dave@sr71.net>
  */
@@ -91,13 +79,26 @@ MODULE_PARM_DESC(nodetect, "Skip DMI-based hardware detection");
  * detected as working, but in reality it is not) as low as
  * possible.
  */
-static struct dmi_system_id nas_led_whitelist[] __initdata = {
+static const struct dmi_system_id nas_led_whitelist[] __initconst = {
 	{
 		.callback = ss4200_led_dmi_callback,
 		.ident = "Intel SS4200-E",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Intel"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "SS4200-E"),
+			DMI_MATCH(DMI_PRODUCT_VERSION, "1.00.00")
+		}
+	},
+	{
+		/*
+		 * FUJITSU SIEMENS SCALEO Home Server/SS4200-E
+		 * BIOS V090L 12/19/2007
+		 */
+		.callback = ss4200_led_dmi_callback,
+		.ident = "Fujitsu Siemens SCALEO Home Server",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "FUJITSU SIEMENS"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "SCALEO Home Server"),
 			DMI_MATCH(DMI_PRODUCT_VERSION, "1.00.00")
 		}
 	},

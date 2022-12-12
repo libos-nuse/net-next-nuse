@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * wm5102.h  --  WM5102 MFD internals
  *
  * Copyright 2012 Wolfson Microelectronics plc
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _WM5102_H
@@ -17,13 +14,13 @@
 #include <linux/regmap.h>
 #include <linux/pm.h>
 
-struct wm_arizona;
-
 extern const struct regmap_config wm5102_i2c_regmap;
 extern const struct regmap_config wm5102_spi_regmap;
 
 extern const struct regmap_config wm5110_i2c_regmap;
 extern const struct regmap_config wm5110_spi_regmap;
+
+extern const struct regmap_config cs47l24_spi_regmap;
 
 extern const struct regmap_config wm8997_i2c_regmap;
 
@@ -39,6 +36,8 @@ extern const struct regmap_irq_chip wm5102_irq;
 extern const struct regmap_irq_chip wm5110_aod;
 extern const struct regmap_irq_chip wm5110_irq;
 extern const struct regmap_irq_chip wm5110_revd_irq;
+
+extern const struct regmap_irq_chip cs47l24_irq;
 
 extern const struct regmap_irq_chip wm8997_aod;
 extern const struct regmap_irq_chip wm8997_irq;

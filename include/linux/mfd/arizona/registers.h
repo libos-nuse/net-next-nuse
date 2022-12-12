@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * ARIZONA register definitions
  *
  * Copyright 2012 Wolfson Microelectronics plc
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _ARIZONA_REGISTERS_H
@@ -856,12 +853,6 @@
 #define ARIZONA_ISRC1INT4MIX_INPUT_1_SOURCE      0xB38
 #define ARIZONA_ISRC2DEC1MIX_INPUT_1_SOURCE      0xB40
 #define ARIZONA_ISRC2DEC2MIX_INPUT_1_SOURCE      0xB48
-#define ARIZONA_ISRC2INT1MIX_INPUT_1_SOURCE      0xB60
-#define ARIZONA_ISRC2INT2MIX_INPUT_1_SOURCE      0xB68
-#define ARIZONA_ISRC1INT3MIX_INPUT_1_SOURCE      0xB30
-#define ARIZONA_ISRC1INT4MIX_INPUT_1_SOURCE      0xB38
-#define ARIZONA_ISRC2DEC1MIX_INPUT_1_SOURCE      0xB40
-#define ARIZONA_ISRC2DEC2MIX_INPUT_1_SOURCE      0xB48
 #define ARIZONA_ISRC2DEC3MIX_INPUT_1_SOURCE      0xB50
 #define ARIZONA_ISRC2DEC4MIX_INPUT_1_SOURCE      0xB58
 #define ARIZONA_ISRC2INT1MIX_INPUT_1_SOURCE      0xB60
@@ -1195,13 +1186,6 @@
 #define ARIZONA_DSP4_SCRATCH_1                   0x1441
 #define ARIZONA_DSP4_SCRATCH_2                   0x1442
 #define ARIZONA_DSP4_SCRATCH_3                   0x1443
-#define ARIZONA_FRF_COEFF_1                      0x1700
-#define ARIZONA_FRF_COEFF_2                      0x1701
-#define ARIZONA_FRF_COEFF_3                      0x1702
-#define ARIZONA_FRF_COEFF_4                      0x1703
-#define ARIZONA_V2_DAC_COMP_1                    0x1704
-#define ARIZONA_V2_DAC_COMP_2                    0x1705
-
 
 /*
  * Field Definitions.

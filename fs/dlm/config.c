@@ -1,18 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
 *******************************************************************************
 **
 **  Copyright (C) Sistina Software, Inc.  1997-2003  All rights reserved.
 **  Copyright (C) 2004-2011 Red Hat, Inc.  All rights reserved.
 **
-**  This copyrighted material is made available to anyone wishing to use,
-**  modify, copy, or redistribute it subject to the terms and conditions
-**  of the GNU General Public License v.2.
 **
 *******************************************************************************
 ******************************************************************************/
 
 #include <linux/kernel.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/configfs.h>
 #include <linux/slab.h>
 #include <linux/in.h>
@@ -73,7 +71,9 @@ struct dlm_cluster {
 	unsigned int cl_toss_secs;
 	unsigned int cl_scan_secs;
 	unsigned int cl_log_debug;
+	unsigned int cl_log_info;
 	unsigned int cl_protocol;
+	unsigned int cl_mark;
 	unsigned int cl_timewarn_cs;
 	unsigned int cl_waitwarn_us;
 	unsigned int cl_new_rsb_count;
@@ -95,7 +95,9 @@ enum {
 	CLUSTER_ATTR_TOSS_SECS,
 	CLUSTER_ATTR_SCAN_SECS,
 	CLUSTER_ATTR_LOG_DEBUG,
+	CLUSTER_ATTR_LOG_INFO,
 	CLUSTER_ATTR_PROTOCOL,
+	CLUSTER_ATTR_MARK,
 	CLUSTER_ATTR_TIMEWARN_CS,
 	CLUSTER_ATTR_WAITWARN_US,
 	CLUSTER_ATTR_NEW_RSB_COUNT,
@@ -123,7 +125,7 @@ static ssize_t cluster_cluster_name_store(struct config_item *item,
 CONFIGFS_ATTR(cluster_, cluster_name);
 
 static ssize_t cluster_set(struct dlm_cluster *cl, unsigned int *cl_field,
-			   int *info_field, int check_zero,
+			   int *info_field, int (*check_cb)(unsigned int x),
 			   const char *buf, size_t len)
 {
 	unsigned int x;
@@ -135,8 +137,11 @@ static ssize_t cluster_set(struct dlm_cluster *cl, unsigned int *cl_field,
 	if (rc)
 		return rc;
 
-	if (check_zero && !x)
-		return -EINVAL;
+	if (check_cb) {
+		rc = check_cb(x);
+		if (rc)
+			return rc;
+	}
 
 	*cl_field = x;
 	*info_field = x;
@@ -144,13 +149,13 @@ static ssize_t cluster_set(struct dlm_cluster *cl, unsigned int *cl_field,
 	return len;
 }
 
-#define CLUSTER_ATTR(name, check_zero)                                        \
+#define CLUSTER_ATTR(name, check_cb)                                          \
 static ssize_t cluster_##name##_store(struct config_item *item, \
 		const char *buf, size_t len) \
 {                                                                             \
 	struct dlm_cluster *cl = config_item_to_cluster(item);		      \
 	return cluster_set(cl, &cl->cl_##name, &dlm_config.ci_##name,         \
-			   check_zero, buf, len);                             \
+			   check_cb, buf, len);                               \
 }                                                                             \
 static ssize_t cluster_##name##_show(struct config_item *item, char *buf)     \
 {                                                                             \
@@ -159,18 +164,36 @@ static ssize_t cluster_##name##_show(struct config_item *item, char *buf)     \
 }                                                                             \
 CONFIGFS_ATTR(cluster_, name);
 
-CLUSTER_ATTR(tcp_port, 1);
-CLUSTER_ATTR(buffer_size, 1);
-CLUSTER_ATTR(rsbtbl_size, 1);
-CLUSTER_ATTR(recover_timer, 1);
-CLUSTER_ATTR(toss_secs, 1);
-CLUSTER_ATTR(scan_secs, 1);
-CLUSTER_ATTR(log_debug, 0);
-CLUSTER_ATTR(protocol, 0);
-CLUSTER_ATTR(timewarn_cs, 1);
-CLUSTER_ATTR(waitwarn_us, 0);
-CLUSTER_ATTR(new_rsb_count, 0);
-CLUSTER_ATTR(recover_callbacks, 0);
+static int dlm_check_zero(unsigned int x)
+{
+	if (!x)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int dlm_check_buffer_size(unsigned int x)
+{
+	if (x < DEFAULT_BUFFER_SIZE)
+		return -EINVAL;
+
+	return 0;
+}
+
+CLUSTER_ATTR(tcp_port, dlm_check_zero);
+CLUSTER_ATTR(buffer_size, dlm_check_buffer_size);
+CLUSTER_ATTR(rsbtbl_size, dlm_check_zero);
+CLUSTER_ATTR(recover_timer, dlm_check_zero);
+CLUSTER_ATTR(toss_secs, dlm_check_zero);
+CLUSTER_ATTR(scan_secs, dlm_check_zero);
+CLUSTER_ATTR(log_debug, NULL);
+CLUSTER_ATTR(log_info, NULL);
+CLUSTER_ATTR(protocol, NULL);
+CLUSTER_ATTR(mark, NULL);
+CLUSTER_ATTR(timewarn_cs, dlm_check_zero);
+CLUSTER_ATTR(waitwarn_us, NULL);
+CLUSTER_ATTR(new_rsb_count, NULL);
+CLUSTER_ATTR(recover_callbacks, NULL);
 
 static struct configfs_attribute *cluster_attrs[] = {
 	[CLUSTER_ATTR_TCP_PORT] = &cluster_attr_tcp_port,
@@ -180,7 +203,9 @@ static struct configfs_attribute *cluster_attrs[] = {
 	[CLUSTER_ATTR_TOSS_SECS] = &cluster_attr_toss_secs,
 	[CLUSTER_ATTR_SCAN_SECS] = &cluster_attr_scan_secs,
 	[CLUSTER_ATTR_LOG_DEBUG] = &cluster_attr_log_debug,
+	[CLUSTER_ATTR_LOG_INFO] = &cluster_attr_log_info,
 	[CLUSTER_ATTR_PROTOCOL] = &cluster_attr_protocol,
+	[CLUSTER_ATTR_MARK] = &cluster_attr_mark,
 	[CLUSTER_ATTR_TIMEWARN_CS] = &cluster_attr_timewarn_cs,
 	[CLUSTER_ATTR_WAITWARN_US] = &cluster_attr_waitwarn_us,
 	[CLUSTER_ATTR_NEW_RSB_COUNT] = &cluster_attr_new_rsb_count,
@@ -194,6 +219,7 @@ enum {
 	COMM_ATTR_LOCAL,
 	COMM_ATTR_ADDR,
 	COMM_ATTR_ADDR_LIST,
+	COMM_ATTR_MARK,
 };
 
 enum {
@@ -214,6 +240,7 @@ struct dlm_space {
 	struct list_head members;
 	struct mutex members_lock;
 	int members_count;
+	struct dlm_nodes *nds;
 };
 
 struct dlm_comms {
@@ -226,6 +253,7 @@ struct dlm_comm {
 	int nodeid;
 	int local;
 	int addr_count;
+	unsigned int mark;
 	struct sockaddr_storage *addr[DLM_MAX_ADDR_COUNT];
 };
 
@@ -278,44 +306,44 @@ static struct configfs_item_operations node_ops = {
 	.release = release_node,
 };
 
-static struct config_item_type clusters_type = {
+static const struct config_item_type clusters_type = {
 	.ct_group_ops = &clusters_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static struct config_item_type cluster_type = {
+static const struct config_item_type cluster_type = {
 	.ct_item_ops = &cluster_ops,
 	.ct_attrs = cluster_attrs,
 	.ct_owner = THIS_MODULE,
 };
 
-static struct config_item_type spaces_type = {
+static const struct config_item_type spaces_type = {
 	.ct_group_ops = &spaces_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static struct config_item_type space_type = {
+static const struct config_item_type space_type = {
 	.ct_item_ops = &space_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static struct config_item_type comms_type = {
+static const struct config_item_type comms_type = {
 	.ct_group_ops = &comms_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static struct config_item_type comm_type = {
+static const struct config_item_type comm_type = {
 	.ct_item_ops = &comm_ops,
 	.ct_attrs = comm_attrs,
 	.ct_owner = THIS_MODULE,
 };
 
-static struct config_item_type nodes_type = {
+static const struct config_item_type nodes_type = {
 	.ct_group_ops = &nodes_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static struct config_item_type node_type = {
+static const struct config_item_type node_type = {
 	.ct_item_ops = &node_ops,
 	.ct_attrs = node_attrs,
 	.ct_owner = THIS_MODULE,
@@ -343,24 +371,20 @@ static struct config_group *make_cluster(struct config_group *g,
 	struct dlm_cluster *cl = NULL;
 	struct dlm_spaces *sps = NULL;
 	struct dlm_comms *cms = NULL;
-	void *gps = NULL;
 
 	cl = kzalloc(sizeof(struct dlm_cluster), GFP_NOFS);
-	gps = kcalloc(3, sizeof(struct config_group *), GFP_NOFS);
 	sps = kzalloc(sizeof(struct dlm_spaces), GFP_NOFS);
 	cms = kzalloc(sizeof(struct dlm_comms), GFP_NOFS);
 
-	if (!cl || !gps || !sps || !cms)
+	if (!cl || !sps || !cms)
 		goto fail;
 
 	config_group_init_type_name(&cl->group, name, &cluster_type);
 	config_group_init_type_name(&sps->ss_group, "spaces", &spaces_type);
 	config_group_init_type_name(&cms->cs_group, "comms", &comms_type);
 
-	cl->group.default_groups = gps;
-	cl->group.default_groups[0] = &sps->ss_group;
-	cl->group.default_groups[1] = &cms->cs_group;
-	cl->group.default_groups[2] = NULL;
+	configfs_add_default_group(&sps->ss_group, &cl->group);
+	configfs_add_default_group(&cms->cs_group, &cl->group);
 
 	cl->cl_tcp_port = dlm_config.ci_tcp_port;
 	cl->cl_buffer_size = dlm_config.ci_buffer_size;
@@ -369,6 +393,7 @@ static struct config_group *make_cluster(struct config_group *g,
 	cl->cl_toss_secs = dlm_config.ci_toss_secs;
 	cl->cl_scan_secs = dlm_config.ci_scan_secs;
 	cl->cl_log_debug = dlm_config.ci_log_debug;
+	cl->cl_log_info = dlm_config.ci_log_info;
 	cl->cl_protocol = dlm_config.ci_protocol;
 	cl->cl_timewarn_cs = dlm_config.ci_timewarn_cs;
 	cl->cl_waitwarn_us = dlm_config.ci_waitwarn_us;
@@ -383,7 +408,6 @@ static struct config_group *make_cluster(struct config_group *g,
 
  fail:
 	kfree(cl);
-	kfree(gps);
 	kfree(sps);
 	kfree(cms);
 	return ERR_PTR(-ENOMEM);
@@ -392,14 +416,8 @@ static struct config_group *make_cluster(struct config_group *g,
 static void drop_cluster(struct config_group *g, struct config_item *i)
 {
 	struct dlm_cluster *cl = config_item_to_cluster(i);
-	struct config_item *tmp;
-	int j;
 
-	for (j = 0; cl->group.default_groups[j]; j++) {
-		tmp = &cl->group.default_groups[j]->cg_item;
-		cl->group.default_groups[j] = NULL;
-		config_item_put(tmp);
-	}
+	configfs_remove_default_groups(&cl->group);
 
 	space_list = NULL;
 	comm_list = NULL;
@@ -410,7 +428,6 @@ static void drop_cluster(struct config_group *g, struct config_item *i)
 static void release_cluster(struct config_item *i)
 {
 	struct dlm_cluster *cl = config_item_to_cluster(i);
-	kfree(cl->group.default_groups);
 	kfree(cl);
 }
 
@@ -418,30 +435,26 @@ static struct config_group *make_space(struct config_group *g, const char *name)
 {
 	struct dlm_space *sp = NULL;
 	struct dlm_nodes *nds = NULL;
-	void *gps = NULL;
 
 	sp = kzalloc(sizeof(struct dlm_space), GFP_NOFS);
-	gps = kcalloc(2, sizeof(struct config_group *), GFP_NOFS);
 	nds = kzalloc(sizeof(struct dlm_nodes), GFP_NOFS);
 
-	if (!sp || !gps || !nds)
+	if (!sp || !nds)
 		goto fail;
 
 	config_group_init_type_name(&sp->group, name, &space_type);
-	config_group_init_type_name(&nds->ns_group, "nodes", &nodes_type);
 
-	sp->group.default_groups = gps;
-	sp->group.default_groups[0] = &nds->ns_group;
-	sp->group.default_groups[1] = NULL;
+	config_group_init_type_name(&nds->ns_group, "nodes", &nodes_type);
+	configfs_add_default_group(&nds->ns_group, &sp->group);
 
 	INIT_LIST_HEAD(&sp->members);
 	mutex_init(&sp->members_lock);
 	sp->members_count = 0;
+	sp->nds = nds;
 	return &sp->group;
 
  fail:
 	kfree(sp);
-	kfree(gps);
 	kfree(nds);
 	return ERR_PTR(-ENOMEM);
 }
@@ -449,24 +462,17 @@ static struct config_group *make_space(struct config_group *g, const char *name)
 static void drop_space(struct config_group *g, struct config_item *i)
 {
 	struct dlm_space *sp = config_item_to_space(i);
-	struct config_item *tmp;
-	int j;
 
 	/* assert list_empty(&sp->members) */
 
-	for (j = 0; sp->group.default_groups[j]; j++) {
-		tmp = &sp->group.default_groups[j]->cg_item;
-		sp->group.default_groups[j] = NULL;
-		config_item_put(tmp);
-	}
-
+	configfs_remove_default_groups(&sp->group);
 	config_item_put(i);
 }
 
 static void release_space(struct config_item *i)
 {
 	struct dlm_space *sp = config_item_to_space(i);
-	kfree(sp->group.default_groups);
+	kfree(sp->nds);
 	kfree(sp);
 }
 
@@ -487,6 +493,7 @@ static struct config_item *make_comm(struct config_group *g, const char *name)
 	cm->nodeid = -1;
 	cm->local = 0;
 	cm->addr_count = 0;
+	cm->mark = 0;
 	return &cm->item;
 }
 
@@ -682,8 +689,28 @@ static ssize_t comm_addr_list_show(struct config_item *item, char *buf)
 	return 4096 - allowance;
 }
 
+static ssize_t comm_mark_show(struct config_item *item, char *buf)
+{
+	return sprintf(buf, "%u\n", config_item_to_comm(item)->mark);
+}
+
+static ssize_t comm_mark_store(struct config_item *item, const char *buf,
+			       size_t len)
+{
+	unsigned int mark;
+	int rc;
+
+	rc = kstrtouint(buf, 0, &mark);
+	if (rc)
+		return rc;
+
+	config_item_to_comm(item)->mark = mark;
+	return len;
+}
+
 CONFIGFS_ATTR(comm_, nodeid);
 CONFIGFS_ATTR(comm_, local);
+CONFIGFS_ATTR(comm_, mark);
 CONFIGFS_ATTR_WO(comm_, addr);
 CONFIGFS_ATTR_RO(comm_, addr_list);
 
@@ -692,6 +719,7 @@ static struct configfs_attribute *comm_attrs[] = {
 	[COMM_ATTR_LOCAL] = &comm_attr_local,
 	[COMM_ATTR_ADDR] = &comm_attr_addr,
 	[COMM_ATTR_ADDR_LIST] = &comm_attr_addr_list,
+	[COMM_ATTR_MARK] = &comm_attr_mark,
 	NULL,
 };
 
@@ -851,6 +879,24 @@ int dlm_comm_seq(int nodeid, uint32_t *seq)
 	return 0;
 }
 
+void dlm_comm_mark(int nodeid, unsigned int *mark)
+{
+	struct dlm_comm *cm;
+
+	cm = get_comm(nodeid);
+	if (!cm) {
+		*mark = dlm_config.ci_mark;
+		return;
+	}
+
+	if (cm->mark)
+		*mark = cm->mark;
+	else
+		*mark = dlm_config.ci_mark;
+
+	put_comm(cm);
+}
+
 int dlm_our_nodeid(void)
 {
 	return local_comm ? local_comm->nodeid : 0;
@@ -869,13 +915,14 @@ int dlm_our_addr(struct sockaddr_storage *addr, int num)
 
 /* Config file defaults */
 #define DEFAULT_TCP_PORT       21064
-#define DEFAULT_BUFFER_SIZE     4096
 #define DEFAULT_RSBTBL_SIZE     1024
 #define DEFAULT_RECOVER_TIMER      5
 #define DEFAULT_TOSS_SECS         10
 #define DEFAULT_SCAN_SECS          5
 #define DEFAULT_LOG_DEBUG          0
+#define DEFAULT_LOG_INFO           1
 #define DEFAULT_PROTOCOL           0
+#define DEFAULT_MARK               0
 #define DEFAULT_TIMEWARN_CS      500 /* 5 sec = 500 centiseconds */
 #define DEFAULT_WAITWARN_US	   0
 #define DEFAULT_NEW_RSB_COUNT    128
@@ -890,7 +937,9 @@ struct dlm_config_info dlm_config = {
 	.ci_toss_secs = DEFAULT_TOSS_SECS,
 	.ci_scan_secs = DEFAULT_SCAN_SECS,
 	.ci_log_debug = DEFAULT_LOG_DEBUG,
+	.ci_log_info = DEFAULT_LOG_INFO,
 	.ci_protocol = DEFAULT_PROTOCOL,
+	.ci_mark = DEFAULT_MARK,
 	.ci_timewarn_cs = DEFAULT_TIMEWARN_CS,
 	.ci_waitwarn_us = DEFAULT_WAITWARN_US,
 	.ci_new_rsb_count = DEFAULT_NEW_RSB_COUNT,

@@ -1,6 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2014, Michael Ellerman, IBM Corp.
- * Licensed under GPLv2.
  */
 
 #define _GNU_SOURCE	/* For CPU_ZERO etc. */
@@ -13,10 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <linux/auxvec.h>
 
 #include "trace.h"
-#include "reg.h"
 #include "ebb.h"
 
 
@@ -324,7 +322,7 @@ bool ebb_is_supported(void)
 {
 #ifdef PPC_FEATURE2_EBB
 	/* EBB requires at least POWER8 */
-	return ((long)get_auxv_entry(AT_HWCAP2) & PPC_FEATURE2_EBB);
+	return have_hwcap2(PPC_FEATURE2_EBB);
 #else
 	return false;
 #endif
@@ -397,8 +395,6 @@ int ebb_child(union pipe read_pipe, union pipe write_pipe)
 
 	ebb_global_disable();
 	ebb_freeze_pmcs();
-
-	count_pmc(1, sample_period);
 
 	dump_ebb_state();
 

@@ -23,6 +23,7 @@
 struct mdp4_lvds_connector {
 	struct drm_connector base;
 	struct drm_encoder *encoder;
+	struct device_node *panel_node;
 	struct drm_panel *panel;
 };
 #define to_mdp4_lvds_connector(x) container_of(x, struct mdp4_lvds_connector, base)
@@ -33,6 +34,10 @@ static enum drm_connector_status mdp4_lvds_connector_detect(
 	struct mdp4_lvds_connector *mdp4_lvds_connector =
 			to_mdp4_lvds_connector(connector);
 
+	if (!mdp4_lvds_connector->panel)
+		mdp4_lvds_connector->panel =
+			of_drm_find_panel(mdp4_lvds_connector->panel_node);
+
 	return mdp4_lvds_connector->panel ?
 			connector_status_connected :
 			connector_status_disconnected;
@@ -42,12 +47,7 @@ static void mdp4_lvds_connector_destroy(struct drm_connector *connector)
 {
 	struct mdp4_lvds_connector *mdp4_lvds_connector =
 			to_mdp4_lvds_connector(connector);
-	struct drm_panel *panel = mdp4_lvds_connector->panel;
 
-	if (panel)
-		drm_panel_detach(panel);
-
-	drm_connector_unregister(connector);
 	drm_connector_cleanup(connector);
 
 	kfree(mdp4_lvds_connector);
@@ -60,8 +60,13 @@ static int mdp4_lvds_connector_get_modes(struct drm_connector *connector)
 	struct drm_panel *panel = mdp4_lvds_connector->panel;
 	int ret = 0;
 
-	if (panel)
+	if (panel) {
+		drm_panel_attach(panel, connector);
+
 		ret = panel->funcs->get_modes(panel);
+
+		drm_panel_detach(panel);
+	}
 
 	return ret;
 }
@@ -111,20 +116,17 @@ static const struct drm_connector_helper_funcs mdp4_lvds_connector_helper_funcs 
 
 /* initialize connector */
 struct drm_connector *mdp4_lvds_connector_init(struct drm_device *dev,
-		struct drm_panel *panel, struct drm_encoder *encoder)
+		struct device_node *panel_node, struct drm_encoder *encoder)
 {
 	struct drm_connector *connector = NULL;
 	struct mdp4_lvds_connector *mdp4_lvds_connector;
-	int ret;
 
 	mdp4_lvds_connector = kzalloc(sizeof(*mdp4_lvds_connector), GFP_KERNEL);
-	if (!mdp4_lvds_connector) {
-		ret = -ENOMEM;
-		goto fail;
-	}
+	if (!mdp4_lvds_connector)
+		return ERR_PTR(-ENOMEM);
 
 	mdp4_lvds_connector->encoder = encoder;
-	mdp4_lvds_connector->panel = panel;
+	mdp4_lvds_connector->panel_node = panel_node;
 
 	connector = &mdp4_lvds_connector->base;
 
@@ -137,18 +139,7 @@ struct drm_connector *mdp4_lvds_connector_init(struct drm_device *dev,
 	connector->interlace_allowed = 0;
 	connector->doublescan_allowed = 0;
 
-	drm_connector_register(connector);
-
 	drm_mode_connector_attach_encoder(connector, encoder);
 
-	if (panel)
-		drm_panel_attach(panel, connector);
-
 	return connector;
-
-fail:
-	if (connector)
-		mdp4_lvds_connector_destroy(connector);
-
-	return ERR_PTR(ret);
 }

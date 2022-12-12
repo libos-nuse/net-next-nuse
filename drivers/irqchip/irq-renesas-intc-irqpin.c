@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Renesas INTC External IRQ Pin Driver
  *
  *  Copyright (C) 2013 Magnus Damm
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <linux/clk.h>
 #include <linux/init.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -31,7 +18,6 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/of_device.h>
-#include <linux/platform_data/irq-renesas-intc-irqpin.h>
 #include <linux/pm_runtime.h>
 
 #define INTC_IRQPIN_MAX 8 /* maximum 8 interrupts per driver instance */
@@ -75,18 +61,17 @@ struct intc_irqpin_irq {
 struct intc_irqpin_priv {
 	struct intc_irqpin_iomem iomem[INTC_IRQPIN_REG_NR];
 	struct intc_irqpin_irq irq[INTC_IRQPIN_MAX];
-	struct renesas_intc_irqpin_config config;
-	unsigned int number_of_irqs;
+	unsigned int sense_bitfield_width;
 	struct platform_device *pdev;
 	struct irq_chip irq_chip;
 	struct irq_domain *irq_domain;
-	struct clk *clk;
-	bool shared_irqs;
+	atomic_t wakeup_path;
+	unsigned shared_irqs:1;
 	u8 shared_irq_mask;
 };
 
-struct intc_irqpin_irlm_config {
-	unsigned int irlm_bit;
+struct intc_irqpin_config {
+	int irlm_bit;		/* -1 if non-existent */
 };
 
 static unsigned long intc_irqpin_read32(void __iomem *iomem)
@@ -171,7 +156,7 @@ static void intc_irqpin_mask_unmask_prio(struct intc_irqpin_priv *p,
 static int intc_irqpin_set_sense(struct intc_irqpin_priv *p, int irq, int value)
 {
 	/* The SENSE register is assumed to be 32-bit. */
-	int bitfield_width = p->config.sense_bitfield_width;
+	int bitfield_width = p->sense_bitfield_width;
 	int shift = 32 - (irq + 1) * bitfield_width;
 
 	dev_dbg(&p->pdev->dev, "sense irq = %d, mode = %d\n", irq, value);
@@ -286,14 +271,10 @@ static int intc_irqpin_irq_set_wake(struct irq_data *d, unsigned int on)
 	int hw_irq = irqd_to_hwirq(d);
 
 	irq_set_irq_wake(p->irq[hw_irq].requested_irq, on);
-
-	if (!p->clk)
-		return 0;
-
 	if (on)
-		clk_enable(p->clk);
+		atomic_inc(&p->wakeup_path);
 	else
-		clk_disable(p->clk);
+		atomic_dec(&p->wakeup_path);
 
 	return 0;
 }
@@ -341,6 +322,9 @@ static irqreturn_t intc_irqpin_shared_irq_handler(int irq, void *dev_id)
  */
 static struct lock_class_key intc_irqpin_irq_lock_class;
 
+/* And this is for the request mutex */
+static struct lock_class_key intc_irqpin_irq_request_class;
+
 static int intc_irqpin_irq_domain_map(struct irq_domain *h, unsigned int virq,
 				      irq_hw_number_t hw)
 {
@@ -351,7 +335,8 @@ static int intc_irqpin_irq_domain_map(struct irq_domain *h, unsigned int virq,
 
 	intc_irqpin_dbg(&p->irq[hw], "map");
 	irq_set_chip_data(virq, h->host_data);
-	irq_set_lockdep_class(virq, &intc_irqpin_irq_lock_class);
+	irq_set_lockdep_class(virq, &intc_irqpin_irq_lock_class,
+			      &intc_irqpin_irq_request_class);
 	irq_set_chip_and_handler(virq, &p->irq_chip, handle_level_irq);
 	return 0;
 }
@@ -361,8 +346,12 @@ static const struct irq_domain_ops intc_irqpin_irq_domain_ops = {
 	.xlate  = irq_domain_xlate_twocell,
 };
 
-static const struct intc_irqpin_irlm_config intc_irqpin_irlm_r8a777x = {
+static const struct intc_irqpin_config intc_irqpin_irlm_r8a777x = {
 	.irlm_bit = 23, /* ICR0.IRLM0 */
+};
+
+static const struct intc_irqpin_config intc_irqpin_rmobile = {
+	.irlm_bit = -1,
 };
 
 static const struct of_device_id intc_irqpin_dt_ids[] = {
@@ -371,15 +360,18 @@ static const struct of_device_id intc_irqpin_dt_ids[] = {
 	  .data = &intc_irqpin_irlm_r8a777x },
 	{ .compatible = "renesas,intc-irqpin-r8a7779",
 	  .data = &intc_irqpin_irlm_r8a777x },
+	{ .compatible = "renesas,intc-irqpin-r8a7740",
+	  .data = &intc_irqpin_rmobile },
+	{ .compatible = "renesas,intc-irqpin-sh73a0",
+	  .data = &intc_irqpin_rmobile },
 	{},
 };
 MODULE_DEVICE_TABLE(of, intc_irqpin_dt_ids);
 
 static int intc_irqpin_probe(struct platform_device *pdev)
 {
+	const struct intc_irqpin_config *config;
 	struct device *dev = &pdev->dev;
-	struct renesas_intc_irqpin_config *pdata = dev->platform_data;
-	const struct of_device_id *of_id;
 	struct intc_irqpin_priv *p;
 	struct intc_irqpin_iomem *i;
 	struct resource *io[INTC_IRQPIN_REG_NR];
@@ -388,36 +380,27 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 	void (*enable_fn)(struct irq_data *d);
 	void (*disable_fn)(struct irq_data *d);
 	const char *name = dev_name(dev);
+	bool control_parent;
+	unsigned int nirqs;
 	int ref_irq;
 	int ret;
 	int k;
 
 	p = devm_kzalloc(dev, sizeof(*p), GFP_KERNEL);
-	if (!p) {
-		dev_err(dev, "failed to allocate driver data\n");
+	if (!p)
 		return -ENOMEM;
-	}
 
 	/* deal with driver instance configuration */
-	if (pdata) {
-		memcpy(&p->config, pdata, sizeof(*pdata));
-	} else {
-		of_property_read_u32(dev->of_node, "sense-bitfield-width",
-				     &p->config.sense_bitfield_width);
-		p->config.control_parent = of_property_read_bool(dev->of_node,
-								 "control-parent");
-	}
-	if (!p->config.sense_bitfield_width)
-		p->config.sense_bitfield_width = 4; /* default to 4 bits */
+	of_property_read_u32(dev->of_node, "sense-bitfield-width",
+			     &p->sense_bitfield_width);
+	control_parent = of_property_read_bool(dev->of_node, "control-parent");
+	if (!p->sense_bitfield_width)
+		p->sense_bitfield_width = 4; /* default to 4 bits */
 
 	p->pdev = pdev;
 	platform_set_drvdata(pdev, p);
 
-	p->clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(p->clk)) {
-		dev_warn(dev, "unable to get clock\n");
-		p->clk = NULL;
-	}
+	config = of_device_get_match_data(dev);
 
 	pm_runtime_enable(dev);
 	pm_runtime_get_sync(dev);
@@ -443,8 +426,8 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 		p->irq[k].requested_irq = irq->start;
 	}
 
-	p->number_of_irqs = k;
-	if (p->number_of_irqs < 1) {
+	nirqs = k;
+	if (nirqs < 1) {
 		dev_err(dev, "not enough IRQ resources\n");
 		ret = -EINVAL;
 		goto err0;
@@ -475,8 +458,8 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 			goto err0;
 		}
 
-		i->iomem = devm_ioremap_nocache(dev, io[k]->start,
-						resource_size(io[k]));
+		i->iomem = devm_ioremap(dev, io[k]->start,
+					resource_size(io[k]));
 		if (!i->iomem) {
 			dev_err(dev, "failed to remap IOMEM\n");
 			ret = -ENXIO;
@@ -485,20 +468,16 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 	}
 
 	/* configure "individual IRQ mode" where needed */
-	of_id = of_match_device(intc_irqpin_dt_ids, dev);
-	if (of_id && of_id->data) {
-		const struct intc_irqpin_irlm_config *irlm_config = of_id->data;
-
+	if (config && config->irlm_bit >= 0) {
 		if (io[INTC_IRQPIN_REG_IRLM])
 			intc_irqpin_read_modify_write(p, INTC_IRQPIN_REG_IRLM,
-						      irlm_config->irlm_bit,
-						      1, 1);
+						      config->irlm_bit, 1, 1);
 		else
 			dev_warn(dev, "unable to select IRLM mode\n");
 	}
 
 	/* mask all interrupts using priority */
-	for (k = 0; k < p->number_of_irqs; k++)
+	for (k = 0; k < nirqs; k++)
 		intc_irqpin_mask_unmask_prio(p, k, 1);
 
 	/* clear all pending interrupts */
@@ -506,16 +485,16 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 
 	/* scan for shared interrupt lines */
 	ref_irq = p->irq[0].requested_irq;
-	p->shared_irqs = true;
-	for (k = 1; k < p->number_of_irqs; k++) {
+	p->shared_irqs = 1;
+	for (k = 1; k < nirqs; k++) {
 		if (ref_irq != p->irq[k].requested_irq) {
-			p->shared_irqs = false;
+			p->shared_irqs = 0;
 			break;
 		}
 	}
 
 	/* use more severe masking method if requested */
-	if (p->config.control_parent) {
+	if (control_parent) {
 		enable_fn = intc_irqpin_irq_enable_force;
 		disable_fn = intc_irqpin_irq_disable_force;
 	} else if (!p->shared_irqs) {
@@ -527,16 +506,15 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 	}
 
 	irq_chip = &p->irq_chip;
-	irq_chip->name = name;
+	irq_chip->name = "intc-irqpin";
+	irq_chip->parent_device = dev;
 	irq_chip->irq_mask = disable_fn;
 	irq_chip->irq_unmask = enable_fn;
 	irq_chip->irq_set_type = intc_irqpin_irq_set_type;
 	irq_chip->irq_set_wake = intc_irqpin_irq_set_wake;
 	irq_chip->flags	= IRQCHIP_MASK_ON_SUSPEND;
 
-	p->irq_domain = irq_domain_add_simple(dev->of_node,
-					      p->number_of_irqs,
-					      p->config.irq_base,
+	p->irq_domain = irq_domain_add_simple(dev->of_node, nirqs, 0,
 					      &intc_irqpin_irq_domain_ops, p);
 	if (!p->irq_domain) {
 		ret = -ENXIO;
@@ -555,7 +533,7 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 		}
 	} else {
 		/* request interrupts one by one */
-		for (k = 0; k < p->number_of_irqs; k++) {
+		for (k = 0; k < nirqs; k++) {
 			if (devm_request_irq(dev, p->irq[k].requested_irq,
 					     intc_irqpin_irq_handler, 0, name,
 					     &p->irq[k])) {
@@ -567,17 +545,10 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 	}
 
 	/* unmask all interrupts on prio level */
-	for (k = 0; k < p->number_of_irqs; k++)
+	for (k = 0; k < nirqs; k++)
 		intc_irqpin_mask_unmask_prio(p, k, 0);
 
-	dev_info(dev, "driving %d irqs\n", p->number_of_irqs);
-
-	/* warn in case of mismatch if irq base is specified */
-	if (p->config.irq_base) {
-		if (p->config.irq_base != p->irq[0].domain_irq)
-			dev_warn(dev, "irq base mismatch (%d/%d)\n",
-				 p->config.irq_base, p->irq[0].domain_irq);
-	}
+	dev_info(dev, "driving %d irqs\n", nirqs);
 
 	return 0;
 
@@ -599,12 +570,25 @@ static int intc_irqpin_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static int __maybe_unused intc_irqpin_suspend(struct device *dev)
+{
+	struct intc_irqpin_priv *p = dev_get_drvdata(dev);
+
+	if (atomic_read(&p->wakeup_path))
+		device_set_wakeup_path(dev);
+
+	return 0;
+}
+
+static SIMPLE_DEV_PM_OPS(intc_irqpin_pm_ops, intc_irqpin_suspend, NULL);
+
 static struct platform_driver intc_irqpin_device_driver = {
 	.probe		= intc_irqpin_probe,
 	.remove		= intc_irqpin_remove,
 	.driver		= {
 		.name	= "renesas_intc_irqpin",
 		.of_match_table = intc_irqpin_dt_ids,
+		.pm	= &intc_irqpin_pm_ops,
 	}
 };
 

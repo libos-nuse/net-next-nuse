@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /* arch/sparc64/kernel/ktlb.S: Kernel mapping TLB miss handling.
  *
  * Copyright (C) 1995, 1997, 2005, 2008 David S. Miller <davem@davemloft.net>
@@ -6,10 +7,10 @@
  * Copyright (C) 1996,98,99 Jakub Jelinek  (jj@sunsite.mff.cuni.cz)
  */
 
+#include <linux/pgtable.h>
 #include <asm/head.h>
 #include <asm/asi.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
 #include <asm/tsb.h>
 
 	.text
@@ -19,6 +20,10 @@ kvmap_itlb:
 	/* g6: TAG TARGET */
 	mov		TLB_TAG_ACCESS, %g4
 	ldxa		[%g4] ASI_IMMU, %g4
+
+	/* The kernel executes in context zero, therefore we do not
+	 * need to clear the context ID bits out of %g4 here.
+	 */
 
 	/* sun4v_itlb_miss branches here with the missing virtual
 	 * address already loaded into %g4
@@ -127,6 +132,10 @@ kvmap_dtlb:
 	/* %g6: TAG TARGET */
 	mov		TLB_TAG_ACCESS, %g4
 	ldxa		[%g4] ASI_DMMU, %g4
+
+	/* The kernel executes in context zero, therefore we do not
+	 * need to clear the context ID bits out of %g4 here.
+	 */
 
 	/* sun4v_dtlb_miss branches here with the missing virtual
 	 * address already loaded into %g4
@@ -250,6 +259,10 @@ kvmap_dtlb_longpath:
 	ldx	[%g5 + HV_FAULT_D_ADDR_OFFSET], %g5
 	nop
 	.previous
+
+	/* The kernel executes in context zero, therefore we do not
+	 * need to clear the context ID bits out of %g5 here.
+	 */
 
 	be,pt	%xcc, sparc64_realfault_common
 	 mov	FAULT_CODE_DTLB, %g4

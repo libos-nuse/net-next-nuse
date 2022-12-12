@@ -1,9 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013
  * Phillip Lougher <phillip@squashfs.org.uk>
- *
- * This work is licensed under the terms of the GNU GPL, version 2. See
- * the COPYING file in the top-level directory.
  */
 
 #include <linux/kernel.h>
@@ -48,7 +46,7 @@ struct squashfs_page_actor *squashfs_page_actor_init(void **buffer,
 	if (actor == NULL)
 		return NULL;
 
-	actor->length = length ? : pages * PAGE_CACHE_SIZE;
+	actor->length = length ? : pages * PAGE_SIZE;
 	actor->buffer = buffer;
 	actor->pages = pages;
 	actor->next_page = 0;
@@ -88,7 +86,7 @@ struct squashfs_page_actor *squashfs_page_actor_init_special(struct page **page,
 	if (actor == NULL)
 		return NULL;
 
-	actor->length = length ? : pages * PAGE_CACHE_SIZE;
+	actor->length = length ? : pages * PAGE_SIZE;
 	actor->page = page;
 	actor->pages = pages;
 	actor->next_page = 0;

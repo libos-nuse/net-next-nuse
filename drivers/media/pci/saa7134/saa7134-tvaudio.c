@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *
  * device driver for philips saa7134 based TV cards
  * tv audio decoder (fm stereo, nicam, ...)
  *
  * (c) 2001-03 Gerd Knorr <kraxel@bytesex.org> [SuSE Labs]
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include "saa7134.h"
@@ -192,7 +179,7 @@ static void mute_input_7134(struct saa7134_dev *dev)
 	in   = dev->input;
 	mute = (dev->ctl_mute ||
 		(dev->automute  &&  (&card(dev).radio) != in));
-	if (card(dev).mute.name) {
+	if (card(dev).mute.type) {
 		/*
 		 * 7130 - we'll mute using some unconnected audio input
 		 * 7134 - we'll probably should switch external mux with gpio
@@ -204,13 +191,14 @@ static void mute_input_7134(struct saa7134_dev *dev)
 	if (dev->hw_mute  == mute &&
 		dev->hw_input == in && !dev->insuspend) {
 		audio_dbg(1, "mute/input: nothing to do [mute=%d,input=%s]\n",
-			  mute, in->name);
+			  mute, saa7134_input_name[in->type]);
 		return;
 	}
 
 	audio_dbg(1, "ctl_mute=%d automute=%d input=%s  =>  mute=%d input=%s\n",
 		  dev->ctl_mute, dev->automute,
-		  dev->input->name, mute, in->name);
+		  saa7134_input_name[dev->input->type], mute,
+		  saa7134_input_name[in->type]);
 	dev->hw_mute  = mute;
 	dev->hw_input = in;
 
@@ -245,7 +233,7 @@ static void mute_input_7134(struct saa7134_dev *dev)
 	mask = card(dev).gpiomask;
 	saa_andorl(SAA7134_GPIO_GPMODE0 >> 2,   mask, mask);
 	saa_andorl(SAA7134_GPIO_GPSTATUS0 >> 2, mask, in->gpio);
-	saa7134_track_gpio(dev,in->name);
+	saa7134_track_gpio(dev, saa7134_input_name[in->type]);
 }
 
 static void tvaudio_setmode(struct saa7134_dev *dev,
@@ -331,7 +319,6 @@ static int tvaudio_checkcarrier(struct saa7134_dev *dev, struct mainscan *scan)
 	__s32 left,right,value;
 
 	if (!(dev->tvnorm->id & scan->std)) {
-		value = 0;
 		audio_dbg(1, "skipping %d.%03d MHz [%4s]\n",
 			  scan->carr / 1000, scan->carr % 1000, scan->name);
 		return 0;
@@ -696,7 +683,8 @@ int saa_dsp_writel(struct saa7134_dev *dev, int reg, u32 value)
 {
 	int err;
 
-	audio_dbg(2, "dsp write reg 0x%x = 0x%06x\n", reg << 2, value);
+	audio_dbg(2, "dsp write reg 0x%x = 0x%06x\n",
+		  (reg << 2) & 0xffffffff, value);
 	err = saa_dsp_wait_bit(dev,SAA7135_DSP_RWSTATE_WRR);
 	if (err < 0)
 		return err;
@@ -756,14 +744,14 @@ static int mute_input_7133(struct saa7134_dev *dev)
 	if (0 != card(dev).gpiomask) {
 		mask = card(dev).gpiomask;
 
-		if (card(dev).mute.name && dev->ctl_mute)
+		if (card(dev).mute.type && dev->ctl_mute)
 			in = &card(dev).mute;
 		else
 			in = dev->input;
 
 		saa_andorl(SAA7134_GPIO_GPMODE0 >> 2,   mask, mask);
 		saa_andorl(SAA7134_GPIO_GPSTATUS0 >> 2, mask, in->gpio);
-		saa7134_track_gpio(dev,in->name);
+		saa7134_track_gpio(dev, saa7134_input_name[in->type]);
 	}
 
 	return 0;

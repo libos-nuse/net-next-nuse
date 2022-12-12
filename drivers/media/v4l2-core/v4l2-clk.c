@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * V4L2 clock service
  *
  * Copyright (C) 2012-2013, Guennadi Liakhovetski <g.liakhovetski@gmx.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/atomic.h>
@@ -15,6 +12,7 @@
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -39,6 +37,7 @@ struct v4l2_clk *v4l2_clk_get(struct device *dev, const char *id)
 {
 	struct v4l2_clk *clk;
 	struct clk *ccf_clk = clk_get(dev, id);
+	char clk_name[V4L2_CLK_NAME_SIZE];
 
 	if (PTR_ERR(ccf_clk) == -EPROBE_DEFER)
 		return ERR_PTR(-EPROBE_DEFER);
@@ -56,6 +55,12 @@ struct v4l2_clk *v4l2_clk_get(struct device *dev, const char *id)
 
 	mutex_lock(&clk_lock);
 	clk = v4l2_clk_find(dev_name(dev));
+
+	/* if dev_name is not found, try use the OF name to find again  */
+	if (PTR_ERR(clk) == -ENODEV && dev->of_node) {
+		v4l2_clk_name_of(clk_name, sizeof(clk_name), dev->of_node);
+		clk = v4l2_clk_find(clk_name);
+	}
 
 	if (!IS_ERR(clk))
 		atomic_inc(&clk->use_count);

@@ -698,6 +698,9 @@ static void ar9003_tx_gain_table_mode2(struct ath_hw *ah)
 	else if (AR_SREV_9340(ah))
 		INIT_INI_ARRAY(&ah->iniModesTxGain,
 			ar9340Modes_low_ob_db_tx_gain_table_1p0);
+	else if (AR_SREV_9531_11(ah))
+		INIT_INI_ARRAY(&ah->iniModesTxGain,
+			       qca953x_1p1_modes_no_xpa_low_power_tx_gain_table);
 	else if (AR_SREV_9485_11_OR_LATER(ah))
 		INIT_INI_ARRAY(&ah->iniModesTxGain,
 			ar9485Modes_low_ob_db_tx_gain_1_1);
@@ -1034,7 +1037,7 @@ static void ar9003_hw_configpcipowersave(struct ath_hw *ah,
 	}
 
 	/*
-	 * Configire PCIE after Ini init. SERDES values now come from ini file
+	 * Configure PCIE after Ini init. SERDES values now come from ini file
 	 * This enables PCIe low power mode.
 	 */
 	array = power_off ? &ah->iniPcieSerdes :

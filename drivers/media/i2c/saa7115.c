@@ -1,41 +1,27 @@
-/* saa711x - Philips SAA711x video decoder driver
- * This driver can work with saa7111, saa7111a, saa7113, saa7114,
- *			     saa7115 and saa7118.
- *
- * Based on saa7114 driver by Maxim Yevtyushkin, which is based on
- * the saa7111 driver by Dave Perks.
- *
- * Copyright (C) 1998 Dave Perks <dperks@ibm.net>
- * Copyright (C) 2002 Maxim Yevtyushkin <max@linuxmedialabs.com>
- *
- * Slight changes for video timing and attachment output by
- * Wolfgang Scherr <scherr@net4you.net>
- *
- * Moved over to the linux >= 2.4.x i2c protocol (1/1/2003)
- * by Ronald Bultje <rbultje@ronald.bitfreak.net>
- *
- * Added saa7115 support by Kevin Thayer <nufan_wfk at yahoo.com>
- * (2/17/2003)
- *
- * VBI support (2004) and cleanups (2005) by Hans Verkuil <hverkuil@xs4all.nl>
- *
- * Copyright (c) 2005-2006 Mauro Carvalho Chehab <mchehab@infradead.org>
- *	SAA7111, SAA7113 and SAA7118 support
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- */
+// SPDX-License-Identifier: GPL-2.0+
+// saa711x - Philips SAA711x video decoder driver
+// This driver can work with saa7111, saa7111a, saa7113, saa7114,
+//			     saa7115 and saa7118.
+//
+// Based on saa7114 driver by Maxim Yevtyushkin, which is based on
+// the saa7111 driver by Dave Perks.
+//
+// Copyright (C) 1998 Dave Perks <dperks@ibm.net>
+// Copyright (C) 2002 Maxim Yevtyushkin <max@linuxmedialabs.com>
+//
+// Slight changes for video timing and attachment output by
+// Wolfgang Scherr <scherr@net4you.net>
+//
+// Moved over to the linux >= 2.4.x i2c protocol (1/1/2003)
+// by Ronald Bultje <rbultje@ronald.bitfreak.net>
+//
+// Added saa7115 support by Kevin Thayer <nufan_wfk at yahoo.com>
+// (2/17/2003)
+//
+// VBI support (2004) and cleanups (2005) by Hans Verkuil <hverkuil@xs4all.nl>
+//
+// Copyright (c) 2005-2006 Mauro Carvalho Chehab <mchehab@kernel.org>
+//	SAA7111, SAA7113 and SAA7118 support
 
 #include "saa711x_regs.h"
 
@@ -46,7 +32,8 @@
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
-#include <media/saa7115.h>
+#include <media/v4l2-mc.h>
+#include <media/i2c/saa7115.h>
 #include <asm/div64.h>
 
 #define VRES_60HZ	(480+16)
@@ -72,8 +59,17 @@ enum saa711x_model {
 	SAA7118,
 };
 
+enum saa711x_pads {
+	SAA711X_PAD_IF_INPUT,
+	SAA711X_PAD_VID_OUT,
+	SAA711X_NUM_PADS
+};
+
 struct saa711x_state {
 	struct v4l2_subdev sd;
+#ifdef CONFIG_MEDIA_CONTROLLER
+	struct media_pad pads[SAA711X_NUM_PADS];
+#endif
 	struct v4l2_ctrl_handler hdl;
 
 	struct {
@@ -758,7 +754,7 @@ static int saa711x_s_clock_freq(struct v4l2_subdev *sd, u32 freq)
 	u32 acni;
 	u32 hz;
 	u64 f;
-	u8 acc = 0; 	/* reg 0x3a, audio clock control */
+	u8 acc = 0;	/* reg 0x3a, audio clock control */
 
 	/* Checks for chips that don't have audio clock (saa7111, saa7113) */
 	if (!saa711x_has_reg(state->ident, R_30_AUD_MAST_CLK_CYCLES_PER_FIELD))
@@ -1581,13 +1577,6 @@ static const struct v4l2_ctrl_ops saa711x_ctrl_ops = {
 
 static const struct v4l2_subdev_core_ops saa711x_core_ops = {
 	.log_status = saa711x_log_status,
-	.g_ext_ctrls = v4l2_subdev_g_ext_ctrls,
-	.try_ext_ctrls = v4l2_subdev_try_ext_ctrls,
-	.s_ext_ctrls = v4l2_subdev_s_ext_ctrls,
-	.g_ctrl = v4l2_subdev_g_ctrl,
-	.s_ctrl = v4l2_subdev_s_ctrl,
-	.queryctrl = v4l2_subdev_queryctrl,
-	.querymenu = v4l2_subdev_querymenu,
 	.reset = saa711x_reset,
 	.s_gpio = saa711x_s_gpio,
 #ifdef CONFIG_VIDEO_ADV_DEBUG
@@ -1777,12 +1766,12 @@ static int saa711x_detect_chip(struct i2c_client *client,
 		 * exists. However, tests on a device labeled as:
 		 * "GM7113C 1145" returned "10" on all 16 chip
 		 * version (reg 0x00) reads. So, we need to also
-		 * accept at least verion 0. For now, let's just
+		 * accept at least version 0. For now, let's just
 		 * assume that a device that returns "0000" for
 		 * the lower nibble is a gm7113c.
 		 */
 
-		strlcpy(name, "gm7113c", CHIP_VER_SIZE);
+		strscpy(name, "gm7113c", CHIP_VER_SIZE);
 
 		if (!autodetect && strcmp(name, id->name))
 			return -EINVAL;
@@ -1792,6 +1781,21 @@ static int saa711x_detect_chip(struct i2c_client *client,
 			name, 16, chip_ver, client->addr << 1);
 
 		return GM7113C;
+	}
+
+	/* Check if it is a CJC7113 */
+	if (!memcmp(name, "1111111111111111", CHIP_VER_SIZE)) {
+		strscpy(name, "cjc7113", CHIP_VER_SIZE);
+
+		if (!autodetect && strcmp(name, id->name))
+			return -EINVAL;
+
+		v4l_dbg(1, debug, client,
+			"It seems to be a %s chip (%*ph) @ 0x%x.\n",
+			name, 16, chip_ver, client->addr << 1);
+
+		/* CJC7113 seems to be SAA7113-compatible */
+		return SAA7113;
 	}
 
 	/* Chip was not discovered. Return its ID and don't bind */
@@ -1809,6 +1813,9 @@ static int saa711x_probe(struct i2c_client *client,
 	struct saa7115_platform_data *pdata;
 	int ident;
 	char name[CHIP_VER_SIZE + 1];
+#if defined(CONFIG_MEDIA_CONTROLLER)
+	int ret;
+#endif
 
 	/* Check if the adapter supports the needed features */
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
@@ -1824,13 +1831,27 @@ static int saa711x_probe(struct i2c_client *client,
 	if (ident < 0)
 		return ident;
 
-	strlcpy(client->name, name, sizeof(client->name));
+	strscpy(client->name, name, sizeof(client->name));
 
 	state = devm_kzalloc(&client->dev, sizeof(*state), GFP_KERNEL);
 	if (state == NULL)
 		return -ENOMEM;
 	sd = &state->sd;
 	v4l2_i2c_subdev_init(sd, client, &saa711x_ops);
+
+#if defined(CONFIG_MEDIA_CONTROLLER)
+	state->pads[SAA711X_PAD_IF_INPUT].flags = MEDIA_PAD_FL_SINK;
+	state->pads[SAA711X_PAD_IF_INPUT].sig_type = PAD_SIGNAL_ANALOG;
+	state->pads[SAA711X_PAD_VID_OUT].flags = MEDIA_PAD_FL_SOURCE;
+	state->pads[SAA711X_PAD_VID_OUT].sig_type = PAD_SIGNAL_DV;
+
+	sd->entity.function = MEDIA_ENT_F_ATV_DECODER;
+
+	ret = media_entity_pads_init(&sd->entity, SAA711X_NUM_PADS,
+				     state->pads);
+	if (ret < 0)
+		return ret;
+#endif
 
 	v4l_info(client, "%s found @ 0x%x (%s)\n", name,
 		 client->addr << 1, client->adapter->name);

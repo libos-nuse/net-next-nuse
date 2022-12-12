@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __SPARC64_CHECKSUM_H
 #define __SPARC64_CHECKSUM_H
 
@@ -16,7 +17,7 @@
  */
 
 #include <linux/in6.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 /* computes the checksum of a memory block at buff, length len,
  * and adds in "sum" (32-bit)
@@ -37,42 +38,9 @@ __wsum csum_partial(const void * buff, int len, __wsum sum);
  * here even more important to align src and dst on a 32-bit (or even
  * better 64-bit) boundary
  */
-__wsum csum_partial_copy_nocheck(const void *src, void *dst,
-				 int len, __wsum sum);
-
-long __csum_partial_copy_from_user(const void __user *src,
-				   void *dst, int len,
-				   __wsum sum);
-
-static inline __wsum
-csum_partial_copy_from_user(const void __user *src,
-			    void *dst, int len,
-			    __wsum sum, int *err)
-{
-	long ret = __csum_partial_copy_from_user(src, dst, len, sum);
-	if (ret < 0)
-		*err = -EFAULT;
-	return (__force __wsum) ret;
-}
-
-/*
- *	Copy and checksum to user
- */
-#define HAVE_CSUM_COPY_USER
-long __csum_partial_copy_to_user(const void *src,
-				 void __user *dst, int len,
-				 __wsum sum);
-
-static inline __wsum
-csum_and_copy_to_user(const void *src,
-		      void __user *dst, int len,
-		      __wsum sum, int *err)
-{
-	long ret = __csum_partial_copy_to_user(src, dst, len, sum);
-	if (ret < 0)
-		*err = -EFAULT;
-	return (__force __wsum) ret;
-}
+__wsum csum_partial_copy_nocheck(const void *src, void *dst, int len);
+__wsum csum_and_copy_from_user(const void __user *src, void *dst, int len);
+__wsum csum_and_copy_to_user(const void *src, void __user *dst, int len);
 
 /* ihl is always 5 or greater, almost always is 5, and iph is word aligned
  * the majority of the time.
@@ -96,8 +64,7 @@ static inline __sum16 csum_fold(__wsum sum)
 }
 
 static inline __wsum csum_tcpudp_nofold(__be32 saddr, __be32 daddr,
-					unsigned int len,
-					unsigned short proto,
+					__u32 len, __u8 proto,
 					__wsum sum)
 {
 	__asm__ __volatile__(
@@ -116,8 +83,7 @@ static inline __wsum csum_tcpudp_nofold(__be32 saddr, __be32 daddr,
  * returns a 16-bit checksum, already complemented
  */
 static inline __sum16 csum_tcpudp_magic(__be32 saddr, __be32 daddr,
-					unsigned short len,
-					unsigned short proto,
+					__u32 len, __u8 proto,
 					__wsum sum)
 {
 	return csum_fold(csum_tcpudp_nofold(saddr,daddr,len,proto,sum));
@@ -127,8 +93,7 @@ static inline __sum16 csum_tcpudp_magic(__be32 saddr, __be32 daddr,
 
 static inline __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
 				      const struct in6_addr *daddr,
-				      __u32 len, unsigned short proto,
-				      __wsum sum)
+				      __u32 len, __u8 proto, __wsum sum)
 {
 	__asm__ __volatile__ (
 "	addcc		%3, %4, %%g7\n"

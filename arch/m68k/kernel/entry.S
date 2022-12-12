@@ -69,15 +69,28 @@ ENTRY(__sys_vfork)
 	lea     %sp@(24),%sp
 	rts
 
+ENTRY(__sys_clone3)
+	SAVE_SWITCH_STACK
+	pea	%sp@(SWITCH_STACK_SIZE)
+	jbsr	m68k_clone3
+	lea	%sp@(28),%sp
+	rts
+
 ENTRY(sys_sigreturn)
 	SAVE_SWITCH_STACK
+	movel	%sp,%sp@-		  | switch_stack pointer
+	pea	%sp@(SWITCH_STACK_SIZE+4) | pt_regs pointer
 	jbsr	do_sigreturn
+	addql	#8,%sp
 	RESTORE_SWITCH_STACK
 	rts
 
 ENTRY(sys_rt_sigreturn)
 	SAVE_SWITCH_STACK
+	movel	%sp,%sp@-		  | switch_stack pointer
+	pea	%sp@(SWITCH_STACK_SIZE+4) | pt_regs pointer
 	jbsr	do_rt_sigreturn
+	addql	#8,%sp
 	RESTORE_SWITCH_STACK
 	rts
 

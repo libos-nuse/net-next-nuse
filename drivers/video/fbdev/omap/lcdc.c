@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * OMAP1 internal LCD controller
  *
  * Copyright (C) 2004 Nokia Corporation
  * Author: Imre Deak <imre.deak@nokia.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 #include <linux/module.h>
 #include <linux/device.h>
@@ -79,12 +66,12 @@ static struct omap_lcd_controller {
 	unsigned long		vram_size;
 } lcdc;
 
-static void inline enable_irqs(int mask)
+static inline void enable_irqs(int mask)
 {
 	lcdc.irq_mask |= mask;
 }
 
-static void inline disable_irqs(int mask)
+static inline void disable_irqs(int mask)
 {
 	lcdc.irq_mask &= ~mask;
 }
@@ -341,13 +328,13 @@ static int omap_lcdc_setup_plane(int plane, int channel_out,
 			lcdc.bpp = 12;
 			break;
 		}
-		/* fallthrough */
+		fallthrough;
 	case OMAPFB_COLOR_YUV422:
 		if (lcdc.ext_mode) {
 			lcdc.bpp = 16;
 			break;
 		}
-		/* fallthrough */
+		fallthrough;
 	default:
 		/* FIXME: other BPPs.
 		 * bpp1: code  0,     size 256
@@ -466,7 +453,7 @@ static void calc_ck_div(int is_tft, int pck, int *pck_div)
 	}
 }
 
-static void inline setup_regs(void)
+static inline void setup_regs(void)
 {
 	u32 l;
 	struct lcd_panel *panel = lcdc.fbdev->panel;
@@ -612,8 +599,8 @@ static void lcdc_dma_handler(u16 status, void *data)
 
 static int alloc_palette_ram(void)
 {
-	lcdc.palette_virt = dma_alloc_writecombine(lcdc.fbdev->dev,
-		MAX_PALETTE_SIZE, &lcdc.palette_phys, GFP_KERNEL);
+	lcdc.palette_virt = dma_alloc_wc(lcdc.fbdev->dev, MAX_PALETTE_SIZE,
+					 &lcdc.palette_phys, GFP_KERNEL);
 	if (lcdc.palette_virt == NULL) {
 		dev_err(lcdc.fbdev->dev, "failed to alloc palette memory\n");
 		return -ENOMEM;
@@ -625,8 +612,8 @@ static int alloc_palette_ram(void)
 
 static void free_palette_ram(void)
 {
-	dma_free_writecombine(lcdc.fbdev->dev, MAX_PALETTE_SIZE,
-			lcdc.palette_virt, lcdc.palette_phys);
+	dma_free_wc(lcdc.fbdev->dev, MAX_PALETTE_SIZE, lcdc.palette_virt,
+		    lcdc.palette_phys);
 }
 
 static int alloc_fbmem(struct omapfb_mem_region *region)
@@ -642,8 +629,8 @@ static int alloc_fbmem(struct omapfb_mem_region *region)
 	if (region->size > frame_size)
 		frame_size = region->size;
 	lcdc.vram_size = frame_size;
-	lcdc.vram_virt = dma_alloc_writecombine(lcdc.fbdev->dev,
-			lcdc.vram_size, &lcdc.vram_phys, GFP_KERNEL);
+	lcdc.vram_virt = dma_alloc_wc(lcdc.fbdev->dev, lcdc.vram_size,
+				      &lcdc.vram_phys, GFP_KERNEL);
 	if (lcdc.vram_virt == NULL) {
 		dev_err(lcdc.fbdev->dev, "unable to allocate FB DMA memory\n");
 		return -ENOMEM;
@@ -660,8 +647,8 @@ static int alloc_fbmem(struct omapfb_mem_region *region)
 
 static void free_fbmem(void)
 {
-	dma_free_writecombine(lcdc.fbdev->dev, lcdc.vram_size,
-			      lcdc.vram_virt, lcdc.vram_phys);
+	dma_free_wc(lcdc.fbdev->dev, lcdc.vram_size, lcdc.vram_virt,
+		    lcdc.vram_phys);
 }
 
 static int setup_fbmem(struct omapfb_mem_desc *req_md)

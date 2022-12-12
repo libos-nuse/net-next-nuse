@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Fast AES implementation for SPE instruction set (PPC)
  *
@@ -7,12 +8,6 @@
  * http://cache.freescale.com/files/32bit/doc/app_note/AN2665.pdf
  *
  * Copyright (c) 2015 Markus Stockhausen <stockhausen@collogia.de>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
- *
  */
 
 #include <asm/ppc_asm.h>
@@ -61,7 +56,7 @@
  * via bl/blr. It expects that caller has pre-xored input data with first
  * 4 words of encryption key into rD0-rD3. Pointer/counter registers must
  * have also been set up before (rT0, rKP, CTR). Output is stored in rD0-rD3
- * and rW0-rW3 and caller must execute a final xor on the ouput registers.
+ * and rW0-rW3 and caller must execute a final xor on the output registers.
  * All working registers rD0-rD3 & rW0-rW7 are overwritten during processing.
  *
  */
@@ -209,7 +204,7 @@ ppc_encrypt_block_loop:
  * via bl/blr. It expects that caller has pre-xored input data with first
  * 4 words of encryption key into rD0-rD3. Pointer/counter registers must
  * have also been set up before (rT0, rKP, CTR). Output is stored in rD0-rD3
- * and rW0-rW3 and caller must execute a final xor on the ouput registers.
+ * and rW0-rW3 and caller must execute a final xor on the output registers.
  * All working registers rD0-rD3 & rW0-rW7 are overwritten during processing.
  *
  */

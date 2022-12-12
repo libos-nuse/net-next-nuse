@@ -55,7 +55,8 @@ void obdo_set_parent_fid(struct obdo *dst, const struct lu_fid *parent)
 EXPORT_SYMBOL(obdo_set_parent_fid);
 
 /* WARNING: the file systems must take care not to tinker with
-   attributes they don't manage (such as blocks). */
+ * attributes they don't manage (such as blocks).
+ */
 void obdo_from_inode(struct obdo *dst, struct inode *src, u32 valid)
 {
 	u32 newvalid = 0;
@@ -122,7 +123,8 @@ void obdo_to_ioobj(struct obdo *oa, struct obd_ioobj *ioobj)
 		ostid_set_seq_mdt0(&ioobj->ioo_oid);
 
 	/* Since 2.4 this does not contain o_mode in the low 16 bits.
-	 * Instead, it holds (bd_md_max_brw - 1) for multi-bulk BRW RPCs */
+	 * Instead, it holds (bd_md_max_brw - 1) for multi-bulk BRW RPCs
+	 */
 	ioobj->ioo_max_brw = 0;
 }
 EXPORT_SYMBOL(obdo_to_ioobj);
@@ -183,8 +185,7 @@ void md_from_obdo(struct md_op_data *op_data, struct obdo *oa, u32 valid)
 		op_data->op_attr.ia_valid |= ATTR_BLOCKS;
 	}
 	if (valid & OBD_MD_FLFLAGS) {
-		((struct ll_iattr *)&op_data->op_attr)->ia_attr_flags =
-			oa->o_flags;
+		op_data->op_attr_flags = oa->o_flags;
 		op_data->op_attr.ia_valid |= ATTR_ATTR_FLAG;
 	}
 }

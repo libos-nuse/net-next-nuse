@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * mac80211 glue code for mac80211 ST-Ericsson CW1200 drivers
  *
@@ -14,10 +15,6 @@
  *   Copyright 2004-2006 Jean-Baptiste Note <jbnote@gmail.com>, et al.
  * - stlc45xx driver
  *   Copyright (C) 2008 Nokia Corporation and/or its subsidiary(-ies).
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -46,7 +43,7 @@ MODULE_ALIAS("cw1200_core");
 
 /* Accept MAC address of the form macaddr=0x00,0x80,0xE1,0x30,0x40,0x50 */
 static u8 cw1200_mac_template[ETH_ALEN] = {0x02, 0x80, 0xe1, 0x00, 0x00, 0x00};
-module_param_array_named(macaddr, cw1200_mac_template, byte, NULL, S_IRUGO);
+module_param_array_named(macaddr, cw1200_mac_template, byte, NULL, 0444);
 MODULE_PARM_DESC(macaddr, "Override platform_data MAC address");
 
 static char *cw1200_sdd_path;
@@ -102,7 +99,7 @@ static struct ieee80211_rate cw1200_mcs_rates[] = {
 
 
 #define CHAN2G(_channel, _freq, _flags) {			\
-	.band			= IEEE80211_BAND_2GHZ,		\
+	.band			= NL80211_BAND_2GHZ,		\
 	.center_freq		= (_freq),			\
 	.hw_value		= (_channel),			\
 	.flags			= (_flags),			\
@@ -111,7 +108,7 @@ static struct ieee80211_rate cw1200_mcs_rates[] = {
 }
 
 #define CHAN5G(_channel, _flags) {				\
-	.band			= IEEE80211_BAND_5GHZ,		\
+	.band			= NL80211_BAND_5GHZ,		\
 	.center_freq	= 5000 + (5 * (_channel)),		\
 	.hw_value		= (_channel),			\
 	.flags			= (_flags),			\
@@ -311,12 +308,12 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 
 	hw->sta_data_size = sizeof(struct cw1200_sta_priv);
 
-	hw->wiphy->bands[IEEE80211_BAND_2GHZ] = &cw1200_band_2ghz;
+	hw->wiphy->bands[NL80211_BAND_2GHZ] = &cw1200_band_2ghz;
 	if (have_5ghz)
-		hw->wiphy->bands[IEEE80211_BAND_5GHZ] = &cw1200_band_5ghz;
+		hw->wiphy->bands[NL80211_BAND_5GHZ] = &cw1200_band_5ghz;
 
 	/* Channel params have to be cleared before registering wiphy again */
-	for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
+	for (band = 0; band < NUM_NL80211_BANDS; band++) {
 		struct ieee80211_supported_band *sband = hw->wiphy->bands[band];
 		if (!sband)
 			continue;
@@ -345,6 +342,11 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 	mutex_init(&priv->wsm_cmd_mux);
 	mutex_init(&priv->conf_mutex);
 	priv->workqueue = create_singlethread_workqueue("cw1200_wq");
+	if (!priv->workqueue) {
+		ieee80211_free_hw(hw);
+		return NULL;
+	}
+
 	sema_init(&priv->scan.lock, 1);
 	INIT_WORK(&priv->scan.work, cw1200_scan_work);
 	INIT_DELAYED_WORK(&priv->scan.probe_work, cw1200_probe_work);
@@ -373,13 +375,13 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 	INIT_WORK(&priv->update_filtering_work, cw1200_update_filtering_work);
 	INIT_WORK(&priv->set_beacon_wakeup_period_work,
 		  cw1200_set_beacon_wakeup_period_work);
-	setup_timer(&priv->mcast_timeout, cw1200_mcast_timeout,
-		    (unsigned long)priv);
+	timer_setup(&priv->mcast_timeout, cw1200_mcast_timeout, 0);
 
 	if (cw1200_queue_stats_init(&priv->tx_queue_stats,
 				    CW1200_LINK_ID_MAX,
 				    cw1200_skb_dtor,
 				    priv)) {
+		destroy_workqueue(priv->workqueue);
 		ieee80211_free_hw(hw);
 		return NULL;
 	}
@@ -391,6 +393,7 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 			for (; i > 0; i--)
 				cw1200_queue_deinit(&priv->tx_queue[i - 1]);
 			cw1200_queue_stats_deinit(&priv->tx_queue_stats);
+			destroy_workqueue(priv->workqueue);
 			ieee80211_free_hw(hw);
 			return NULL;
 		}

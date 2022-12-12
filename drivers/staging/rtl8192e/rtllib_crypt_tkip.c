@@ -1,14 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Host AP crypt: host-based TKIP encryption implementation for Host AP driver
  *
  * Copyright (c) 2003-2004, Jouni Malinen <jkmaline@cc.hut.fi>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation. See README and COPYING for
- * more details.
  */
 
+#include <crypto/arc4.h>
+#include <crypto/hash.h>
+#include <linux/fips.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -18,8 +17,6 @@
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
 #include <linux/string.h>
-#include <linux/crypto.h>
-#include <linux/scatterlist.h>
 #include <linux/crc32.h>
 #include <linux/etherdevice.h>
 
@@ -48,10 +45,10 @@ struct rtllib_tkip_data {
 	u32 dot11RSNAStatsTKIPLocalMICFailures;
 
 	int key_idx;
-	struct crypto_blkcipher *rx_tfm_arc4;
-	struct crypto_hash *rx_tfm_michael;
-	struct crypto_blkcipher *tx_tfm_arc4;
-	struct crypto_hash *tx_tfm_michael;
+	struct arc4_ctx rx_ctx_arc4;
+	struct arc4_ctx tx_ctx_arc4;
+	struct crypto_shash *rx_tfm_michael;
+	struct crypto_shash *tx_tfm_michael;
 	/* scratch buffers for virt_to_page() (crypto API) */
 	u8 rx_hdr[16];
 	u8 tx_hdr[16];
@@ -61,36 +58,22 @@ static void *rtllib_tkip_init(int key_idx)
 {
 	struct rtllib_tkip_data *priv;
 
+	if (fips_enabled)
+		return NULL;
+
 	priv = kzalloc(sizeof(*priv), GFP_ATOMIC);
 	if (priv == NULL)
 		goto fail;
 	priv->key_idx = key_idx;
-	priv->tx_tfm_arc4 = crypto_alloc_blkcipher("ecb(arc4)", 0,
-			CRYPTO_ALG_ASYNC);
-	if (IS_ERR(priv->tx_tfm_arc4)) {
-		pr_debug("Could not allocate crypto API arc4\n");
-		priv->tx_tfm_arc4 = NULL;
-		goto fail;
-	}
 
-	priv->tx_tfm_michael = crypto_alloc_hash("michael_mic", 0,
-			CRYPTO_ALG_ASYNC);
+	priv->tx_tfm_michael = crypto_alloc_shash("michael_mic", 0, 0);
 	if (IS_ERR(priv->tx_tfm_michael)) {
 		pr_debug("Could not allocate crypto API michael_mic\n");
 		priv->tx_tfm_michael = NULL;
 		goto fail;
 	}
 
-	priv->rx_tfm_arc4 = crypto_alloc_blkcipher("ecb(arc4)", 0,
-			CRYPTO_ALG_ASYNC);
-	if (IS_ERR(priv->rx_tfm_arc4)) {
-		pr_debug("Could not allocate crypto API arc4\n");
-		priv->rx_tfm_arc4 = NULL;
-		goto fail;
-	}
-
-	priv->rx_tfm_michael = crypto_alloc_hash("michael_mic", 0,
-			CRYPTO_ALG_ASYNC);
+	priv->rx_tfm_michael = crypto_alloc_shash("michael_mic", 0, 0);
 	if (IS_ERR(priv->rx_tfm_michael)) {
 		pr_debug("Could not allocate crypto API michael_mic\n");
 		priv->rx_tfm_michael = NULL;
@@ -100,14 +83,8 @@ static void *rtllib_tkip_init(int key_idx)
 
 fail:
 	if (priv) {
-		if (priv->tx_tfm_michael)
-			crypto_free_hash(priv->tx_tfm_michael);
-		if (priv->tx_tfm_arc4)
-			crypto_free_blkcipher(priv->tx_tfm_arc4);
-		if (priv->rx_tfm_michael)
-			crypto_free_hash(priv->rx_tfm_michael);
-		if (priv->rx_tfm_arc4)
-			crypto_free_blkcipher(priv->rx_tfm_arc4);
+		crypto_free_shash(priv->tx_tfm_michael);
+		crypto_free_shash(priv->rx_tfm_michael);
 		kfree(priv);
 	}
 
@@ -120,16 +97,10 @@ static void rtllib_tkip_deinit(void *priv)
 	struct rtllib_tkip_data *_priv = priv;
 
 	if (_priv) {
-		if (_priv->tx_tfm_michael)
-			crypto_free_hash(_priv->tx_tfm_michael);
-		if (_priv->tx_tfm_arc4)
-			crypto_free_blkcipher(_priv->tx_tfm_arc4);
-		if (_priv->rx_tfm_michael)
-			crypto_free_hash(_priv->rx_tfm_michael);
-		if (_priv->rx_tfm_arc4)
-			crypto_free_blkcipher(_priv->rx_tfm_arc4);
+		crypto_free_shash(_priv->tx_tfm_michael);
+		crypto_free_shash(_priv->rx_tfm_michael);
 	}
-	kfree(priv);
+	kfree_sensitive(priv);
 }
 
 
@@ -296,16 +267,14 @@ static void tkip_mixing_phase2(u8 *WEPSeed, const u8 *TK, const u16 *TTAK,
 static int rtllib_tkip_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 {
 	struct rtllib_tkip_data *tkey = priv;
-		int len;
+	int len;
 	u8 *pos;
 	struct rtllib_hdr_4addr *hdr;
 	struct cb_desc *tcb_desc = (struct cb_desc *)(skb->cb +
 				    MAX_DEV_ADDR_SIZE);
-	struct blkcipher_desc desc = {.tfm = tkey->tx_tfm_arc4};
 	int ret = 0;
 	u8 rc4key[16],  *icv;
 	u32 crc;
-	struct scatterlist sg;
 
 	if (skb_headroom(skb) < 8 || skb_tailroom(skb) < 4 ||
 	    skb->len < hdr_len)
@@ -354,11 +323,8 @@ static int rtllib_tkip_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 		icv[2] = crc >> 16;
 		icv[3] = crc >> 24;
 
-		sg_init_one(&sg, pos, len+4);
-
-
-		crypto_blkcipher_setkey(tkey->tx_tfm_arc4, rc4key, 16);
-		ret = crypto_blkcipher_encrypt(&desc, &sg, &sg, len + 4);
+		arc4_setkey(&tkey->tx_ctx_arc4, rc4key, 16);
+		arc4_crypt(&tkey->tx_ctx_arc4, pos, pos, len + 4);
 	}
 
 	tkey->tx_iv16++;
@@ -369,8 +335,7 @@ static int rtllib_tkip_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 
 	if (!tcb_desc->bHwSec)
 		return ret;
-	else
-		return 0;
+	return 0;
 
 
 }
@@ -384,11 +349,9 @@ static int rtllib_tkip_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	struct rtllib_hdr_4addr *hdr;
 	struct cb_desc *tcb_desc = (struct cb_desc *)(skb->cb +
 				    MAX_DEV_ADDR_SIZE);
-	struct blkcipher_desc desc = {.tfm = tkey->rx_tfm_arc4};
 	u8 rc4key[16];
 	u8 icv[4];
 	u32 crc;
-	struct scatterlist sg;
 	int plen;
 
 	if (skb->len < hdr_len + 8 + 4)
@@ -448,17 +411,8 @@ static int rtllib_tkip_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 
 		plen = skb->len - hdr_len - 12;
 
-		sg_init_one(&sg, pos, plen+4);
-
-		crypto_blkcipher_setkey(tkey->rx_tfm_arc4, rc4key, 16);
-		if (crypto_blkcipher_decrypt(&desc, &sg, &sg, plen + 4)) {
-			if (net_ratelimit()) {
-				netdev_dbg(skb->dev,
-					   "Failed to decrypt received packet from %pM\n",
-					   hdr->addr2);
-			}
-			return -7;
-		}
+		arc4_setkey(&tkey->rx_ctx_arc4, rc4key, 16);
+		arc4_crypt(&tkey->rx_ctx_arc4, pos, pos, plen + 4);
 
 		crc = ~crc32_le(~0, pos, plen);
 		icv[0] = crc;
@@ -500,26 +454,31 @@ static int rtllib_tkip_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 }
 
 
-static int michael_mic(struct crypto_hash *tfm_michael, u8 *key, u8 *hdr,
+static int michael_mic(struct crypto_shash *tfm_michael, u8 *key, u8 *hdr,
 		       u8 *data, size_t data_len, u8 *mic)
 {
-	struct hash_desc desc;
-	struct scatterlist sg[2];
+	SHASH_DESC_ON_STACK(desc, tfm_michael);
+	int err;
 
-	if (tfm_michael == NULL) {
-		pr_warn("michael_mic: tfm_michael == NULL\n");
-		return -1;
-	}
-	sg_init_table(sg, 2);
-	sg_set_buf(&sg[0], hdr, 16);
-	sg_set_buf(&sg[1], data, data_len);
+	desc->tfm = tfm_michael;
 
-	if (crypto_hash_setkey(tfm_michael, key, 8))
+	if (crypto_shash_setkey(tfm_michael, key, 8))
 		return -1;
 
-	desc.tfm = tfm_michael;
-	desc.flags = 0;
-	return crypto_hash_digest(&desc, sg, data_len + 16, mic);
+	err = crypto_shash_init(desc);
+	if (err)
+		goto out;
+	err = crypto_shash_update(desc, hdr, 16);
+	if (err)
+		goto out;
+	err = crypto_shash_update(desc, data, data_len);
+	if (err)
+		goto out;
+	err = crypto_shash_final(desc, mic);
+
+out:
+	shash_desc_zero(desc);
+	return err;
 }
 
 static void michael_mic_hdr(struct sk_buff *skb, u8 *hdr)
@@ -655,18 +614,14 @@ static int rtllib_tkip_set_key(void *key, int len, u8 *seq, void *priv)
 {
 	struct rtllib_tkip_data *tkey = priv;
 	int keyidx;
-	struct crypto_hash *tfm = tkey->tx_tfm_michael;
-	struct crypto_blkcipher *tfm2 = tkey->tx_tfm_arc4;
-	struct crypto_hash *tfm3 = tkey->rx_tfm_michael;
-	struct crypto_blkcipher *tfm4 = tkey->rx_tfm_arc4;
+	struct crypto_shash *tfm = tkey->tx_tfm_michael;
+	struct crypto_shash *tfm3 = tkey->rx_tfm_michael;
 
 	keyidx = tkey->key_idx;
 	memset(tkey, 0, sizeof(*tkey));
 	tkey->key_idx = keyidx;
 	tkey->tx_tfm_michael = tfm;
-	tkey->tx_tfm_arc4 = tfm2;
 	tkey->rx_tfm_michael = tfm3;
-	tkey->rx_tfm_arc4 = tfm4;
 
 	if (len == TKIP_KEY_LEN) {
 		memcpy(tkey->key, key, TKIP_KEY_LEN);

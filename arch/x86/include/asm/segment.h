@@ -1,7 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_SEGMENT_H
 #define _ASM_X86_SEGMENT_H
 
 #include <linux/const.h>
+#include <asm/alternative.h>
 
 /*
  * Constructor for a conventional segment GDT (or LDT) entry.
@@ -28,6 +30,18 @@
  * privilege level
  */
 #define SEGMENT_RPL_MASK	0x3
+
+/*
+ * When running on Xen PV, the actual privilege level of the kernel is 1,
+ * not 0. Testing the Requested Privilege Level in a segment selector to
+ * determine whether the context is user mode or kernel mode with
+ * SEGMENT_RPL_MASK is wrong because the PV kernel's privilege level
+ * matches the 0x3 mask.
+ *
+ * Testing with USER_SEGMENT_RPL_MASK is valid for both native and Xen PV
+ * kernels because privilege level 2 is never used.
+ */
+#define USER_SEGMENT_RPL_MASK	0x2
 
 /* User mode is privilege level 3: */
 #define USER_RPL		0x3
@@ -144,7 +158,7 @@
 # define __KERNEL_PERCPU		0
 #endif
 
-#ifdef CONFIG_CC_STACKPROTECTOR
+#ifdef CONFIG_STACKPROTECTOR
 # define __KERNEL_STACK_CANARY		(GDT_ENTRY_STACK_CANARY*8)
 #else
 # define __KERNEL_STACK_CANARY		0
@@ -184,8 +198,7 @@
 #define GDT_ENTRY_TLS_MIN		12
 #define GDT_ENTRY_TLS_MAX		14
 
-/* Abused to load per CPU data from limit */
-#define GDT_ENTRY_PER_CPU		15
+#define GDT_ENTRY_CPUNODE		15
 
 /*
  * Number of entries in the GDT table:
@@ -205,30 +218,60 @@
 #define __USER_DS			(GDT_ENTRY_DEFAULT_USER_DS*8 + 3)
 #define __USER32_DS			__USER_DS
 #define __USER_CS			(GDT_ENTRY_DEFAULT_USER_CS*8 + 3)
-#define __PER_CPU_SEG			(GDT_ENTRY_PER_CPU*8 + 3)
+#define __CPUNODE_SEG			(GDT_ENTRY_CPUNODE*8 + 3)
 
-/* TLS indexes for 64-bit - hardcoded in arch_prctl(): */
-#define FS_TLS				0
-#define GS_TLS				1
-
-#define GS_TLS_SEL			((GDT_ENTRY_TLS_MIN+GS_TLS)*8 + 3)
-#define FS_TLS_SEL			((GDT_ENTRY_TLS_MIN+FS_TLS)*8 + 3)
-
-#endif
-
-#ifndef CONFIG_PARAVIRT
-# define get_kernel_rpl()		0
 #endif
 
 #define IDT_ENTRIES			256
 #define NUM_EXCEPTION_VECTORS		32
 
 /* Bitmask of exception vectors which push an error code on the stack: */
-#define EXCEPTION_ERRCODE_MASK		0x00027d00
+#define EXCEPTION_ERRCODE_MASK		0x20027d00
 
 #define GDT_SIZE			(GDT_ENTRIES*8)
 #define GDT_ENTRY_TLS_ENTRIES		3
 #define TLS_SIZE			(GDT_ENTRY_TLS_ENTRIES* 8)
+
+#ifdef CONFIG_X86_64
+
+/* Bit size and mask of CPU number stored in the per CPU data (and TSC_AUX) */
+#define VDSO_CPUNODE_BITS		12
+#define VDSO_CPUNODE_MASK		0xfff
+
+#ifndef __ASSEMBLY__
+
+/* Helper functions to store/load CPU and node numbers */
+
+static inline unsigned long vdso_encode_cpunode(int cpu, unsigned long node)
+{
+	return (node << VDSO_CPUNODE_BITS) | cpu;
+}
+
+static inline void vdso_read_cpunode(unsigned *cpu, unsigned *node)
+{
+	unsigned int p;
+
+	/*
+	 * Load CPU and node number from the GDT.  LSL is faster than RDTSCP
+	 * and works on all CPUs.  This is volatile so that it orders
+	 * correctly with respect to barrier() and to keep GCC from cleverly
+	 * hoisting it out of the calling function.
+	 *
+	 * If RDPID is available, use it.
+	 */
+	alternative_io ("lsl %[seg],%[p]",
+			".byte 0xf3,0x0f,0xc7,0xf8", /* RDPID %eax/rax */
+			X86_FEATURE_RDPID,
+			[p] "=a" (p), [seg] "r" (__CPUNODE_SEG));
+
+	if (cpu)
+		*cpu = (p & VDSO_CPUNODE_MASK);
+	if (node)
+		*node = (p >> VDSO_CPUNODE_BITS);
+}
+
+#endif /* !__ASSEMBLY__ */
+#endif /* CONFIG_X86_64 */
 
 #ifdef __KERNEL__
 
@@ -241,18 +284,31 @@
  */
 #define EARLY_IDT_HANDLER_SIZE 9
 
+/*
+ * xen_early_idt_handler_array is for Xen pv guests: for each entry in
+ * early_idt_handler_array it contains a prequel in the form of
+ * pop %rcx; pop %r11; jmp early_idt_handler_array[i]; summing up to
+ * max 8 bytes.
+ */
+#define XEN_EARLY_IDT_HANDLER_SIZE 8
+
 #ifndef __ASSEMBLY__
 
 extern const char early_idt_handler_array[NUM_EXCEPTION_VECTORS][EARLY_IDT_HANDLER_SIZE];
-#ifdef CONFIG_TRACING
-# define trace_early_idt_handler_array early_idt_handler_array
+extern void early_ignore_irq(void);
+
+#ifdef CONFIG_XEN_PV
+extern const char xen_early_idt_handler_array[NUM_EXCEPTION_VECTORS][XEN_EARLY_IDT_HANDLER_SIZE];
 #endif
 
 /*
- * Load a segment. Fall back on loading the zero
- * segment if something goes wrong..
+ * Load a segment. Fall back on loading the zero segment if something goes
+ * wrong.  This variant assumes that loading zero fully clears the segment.
+ * This is always the case on Intel CPUs and, even on 64-bit AMD CPUs, any
+ * failure to fully clear the cached descriptor is only observable for
+ * FS and GS.
  */
-#define loadsegment(seg, value)						\
+#define __loadsegment_simple(seg, value)				\
 do {									\
 	unsigned short __val = (value);					\
 									\
@@ -268,6 +324,38 @@ do {									\
 									\
 		     : "+r" (__val) : : "memory");			\
 } while (0)
+
+#define __loadsegment_ss(value) __loadsegment_simple(ss, (value))
+#define __loadsegment_ds(value) __loadsegment_simple(ds, (value))
+#define __loadsegment_es(value) __loadsegment_simple(es, (value))
+
+#ifdef CONFIG_X86_32
+
+/*
+ * On 32-bit systems, the hidden parts of FS and GS are unobservable if
+ * the selector is NULL, so there's no funny business here.
+ */
+#define __loadsegment_fs(value) __loadsegment_simple(fs, (value))
+#define __loadsegment_gs(value) __loadsegment_simple(gs, (value))
+
+#else
+
+static inline void __loadsegment_fs(unsigned short value)
+{
+	asm volatile("						\n"
+		     "1:	movw %0, %%fs			\n"
+		     "2:					\n"
+
+		     _ASM_EXTABLE_HANDLE(1b, 2b, ex_handler_clear_fs)
+
+		     : : "rm" (value) : "memory");
+}
+
+/* __loadsegment_gs is intentionally undefined.  Use load_gs_index instead. */
+
+#endif
+
+#define loadsegment(seg, value) __loadsegment_ ## seg (value)
 
 /*
  * Save a segment register away:

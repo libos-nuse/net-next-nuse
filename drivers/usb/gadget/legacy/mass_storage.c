@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * mass_storage.c -- Mass Storage USB Gadget
  *
@@ -5,11 +6,6 @@
  * Copyright (C) 2009 Samsung Electronics
  *                    Author: Michal Nazarewicz <mina86@mina86.com>
  * All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 
@@ -55,7 +51,7 @@ static struct usb_device_descriptor msg_device_desc = {
 	.bLength =		sizeof msg_device_desc,
 	.bDescriptorType =	USB_DT_DEVICE,
 
-	.bcdUSB =		cpu_to_le16(0x0200),
+	/* .bcdUSB = DYNAMIC */
 	.bDeviceClass =		USB_CLASS_PER_INTERFACE,
 
 	/* Vendor and product id can be overridden by module parameters.  */
@@ -107,18 +103,8 @@ static unsigned int fsg_num_buffers = CONFIG_USB_GADGET_STORAGE_NUM_BUFFERS;
 
 FSG_MODULE_PARAMETERS(/* no prefix */, mod_data);
 
-static unsigned long msg_registered;
-static void msg_cleanup(void);
-
-static int msg_thread_exits(struct fsg_common *common)
-{
-	msg_cleanup();
-	return 0;
-}
-
 static int msg_do_config(struct usb_configuration *c)
 {
-	struct fsg_opts *opts;
 	int ret;
 
 	if (gadget_is_otg(c->cdev->gadget)) {
@@ -126,15 +112,9 @@ static int msg_do_config(struct usb_configuration *c)
 		c->bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 	}
 
-	opts = fsg_opts_from_func_inst(fi_msg);
-
 	f_msg = usb_get_function(fi_msg);
 	if (IS_ERR(f_msg))
 		return PTR_ERR(f_msg);
-
-	ret = fsg_common_run_thread(opts->common);
-	if (ret)
-		goto put_func;
 
 	ret = usb_add_function(c, f_msg);
 	if (ret)
@@ -158,9 +138,6 @@ static struct usb_configuration msg_config_driver = {
 
 static int msg_bind(struct usb_composite_dev *cdev)
 {
-	static const struct fsg_operations ops = {
-		.thread_exits = msg_thread_exits,
-	};
 	struct fsg_opts *opts;
 	struct fsg_config config;
 	int status;
@@ -176,8 +153,6 @@ static int msg_bind(struct usb_composite_dev *cdev)
 	status = fsg_common_set_num_buffers(opts->common, fsg_num_buffers);
 	if (status)
 		goto fail;
-
-	fsg_common_set_ops(opts->common, &ops);
 
 	status = fsg_common_set_cdev(opts->common, cdev, config.can_stall);
 	if (status)
@@ -214,7 +189,6 @@ static int msg_bind(struct usb_composite_dev *cdev)
 	usb_composite_overwrite_options(cdev, &coverwrite);
 	dev_info(&cdev->gadget->dev,
 		 DRIVER_DESC ", version: " DRIVER_VERSION "\n");
-	set_bit(0, &msg_registered);
 	return 0;
 
 fail_otg_desc:
@@ -248,26 +222,15 @@ static int msg_unbind(struct usb_composite_dev *cdev)
 static struct usb_composite_driver msg_driver = {
 	.name		= "g_mass_storage",
 	.dev		= &msg_device_desc,
-	.max_speed	= USB_SPEED_SUPER,
+	.max_speed	= USB_SPEED_SUPER_PLUS,
 	.needs_serial	= 1,
 	.strings	= dev_strings,
 	.bind		= msg_bind,
 	.unbind		= msg_unbind,
 };
 
+module_usb_composite_driver(msg_driver);
+
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_AUTHOR("Michal Nazarewicz");
 MODULE_LICENSE("GPL");
-
-static int __init msg_init(void)
-{
-	return usb_composite_probe(&msg_driver);
-}
-module_init(msg_init);
-
-static void msg_cleanup(void)
-{
-	if (test_and_clear_bit(0, &msg_registered))
-		usb_composite_unregister(&msg_driver);
-}
-module_exit(msg_cleanup);

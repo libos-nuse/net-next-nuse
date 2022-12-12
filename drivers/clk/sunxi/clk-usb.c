@@ -1,21 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2013-2015 Emilio López
  *
  * Emilio López <emilio@elopez.com.ar>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/reset-controller.h>
@@ -76,7 +68,7 @@ static int sunxi_usb_reset_deassert(struct reset_controller_dev *rcdev,
 	return 0;
 }
 
-static struct reset_control_ops sunxi_usb_reset_ops = {
+static const struct reset_control_ops sunxi_usb_reset_ops = {
 	.assert		= sunxi_usb_reset_assert,
 	.deassert	= sunxi_usb_reset_deassert,
 };
@@ -122,7 +114,7 @@ static void __init sunxi_usb_clk_setup(struct device_node *node,
 	if (!clk_data)
 		return;
 
-	clk_data->clks = kzalloc((qty+1) * sizeof(struct clk *), GFP_KERNEL);
+	clk_data->clks = kcalloc(qty + 1, sizeof(struct clk *), GFP_KERNEL);
 	if (!clk_data->clks) {
 		kfree(clk_data);
 		return;
@@ -215,6 +207,18 @@ static void __init sun8i_a23_usb_setup(struct device_node *node)
 	sunxi_usb_clk_setup(node, &sun8i_a23_usb_clk_data, &sun4i_a10_usb_lock);
 }
 CLK_OF_DECLARE(sun8i_a23_usb, "allwinner,sun8i-a23-usb-clk", sun8i_a23_usb_setup);
+
+static const struct usb_clk_data sun8i_h3_usb_clk_data __initconst = {
+	.clk_mask =  BIT(19) | BIT(18) | BIT(17) | BIT(16) |
+		     BIT(11) | BIT(10) | BIT(9) | BIT(8),
+	.reset_mask = BIT(3) | BIT(2) | BIT(1) | BIT(0),
+};
+
+static void __init sun8i_h3_usb_setup(struct device_node *node)
+{
+	sunxi_usb_clk_setup(node, &sun8i_h3_usb_clk_data, &sun4i_a10_usb_lock);
+}
+CLK_OF_DECLARE(sun8i_h3_usb, "allwinner,sun8i-h3-usb-clk", sun8i_h3_usb_setup);
 
 static const struct usb_clk_data sun9i_a80_usb_mod_data __initconst = {
 	.clk_mask = BIT(6) | BIT(5) | BIT(4) | BIT(3) | BIT(2) | BIT(1),

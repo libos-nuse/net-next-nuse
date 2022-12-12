@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_IRQ_H
 #define _ASM_IRQ_H
 
@@ -7,11 +8,8 @@
 
 #define NR_IRQS_BASE	3
 
-#ifdef CONFIG_PCI_NR_MSI
-# define NR_IRQS	(NR_IRQS_BASE + CONFIG_PCI_NR_MSI)
-#else
-# define NR_IRQS	NR_IRQS_BASE
-#endif
+#define NR_IRQS	NR_IRQS_BASE
+#define NR_IRQS_LEGACY NR_IRQS_BASE
 
 /* External interruption codes */
 #define EXT_IRQ_INTERRUPT_KEY	0x0040
@@ -49,7 +47,6 @@ enum interruption_class {
 	IRQEXT_CMC,
 	IRQEXT_FTP,
 	IRQIO_CIO,
-	IRQIO_QAI,
 	IRQIO_DAS,
 	IRQIO_C15,
 	IRQIO_C70,
@@ -57,13 +54,16 @@ enum interruption_class {
 	IRQIO_VMR,
 	IRQIO_LCS,
 	IRQIO_CTC,
-	IRQIO_APB,
 	IRQIO_ADM,
 	IRQIO_CSC,
-	IRQIO_PCI,
-	IRQIO_MSI,
 	IRQIO_VIR,
+	IRQIO_QAI,
+	IRQIO_APB,
+	IRQIO_PCF,
+	IRQIO_PCD,
+	IRQIO_MSI,
 	IRQIO_VAI,
+	IRQIO_GAL,
 	NMI_NMI,
 	CPU_RST,
 	NR_ARCH_IRQS

@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * MPC52xx PSC in SPI mode driver.
  *
  * Maintainer: Dragos Carp
  *
  * Copyright (C) 2006 TOPTICA Photonics AG.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/module.h>
@@ -42,7 +38,6 @@ struct mpc52xx_psc_spi {
 	u8 bits_per_word;
 	u8 busy;
 
-	struct workqueue_struct *workqueue;
 	struct work_struct work;
 
 	struct list_head queue;
@@ -239,8 +234,7 @@ static void mpc52xx_psc_spi_work(struct work_struct *work)
 				break;
 			m->actual_length += t->len;
 
-			if (t->delay_usecs)
-				udelay(t->delay_usecs);
+			spi_transfer_delay_exec(t);
 
 			if (cs_change)
 				mpc52xx_psc_spi_deactivate_cs(spi);
@@ -299,7 +293,7 @@ static int mpc52xx_psc_spi_transfer(struct spi_device *spi,
 
 	spin_lock_irqsave(&mps->lock, flags);
 	list_add_tail(&m->queue, &mps->queue);
-	queue_work(mps->workqueue, &mps->work);
+	schedule_work(&mps->work);
 	spin_unlock_irqrestore(&mps->lock, flags);
 
 	return 0;
@@ -425,21 +419,12 @@ static int mpc52xx_psc_spi_do_probe(struct device *dev, u32 regaddr,
 	INIT_WORK(&mps->work, mpc52xx_psc_spi_work);
 	INIT_LIST_HEAD(&mps->queue);
 
-	mps->workqueue = create_singlethread_workqueue(
-		dev_name(master->dev.parent));
-	if (mps->workqueue == NULL) {
-		ret = -EBUSY;
-		goto free_irq;
-	}
-
 	ret = spi_register_master(master);
 	if (ret < 0)
-		goto unreg_master;
+		goto free_irq;
 
 	return ret;
 
-unreg_master:
-	destroy_workqueue(mps->workqueue);
 free_irq:
 	free_irq(mps->irq, mps);
 free_master:
@@ -484,8 +469,7 @@ static int mpc52xx_psc_spi_of_remove(struct platform_device *op)
 	struct spi_master *master = spi_master_get(platform_get_drvdata(op));
 	struct mpc52xx_psc_spi *mps = spi_master_get_devdata(master);
 
-	flush_workqueue(mps->workqueue);
-	destroy_workqueue(mps->workqueue);
+	flush_work(&mps->work);
 	spi_unregister_master(master);
 	free_irq(mps->irq, mps);
 	if (mps->psc)

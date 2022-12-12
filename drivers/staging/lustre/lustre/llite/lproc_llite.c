@@ -27,7 +27,7 @@
  * Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright (c) 2011, 2012, Intel Corporation.
+ * Copyright (c) 2011, 2015, Intel Corporation.
  */
 /*
  * This file is part of Lustre, http://www.lustre.org/
@@ -43,7 +43,7 @@
 #include "llite_internal.h"
 #include "vvp_internal.h"
 
-/* /proc/lustre/llite mount point registration */
+/* debugfs llite mount point registration */
 static struct file_operations ll_rw_extents_stats_fops;
 static struct file_operations ll_rw_extents_stats_pp_fops;
 static struct file_operations ll_rw_offset_stats_fops;
@@ -233,7 +233,7 @@ static ssize_t max_read_ahead_mb_show(struct kobject *kobj,
 	pages_number = sbi->ll_ra_info.ra_max_pages;
 	spin_unlock(&sbi->ll_lock);
 
-	mult = 1 << (20 - PAGE_CACHE_SHIFT);
+	mult = 1 << (20 - PAGE_SHIFT);
 	return lprocfs_read_frac_helper(buf, PAGE_SIZE, pages_number, mult);
 }
 
@@ -251,12 +251,11 @@ static ssize_t max_read_ahead_mb_store(struct kobject *kobj,
 	if (rc)
 		return rc;
 
-	pages_number *= 1 << (20 - PAGE_CACHE_SHIFT); /* MB -> pages */
+	pages_number *= 1 << (20 - PAGE_SHIFT); /* MB -> pages */
 
 	if (pages_number > totalram_pages / 2) {
-
 		CERROR("can't set file readahead more than %lu MB\n",
-		       totalram_pages >> (20 - PAGE_CACHE_SHIFT + 1)); /*1/2 of RAM*/
+		       totalram_pages >> (20 - PAGE_SHIFT + 1)); /*1/2 of RAM*/
 		return -ERANGE;
 	}
 
@@ -281,7 +280,7 @@ static ssize_t max_read_ahead_per_file_mb_show(struct kobject *kobj,
 	pages_number = sbi->ll_ra_info.ra_max_pages_per_file;
 	spin_unlock(&sbi->ll_lock);
 
-	mult = 1 << (20 - PAGE_CACHE_SHIFT);
+	mult = 1 << (20 - PAGE_SHIFT);
 	return lprocfs_read_frac_helper(buf, PAGE_SIZE, pages_number, mult);
 }
 
@@ -326,7 +325,7 @@ static ssize_t max_read_ahead_whole_mb_show(struct kobject *kobj,
 	pages_number = sbi->ll_ra_info.ra_max_read_ahead_whole_pages;
 	spin_unlock(&sbi->ll_lock);
 
-	mult = 1 << (20 - PAGE_CACHE_SHIFT);
+	mult = 1 << (20 - PAGE_SHIFT);
 	return lprocfs_read_frac_helper(buf, PAGE_SIZE, pages_number, mult);
 }
 
@@ -345,10 +344,11 @@ static ssize_t max_read_ahead_whole_mb_store(struct kobject *kobj,
 		return rc;
 
 	/* Cap this at the current max readahead window size, the readahead
-	 * algorithm does this anyway so it's pointless to set it larger. */
+	 * algorithm does this anyway so it's pointless to set it larger.
+	 */
 	if (pages_number > sbi->ll_ra_info.ra_max_pages_per_file) {
 		CERROR("can't set max_read_ahead_whole_mb more than max_read_ahead_per_file_mb: %lu\n",
-		       sbi->ll_ra_info.ra_max_pages_per_file >> (20 - PAGE_CACHE_SHIFT));
+		       sbi->ll_ra_info.ra_max_pages_per_file >> (20 - PAGE_SHIFT));
 		return -ERANGE;
 	}
 
@@ -365,7 +365,7 @@ static int ll_max_cached_mb_seq_show(struct seq_file *m, void *v)
 	struct super_block     *sb    = m->private;
 	struct ll_sb_info      *sbi   = ll_s2sbi(sb);
 	struct cl_client_cache *cache = &sbi->ll_cache;
-	int shift = 20 - PAGE_CACHE_SHIFT;
+	int shift = 20 - PAGE_SHIFT;
 	int max_cached_mb;
 	int unused_mb;
 
@@ -392,6 +392,8 @@ static ssize_t ll_max_cached_mb_seq_write(struct file *file,
 	struct super_block *sb = ((struct seq_file *)file->private_data)->private;
 	struct ll_sb_info *sbi = ll_s2sbi(sb);
 	struct cl_client_cache *cache = &sbi->ll_cache;
+	struct lu_env *env;
+	int refcheck;
 	int mult, rc, pages_number;
 	int diff = 0;
 	int nrpages = 0;
@@ -404,7 +406,7 @@ static ssize_t ll_max_cached_mb_seq_write(struct file *file,
 		return -EFAULT;
 	kernbuf[count] = 0;
 
-	mult = 1 << (20 - PAGE_CACHE_SHIFT);
+	mult = 1 << (20 - PAGE_SHIFT);
 	buffer += lprocfs_find_named_value(kernbuf, "max_cached_mb:", &count) -
 		  kernbuf;
 	rc = lprocfs_write_frac_helper(buffer, count, &pages_number, mult);
@@ -414,7 +416,7 @@ static ssize_t ll_max_cached_mb_seq_write(struct file *file,
 	if (pages_number < 0 || pages_number > totalram_pages) {
 		CERROR("%s: can't set max cache more than %lu MB\n",
 		       ll_get_fsname(sb, NULL, 0),
-		       totalram_pages >> (20 - PAGE_CACHE_SHIFT));
+		       totalram_pages >> (20 - PAGE_SHIFT));
 		return -ERANGE;
 	}
 
@@ -428,6 +430,10 @@ static ssize_t ll_max_cached_mb_seq_write(struct file *file,
 		rc = 0;
 		goto out;
 	}
+
+	env = cl_env_get(&refcheck);
+	if (IS_ERR(env))
+		return 0;
 
 	diff = -diff;
 	while (diff > 0) {
@@ -453,20 +459,21 @@ static ssize_t ll_max_cached_mb_seq_write(struct file *file,
 		if (diff <= 0)
 			break;
 
-		if (sbi->ll_dt_exp == NULL) { /* being initialized */
-			rc = -ENODEV;
-			break;
+		if (!sbi->ll_dt_exp) { /* being initialized */
+			rc = 0;
+			goto out;
 		}
 
 		/* difficult - have to ask OSCs to drop LRU slots. */
 		tmp = diff << 1;
-		rc = obd_set_info_async(NULL, sbi->ll_dt_exp,
-				sizeof(KEY_CACHE_LRU_SHRINK),
-				KEY_CACHE_LRU_SHRINK,
-				sizeof(tmp), &tmp, NULL);
+		rc = obd_set_info_async(env, sbi->ll_dt_exp,
+					sizeof(KEY_CACHE_LRU_SHRINK),
+					KEY_CACHE_LRU_SHRINK,
+					sizeof(tmp), &tmp, NULL);
 		if (rc < 0)
 			break;
 	}
+	cl_env_put(env, &refcheck);
 
 out:
 	if (rc >= 0) {
@@ -817,6 +824,23 @@ static ssize_t xattr_cache_store(struct kobject *kobj,
 }
 LUSTRE_RW_ATTR(xattr_cache);
 
+static ssize_t unstable_stats_show(struct kobject *kobj,
+				   struct attribute *attr,
+				   char *buf)
+{
+	struct ll_sb_info *sbi = container_of(kobj, struct ll_sb_info,
+					      ll_kobj);
+	struct cl_client_cache *cache = &sbi->ll_cache;
+	int pages, mb;
+
+	pages = atomic_read(&cache->ccc_unstable_nr);
+	mb = (pages * PAGE_SIZE) >> 20;
+
+	return sprintf(buf, "unstable_pages: %8d\n"
+			    "unstable_mb:    %8d\n", pages, mb);
+}
+LUSTRE_RO_ATTR(unstable_stats);
+
 static struct lprocfs_vars lprocfs_llite_obd_vars[] = {
 	/* { "mntpt_path",   ll_rd_path,	     0, 0 }, */
 	{ "site",	  &ll_site_stats_fops,    NULL, 0 },
@@ -852,6 +876,7 @@ static struct attribute *llite_attrs[] = {
 	&lustre_attr_max_easize.attr,
 	&lustre_attr_default_easize.attr,
 	&lustre_attr_xattr_cache.attr,
+	&lustre_attr_unstable_stats.attr,
 	NULL,
 };
 
@@ -952,6 +977,7 @@ static const char *ra_stat_string[] = {
 	[RA_STAT_EOF] = "read-ahead to EOF",
 	[RA_STAT_MAX_IN_FLIGHT] = "hit max r-a issue",
 	[RA_STAT_WRONG_GRAB_PAGE] = "wrong page from grab_cache_page",
+	[RA_STAT_FAILED_REACH_END] = "failed to reach end"
 };
 
 int ldebugfs_register_mountpoint(struct dentry *parent,
@@ -966,9 +992,9 @@ int ldebugfs_register_mountpoint(struct dentry *parent,
 
 	name[MAX_STRING_SIZE] = '\0';
 
-	LASSERT(sbi != NULL);
-	LASSERT(mdc != NULL);
-	LASSERT(osc != NULL);
+	LASSERT(sbi);
+	LASSERT(mdc);
+	LASSERT(osc);
 
 	/* Get fsname */
 	len = strlen(lsi->lsi_lmd->lmd_profile);
@@ -999,7 +1025,7 @@ int ldebugfs_register_mountpoint(struct dentry *parent,
 		CWARN("Error adding the extent_stats file\n");
 
 	rc = ldebugfs_seq_create(sbi->ll_debugfs_entry,
-				  "extents_stats_per_process",
+				 "extents_stats_per_process",
 				 0644, &ll_rw_extents_stats_pp_fops, sbi);
 	if (rc)
 		CWARN("Error adding the extents_stats_per_process file\n");
@@ -1012,7 +1038,7 @@ int ldebugfs_register_mountpoint(struct dentry *parent,
 	/* File operations stats */
 	sbi->ll_stats = lprocfs_alloc_stats(LPROC_LL_FILE_OPCODES,
 					    LPROCFS_STATS_FLAG_NONE);
-	if (sbi->ll_stats == NULL) {
+	if (!sbi->ll_stats) {
 		err = -ENOMEM;
 		goto out;
 	}
@@ -1033,13 +1059,13 @@ int ldebugfs_register_mountpoint(struct dentry *parent,
 				     llite_opcode_table[id].opname, ptr);
 	}
 	err = ldebugfs_register_stats(sbi->ll_debugfs_entry, "stats",
-				     sbi->ll_stats);
+				      sbi->ll_stats);
 	if (err)
 		goto out;
 
 	sbi->ll_ra_stats = lprocfs_alloc_stats(ARRAY_SIZE(ra_stat_string),
 					       LPROCFS_STATS_FLAG_NONE);
-	if (sbi->ll_ra_stats == NULL) {
+	if (!sbi->ll_ra_stats) {
 		err = -ENOMEM;
 		goto out;
 	}
@@ -1049,7 +1075,7 @@ int ldebugfs_register_mountpoint(struct dentry *parent,
 				     ra_stat_string[id], "pages");
 
 	err = ldebugfs_register_stats(sbi->ll_debugfs_entry, "read_ahead_stats",
-				     sbi->ll_ra_stats);
+				      sbi->ll_ra_stats);
 	if (err)
 		goto out;
 
@@ -1103,7 +1129,7 @@ void ldebugfs_unregister_mountpoint(struct ll_sb_info *sbi)
 #define pct(a, b) (b ? a * 100 / b : 0)
 
 static void ll_display_extents_info(struct ll_rw_extents_info *io_extents,
-				   struct seq_file *seq, int which)
+				    struct seq_file *seq, int which)
 {
 	unsigned long read_tot = 0, write_tot = 0, read_cum, write_cum;
 	unsigned long start, end, r, w;
@@ -1503,5 +1529,5 @@ LPROC_SEQ_FOPS(ll_rw_offset_stats);
 
 void lprocfs_llite_init_vars(struct lprocfs_static_vars *lvars)
 {
-    lvars->obd_vars     = lprocfs_llite_obd_vars;
+	lvars->obd_vars = lprocfs_llite_obd_vars;
 }

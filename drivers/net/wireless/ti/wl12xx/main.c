@@ -1,25 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file is part of wl1271
  *
  * Copyright (C) 2008-2010 Nokia Corporation
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 
 #include <linux/err.h>
@@ -39,6 +26,7 @@
 #include "scan.h"
 #include "event.h"
 #include "debugfs.h"
+#include "conf.h"
 
 static char *fref_param;
 static char *tcxo_param;
@@ -46,69 +34,69 @@ static char *tcxo_param;
 static struct wlcore_conf wl12xx_conf = {
 	.sg = {
 		.params = {
-			[CONF_SG_ACL_BT_MASTER_MIN_BR] = 10,
-			[CONF_SG_ACL_BT_MASTER_MAX_BR] = 180,
-			[CONF_SG_ACL_BT_SLAVE_MIN_BR] = 10,
-			[CONF_SG_ACL_BT_SLAVE_MAX_BR] = 180,
-			[CONF_SG_ACL_BT_MASTER_MIN_EDR] = 10,
-			[CONF_SG_ACL_BT_MASTER_MAX_EDR] = 80,
-			[CONF_SG_ACL_BT_SLAVE_MIN_EDR] = 10,
-			[CONF_SG_ACL_BT_SLAVE_MAX_EDR] = 80,
-			[CONF_SG_ACL_WLAN_PS_MASTER_BR] = 8,
-			[CONF_SG_ACL_WLAN_PS_SLAVE_BR] = 8,
-			[CONF_SG_ACL_WLAN_PS_MASTER_EDR] = 20,
-			[CONF_SG_ACL_WLAN_PS_SLAVE_EDR] = 20,
-			[CONF_SG_ACL_WLAN_ACTIVE_MASTER_MIN_BR] = 20,
-			[CONF_SG_ACL_WLAN_ACTIVE_MASTER_MAX_BR] = 35,
-			[CONF_SG_ACL_WLAN_ACTIVE_SLAVE_MIN_BR] = 16,
-			[CONF_SG_ACL_WLAN_ACTIVE_SLAVE_MAX_BR] = 35,
-			[CONF_SG_ACL_WLAN_ACTIVE_MASTER_MIN_EDR] = 32,
-			[CONF_SG_ACL_WLAN_ACTIVE_MASTER_MAX_EDR] = 50,
-			[CONF_SG_ACL_WLAN_ACTIVE_SLAVE_MIN_EDR] = 28,
-			[CONF_SG_ACL_WLAN_ACTIVE_SLAVE_MAX_EDR] = 50,
-			[CONF_SG_ACL_ACTIVE_SCAN_WLAN_BR] = 10,
-			[CONF_SG_ACL_ACTIVE_SCAN_WLAN_EDR] = 20,
-			[CONF_SG_ACL_PASSIVE_SCAN_BT_BR] = 75,
-			[CONF_SG_ACL_PASSIVE_SCAN_WLAN_BR] = 15,
-			[CONF_SG_ACL_PASSIVE_SCAN_BT_EDR] = 27,
-			[CONF_SG_ACL_PASSIVE_SCAN_WLAN_EDR] = 17,
+			[WL12XX_CONF_SG_ACL_BT_MASTER_MIN_BR] = 10,
+			[WL12XX_CONF_SG_ACL_BT_MASTER_MAX_BR] = 180,
+			[WL12XX_CONF_SG_ACL_BT_SLAVE_MIN_BR] = 10,
+			[WL12XX_CONF_SG_ACL_BT_SLAVE_MAX_BR] = 180,
+			[WL12XX_CONF_SG_ACL_BT_MASTER_MIN_EDR] = 10,
+			[WL12XX_CONF_SG_ACL_BT_MASTER_MAX_EDR] = 80,
+			[WL12XX_CONF_SG_ACL_BT_SLAVE_MIN_EDR] = 10,
+			[WL12XX_CONF_SG_ACL_BT_SLAVE_MAX_EDR] = 80,
+			[WL12XX_CONF_SG_ACL_WLAN_PS_MASTER_BR] = 8,
+			[WL12XX_CONF_SG_ACL_WLAN_PS_SLAVE_BR] = 8,
+			[WL12XX_CONF_SG_ACL_WLAN_PS_MASTER_EDR] = 20,
+			[WL12XX_CONF_SG_ACL_WLAN_PS_SLAVE_EDR] = 20,
+			[WL12XX_CONF_SG_ACL_WLAN_ACTIVE_MASTER_MIN_BR] = 20,
+			[WL12XX_CONF_SG_ACL_WLAN_ACTIVE_MASTER_MAX_BR] = 35,
+			[WL12XX_CONF_SG_ACL_WLAN_ACTIVE_SLAVE_MIN_BR] = 16,
+			[WL12XX_CONF_SG_ACL_WLAN_ACTIVE_SLAVE_MAX_BR] = 35,
+			[WL12XX_CONF_SG_ACL_WLAN_ACTIVE_MASTER_MIN_EDR] = 32,
+			[WL12XX_CONF_SG_ACL_WLAN_ACTIVE_MASTER_MAX_EDR] = 50,
+			[WL12XX_CONF_SG_ACL_WLAN_ACTIVE_SLAVE_MIN_EDR] = 28,
+			[WL12XX_CONF_SG_ACL_WLAN_ACTIVE_SLAVE_MAX_EDR] = 50,
+			[WL12XX_CONF_SG_ACL_ACTIVE_SCAN_WLAN_BR] = 10,
+			[WL12XX_CONF_SG_ACL_ACTIVE_SCAN_WLAN_EDR] = 20,
+			[WL12XX_CONF_SG_ACL_PASSIVE_SCAN_BT_BR] = 75,
+			[WL12XX_CONF_SG_ACL_PASSIVE_SCAN_WLAN_BR] = 15,
+			[WL12XX_CONF_SG_ACL_PASSIVE_SCAN_BT_EDR] = 27,
+			[WL12XX_CONF_SG_ACL_PASSIVE_SCAN_WLAN_EDR] = 17,
 			/* active scan params */
-			[CONF_SG_AUTO_SCAN_PROBE_REQ] = 170,
-			[CONF_SG_ACTIVE_SCAN_DURATION_FACTOR_HV3] = 50,
-			[CONF_SG_ACTIVE_SCAN_DURATION_FACTOR_A2DP] = 100,
+			[WL12XX_CONF_SG_AUTO_SCAN_PROBE_REQ] = 170,
+			[WL12XX_CONF_SG_ACTIVE_SCAN_DURATION_FACTOR_HV3] = 50,
+			[WL12XX_CONF_SG_ACTIVE_SCAN_DURATION_FACTOR_A2DP] = 100,
 			/* passive scan params */
-			[CONF_SG_PASSIVE_SCAN_DURATION_FACTOR_A2DP_BR] = 800,
-			[CONF_SG_PASSIVE_SCAN_DURATION_FACTOR_A2DP_EDR] = 200,
-			[CONF_SG_PASSIVE_SCAN_DURATION_FACTOR_HV3] = 200,
+			[WL12XX_CONF_SG_PASSIVE_SCAN_DUR_FACTOR_A2DP_BR] = 800,
+			[WL12XX_CONF_SG_PASSIVE_SCAN_DUR_FACTOR_A2DP_EDR] = 200,
+			[WL12XX_CONF_SG_PASSIVE_SCAN_DUR_FACTOR_HV3] = 200,
 			/* passive scan in dual antenna params */
-			[CONF_SG_CONSECUTIVE_HV3_IN_PASSIVE_SCAN] = 0,
-			[CONF_SG_BCN_HV3_COLLISION_THRESH_IN_PASSIVE_SCAN] = 0,
-			[CONF_SG_TX_RX_PROTECTION_BWIDTH_IN_PASSIVE_SCAN] = 0,
+			[WL12XX_CONF_SG_CONSECUTIVE_HV3_IN_PASSIVE_SCAN] = 0,
+			[WL12XX_CONF_SG_BCN_HV3_COLL_THR_IN_PASSIVE_SCAN] = 0,
+			[WL12XX_CONF_SG_TX_RX_PROTECT_BW_IN_PASSIVE_SCAN] = 0,
 			/* general params */
-			[CONF_SG_STA_FORCE_PS_IN_BT_SCO] = 1,
-			[CONF_SG_ANTENNA_CONFIGURATION] = 0,
-			[CONF_SG_BEACON_MISS_PERCENT] = 60,
-			[CONF_SG_DHCP_TIME] = 5000,
-			[CONF_SG_RXT] = 1200,
-			[CONF_SG_TXT] = 1000,
-			[CONF_SG_ADAPTIVE_RXT_TXT] = 1,
-			[CONF_SG_GENERAL_USAGE_BIT_MAP] = 3,
-			[CONF_SG_HV3_MAX_SERVED] = 6,
-			[CONF_SG_PS_POLL_TIMEOUT] = 10,
-			[CONF_SG_UPSD_TIMEOUT] = 10,
-			[CONF_SG_CONSECUTIVE_CTS_THRESHOLD] = 2,
-			[CONF_SG_STA_RX_WINDOW_AFTER_DTIM] = 5,
-			[CONF_SG_STA_CONNECTION_PROTECTION_TIME] = 30,
+			[WL12XX_CONF_SG_STA_FORCE_PS_IN_BT_SCO] = 1,
+			[WL12XX_CONF_SG_ANTENNA_CONFIGURATION] = 0,
+			[WL12XX_CONF_SG_BEACON_MISS_PERCENT] = 60,
+			[WL12XX_CONF_SG_DHCP_TIME] = 5000,
+			[WL12XX_CONF_SG_RXT] = 1200,
+			[WL12XX_CONF_SG_TXT] = 1000,
+			[WL12XX_CONF_SG_ADAPTIVE_RXT_TXT] = 1,
+			[WL12XX_CONF_SG_GENERAL_USAGE_BIT_MAP] = 3,
+			[WL12XX_CONF_SG_HV3_MAX_SERVED] = 6,
+			[WL12XX_CONF_SG_PS_POLL_TIMEOUT] = 10,
+			[WL12XX_CONF_SG_UPSD_TIMEOUT] = 10,
+			[WL12XX_CONF_SG_CONSECUTIVE_CTS_THRESHOLD] = 2,
+			[WL12XX_CONF_SG_STA_RX_WINDOW_AFTER_DTIM] = 5,
+			[WL12XX_CONF_SG_STA_CONNECTION_PROTECTION_TIME] = 30,
 			/* AP params */
-			[CONF_AP_BEACON_MISS_TX] = 3,
-			[CONF_AP_RX_WINDOW_AFTER_BEACON] = 10,
-			[CONF_AP_BEACON_WINDOW_INTERVAL] = 2,
-			[CONF_AP_CONNECTION_PROTECTION_TIME] = 0,
-			[CONF_AP_BT_ACL_VAL_BT_SERVE_TIME] = 25,
-			[CONF_AP_BT_ACL_VAL_WL_SERVE_TIME] = 25,
+			[WL12XX_CONF_AP_BEACON_MISS_TX] = 3,
+			[WL12XX_CONF_AP_RX_WINDOW_AFTER_BEACON] = 10,
+			[WL12XX_CONF_AP_BEACON_WINDOW_INTERVAL] = 2,
+			[WL12XX_CONF_AP_CONNECTION_PROTECTION_TIME] = 0,
+			[WL12XX_CONF_AP_BT_ACL_VAL_BT_SERVE_TIME] = 25,
+			[WL12XX_CONF_AP_BT_ACL_VAL_WL_SERVE_TIME] = 25,
 			/* CTS Diluting params */
-			[CONF_SG_CTS_DILUTED_BAD_RX_PACKETS_TH] = 0,
-			[CONF_SG_CTS_CHOP_IN_DUAL_ANT_SCO_MASTER] = 0,
+			[WL12XX_CONF_SG_CTS_DILUTED_BAD_RX_PACKETS_TH] = 0,
+			[WL12XX_CONF_SG_CTS_CHOP_IN_DUAL_ANT_SCO_MASTER] = 0,
 		},
 		.state = CONF_SG_PROTECTIVE,
 	},
@@ -468,8 +456,8 @@ static const u8 wl12xx_rate_to_idx_5ghz[] = {
 };
 
 static const u8 *wl12xx_band_rate_to_idx[] = {
-	[IEEE80211_BAND_2GHZ] = wl12xx_rate_to_idx_2ghz,
-	[IEEE80211_BAND_5GHZ] = wl12xx_rate_to_idx_5ghz
+	[NL80211_BAND_2GHZ] = wl12xx_rate_to_idx_2ghz,
+	[NL80211_BAND_5GHZ] = wl12xx_rate_to_idx_5ghz
 };
 
 enum wl12xx_hw_rates {
@@ -552,8 +540,8 @@ static struct wlcore_partition_set wl12xx_ptable[PART_TABLE_LEN] = {
 			.size  = 0x00000004
 		},
 		.mem3 = {
-			.start = 0x00040404,
-			.size  = 0x00000000
+			.start = 0x00000000,
+			.size  = 0x00040404
 		},
 	},
 
@@ -647,7 +635,6 @@ static int wl12xx_identify_chip(struct wl1271 *wl)
 		wl->quirks |= WLCORE_QUIRK_LEGACY_NVS |
 			      WLCORE_QUIRK_DUAL_PROBE_TMPL |
 			      WLCORE_QUIRK_TKIP_HEADER_SPACE |
-			      WLCORE_QUIRK_START_STA_FAILS |
 			      WLCORE_QUIRK_AP_ZERO_SESSION_ID;
 		wl->sr_fw_name = WL127X_FW_NAME_SINGLE;
 		wl->mr_fw_name = WL127X_FW_NAME_MULTI;
@@ -671,7 +658,6 @@ static int wl12xx_identify_chip(struct wl1271 *wl)
 		wl->quirks |= WLCORE_QUIRK_LEGACY_NVS |
 			      WLCORE_QUIRK_DUAL_PROBE_TMPL |
 			      WLCORE_QUIRK_TKIP_HEADER_SPACE |
-			      WLCORE_QUIRK_START_STA_FAILS |
 			      WLCORE_QUIRK_AP_ZERO_SESSION_ID;
 		wl->plt_fw_name = WL127X_PLT_FW_NAME;
 		wl->sr_fw_name = WL127X_FW_NAME_SINGLE;
@@ -700,7 +686,6 @@ static int wl12xx_identify_chip(struct wl1271 *wl)
 		wl->quirks |= WLCORE_QUIRK_TX_BLOCKSIZE_ALIGN |
 			      WLCORE_QUIRK_DUAL_PROBE_TMPL |
 			      WLCORE_QUIRK_TKIP_HEADER_SPACE |
-			      WLCORE_QUIRK_START_STA_FAILS |
 			      WLCORE_QUIRK_AP_ZERO_SESSION_ID;
 
 		wlcore_set_min_fw_ver(wl, WL128X_CHIP_VER,
@@ -1809,6 +1794,7 @@ static int wl12xx_setup(struct wl1271 *wl)
 
 	BUILD_BUG_ON(WL12XX_MAX_LINKS > WLCORE_MAX_LINKS);
 	BUILD_BUG_ON(WL12XX_MAX_AP_STATIONS > WL12XX_MAX_LINKS);
+	BUILD_BUG_ON(WL12XX_CONF_SG_PARAMS_MAX > WLCORE_CONF_SG_PARAMS_MAX);
 
 	wl->rtable = wl12xx_rtable;
 	wl->num_tx_desc = WL12XX_NUM_TX_DESCRIPTORS;
@@ -1825,8 +1811,8 @@ static int wl12xx_setup(struct wl1271 *wl)
 	wl->fw_status_priv_len = 0;
 	wl->stats.fw_stats_len = sizeof(struct wl12xx_acx_statistics);
 	wl->ofdm_only_ap = true;
-	wlcore_set_ht_cap(wl, IEEE80211_BAND_2GHZ, &wl12xx_ht_cap);
-	wlcore_set_ht_cap(wl, IEEE80211_BAND_5GHZ, &wl12xx_ht_cap);
+	wlcore_set_ht_cap(wl, NL80211_BAND_2GHZ, &wl12xx_ht_cap);
+	wlcore_set_ht_cap(wl, NL80211_BAND_5GHZ, &wl12xx_ht_cap);
 	wl12xx_conf_init(wl);
 
 	if (!fref_param) {

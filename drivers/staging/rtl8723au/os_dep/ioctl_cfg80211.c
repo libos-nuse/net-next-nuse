@@ -39,7 +39,7 @@ static const u32 rtw_cipher_suites[] = {
 }
 
 #define CHAN2G(_channel, _freq, _flags) {			\
-	.band			= IEEE80211_BAND_2GHZ,		\
+	.band			= NL80211_BAND_2GHZ,		\
 	.center_freq		= (_freq),			\
 	.hw_value		= (_channel),			\
 	.flags			= (_flags),			\
@@ -48,7 +48,7 @@ static const u32 rtw_cipher_suites[] = {
 }
 
 #define CHAN5G(_channel, _flags) {				\
-	.band			= IEEE80211_BAND_5GHZ,		\
+	.band			= NL80211_BAND_5GHZ,		\
 	.center_freq		= 5000 + (5 * (_channel)),	\
 	.hw_value		= (_channel),			\
 	.flags			= (_flags),			\
@@ -143,15 +143,15 @@ static void rtw_5g_rates_init(struct ieee80211_rate *rates)
 }
 
 static struct ieee80211_supported_band *
-rtw_spt_band_alloc(enum ieee80211_band band)
+rtw_spt_band_alloc(enum nl80211_band band)
 {
 	struct ieee80211_supported_band *spt_band = NULL;
 	int n_channels, n_bitrates;
 
-	if (band == IEEE80211_BAND_2GHZ) {
+	if (band == NL80211_BAND_2GHZ) {
 		n_channels = RTW_2G_CHANNELS_NUM;
 		n_bitrates = RTW_G_RATES_NUM;
-	} else if (band == IEEE80211_BAND_5GHZ) {
+	} else if (band == NL80211_BAND_5GHZ) {
 		n_channels = RTW_5G_CHANNELS_NUM;
 		n_bitrates = RTW_A_RATES_NUM;
 	} else {
@@ -176,10 +176,10 @@ rtw_spt_band_alloc(enum ieee80211_band band)
 	spt_band->n_channels = n_channels;
 	spt_band->n_bitrates = n_bitrates;
 
-	if (band == IEEE80211_BAND_2GHZ) {
+	if (band == NL80211_BAND_2GHZ) {
 		rtw_2g_channels_init(spt_band->channels);
 		rtw_2g_rates_init(spt_band->bitrates);
-	} else if (band == IEEE80211_BAND_5GHZ) {
+	} else if (band == NL80211_BAND_5GHZ) {
 		rtw_5g_channels_init(spt_band->channels);
 		rtw_5g_rates_init(spt_band->bitrates);
 	}
@@ -257,10 +257,10 @@ static int rtw_cfg80211_inform_bss(struct rtw_adapter *padapter,
 	channel = pnetwork->network.DSConfig;
 	if (channel <= RTW_CH_MAX_2G_CHANNEL)
 		freq = ieee80211_channel_to_frequency(channel,
-						      IEEE80211_BAND_2GHZ);
+						      NL80211_BAND_2GHZ);
 	else
 		freq = ieee80211_channel_to_frequency(channel,
-						      IEEE80211_BAND_5GHZ);
+						      NL80211_BAND_5GHZ);
 
 	notify_channel = ieee80211_get_channel(wiphy, freq);
 
@@ -322,11 +322,11 @@ void rtw_cfg80211_indicate_connect(struct rtw_adapter *padapter)
 		if (channel <= RTW_CH_MAX_2G_CHANNEL)
 			freq =
 			    ieee80211_channel_to_frequency(channel,
-							   IEEE80211_BAND_2GHZ);
+							   NL80211_BAND_2GHZ);
 		else
 			freq =
 			    ieee80211_channel_to_frequency(channel,
-							   IEEE80211_BAND_5GHZ);
+							   NL80211_BAND_5GHZ);
 
 		notify_channel = ieee80211_get_channel(wiphy, freq);
 
@@ -458,7 +458,7 @@ static int set_group_key(struct rtw_adapter *padapter, struct key_params *parms,
 
 	pcmd->cmdcode = _SetKey_CMD_;
 	pcmd->parmbuf = (u8 *) psetkeyparm;
-	pcmd->cmdsz = (sizeof(struct setkey_parm));
+	pcmd->cmdsz = sizeof(struct setkey_parm);
 	pcmd->rsp = NULL;
 	pcmd->rspsz = 0;
 
@@ -543,7 +543,7 @@ static int rtw_cfg80211_ap_set_encryption(struct net_device *dev, u8 key_index,
 				memcpy(psecuritypriv->
 				       dot118021XGrpKey[key_index].skey,
 				       keyparms->key,
-				       (key_len > 16 ? 16 : key_len));
+				       (min(16, key_len)));
 
 				/* set mic key */
 				memcpy(psecuritypriv->
@@ -565,7 +565,7 @@ static int rtw_cfg80211_ap_set_encryption(struct net_device *dev, u8 key_index,
 				memcpy(psecuritypriv->
 				       dot118021XGrpKey[key_index].skey,
 				       keyparms->key,
-				       (key_len > 16 ? 16 : key_len));
+				       (min(16, key_len)));
 			} else {
 				DBG_8723A("%s, set group_key, none\n",
 					  __func__);
@@ -603,7 +603,7 @@ static int rtw_cfg80211_ap_set_encryption(struct net_device *dev, u8 key_index,
 		if (set_tx == 1) {
 			/* pairwise key */
 			memcpy(psta->dot118021x_UncstKey.skey,
-			       keyparms->key, (key_len > 16 ? 16 : key_len));
+			       keyparms->key, (min(16, key_len)));
 
 			if (keyparms->cipher == WLAN_CIPHER_SUITE_WEP40 ||
 			    keyparms->cipher == WLAN_CIPHER_SUITE_WEP104) {
@@ -661,7 +661,7 @@ static int rtw_cfg80211_ap_set_encryption(struct net_device *dev, u8 key_index,
 				memcpy(psecuritypriv->
 				       dot118021XGrpKey[key_index].skey,
 				       keyparms->key,
-				       (key_len > 16 ? 16 : key_len));
+				       (min(16, key_len)));
 
 				/* set mic key */
 				memcpy(psecuritypriv->
@@ -679,7 +679,7 @@ static int rtw_cfg80211_ap_set_encryption(struct net_device *dev, u8 key_index,
 				memcpy(psecuritypriv->
 				       dot118021XGrpKey[key_index].skey,
 				       keyparms->key,
-				       (key_len > 16 ? 16 : key_len));
+				       (min(16, key_len)));
 			} else {
 				psecuritypriv->dot118021XGrpPrivacy = 0;
 			}
@@ -789,7 +789,7 @@ static int rtw_cfg80211_set_encryption(struct net_device *dev, u8 key_index,
 
 					memcpy(psta->dot118021x_UncstKey.skey,
 					       keyparms->key,
-					       (key_len > 16 ? 16 : key_len));
+					       (min(16, key_len)));
 
 					if (keyparms->cipher ==
 					    WLAN_CIPHER_SUITE_TKIP) {
@@ -812,7 +812,7 @@ static int rtw_cfg80211_set_encryption(struct net_device *dev, u8 key_index,
 					memcpy(padapter->securitypriv.
 					       dot118021XGrpKey[key_index].skey,
 					       keyparms->key,
-					       (key_len > 16 ? 16 : key_len));
+					       (min(16, key_len)));
 					memcpy(padapter->securitypriv.
 					       dot118021XGrptxmickey[key_index].
 					       skey, &keyparms->key[16], 8);
@@ -1270,18 +1270,14 @@ void rtw_cfg80211_indicate_scan_done(struct rtw_wdev_priv *pwdev_priv,
 
 void rtw_cfg80211_surveydone_event_callback(struct rtw_adapter *padapter)
 {
-	struct list_head *plist, *phead, *ptmp;
+	struct list_head *phead;
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 	struct rtw_queue *queue = &pmlmepriv->scanned_queue;
-	struct wlan_network *pnetwork;
+	struct wlan_network *pnetwork, *ptmp;
 
 	spin_lock_bh(&pmlmepriv->scanned_queue.lock);
-
 	phead = get_list_head(queue);
-
-	list_for_each_safe(plist, ptmp, phead) {
-		pnetwork = container_of(plist, struct wlan_network, list);
-
+	list_for_each_entry_safe(pnetwork, ptmp, phead, list) {
 		/* report network only if the current channel set
 		   contains the channel to which this network belongs */
 		if (rtw_ch_set_search_ch23a
@@ -1289,7 +1285,6 @@ void rtw_cfg80211_surveydone_event_callback(struct rtw_adapter *padapter)
 		     pnetwork->network.DSConfig) >= 0)
 			rtw_cfg80211_inform_bss(padapter, pnetwork);
 	}
-
 	spin_unlock_bh(&pmlmepriv->scanned_queue.lock);
 
 	/* call this after other things have been done */
@@ -2202,7 +2197,7 @@ static int cfg80211_rtw_get_txpower(struct wiphy *wiphy,
 				    struct wireless_dev *wdev, int *dbm)
 {
 	DBG_8723A("%s\n", __func__);
-	*dbm = (12);
+	*dbm = 12;
 	return 0;
 }
 
@@ -2365,10 +2360,10 @@ void rtw_cfg80211_indicate_sta_assoc(struct rtw_adapter *padapter,
 	channel = pmlmeext->cur_channel;
 	if (channel <= RTW_CH_MAX_2G_CHANNEL)
 		freq = ieee80211_channel_to_frequency(channel,
-						      IEEE80211_BAND_2GHZ);
+						      NL80211_BAND_2GHZ);
 	else
 		freq = ieee80211_channel_to_frequency(channel,
-						      IEEE80211_BAND_5GHZ);
+						      NL80211_BAND_5GHZ);
 
 	cfg80211_rx_mgmt(padapter->rtw_wdev, freq, 0, pmgmt_frame, frame_len,
 			 0);
@@ -2397,10 +2392,10 @@ void rtw_cfg80211_indicate_sta_disassoc(struct rtw_adapter *padapter,
 	channel = pmlmeext->cur_channel;
 	if (channel <= RTW_CH_MAX_2G_CHANNEL)
 		freq = ieee80211_channel_to_frequency(channel,
-						      IEEE80211_BAND_2GHZ);
+						      NL80211_BAND_2GHZ);
 	else
 		freq = ieee80211_channel_to_frequency(channel,
-						      IEEE80211_BAND_5GHZ);
+						      NL80211_BAND_5GHZ);
 
 	mgmt.frame_control =
 		cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_DEAUTH);
@@ -2615,8 +2610,6 @@ static int rtw_cfg80211_add_monitor_if(struct rtw_adapter *padapter, char *name,
 	/*  wdev */
 	mon_wdev = kzalloc(sizeof(struct wireless_dev), GFP_KERNEL);
 	if (!mon_wdev) {
-		DBG_8723A("%s(%s): allocate mon_wdev fail\n", __func__,
-			  padapter->pnetdev->name);
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -2850,9 +2843,9 @@ static int cfg80211_rtw_del_station(struct wiphy *wiphy,
 {
 	const u8 *mac = params->mac;
 	int ret = 0;
-	struct list_head *phead, *plist, *ptmp;
+	struct list_head *phead;
 	u8 updated = 0;
-	struct sta_info *psta;
+	struct sta_info *psta, *ptmp;
 	struct rtw_adapter *padapter = netdev_priv(ndev);
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 	struct sta_priv *pstapriv = &padapter->stapriv;
@@ -2881,13 +2874,9 @@ static int cfg80211_rtw_del_station(struct wiphy *wiphy,
 		return -EINVAL;
 
 	spin_lock_bh(&pstapriv->asoc_list_lock);
-
 	phead = &pstapriv->asoc_list;
-
 	/* check asoc_queue */
-	list_for_each_safe(plist, ptmp, phead) {
-		psta = container_of(plist, struct sta_info, asoc_list);
-
+	list_for_each_entry_safe(psta, ptmp, phead, asoc_list) {
 		if (ether_addr_equal(mac, psta->hwaddr)) {
 			if (psta->dot8021xalg == 1 &&
 			    psta->bpairwise_key_installed == false) {
@@ -2912,7 +2901,6 @@ static int cfg80211_rtw_del_station(struct wiphy *wiphy,
 			}
 		}
 	}
-
 	spin_unlock_bh(&pstapriv->asoc_list_lock);
 
 	associated_clients_update23a(padapter, updated);
@@ -3121,7 +3109,7 @@ static struct cfg80211_ops rtw_cfg80211_ops = {
 };
 
 static void rtw_cfg80211_init_ht_capab(struct ieee80211_sta_ht_cap *ht_cap,
-				       enum ieee80211_band band, u8 rf_type)
+				       enum nl80211_band band, u8 rf_type)
 {
 
 #define MAX_BIT_RATE_40MHZ_MCS15	300	/* Mbps */
@@ -3145,7 +3133,7 @@ static void rtw_cfg80211_init_ht_capab(struct ieee80211_sta_ht_cap *ht_cap,
 	ht_cap->mcs.tx_params = IEEE80211_HT_MCS_TX_DEFINED;
 
 	/*
-	 *hw->wiphy->bands[IEEE80211_BAND_2GHZ]
+	 *hw->wiphy->bands[NL80211_BAND_2GHZ]
 	 *base on ant_num
 	 *rx_mask: RX mask
 	 *if rx_ant = 1 rx_mask[0]= 0xff;==>MCS0-MCS7
@@ -3185,19 +3173,19 @@ void rtw_cfg80211_init_wiphy(struct rtw_adapter *padapter)
 
 	/* if (padapter->registrypriv.wireless_mode & WIRELESS_11G) */
 	{
-		bands = wiphy->bands[IEEE80211_BAND_2GHZ];
+		bands = wiphy->bands[NL80211_BAND_2GHZ];
 		if (bands)
 			rtw_cfg80211_init_ht_capab(&bands->ht_cap,
-						   IEEE80211_BAND_2GHZ,
+						   NL80211_BAND_2GHZ,
 						   rf_type);
 	}
 
 	/* if (padapter->registrypriv.wireless_mode & WIRELESS_11A) */
 	{
-		bands = wiphy->bands[IEEE80211_BAND_5GHZ];
+		bands = wiphy->bands[NL80211_BAND_5GHZ];
 		if (bands)
 			rtw_cfg80211_init_ht_capab(&bands->ht_cap,
-						   IEEE80211_BAND_5GHZ,
+						   NL80211_BAND_5GHZ,
 						   rf_type);
 	}
 }
@@ -3236,11 +3224,11 @@ static void rtw_cfg80211_preinit_wiphy(struct rtw_adapter *padapter,
 	wiphy->n_cipher_suites = ARRAY_SIZE(rtw_cipher_suites);
 
 	/* if (padapter->registrypriv.wireless_mode & WIRELESS_11G) */
-	wiphy->bands[IEEE80211_BAND_2GHZ] =
-	    rtw_spt_band_alloc(IEEE80211_BAND_2GHZ);
+	wiphy->bands[NL80211_BAND_2GHZ] =
+	    rtw_spt_band_alloc(NL80211_BAND_2GHZ);
 	/* if (padapter->registrypriv.wireless_mode & WIRELESS_11A) */
-	wiphy->bands[IEEE80211_BAND_5GHZ] =
-	    rtw_spt_band_alloc(IEEE80211_BAND_5GHZ);
+	wiphy->bands[NL80211_BAND_5GHZ] =
+	    rtw_spt_band_alloc(NL80211_BAND_5GHZ);
 
 	wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
 	wiphy->flags |= WIPHY_FLAG_OFFCHAN_TX | WIPHY_FLAG_HAVE_AP_SME;
@@ -3272,7 +3260,6 @@ int rtw_wdev_alloc(struct rtw_adapter *padapter, struct device *dev)
 	/*  wdev */
 	wdev = kzalloc(sizeof(struct wireless_dev), GFP_KERNEL);
 	if (!wdev) {
-		DBG_8723A("Couldn't allocate wireless device\n");
 		ret = -ENOMEM;
 		goto free_wiphy;
 	}
@@ -3326,8 +3313,8 @@ void rtw_wdev_free(struct wireless_dev *wdev)
 	if (!wdev)
 		return;
 
-	kfree(wdev->wiphy->bands[IEEE80211_BAND_2GHZ]);
-	kfree(wdev->wiphy->bands[IEEE80211_BAND_5GHZ]);
+	kfree(wdev->wiphy->bands[NL80211_BAND_2GHZ]);
+	kfree(wdev->wiphy->bands[NL80211_BAND_5GHZ]);
 
 	wiphy_free(wdev->wiphy);
 

@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Xilinx SLCR driver
  *
  * Copyright (c) 2011-2013 Xilinx Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
- *
- * You should have received a copy of the GNU General Public
- * License along with this program; if not, write to the Free
- * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA
- * 02139, USA.
  */
 
 #include <linux/io.h>
@@ -28,6 +19,7 @@
 #define SLCR_A9_CPU_RST_CTRL_OFFSET	0x244 /* CPU Software Reset Control */
 #define SLCR_REBOOT_STATUS_OFFSET	0x258 /* PS Reboot Status */
 #define SLCR_PSS_IDCODE			0x530 /* PS IDCODE */
+#define SLCR_L2C_RAM			0xA1C /* L2C_RAM in AR#54190 */
 
 #define SLCR_UNLOCK_MAGIC		0xDF0D
 #define SLCR_A9_CPU_CLKSTOP		0x10
@@ -227,9 +219,12 @@ int __init zynq_early_slcr_init(void)
 	/* unlock the SLCR so that registers can be changed */
 	zynq_slcr_unlock();
 
+	/* See AR#54190 design advisory */
+	regmap_update_bits(zynq_slcr_regmap, SLCR_L2C_RAM, 0x70707, 0x20202);
+
 	register_restart_handler(&zynq_slcr_restart_nb);
 
-	pr_info("%s mapped to %p\n", np->name, zynq_slcr_base);
+	pr_info("%pOFn mapped to %p\n", np, zynq_slcr_base);
 
 	of_node_put(np);
 

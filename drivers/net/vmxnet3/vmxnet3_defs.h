@@ -1,7 +1,7 @@
 /*
  * Linux driver for VMware's vmxnet3 ethernet NIC.
  *
- * Copyright (C) 2008-2015, VMware, Inc. All Rights Reserved.
+ * Copyright (C) 2008-2020, VMware, Inc. All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,7 +20,7 @@
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  *
- * Maintained by: Shreyas Bhatewara <pv-drivers@vmware.com>
+ * Maintained by: pv-drivers@vmware.com
  *
  */
 
@@ -76,7 +76,13 @@ enum {
 	VMXNET3_CMD_UPDATE_IML,
 	VMXNET3_CMD_UPDATE_PMCFG,
 	VMXNET3_CMD_UPDATE_FEATURE,
+	VMXNET3_CMD_RESERVED1,
 	VMXNET3_CMD_LOAD_PLUGIN,
+	VMXNET3_CMD_RESERVED2,
+	VMXNET3_CMD_RESERVED3,
+	VMXNET3_CMD_SET_COALESCE,
+	VMXNET3_CMD_REGISTER_MEMREGS,
+	VMXNET3_CMD_SET_RSS_FIELDS,
 
 	VMXNET3_CMD_FIRST_GET = 0xF00D0000,
 	VMXNET3_CMD_GET_QUEUE_STATUS = VMXNET3_CMD_FIRST_GET,
@@ -87,20 +93,24 @@ enum {
 	VMXNET3_CMD_GET_DID_LO,
 	VMXNET3_CMD_GET_DID_HI,
 	VMXNET3_CMD_GET_DEV_EXTRA_INFO,
-	VMXNET3_CMD_GET_CONF_INTR
+	VMXNET3_CMD_GET_CONF_INTR,
+	VMXNET3_CMD_GET_RESERVED1,
+	VMXNET3_CMD_GET_TXDATA_DESC_SIZE,
+	VMXNET3_CMD_GET_COALESCE,
+	VMXNET3_CMD_GET_RSS_FIELDS,
 };
 
 /*
  *	Little Endian layout of bitfields -
  *	Byte 0 :	7.....len.....0
- *	Byte 1 :	rsvd gen 13.len.8
+ *	Byte 1 :	oco gen 13.len.8
  *	Byte 2 : 	5.msscof.0 ext1  dtype
  *	Byte 3 : 	13...msscof...6
  *
  *	Big Endian layout of bitfields -
  *	Byte 0:		13...msscof...6
  *	Byte 1 : 	5.msscof.0 ext1  dtype
- *	Byte 2 :	rsvd gen 13.len.8
+ *	Byte 2 :	oco gen 13.len.8
  *	Byte 3 :	7.....len.....0
  *
  *	Thus, le32_to_cpu on the dword will allow the big endian driver to read
@@ -115,13 +125,13 @@ struct Vmxnet3_TxDesc {
 	u32 msscof:14;  /* MSS, checksum offset, flags */
 	u32 ext1:1;
 	u32 dtype:1;    /* descriptor type */
-	u32 rsvd:1;
+	u32 oco:1;
 	u32 gen:1;      /* generation bit */
 	u32 len:14;
 #else
 	u32 len:14;
 	u32 gen:1;      /* generation bit */
-	u32 rsvd:1;
+	u32 oco:1;
 	u32 dtype:1;    /* descriptor type */
 	u32 ext1:1;
 	u32 msscof:14;  /* MSS, checksum offset, flags */
@@ -147,9 +157,10 @@ struct Vmxnet3_TxDesc {
 };
 
 /* TxDesc.OM values */
-#define VMXNET3_OM_NONE		0
-#define VMXNET3_OM_CSUM		2
-#define VMXNET3_OM_TSO		3
+#define VMXNET3_OM_NONE         0
+#define VMXNET3_OM_ENCAP        1
+#define VMXNET3_OM_CSUM         2
+#define VMXNET3_OM_TSO          3
 
 /* fields in TxDesc we access w/o using bit fields */
 #define VMXNET3_TXD_EOP_SHIFT	12
@@ -168,6 +179,8 @@ struct Vmxnet3_TxDesc {
 struct Vmxnet3_TxDataDesc {
 	u8		data[VMXNET3_HDR_COPY_SIZE];
 };
+
+typedef u8 Vmxnet3_RxDataDesc;
 
 #define VMXNET3_TCD_GEN_SHIFT	31
 #define VMXNET3_TCD_GEN_SIZE	1
@@ -213,6 +226,8 @@ struct Vmxnet3_RxDesc {
 /* fields in RxDesc we access w/o using bit fields */
 #define VMXNET3_RXD_BTYPE_SHIFT  14
 #define VMXNET3_RXD_GEN_SHIFT    31
+
+#define VMXNET3_RCD_HDR_INNER_SHIFT  13
 
 struct Vmxnet3_RxCompDesc {
 #ifdef __BIG_ENDIAN_BITFIELD
@@ -373,12 +388,25 @@ union Vmxnet3_GenericDesc {
 #define VMXNET3_RING_SIZE_ALIGN 32
 #define VMXNET3_RING_SIZE_MASK  (VMXNET3_RING_SIZE_ALIGN - 1)
 
+/* Tx Data Ring buffer size must be a multiple of 64 */
+#define VMXNET3_TXDATA_DESC_SIZE_ALIGN 64
+#define VMXNET3_TXDATA_DESC_SIZE_MASK  (VMXNET3_TXDATA_DESC_SIZE_ALIGN - 1)
+
+/* Rx Data Ring buffer size must be a multiple of 64 */
+#define VMXNET3_RXDATA_DESC_SIZE_ALIGN 64
+#define VMXNET3_RXDATA_DESC_SIZE_MASK  (VMXNET3_RXDATA_DESC_SIZE_ALIGN - 1)
+
 /* Max ring size */
 #define VMXNET3_TX_RING_MAX_SIZE   4096
 #define VMXNET3_TC_RING_MAX_SIZE   4096
 #define VMXNET3_RX_RING_MAX_SIZE   4096
-#define VMXNET3_RX_RING2_MAX_SIZE  2048
+#define VMXNET3_RX_RING2_MAX_SIZE  4096
 #define VMXNET3_RC_RING_MAX_SIZE   8192
+
+#define VMXNET3_TXDATA_DESC_MIN_SIZE 128
+#define VMXNET3_TXDATA_DESC_MAX_SIZE 2048
+
+#define VMXNET3_RXDATA_DESC_MAX_SIZE 2048
 
 /* a list of reasons for queue stop */
 
@@ -466,7 +494,9 @@ struct Vmxnet3_TxQueueConf {
 	__le32		compRingSize; /* # of comp desc */
 	__le32		ddLen;        /* size of driver data */
 	u8		intrIdx;
-	u8		_pad[7];
+	u8		_pad1[1];
+	__le16		txDataRingDescSize;
+	u8		_pad2[4];
 };
 
 
@@ -474,12 +504,14 @@ struct Vmxnet3_RxQueueConf {
 	__le64		rxRingBasePA[2];
 	__le64		compRingBasePA;
 	__le64		ddPA;            /* driver data */
-	__le64		reserved;
+	__le64		rxDataRingBasePA;
 	__le32		rxRingSize[2];   /* # of rx desc */
 	__le32		compRingSize;    /* # of rx comp desc */
 	__le32		ddLen;           /* size of driver data */
 	u8		intrIdx;
-	u8		_pad[7];
+	u8		_pad1[1];
+	__le16		rxDataRingDescSize;  /* size of rx data ring buffer */
+	u8		_pad2[4];
 };
 
 
@@ -609,6 +641,73 @@ struct Vmxnet3_RxQueueDesc {
 	u8				      __pad[88]; /* 128 aligned */
 };
 
+struct Vmxnet3_SetPolling {
+	u8					enablePolling;
+};
+
+#define VMXNET3_COAL_STATIC_MAX_DEPTH		128
+#define VMXNET3_COAL_RBC_MIN_RATE		100
+#define VMXNET3_COAL_RBC_MAX_RATE		100000
+
+enum Vmxnet3_CoalesceMode {
+	VMXNET3_COALESCE_DISABLED   = 0,
+	VMXNET3_COALESCE_ADAPT      = 1,
+	VMXNET3_COALESCE_STATIC     = 2,
+	VMXNET3_COALESCE_RBC        = 3
+};
+
+struct Vmxnet3_CoalesceRbc {
+	u32					rbc_rate;
+};
+
+struct Vmxnet3_CoalesceStatic {
+	u32					tx_depth;
+	u32					tx_comp_depth;
+	u32					rx_depth;
+};
+
+struct Vmxnet3_CoalesceScheme {
+	enum Vmxnet3_CoalesceMode		coalMode;
+	union {
+		struct Vmxnet3_CoalesceRbc	coalRbc;
+		struct Vmxnet3_CoalesceStatic	coalStatic;
+	} coalPara;
+};
+
+struct Vmxnet3_MemoryRegion {
+	__le64					startPA;
+	__le32					length;
+	__le16					txQueueBits;
+	__le16					rxQueueBits;
+};
+
+#define MAX_MEMORY_REGION_PER_QUEUE 16
+#define MAX_MEMORY_REGION_PER_DEVICE 256
+
+struct Vmxnet3_MemRegs {
+	__le16					numRegs;
+	__le16					pad[3];
+	struct Vmxnet3_MemoryRegion		memRegs[1];
+};
+
+enum Vmxnet3_RSSField {
+	VMXNET3_RSS_FIELDS_TCPIP4 = 0x0001,
+	VMXNET3_RSS_FIELDS_TCPIP6 = 0x0002,
+	VMXNET3_RSS_FIELDS_UDPIP4 = 0x0004,
+	VMXNET3_RSS_FIELDS_UDPIP6 = 0x0008,
+	VMXNET3_RSS_FIELDS_ESPIP4 = 0x0010,
+	VMXNET3_RSS_FIELDS_ESPIP6 = 0x0020,
+};
+
+/* If the command data <= 16 bytes, use the shared memory directly.
+ * otherwise, use variable length configuration descriptor.
+ */
+union Vmxnet3_CmdInfo {
+	struct Vmxnet3_VariableLenConfDesc	varConf;
+	struct Vmxnet3_SetPolling		setPolling;
+	enum   Vmxnet3_RSSField                 setRssFields;
+	__le64					data[2];
+};
 
 struct Vmxnet3_DSDevRead {
 	/* read-only region for device, read by dev in response to a SET cmd */
@@ -627,7 +726,14 @@ struct Vmxnet3_DriverShared {
 	__le32				pad;
 	struct Vmxnet3_DSDevRead	devRead;
 	__le32				ecr;
-	__le32				reserved[5];
+	__le32				reserved;
+	union {
+		__le32			reserved1[4];
+		union Vmxnet3_CmdInfo	cmdInfo; /* only valid in the context of
+						  * executing the relevant
+						  * command
+						  */
+	} cu;
 };
 
 

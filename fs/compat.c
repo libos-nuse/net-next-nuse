@@ -792,7 +792,7 @@ COMPAT_SYSCALL_DEFINE5(mount, const char __user *, dev_name,
 		       const void __user *, data)
 {
 	char *kernel_type;
-	unsigned long data_page;
+	void *options;
 	char *kernel_dev;
 	int retval;
 
@@ -806,26 +806,25 @@ COMPAT_SYSCALL_DEFINE5(mount, const char __user *, dev_name,
 	if (IS_ERR(kernel_dev))
 		goto out1;
 
-	retval = copy_mount_options(data, &data_page);
-	if (retval < 0)
+	options = copy_mount_options(data);
+	retval = PTR_ERR(options);
+	if (IS_ERR(options))
 		goto out2;
 
-	retval = -EINVAL;
-
-	if (kernel_type && data_page) {
+	if (kernel_type && options) {
 		if (!strcmp(kernel_type, NCPFS_NAME)) {
-			do_ncp_super_data_conv((void *)data_page);
+			do_ncp_super_data_conv(options);
 		} else if (!strcmp(kernel_type, NFS4_NAME)) {
-			if (do_nfs4_super_data_conv((void *) data_page))
+			retval = -EINVAL;
+			if (do_nfs4_super_data_conv(options))
 				goto out3;
 		}
 	}
 
-	retval = do_mount(kernel_dev, dir_name, kernel_type,
-			flags, (void*)data_page);
+	retval = do_mount(kernel_dev, dir_name, kernel_type, flags, options);
 
  out3:
-	free_page(data_page);
+	kfree(options);
  out2:
 	kfree(kernel_dev);
  out1:
@@ -885,7 +884,7 @@ COMPAT_SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 		struct compat_old_linux_dirent __user *, dirent, unsigned int, count)
 {
 	int error;
-	struct fd f = fdget(fd);
+	struct fd f = fdget_pos(fd);
 	struct compat_readdir_callback buf = {
 		.ctx.actor = compat_fillonedir,
 		.dirent = dirent
@@ -898,7 +897,7 @@ COMPAT_SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 	if (buf.result)
 		error = buf.result;
 
-	fdput(f);
+	fdput_pos(f);
 	return error;
 }
 
@@ -937,6 +936,8 @@ static int compat_filldir(struct dir_context *ctx, const char *name, int namlen,
 	}
 	dirent = buf->previous;
 	if (dirent) {
+		if (signal_pending(current))
+			return -EINTR;
 		if (__put_user(offset, &dirent->d_off))
 			goto efault;
 	}
@@ -976,7 +977,7 @@ COMPAT_SYSCALL_DEFINE3(getdents, unsigned int, fd,
 	if (!access_ok(VERIFY_WRITE, dirent, count))
 		return -EFAULT;
 
-	f = fdget(fd);
+	f = fdget_pos(fd);
 	if (!f.file)
 		return -EBADF;
 
@@ -990,7 +991,7 @@ COMPAT_SYSCALL_DEFINE3(getdents, unsigned int, fd,
 		else
 			error = count - buf.count;
 	}
-	fdput(f);
+	fdput_pos(f);
 	return error;
 }
 
@@ -1021,6 +1022,8 @@ static int compat_filldir64(struct dir_context *ctx, const char *name,
 	dirent = buf->previous;
 
 	if (dirent) {
+		if (signal_pending(current))
+			return -EINTR;
 		if (__put_user_unaligned(offset, &dirent->d_off))
 			goto efault;
 	}
@@ -1063,7 +1066,7 @@ COMPAT_SYSCALL_DEFINE3(getdents64, unsigned int, fd,
 	if (!access_ok(VERIFY_WRITE, dirent, count))
 		return -EFAULT;
 
-	f = fdget(fd);
+	f = fdget_pos(fd);
 	if (!f.file)
 		return -EBADF;
 
@@ -1078,7 +1081,7 @@ COMPAT_SYSCALL_DEFINE3(getdents64, unsigned int, fd,
 		else
 			error = count - buf.count;
 	}
-	fdput(f);
+	fdput_pos(f);
 	return error;
 }
 #endif /* __ARCH_WANT_COMPAT_SYS_GETDENTS64 */

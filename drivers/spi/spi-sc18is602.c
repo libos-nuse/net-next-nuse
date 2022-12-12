@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * NXP SC18IS602/603 SPI driver
  *
  * Copyright (C) Guenter Roeck <linux@roeck-us.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -21,8 +12,10 @@
 #include <linux/i2c.h>
 #include <linux/delay.h>
 #include <linux/pm_runtime.h>
+#include <linux/of_device.h>
 #include <linux/of.h>
 #include <linux/platform_data/sc18is602.h>
+#include <linux/gpio/consumer.h>
 
 enum chips { sc18is602, sc18is602b, sc18is603 };
 
@@ -50,6 +43,8 @@ struct sc18is602 {
 	u8			buffer[SC18IS602_BUFSIZ + 1];
 	int			tlen;	/* Data queued for tx in buffer */
 	int			rindex;	/* Receive data index in buffer */
+
+	struct gpio_desc	*reset;
 };
 
 static int sc18is602_wait_ready(struct sc18is602 *hw, int len)
@@ -216,8 +211,7 @@ static int sc18is602_transfer_one(struct spi_master *master,
 		}
 		status = 0;
 
-		if (t->delay_usecs)
-			udelay(t->delay_usecs);
+		spi_transfer_delay_exec(t);
 	}
 	m->status = status;
 	spi_finalize_current_message(master);
@@ -244,25 +238,33 @@ static int sc18is602_probe(struct i2c_client *client,
 	struct sc18is602_platform_data *pdata = dev_get_platdata(dev);
 	struct sc18is602 *hw;
 	struct spi_master *master;
-	int error;
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C |
 				     I2C_FUNC_SMBUS_WRITE_BYTE_DATA))
 		return -EINVAL;
 
-	master = spi_alloc_master(dev, sizeof(struct sc18is602));
+	master = devm_spi_alloc_master(dev, sizeof(struct sc18is602));
 	if (!master)
 		return -ENOMEM;
 
 	hw = spi_master_get_devdata(master);
 	i2c_set_clientdata(client, hw);
 
+	/* assert reset and then release */
+	hw->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+	if (IS_ERR(hw->reset))
+		return PTR_ERR(hw->reset);
+	gpiod_set_value_cansleep(hw->reset, 0);
+
 	hw->master = master;
 	hw->client = client;
 	hw->dev = dev;
 	hw->ctrl = 0xff;
 
-	hw->id = id->driver_data;
+	if (client->dev.of_node)
+		hw->id = (enum chips)of_device_get_match_data(&client->dev);
+	else
+		hw->id = id->driver_data;
 
 	switch (hw->id) {
 	case sc18is602:
@@ -295,15 +297,7 @@ static int sc18is602_probe(struct i2c_client *client,
 	master->min_speed_hz = hw->freq / 128;
 	master->max_speed_hz = hw->freq / 4;
 
-	error = devm_spi_register_master(dev, master);
-	if (error)
-		goto error_reg;
-
-	return 0;
-
-error_reg:
-	spi_master_put(master);
-	return error;
+	return devm_spi_register_master(dev, master);
 }
 
 static const struct i2c_device_id sc18is602_id[] = {
@@ -314,9 +308,27 @@ static const struct i2c_device_id sc18is602_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, sc18is602_id);
 
+static const struct of_device_id sc18is602_of_match[] = {
+	{
+		.compatible = "nxp,sc18is602",
+		.data = (void *)sc18is602
+	},
+	{
+		.compatible = "nxp,sc18is602b",
+		.data = (void *)sc18is602b
+	},
+	{
+		.compatible = "nxp,sc18is603",
+		.data = (void *)sc18is603
+	},
+	{ },
+};
+MODULE_DEVICE_TABLE(of, sc18is602_of_match);
+
 static struct i2c_driver sc18is602_driver = {
 	.driver = {
 		.name = "sc18is602",
+		.of_match_table = of_match_ptr(sc18is602_of_match),
 	},
 	.probe = sc18is602_probe,
 	.id_table = sc18is602_id,
@@ -324,6 +336,6 @@ static struct i2c_driver sc18is602_driver = {
 
 module_i2c_driver(sc18is602_driver);
 
-MODULE_DESCRIPTION("SC18IC602/603 SPI Master Driver");
+MODULE_DESCRIPTION("SC18IS602/603 SPI Master Driver");
 MODULE_AUTHOR("Guenter Roeck");
 MODULE_LICENSE("GPL");

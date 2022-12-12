@@ -34,6 +34,7 @@
 
 #include <linux/kernel.h>
 #include <linux/serial_8250.h>
+#include <linux/memblock.h>
 #include <linux/pm.h>
 
 #include <asm/idle.h>
@@ -149,7 +150,7 @@ static void prom_add_memory(void)
 
 	bootm = (void *)(long)nlm_prom_info.psb_mem_map;
 	for (i = 0; i < bootm->nr_map; i++) {
-		if (bootm->map[i].type != BOOT_MEM_RAM)
+		if (bootm->map[i].type != NLM_BOOT_MEM_RAM)
 			continue;
 		start = bootm->map[i].addr;
 		size   = bootm->map[i].size;
@@ -158,7 +159,7 @@ static void prom_add_memory(void)
 		if (i == 0 && start == 0 && size == 0x0c000000)
 			size = 0x0ff00000;
 
-		add_memory_region(start, size - pref_backup, BOOT_MEM_RAM);
+		memblock_add(start, size - pref_backup);
 	}
 }
 
@@ -168,7 +169,7 @@ static void nlm_init_node(void)
 
 	nodep = nlm_current_node();
 	nodep->picbase = nlm_mmio_base(NETLOGIC_IO_PIC_OFFSET);
-	nodep->ebase = read_c0_ebase() & (~((1 << 12) - 1));
+	nodep->ebase = read_c0_ebase() & MIPS_EBASE_BASE;
 	spin_lock_init(&nodep->piclock);
 }
 

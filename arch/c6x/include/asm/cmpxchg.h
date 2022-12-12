@@ -1,12 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  Port on Texas Instruments TMS320C6x architecture
  *
  *  Copyright (C) 2004, 2009, 2010, 2011 Texas Instruments Incorporated
  *  Author: Aurelien Jacquiot (aurelien.jacquiot@jaluna.com)
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 #ifndef _ASM_C6X_CMPXCHG_H
 #define _ASM_C6X_CMPXCHG_H
@@ -47,8 +44,6 @@ static inline unsigned int __xchg(unsigned int x, volatile void *ptr, int size)
 #define xchg(ptr, x) \
 	((__typeof__(*(ptr)))__xchg((unsigned int)(x), (void *) (ptr), \
 				    sizeof(*(ptr))))
-#define tas(ptr)    xchg((ptr), 1)
-
 
 #include <asm-generic/cmpxchg-local.h>
 

@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2014-2015 Hisilicon Limited.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/cdev.h>
@@ -32,10 +28,13 @@
 #define RCB_RESET_WAIT_TIMES 30
 #define RCB_RESET_TRY_TIMES 10
 
+/* Because default mtu is 1500, rcb buffer size is set to 2048 enough */
+#define RCB_DEFAULT_BUFFER_SIZE 2048
+
 /**
  *hns_rcb_wait_fbd_clean - clean fbd
  *@qs: ring struct pointer array
- *@qnum: num of array
+ *@q_num: num of array
  *@flag: tx or rx flag
  */
 void hns_rcb_wait_fbd_clean(struct hnae_queue **qs, int q_num, u32 flag)
@@ -61,6 +60,29 @@ void hns_rcb_wait_fbd_clean(struct hnae_queue **qs, int q_num, u32 flag)
 	if (i < q_num)
 		dev_err(qs[i]->handle->owner_dev,
 			"queue(%d) wait fbd(%d) clean fail!!\n", i, fbd_num);
+}
+
+int hns_rcb_wait_tx_ring_clean(struct hnae_queue *qs)
+{
+	u32 head, tail;
+	int wait_cnt;
+
+	tail = dsaf_read_dev(&qs->tx_ring, RCB_REG_TAIL);
+	wait_cnt = 0;
+	while (wait_cnt++ < HNS_MAX_WAIT_CNT) {
+		head = dsaf_read_dev(&qs->tx_ring, RCB_REG_HEAD);
+		if (tail == head)
+			break;
+
+		usleep_range(100, 200);
+	}
+
+	if (wait_cnt >= HNS_MAX_WAIT_CNT) {
+		dev_err(qs->dev->dev, "rcb wait timeout, head not equal to tail.\n");
+		return -EBUSY;
+	}
+
+	return 0;
 }
 
 /**
@@ -169,7 +191,8 @@ void hns_rcbv2_int_clr_hw(struct hnae_queue *q, u32 flag)
 
 /**
  *hns_rcb_ring_enable_hw - enable ring
- *@ring: rcb ring
+ *@q: rcb ring
+ *@val: value to write
  */
 void hns_rcb_ring_enable_hw(struct hnae_queue *q, u32 val)
 {
@@ -192,6 +215,30 @@ void hns_rcb_common_init_commit_hw(struct rcb_common_cb *rcb_common)
 	wmb();	/* Sync point after breakpoint */
 }
 
+/* hns_rcb_set_tx_ring_bs - init rcb ring buf size regester
+ *@q: hnae_queue
+ *@buf_size: buffer size set to hw
+ */
+void hns_rcb_set_tx_ring_bs(struct hnae_queue *q, u32 buf_size)
+{
+	u32 bd_size_type = hns_rcb_buf_size2type(buf_size);
+
+	dsaf_write_dev(q, RCB_RING_TX_RING_BD_LEN_REG,
+		       bd_size_type);
+}
+
+/* hns_rcb_set_rx_ring_bs - init rcb ring buf size regester
+ *@q: hnae_queue
+ *@buf_size: buffer size set to hw
+ */
+void hns_rcb_set_rx_ring_bs(struct hnae_queue *q, u32 buf_size)
+{
+	u32 bd_size_type = hns_rcb_buf_size2type(buf_size);
+
+	dsaf_write_dev(q, RCB_RING_RX_RING_BD_LEN_REG,
+		       bd_size_type);
+}
+
 /**
  *hns_rcb_ring_init - init rcb ring
  *@ring_pair: ring pair control block
@@ -200,8 +247,6 @@ void hns_rcb_common_init_commit_hw(struct rcb_common_cb *rcb_common)
 static void hns_rcb_ring_init(struct ring_pair_cb *ring_pair, int ring_type)
 {
 	struct hnae_queue *q = &ring_pair->q;
-	struct rcb_common_cb *rcb_common = ring_pair->rcb_common;
-	u32 bd_size_type = rcb_common->dsaf_dev->buf_size_type;
 	struct hnae_ring *ring =
 		(ring_type == RX_RING) ? &q->rx_ring : &q->tx_ring;
 	dma_addr_t dma = ring->desc_dma_addr;
@@ -212,24 +257,24 @@ static void hns_rcb_ring_init(struct ring_pair_cb *ring_pair, int ring_type)
 		dsaf_write_dev(q, RCB_RING_RX_RING_BASEADDR_H_REG,
 			       (u32)((dma >> 31) >> 1));
 
-		dsaf_write_dev(q, RCB_RING_RX_RING_BD_LEN_REG,
-			       bd_size_type);
+		hns_rcb_set_rx_ring_bs(q, ring->buf_size);
+
 		dsaf_write_dev(q, RCB_RING_RX_RING_BD_NUM_REG,
-			       ring_pair->port_id_in_dsa);
+			       ring_pair->port_id_in_comm);
 		dsaf_write_dev(q, RCB_RING_RX_RING_PKTLINE_REG,
-			       ring_pair->port_id_in_dsa);
+			       ring_pair->port_id_in_comm);
 	} else {
 		dsaf_write_dev(q, RCB_RING_TX_RING_BASEADDR_L_REG,
 			       (u32)dma);
 		dsaf_write_dev(q, RCB_RING_TX_RING_BASEADDR_H_REG,
 			       (u32)((dma >> 31) >> 1));
 
-		dsaf_write_dev(q, RCB_RING_TX_RING_BD_LEN_REG,
-			       bd_size_type);
+		hns_rcb_set_tx_ring_bs(q, ring->buf_size);
+
 		dsaf_write_dev(q, RCB_RING_TX_RING_BD_NUM_REG,
-			       ring_pair->port_id_in_dsa);
+			       ring_pair->port_id_in_comm);
 		dsaf_write_dev(q, RCB_RING_TX_RING_PKTLINE_REG,
-			       ring_pair->port_id_in_dsa);
+			ring_pair->port_id_in_comm + HNS_RCB_TX_PKTLINE_OFFSET);
 	}
 }
 
@@ -256,55 +301,35 @@ static void hns_rcb_set_port_desc_cnt(struct rcb_common_cb *rcb_common,
 		       desc_cnt);
 }
 
-/**
- *hns_rcb_set_port_coalesced_frames - set rcb port coalesced frames
- *@rcb_common: rcb_common device
- *@port_idx:port index
- *@coalesced_frames:BD num for coalesced frames
- */
-static int  hns_rcb_set_port_coalesced_frames(struct rcb_common_cb *rcb_common,
-					      u32 port_idx,
-					      u32 coalesced_frames)
+static void hns_rcb_set_port_timeout(
+	struct rcb_common_cb *rcb_common, u32 port_idx, u32 timeout)
 {
-	if (coalesced_frames >= rcb_common->desc_num ||
-	    coalesced_frames > HNS_RCB_MAX_COALESCED_FRAMES)
-		return -EINVAL;
+	if (AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver)) {
+		dsaf_write_dev(rcb_common, RCB_CFG_OVERTIME_REG,
+			       timeout * HNS_RCB_CLK_FREQ_MHZ);
+	} else if (!HNS_DSAF_IS_DEBUG(rcb_common->dsaf_dev)) {
+		if (timeout > HNS_RCB_DEF_GAP_TIME_USECS)
+			dsaf_write_dev(rcb_common,
+				       RCB_PORT_INT_GAPTIME_REG + port_idx * 4,
+				       HNS_RCB_DEF_GAP_TIME_USECS);
+		else
+			dsaf_write_dev(rcb_common,
+				       RCB_PORT_INT_GAPTIME_REG + port_idx * 4,
+				       timeout);
 
-	dsaf_write_dev(rcb_common, RCB_CFG_PKTLINE_REG + port_idx * 4,
-		       coalesced_frames);
-	return 0;
-}
-
-/**
- *hns_rcb_get_port_coalesced_frames - set rcb port coalesced frames
- *@rcb_common: rcb_common device
- *@port_idx:port index
- * return coaleseced frames value
- */
-static u32 hns_rcb_get_port_coalesced_frames(struct rcb_common_cb *rcb_common,
-					     u32 port_idx)
-{
-	if (port_idx >= HNS_RCB_SERVICE_NW_ENGINE_NUM)
-		port_idx = 0;
-
-	return dsaf_read_dev(rcb_common,
-			     RCB_CFG_PKTLINE_REG + port_idx * 4);
-}
-
-/**
- *hns_rcb_set_timeout - set rcb port coalesced time_out
- *@rcb_common: rcb_common device
- *@time_out:time for coalesced time_out
- */
-static void hns_rcb_set_timeout(struct rcb_common_cb *rcb_common,
-				u32 timeout)
-{
-	dsaf_write_dev(rcb_common, RCB_CFG_OVERTIME_REG, timeout);
+		dsaf_write_dev(rcb_common,
+			       RCB_PORT_CFG_OVERTIME_REG + port_idx * 4,
+			       timeout);
+	} else {
+		dsaf_write_dev(rcb_common,
+			       RCB_PORT_CFG_OVERTIME_REG + port_idx * 4,
+			       timeout);
+	}
 }
 
 static int hns_rcb_common_get_port_num(struct rcb_common_cb *rcb_common)
 {
-	if (rcb_common->comm_index == HNS_DSAF_COMM_SERVICE_NW_IDX)
+	if (!HNS_DSAF_IS_DEBUG(rcb_common->dsaf_dev))
 		return HNS_RCB_SERVICE_NW_ENGINE_NUM;
 	else
 		return HNS_RCB_DEBUG_NW_ENGINE_NUM;
@@ -361,16 +386,30 @@ int hns_rcb_common_init_hw(struct rcb_common_cb *rcb_common)
 
 	for (i = 0; i < port_num; i++) {
 		hns_rcb_set_port_desc_cnt(rcb_common, i, rcb_common->desc_num);
-		(void)hns_rcb_set_port_coalesced_frames(
-			rcb_common, i, rcb_common->coalesced_frames);
+		hns_rcb_set_rx_coalesced_frames(
+			rcb_common, i, HNS_RCB_DEF_RX_COALESCED_FRAMES);
+		if (!AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver) &&
+		    !HNS_DSAF_IS_DEBUG(rcb_common->dsaf_dev))
+			hns_rcb_set_tx_coalesced_frames(
+				rcb_common, i, HNS_RCB_DEF_TX_COALESCED_FRAMES);
+		hns_rcb_set_port_timeout(
+			rcb_common, i, HNS_RCB_DEF_COALESCED_USECS);
 	}
-	hns_rcb_set_timeout(rcb_common, rcb_common->timeout);
 
 	dsaf_write_dev(rcb_common, RCB_COM_CFG_ENDIAN_REG,
 		       HNS_RCB_COMMON_ENDIAN);
 
-	dsaf_write_dev(rcb_common, RCB_COM_CFG_FNA_REG, 0x0);
-	dsaf_write_dev(rcb_common, RCB_COM_CFG_FA_REG, 0x1);
+	if (AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver)) {
+		dsaf_write_dev(rcb_common, RCB_COM_CFG_FNA_REG, 0x0);
+		dsaf_write_dev(rcb_common, RCB_COM_CFG_FA_REG, 0x1);
+	} else {
+		dsaf_set_dev_bit(rcb_common, RCBV2_COM_CFG_USER_REG,
+				 RCB_COM_CFG_FNA_B, false);
+		dsaf_set_dev_bit(rcb_common, RCBV2_COM_CFG_USER_REG,
+				 RCB_COM_CFG_FA_B, true);
+		dsaf_set_dev_bit(rcb_common, RCBV2_COM_CFG_TSO_MODE_REG,
+				 RCB_COM_TSO_MODE_B, HNS_TSO_MODE_8BD_32K);
+	}
 
 	return 0;
 }
@@ -404,7 +443,6 @@ static void hns_rcb_ring_get_cfg(struct hnae_queue *q, int ring_type)
 	struct hnae_ring *ring;
 	struct rcb_common_cb *rcb_common;
 	struct ring_pair_cb *ring_pair_cb;
-	u32 buf_size;
 	u16 desc_num, mdnum_ppkt;
 	bool irq_idx, is_ver1;
 
@@ -417,7 +455,7 @@ static void hns_rcb_ring_get_cfg(struct hnae_queue *q, int ring_type)
 		mdnum_ppkt = HNS_RCB_RING_MAX_BD_PER_PKT;
 	} else {
 		ring = &q->tx_ring;
-		ring->io_base = (u8 __iomem *)ring_pair_cb->q.io_base +
+		ring->io_base = ring_pair_cb->q.io_base +
 			HNS_RCB_TX_REG_OFFSET;
 		irq_idx = HNS_RCB_IRQ_IDX_TX;
 		mdnum_ppkt = is_ver1 ? HNS_RCB_RING_MAX_TXBD_PER_PKT :
@@ -425,7 +463,6 @@ static void hns_rcb_ring_get_cfg(struct hnae_queue *q, int ring_type)
 	}
 
 	rcb_common = ring_pair_cb->rcb_common;
-	buf_size = rcb_common->dsaf_dev->buf_size;
 	desc_num = rcb_common->dsaf_dev->desc_num;
 
 	ring->desc = NULL;
@@ -434,7 +471,7 @@ static void hns_rcb_ring_get_cfg(struct hnae_queue *q, int ring_type)
 	ring->irq = ring_pair_cb->virq[irq_idx];
 	ring->desc_dma_addr = 0;
 
-	ring->buf_size = buf_size;
+	ring->buf_size = RCB_DEFAULT_BUFFER_SIZE;
 	ring->desc_num = desc_num;
 	ring->max_desc_num_per_pkt = mdnum_ppkt;
 	ring->max_raw_data_sz_per_desc = HNS_RCB_MAX_PKT_SIZE;
@@ -451,38 +488,22 @@ static void hns_rcb_ring_pair_get_cfg(struct ring_pair_cb *ring_pair_cb)
 	hns_rcb_ring_get_cfg(&ring_pair_cb->q, TX_RING);
 }
 
-static int hns_rcb_get_port(struct rcb_common_cb *rcb_common, int ring_idx)
+static int hns_rcb_get_port_in_comm(
+	struct rcb_common_cb *rcb_common, int ring_idx)
 {
-	int comm_index = rcb_common->comm_index;
-	int port;
-	int q_num;
-
-	if (comm_index == HNS_DSAF_COMM_SERVICE_NW_IDX) {
-		q_num = (int)rcb_common->max_q_per_vf * rcb_common->max_vfn;
-		port = ring_idx / q_num;
-	} else {
-		port = HNS_RCB_SERVICE_NW_ENGINE_NUM + comm_index - 1;
-	}
-
-	return port;
+	return ring_idx / (rcb_common->max_q_per_vf * rcb_common->max_vfn);
 }
 
 #define SERVICE_RING_IRQ_IDX(v1) \
 	((v1) ? HNS_SERVICE_RING_IRQ_IDX : HNSV2_SERVICE_RING_IRQ_IDX)
-#define DEBUG_RING_IRQ_IDX(v1) \
-	((v1) ? HNS_DEBUG_RING_IRQ_IDX : HNSV2_DEBUG_RING_IRQ_IDX)
-#define DEBUG_RING_IRQ_OFFSET(v1) \
-	((v1) ? HNS_DEBUG_RING_IRQ_OFFSET : HNSV2_DEBUG_RING_IRQ_OFFSET)
 static int hns_rcb_get_base_irq_idx(struct rcb_common_cb *rcb_common)
 {
-	int comm_index = rcb_common->comm_index;
 	bool is_ver1 = AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver);
 
-	if (comm_index == HNS_DSAF_COMM_SERVICE_NW_IDX)
+	if (!HNS_DSAF_IS_DEBUG(rcb_common->dsaf_dev))
 		return SERVICE_RING_IRQ_IDX(is_ver1);
 	else
-		return  DEBUG_RING_IRQ_IDX(is_ver1) +
-			(comm_index - 1) * DEBUG_RING_IRQ_OFFSET(is_ver1);
+		return  HNS_DEBUG_RING_IRQ_IDX;
 }
 
 #define RCB_COMM_BASE_TO_RING_BASE(base, ringid)\
@@ -491,16 +512,14 @@ static int hns_rcb_get_base_irq_idx(struct rcb_common_cb *rcb_common)
  *hns_rcb_get_cfg - get rcb config
  *@rcb_common: rcb common device
  */
-void hns_rcb_get_cfg(struct rcb_common_cb *rcb_common)
+int hns_rcb_get_cfg(struct rcb_common_cb *rcb_common)
 {
 	struct ring_pair_cb *ring_pair_cb;
 	u32 i;
 	u32 ring_num = rcb_common->ring_num;
 	int base_irq_idx = hns_rcb_get_base_irq_idx(rcb_common);
-	struct device_node *np = rcb_common->dsaf_dev->dev->of_node;
 	struct platform_device *pdev =
-		container_of(rcb_common->dsaf_dev->dev,
-			     struct platform_device, dev);
+		to_platform_device(rcb_common->dsaf_dev->dev);
 	bool is_ver1 = AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver);
 
 	for (i = 0; i < ring_num; i++) {
@@ -510,98 +529,165 @@ void hns_rcb_get_cfg(struct rcb_common_cb *rcb_common)
 		ring_pair_cb->index = i;
 		ring_pair_cb->q.io_base =
 			RCB_COMM_BASE_TO_RING_BASE(rcb_common->io_base, i);
-		ring_pair_cb->port_id_in_dsa = hns_rcb_get_port(rcb_common, i);
+		ring_pair_cb->port_id_in_comm =
+			hns_rcb_get_port_in_comm(rcb_common, i);
 		ring_pair_cb->virq[HNS_RCB_IRQ_IDX_TX] =
-		is_ver1 ? irq_of_parse_and_map(np, base_irq_idx + i * 2) :
+		is_ver1 ? platform_get_irq(pdev, base_irq_idx + i * 2) :
 			  platform_get_irq(pdev, base_irq_idx + i * 3 + 1);
 		ring_pair_cb->virq[HNS_RCB_IRQ_IDX_RX] =
-		is_ver1 ? irq_of_parse_and_map(np, base_irq_idx + i * 2 + 1) :
+		is_ver1 ? platform_get_irq(pdev, base_irq_idx + i * 2 + 1) :
 			  platform_get_irq(pdev, base_irq_idx + i * 3);
+		if ((ring_pair_cb->virq[HNS_RCB_IRQ_IDX_TX] == -EPROBE_DEFER) ||
+		    (ring_pair_cb->virq[HNS_RCB_IRQ_IDX_RX] == -EPROBE_DEFER))
+			return -EPROBE_DEFER;
+
 		ring_pair_cb->q.phy_base =
 			RCB_COMM_BASE_TO_RING_BASE(rcb_common->phy_base, i);
 		hns_rcb_ring_pair_get_cfg(ring_pair_cb);
 	}
+
+	return 0;
 }
 
 /**
- *hns_rcb_get_coalesced_frames - get rcb port coalesced frames
+ *hns_rcb_get_rx_coalesced_frames - get rcb port rx coalesced frames
  *@rcb_common: rcb_common device
- *@comm_index:port index
- *return coalesced_frames
+ *@port_idx:port id in comm
+ *
+ *Returns: coalesced_frames
  */
-u32 hns_rcb_get_coalesced_frames(struct dsaf_device *dsaf_dev, int port)
+u32 hns_rcb_get_rx_coalesced_frames(
+	struct rcb_common_cb *rcb_common, u32 port_idx)
 {
-	int comm_index =  hns_dsaf_get_comm_idx_by_port(port);
-	struct rcb_common_cb *rcb_comm = dsaf_dev->rcb_common[comm_index];
+	return dsaf_read_dev(rcb_common, RCB_CFG_PKTLINE_REG + port_idx * 4);
+}
 
-	return hns_rcb_get_port_coalesced_frames(rcb_comm, port);
+/**
+ *hns_rcb_get_tx_coalesced_frames - get rcb port tx coalesced frames
+ *@rcb_common: rcb_common device
+ *@port_idx:port id in comm
+ *
+ *Returns: coalesced_frames
+ */
+u32 hns_rcb_get_tx_coalesced_frames(
+	struct rcb_common_cb *rcb_common, u32 port_idx)
+{
+	u64 reg;
+
+	reg = RCB_CFG_PKTLINE_REG + (port_idx + HNS_RCB_TX_PKTLINE_OFFSET) * 4;
+	return dsaf_read_dev(rcb_common, reg);
 }
 
 /**
  *hns_rcb_get_coalesce_usecs - get rcb port coalesced time_out
  *@rcb_common: rcb_common device
- *@comm_index:port index
- *return time_out
+ *@port_idx:port id in comm
+ *
+ *Returns: time_out
  */
-u32 hns_rcb_get_coalesce_usecs(struct dsaf_device *dsaf_dev, int comm_index)
+u32 hns_rcb_get_coalesce_usecs(
+	struct rcb_common_cb *rcb_common, u32 port_idx)
 {
-	struct rcb_common_cb *rcb_comm = dsaf_dev->rcb_common[comm_index];
-
-	return rcb_comm->timeout;
+	if (AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver))
+		return dsaf_read_dev(rcb_common, RCB_CFG_OVERTIME_REG) /
+		       HNS_RCB_CLK_FREQ_MHZ;
+	else
+		return dsaf_read_dev(rcb_common,
+				     RCB_PORT_CFG_OVERTIME_REG + port_idx * 4);
 }
 
 /**
  *hns_rcb_set_coalesce_usecs - set rcb port coalesced time_out
  *@rcb_common: rcb_common device
- *@comm_index: comm :index
- *@etx_usecs:tx time for coalesced time_out
- *@rx_usecs:rx time for coalesced time_out
+ *@port_idx:port id in comm
+ *@timeout:tx/rx time for coalesced time_out
+ *
+ * Returns:
+ * Zero for success, or an error code in case of failure
  */
-void hns_rcb_set_coalesce_usecs(struct dsaf_device *dsaf_dev,
-				int port, u32 timeout)
+int hns_rcb_set_coalesce_usecs(
+	struct rcb_common_cb *rcb_common, u32 port_idx, u32 timeout)
 {
-	int comm_index =  hns_dsaf_get_comm_idx_by_port(port);
-	struct rcb_common_cb *rcb_comm = dsaf_dev->rcb_common[comm_index];
+	u32 old_timeout = hns_rcb_get_coalesce_usecs(rcb_common, port_idx);
 
-	if (rcb_comm->timeout == timeout)
-		return;
+	if (timeout == old_timeout)
+		return 0;
 
-	if (comm_index == HNS_DSAF_COMM_SERVICE_NW_IDX) {
-		dev_err(dsaf_dev->dev,
-			"error: not support coalesce_usecs setting!\n");
-		return;
+	if (AE_IS_VER1(rcb_common->dsaf_dev->dsaf_ver)) {
+		if (!HNS_DSAF_IS_DEBUG(rcb_common->dsaf_dev)) {
+			dev_err(rcb_common->dsaf_dev->dev,
+				"error: not support coalesce_usecs setting!\n");
+			return -EINVAL;
+		}
 	}
-	rcb_comm->timeout = timeout;
-	hns_rcb_set_timeout(rcb_comm, rcb_comm->timeout);
+	if (timeout > HNS_RCB_MAX_COALESCED_USECS || timeout == 0) {
+		dev_err(rcb_common->dsaf_dev->dev,
+			"error: coalesce_usecs setting supports 1~1023us\n");
+		return -EINVAL;
+	}
+	hns_rcb_set_port_timeout(rcb_common, port_idx, timeout);
+	return 0;
 }
 
 /**
- *hns_rcb_set_coalesced_frames - set rcb coalesced frames
+ *hns_rcb_set_tx_coalesced_frames - set rcb coalesced frames
  *@rcb_common: rcb_common device
- *@tx_frames:tx BD num for coalesced frames
- *@rx_frames:rx BD num for coalesced frames
- *Return 0 on success, negative on failure
+ *@port_idx:port id in comm
+ *@coalesced_frames:tx/rx BD num for coalesced frames
+ *
+ * Returns:
+ * Zero for success, or an error code in case of failure
  */
-int hns_rcb_set_coalesced_frames(struct dsaf_device *dsaf_dev,
-				 int port, u32 coalesced_frames)
+int hns_rcb_set_tx_coalesced_frames(
+	struct rcb_common_cb *rcb_common, u32 port_idx, u32 coalesced_frames)
 {
-	int comm_index =  hns_dsaf_get_comm_idx_by_port(port);
-	struct rcb_common_cb *rcb_comm = dsaf_dev->rcb_common[comm_index];
-	u32 coalesced_reg_val;
-	int ret;
+	u32 old_waterline =
+		hns_rcb_get_tx_coalesced_frames(rcb_common, port_idx);
+	u64 reg;
 
-	coalesced_reg_val = hns_rcb_get_port_coalesced_frames(rcb_comm, port);
-
-	if (coalesced_reg_val == coalesced_frames)
+	if (coalesced_frames == old_waterline)
 		return 0;
 
-	if (coalesced_frames >= HNS_RCB_MIN_COALESCED_FRAMES) {
-		ret = hns_rcb_set_port_coalesced_frames(rcb_comm, port,
-							coalesced_frames);
-		return ret;
-	} else {
+	if (coalesced_frames != 1) {
+		dev_err(rcb_common->dsaf_dev->dev,
+			"error: not support tx coalesce_frames setting!\n");
 		return -EINVAL;
 	}
+
+	reg = RCB_CFG_PKTLINE_REG + (port_idx + HNS_RCB_TX_PKTLINE_OFFSET) * 4;
+	dsaf_write_dev(rcb_common, reg,	coalesced_frames);
+	return 0;
+}
+
+/**
+ *hns_rcb_set_rx_coalesced_frames - set rcb rx coalesced frames
+ *@rcb_common: rcb_common device
+ *@port_idx:port id in comm
+ *@coalesced_frames:tx/rx BD num for coalesced frames
+ *
+ * Returns:
+ * Zero for success, or an error code in case of failure
+ */
+int hns_rcb_set_rx_coalesced_frames(
+	struct rcb_common_cb *rcb_common, u32 port_idx, u32 coalesced_frames)
+{
+	u32 old_waterline =
+		hns_rcb_get_rx_coalesced_frames(rcb_common, port_idx);
+
+	if (coalesced_frames == old_waterline)
+		return 0;
+
+	if (coalesced_frames >= rcb_common->desc_num ||
+	    coalesced_frames > HNS_RCB_MAX_COALESCED_FRAMES ||
+	    coalesced_frames < HNS_RCB_MIN_COALESCED_FRAMES) {
+		dev_err(rcb_common->dsaf_dev->dev,
+			"error: not support coalesce_frames setting!\n");
+		return -EINVAL;
+	}
+
+	dsaf_write_dev(rcb_common, RCB_CFG_PKTLINE_REG + port_idx * 4,
+		       coalesced_frames);
+	return 0;
 }
 
 /**
@@ -611,113 +697,82 @@ int hns_rcb_set_coalesced_frames(struct dsaf_device *dsaf_dev,
  *@max_vfn : max vfn number
  *@max_q_per_vf:max ring number per vm
  */
-void hns_rcb_get_queue_mode(enum dsaf_mode dsaf_mode, int comm_index,
-			    u16 *max_vfn, u16 *max_q_per_vf)
+void hns_rcb_get_queue_mode(enum dsaf_mode dsaf_mode, u16 *max_vfn,
+			    u16 *max_q_per_vf)
 {
-	if (comm_index == HNS_DSAF_COMM_SERVICE_NW_IDX) {
-		switch (dsaf_mode) {
-		case DSAF_MODE_DISABLE_6PORT_0VM:
-			*max_vfn = 1;
-			*max_q_per_vf = 16;
-			break;
-		case DSAF_MODE_DISABLE_FIX:
-			*max_vfn = 1;
-			*max_q_per_vf = 1;
-			break;
-		case DSAF_MODE_DISABLE_2PORT_64VM:
-			*max_vfn = 64;
-			*max_q_per_vf = 1;
-			break;
-		case DSAF_MODE_DISABLE_6PORT_16VM:
-			*max_vfn = 16;
-			*max_q_per_vf = 1;
-			break;
-		default:
-			*max_vfn = 1;
-			*max_q_per_vf = 16;
-			break;
-		}
-	} else {
+	switch (dsaf_mode) {
+	case DSAF_MODE_DISABLE_6PORT_0VM:
+		*max_vfn = 1;
+		*max_q_per_vf = 16;
+		break;
+	case DSAF_MODE_DISABLE_FIX:
+	case DSAF_MODE_DISABLE_SP:
 		*max_vfn = 1;
 		*max_q_per_vf = 1;
+		break;
+	case DSAF_MODE_DISABLE_2PORT_64VM:
+		*max_vfn = 64;
+		*max_q_per_vf = 1;
+		break;
+	case DSAF_MODE_DISABLE_6PORT_16VM:
+		*max_vfn = 16;
+		*max_q_per_vf = 1;
+		break;
+	default:
+		*max_vfn = 1;
+		*max_q_per_vf = 16;
+		break;
 	}
 }
 
-int hns_rcb_get_ring_num(struct dsaf_device *dsaf_dev, int comm_index)
+static int hns_rcb_get_ring_num(struct dsaf_device *dsaf_dev)
 {
-	if (comm_index == HNS_DSAF_COMM_SERVICE_NW_IDX) {
-		switch (dsaf_dev->dsaf_mode) {
-		case DSAF_MODE_ENABLE_FIX:
-			return 1;
-
-		case DSAF_MODE_DISABLE_FIX:
-			return 6;
-
-		case DSAF_MODE_ENABLE_0VM:
-			return 32;
-
-		case DSAF_MODE_DISABLE_6PORT_0VM:
-		case DSAF_MODE_ENABLE_16VM:
-		case DSAF_MODE_DISABLE_6PORT_2VM:
-		case DSAF_MODE_DISABLE_6PORT_16VM:
-		case DSAF_MODE_DISABLE_6PORT_4VM:
-		case DSAF_MODE_ENABLE_8VM:
-			return 96;
-
-		case DSAF_MODE_DISABLE_2PORT_16VM:
-		case DSAF_MODE_DISABLE_2PORT_8VM:
-		case DSAF_MODE_ENABLE_32VM:
-		case DSAF_MODE_DISABLE_2PORT_64VM:
-		case DSAF_MODE_ENABLE_128VM:
-			return 128;
-
-		default:
-			dev_warn(dsaf_dev->dev,
-				 "get ring num fail,use default!dsaf_mode=%d\n",
-				 dsaf_dev->dsaf_mode);
-			return 128;
-		}
-	} else {
+	switch (dsaf_dev->dsaf_mode) {
+	case DSAF_MODE_ENABLE_FIX:
+	case DSAF_MODE_DISABLE_SP:
 		return 1;
+
+	case DSAF_MODE_DISABLE_FIX:
+		return 6;
+
+	case DSAF_MODE_ENABLE_0VM:
+		return 32;
+
+	case DSAF_MODE_DISABLE_6PORT_0VM:
+	case DSAF_MODE_ENABLE_16VM:
+	case DSAF_MODE_DISABLE_6PORT_2VM:
+	case DSAF_MODE_DISABLE_6PORT_16VM:
+	case DSAF_MODE_DISABLE_6PORT_4VM:
+	case DSAF_MODE_ENABLE_8VM:
+		return 96;
+
+	case DSAF_MODE_DISABLE_2PORT_16VM:
+	case DSAF_MODE_DISABLE_2PORT_8VM:
+	case DSAF_MODE_ENABLE_32VM:
+	case DSAF_MODE_DISABLE_2PORT_64VM:
+	case DSAF_MODE_ENABLE_128VM:
+		return 128;
+
+	default:
+		dev_warn(dsaf_dev->dev,
+			 "get ring num fail,use default!dsaf_mode=%d\n",
+			 dsaf_dev->dsaf_mode);
+		return 128;
 	}
 }
 
-void __iomem *hns_rcb_common_get_vaddr(struct dsaf_device *dsaf_dev,
-				       int comm_index)
+static u8 __iomem *hns_rcb_common_get_vaddr(struct rcb_common_cb *rcb_common)
 {
-	void __iomem *base_addr;
+	struct dsaf_device *dsaf_dev = rcb_common->dsaf_dev;
 
-	if (comm_index == HNS_DSAF_COMM_SERVICE_NW_IDX)
-		base_addr = dsaf_dev->ppe_base + RCB_COMMON_REG_OFFSET;
-	else
-		base_addr = dsaf_dev->sds_base
-			+ (comm_index - 1) * HNS_DSAF_DEBUG_NW_REG_OFFSET
-			+ RCB_COMMON_REG_OFFSET;
-
-	return base_addr;
+	return dsaf_dev->ppe_base + RCB_COMMON_REG_OFFSET;
 }
 
-static phys_addr_t hns_rcb_common_get_paddr(struct dsaf_device *dsaf_dev,
-					    int comm_index)
+static phys_addr_t hns_rcb_common_get_paddr(struct rcb_common_cb *rcb_common)
 {
-	struct device_node *np = dsaf_dev->dev->of_node;
-	phys_addr_t phy_addr;
-	const __be32 *tmp_addr;
-	u64 addr_offset = 0;
-	u64 size = 0;
-	int index = 0;
+	struct dsaf_device *dsaf_dev = rcb_common->dsaf_dev;
 
-	if (comm_index == HNS_DSAF_COMM_SERVICE_NW_IDX) {
-		index    = 2;
-		addr_offset = RCB_COMMON_REG_OFFSET;
-	} else {
-		index    = 1;
-		addr_offset = (comm_index - 1) * HNS_DSAF_DEBUG_NW_REG_OFFSET +
-				RCB_COMMON_REG_OFFSET;
-	}
-	tmp_addr  = of_get_address(np, index, &size, NULL);
-	phy_addr  = of_translate_address(np, tmp_addr);
-	return phy_addr + addr_offset;
+	return dsaf_dev->ppe_paddr + RCB_COMMON_REG_OFFSET;
 }
 
 int hns_rcb_common_get_cfg(struct dsaf_device *dsaf_dev,
@@ -727,11 +782,12 @@ int hns_rcb_common_get_cfg(struct dsaf_device *dsaf_dev,
 	enum dsaf_mode dsaf_mode = dsaf_dev->dsaf_mode;
 	u16 max_vfn;
 	u16 max_q_per_vf;
-	int ring_num = hns_rcb_get_ring_num(dsaf_dev, comm_index);
+	int ring_num = hns_rcb_get_ring_num(dsaf_dev);
 
 	rcb_common =
-		devm_kzalloc(dsaf_dev->dev, sizeof(*rcb_common) +
-			ring_num * sizeof(struct ring_pair_cb), GFP_KERNEL);
+		devm_kzalloc(dsaf_dev->dev,
+			     struct_size(rcb_common, ring_pair_cb, ring_num),
+			     GFP_KERNEL);
 	if (!rcb_common) {
 		dev_err(dsaf_dev->dev, "rcb common devm_kzalloc fail!\n");
 		return -ENOMEM;
@@ -741,15 +797,13 @@ int hns_rcb_common_get_cfg(struct dsaf_device *dsaf_dev,
 	rcb_common->dsaf_dev = dsaf_dev;
 
 	rcb_common->desc_num = dsaf_dev->desc_num;
-	rcb_common->coalesced_frames = HNS_RCB_DEF_COALESCED_FRAMES;
-	rcb_common->timeout = HNS_RCB_MAX_TIME_OUT;
 
-	hns_rcb_get_queue_mode(dsaf_mode, comm_index, &max_vfn, &max_q_per_vf);
+	hns_rcb_get_queue_mode(dsaf_mode, &max_vfn, &max_q_per_vf);
 	rcb_common->max_vfn = max_vfn;
 	rcb_common->max_q_per_vf = max_q_per_vf;
 
-	rcb_common->io_base = hns_rcb_common_get_vaddr(dsaf_dev, comm_index);
-	rcb_common->phy_base = hns_rcb_common_get_paddr(dsaf_dev, comm_index);
+	rcb_common->io_base = hns_rcb_common_get_vaddr(rcb_common);
+	rcb_common->phy_base = hns_rcb_common_get_paddr(rcb_common);
 
 	dsaf_dev->rcb_common[comm_index] = rcb_common;
 	return 0;
@@ -791,7 +845,7 @@ void hns_rcb_update_stats(struct hnae_queue *queue)
 
 /**
  *hns_rcb_get_stats - get rcb statistic
- *@ring: rcb ring
+ *@queue: rcb ring
  *@data:statistic value
  */
 void hns_rcb_get_stats(struct hnae_queue *queue, u64 *data)
@@ -943,6 +997,10 @@ void hns_rcb_get_strings(int stringset, u8 *data, int index)
 void hns_rcb_get_common_regs(struct rcb_common_cb *rcb_com, void *data)
 {
 	u32 *regs = data;
+	bool is_ver1 = AE_IS_VER1(rcb_com->dsaf_dev->dsaf_ver);
+	bool is_dbg = HNS_DSAF_IS_DEBUG(rcb_com->dsaf_dev);
+	u32 reg_tmp;
+	u32 reg_num_tmp;
 	u32 i = 0;
 
 	/*rcb common registers */
@@ -996,12 +1054,16 @@ void hns_rcb_get_common_regs(struct rcb_common_cb *rcb_com, void *data)
 			= dsaf_read_dev(rcb_com, RCB_CFG_PKTLINE_REG + 4 * i);
 	}
 
-	regs[70] = dsaf_read_dev(rcb_com, RCB_CFG_OVERTIME_REG);
-	regs[71] = dsaf_read_dev(rcb_com, RCB_CFG_PKTLINE_INT_NUM_REG);
-	regs[72] = dsaf_read_dev(rcb_com, RCB_CFG_OVERTIME_INT_NUM_REG);
+	reg_tmp = is_ver1 ? RCB_CFG_OVERTIME_REG : RCB_PORT_CFG_OVERTIME_REG;
+	reg_num_tmp = (is_ver1 || is_dbg) ? 1 : 6;
+	for (i = 0; i < reg_num_tmp; i++)
+		regs[70 + i] = dsaf_read_dev(rcb_com, reg_tmp);
+
+	regs[76] = dsaf_read_dev(rcb_com, RCB_CFG_PKTLINE_INT_NUM_REG);
+	regs[77] = dsaf_read_dev(rcb_com, RCB_CFG_OVERTIME_INT_NUM_REG);
 
 	/* mark end of rcb common regs */
-	for (i = 73; i < 80; i++)
+	for (i = 78; i < 80; i++)
 		regs[i] = 0xcccccccc;
 }
 

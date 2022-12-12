@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * MPC85xx setup and early boot code plus other random bits.
  *
  * Maintained by Kumar Gala (see MAINTAINERS for contact information)
  *
  * Copyright 2005 Freescale Semiconductor Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/stddef.h>
@@ -35,17 +31,6 @@
 #endif
 
 #include "mpc85xx.h"
-
-#ifdef CONFIG_PCI
-static int mpc85xx_exclude_device(struct pci_controller *hose,
-				   u_char bus, u_char devfn)
-{
-	if (bus == 0 && PCI_SLOT(devfn) == 0)
-		return PCIBIOS_DEVICE_NOT_FOUND;
-	else
-		return PCIBIOS_SUCCESSFUL;
-}
-#endif /* CONFIG_PCI */
 
 static void __init mpc85xx_ads_pic_init(void)
 {
@@ -145,10 +130,6 @@ static void __init mpc85xx_ads_setup_arch(void)
 	init_ioports();
 #endif
 
-#ifdef CONFIG_PCI
-	ppc_md.pci_exclude_device = mpc85xx_exclude_device;
-#endif
-
 	fsl_pci_assign_primary();
 }
 
@@ -175,9 +156,7 @@ machine_arch_initcall(mpc85xx_ads, mpc85xx_common_publish_devices);
  */
 static int __init mpc85xx_ads_probe(void)
 {
-        unsigned long root = of_get_flat_dt_root();
-
-        return of_flat_dt_is_compatible(root, "MPC85xxADS");
+	return of_machine_is_compatible("MPC85xxADS");
 }
 
 define_machine(mpc85xx_ads) {
@@ -187,7 +166,6 @@ define_machine(mpc85xx_ads) {
 	.init_IRQ		= mpc85xx_ads_pic_init,
 	.show_cpuinfo		= mpc85xx_ads_show_cpuinfo,
 	.get_irq		= mpic_get_irq,
-	.restart		= fsl_rstcr_restart,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 };

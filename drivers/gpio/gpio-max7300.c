@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2009 Wolfram Sang, Pengutronix
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Check max730x.c for further details.
  */
@@ -65,7 +62,6 @@ MODULE_DEVICE_TABLE(i2c, max7300_id);
 static struct i2c_driver max7300_driver = {
 	.driver = {
 		.name = "max7300",
-		.owner = THIS_MODULE,
 	},
 	.probe = max7300_probe,
 	.remove = max7300_remove,

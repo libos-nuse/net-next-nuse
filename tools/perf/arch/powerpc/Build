@@ -1,1 +1,2 @@
-libperf-y += util/
+perf-y += util/
+perf-y += tests/

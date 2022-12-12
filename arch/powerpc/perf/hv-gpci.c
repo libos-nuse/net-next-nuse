@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Hypervisor supplied "gpci" ("get performance counter info") performance
  * counter support
  *
  * Author: Cody P Schafer <cody@linux.vnet.ibm.com>
  * Copyright 2014 IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt) "hv-gpci: " fmt
@@ -51,6 +47,8 @@ EVENT_DEFINE_RANGE_FORMAT(counter_info_version, config1, 16, 23);
 EVENT_DEFINE_RANGE_FORMAT(length, config1, 24, 31);
 /* u32, byte offset */
 EVENT_DEFINE_RANGE_FORMAT(offset, config1, 32, 63);
+
+static cpumask_t hv_gpci_cpumask;
 
 static struct attribute *format_attrs[] = {
 	&format_attr_request.attr,
@@ -98,7 +96,15 @@ static ssize_t kernel_version_show(struct device *dev,
 	return sprintf(page, "0x%x\n", COUNTER_INFO_VERSION_CURRENT);
 }
 
+static ssize_t cpumask_show(struct device *dev,
+			    struct device_attribute *attr, char *buf)
+{
+	return cpumap_print_to_pagebuf(true, buf, &hv_gpci_cpumask);
+}
+
 static DEVICE_ATTR_RO(kernel_version);
+static DEVICE_ATTR_RO(cpumask);
+
 HV_CAPS_ATTR(version, "0x%x\n");
 HV_CAPS_ATTR(ga, "%d\n");
 HV_CAPS_ATTR(expanded, "%d\n");
@@ -115,6 +121,15 @@ static struct attribute *interface_attrs[] = {
 	NULL,
 };
 
+static struct attribute *cpumask_attrs[] = {
+	&dev_attr_cpumask.attr,
+	NULL,
+};
+
+static struct attribute_group cpumask_attr_group = {
+	.attrs = cpumask_attrs,
+};
+
 static struct attribute_group interface_group = {
 	.name = "interface",
 	.attrs = interface_attrs,
@@ -124,11 +139,11 @@ static const struct attribute_group *attr_groups[] = {
 	&format_group,
 	&event_group,
 	&interface_group,
+	&cpumask_attr_group,
 	NULL,
 };
 
-#define GPCI_MAX_DATA_BYTES \
-	(1024 - sizeof(struct hv_get_perf_counter_info_params))
+static DEFINE_PER_CPU(char, hv_gpci_reqb[HGPCI_REQ_BUFFER_SIZE]) __aligned(sizeof(uint64_t));
 
 static unsigned long single_gpci_request(u32 req, u32 starting_index,
 		u16 secondary_index, u8 version_in, u32 offset, u8 length,
@@ -137,24 +152,21 @@ static unsigned long single_gpci_request(u32 req, u32 starting_index,
 	unsigned long ret;
 	size_t i;
 	u64 count;
+	struct hv_gpci_request_buffer *arg;
 
-	struct {
-		struct hv_get_perf_counter_info_params params;
-		uint8_t bytes[GPCI_MAX_DATA_BYTES];
-	} __packed __aligned(sizeof(uint64_t)) arg = {
-		.params = {
-			.counter_request = cpu_to_be32(req),
-			.starting_index = cpu_to_be32(starting_index),
-			.secondary_index = cpu_to_be16(secondary_index),
-			.counter_info_version_in = version_in,
-		}
-	};
+	arg = (void *)get_cpu_var(hv_gpci_reqb);
+	memset(arg, 0, HGPCI_REQ_BUFFER_SIZE);
+
+	arg->params.counter_request = cpu_to_be32(req);
+	arg->params.starting_index = cpu_to_be32(starting_index);
+	arg->params.secondary_index = cpu_to_be16(secondary_index);
+	arg->params.counter_info_version_in = version_in;
 
 	ret = plpar_hcall_norets(H_GET_PERF_COUNTER_INFO,
-			virt_to_phys(&arg), sizeof(arg));
+			virt_to_phys(arg), HGPCI_REQ_BUFFER_SIZE);
 	if (ret) {
 		pr_devel("hcall failed: 0x%lx\n", ret);
-		return ret;
+		goto out;
 	}
 
 	/*
@@ -163,9 +175,11 @@ static unsigned long single_gpci_request(u32 req, u32 starting_index,
 	 */
 	count = 0;
 	for (i = offset; i < offset + length; i++)
-		count |= arg.bytes[i] << (i - offset);
+		count |= arg->bytes[i] << (i - offset);
 
 	*value = count;
+out:
+	put_cpu_var(hv_gpci_reqb);
 	return ret;
 }
 
@@ -225,15 +239,6 @@ static int h_gpci_event_init(struct perf_event *event)
 		return -EINVAL;
 	}
 
-	/* unsupported modes and filters */
-	if (event->attr.exclude_user   ||
-	    event->attr.exclude_kernel ||
-	    event->attr.exclude_hv     ||
-	    event->attr.exclude_idle   ||
-	    event->attr.exclude_host   ||
-	    event->attr.exclude_guest)
-		return -EINVAL;
-
 	/* no branch sampling */
 	if (has_branch_stack(event))
 		return -EOPNOTSUPP;
@@ -245,10 +250,10 @@ static int h_gpci_event_init(struct perf_event *event)
 	}
 
 	/* last byte within the buffer? */
-	if ((event_get_offset(event) + length) > GPCI_MAX_DATA_BYTES) {
+	if ((event_get_offset(event) + length) > HGPCI_MAX_DATA_BYTES) {
 		pr_devel("request outside of buffer: %zu > %zu\n",
 				(size_t)event_get_offset(event) + length,
-				GPCI_MAX_DATA_BYTES);
+				HGPCI_MAX_DATA_BYTES);
 		return -EINVAL;
 	}
 
@@ -278,7 +283,47 @@ static struct pmu h_gpci_pmu = {
 	.start       = h_gpci_event_start,
 	.stop        = h_gpci_event_stop,
 	.read        = h_gpci_event_update,
+	.capabilities = PERF_PMU_CAP_NO_EXCLUDE,
 };
+
+static int ppc_hv_gpci_cpu_online(unsigned int cpu)
+{
+	if (cpumask_empty(&hv_gpci_cpumask))
+		cpumask_set_cpu(cpu, &hv_gpci_cpumask);
+
+	return 0;
+}
+
+static int ppc_hv_gpci_cpu_offline(unsigned int cpu)
+{
+	int target;
+
+	/* Check if exiting cpu is used for collecting gpci events */
+	if (!cpumask_test_and_clear_cpu(cpu, &hv_gpci_cpumask))
+		return 0;
+
+	/* Find a new cpu to collect gpci events */
+	target = cpumask_last(cpu_active_mask);
+
+	if (target < 0 || target >= nr_cpu_ids) {
+		pr_err("hv_gpci: CPU hotplug init failed\n");
+		return -1;
+	}
+
+	/* Migrate gpci events to the new target */
+	cpumask_set_cpu(target, &hv_gpci_cpumask);
+	perf_pmu_migrate_context(&h_gpci_pmu, cpu, target);
+
+	return 0;
+}
+
+static int hv_gpci_cpu_hotplug_init(void)
+{
+	return cpuhp_setup_state(CPUHP_AP_PERF_POWERPC_HV_GPCI_ONLINE,
+			  "perf/powerpc/hv_gcpi:online",
+			  ppc_hv_gpci_cpu_online,
+			  ppc_hv_gpci_cpu_offline);
+}
 
 static int hv_gpci_init(void)
 {
@@ -299,6 +344,11 @@ static int hv_gpci_init(void)
 				hret);
 		return -ENODEV;
 	}
+
+	/* init cpuhotplug */
+	r = hv_gpci_cpu_hotplug_init();
+	if (r)
+		return r;
 
 	/* sampling not supported */
 	h_gpci_pmu.capabilities |= PERF_PMU_CAP_NO_INTERRUPT;

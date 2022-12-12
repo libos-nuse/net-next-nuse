@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef LINUX_BCMA_PRIVATE_H_
 #define LINUX_BCMA_PRIVATE_H_
 
@@ -8,16 +9,14 @@
 #include <linux/bcma/bcma.h>
 #include <linux/delay.h>
 
-#define BCMA_CORE_SIZE		0x1000
-
 #define bcma_err(bus, fmt, ...) \
-	pr_err("bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
+	dev_err((bus)->dev, "bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
 #define bcma_warn(bus, fmt, ...) \
-	pr_warn("bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
+	dev_warn((bus)->dev, "bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
 #define bcma_info(bus, fmt, ...) \
-	pr_info("bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
+	dev_info((bus)->dev, "bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
 #define bcma_debug(bus, fmt, ...) \
-	pr_debug("bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
+	dev_dbg((bus)->dev, "bus%d: " fmt, (bus)->num, ##__VA_ARGS__)
 
 struct bcma_bus;
 
@@ -34,7 +33,6 @@ int __init bcma_bus_early_register(struct bcma_bus *bus);
 int bcma_bus_suspend(struct bcma_bus *bus);
 int bcma_bus_resume(struct bcma_bus *bus);
 #endif
-struct device *bcma_bus_get_host_dev(struct bcma_bus *bus);
 
 /* scan.c */
 void bcma_detect_chip(struct bcma_bus *bus);
@@ -49,7 +47,6 @@ void bcma_core_chipcommon_init(struct bcma_drv_cc *cc);
 void bcma_chipco_bcm4331_ext_pa_lines_ctl(struct bcma_drv_cc *cc, bool enable);
 #ifdef CONFIG_BCMA_DRIVER_MIPS
 void bcma_chipco_serial_init(struct bcma_drv_cc *cc);
-extern struct platform_device bcma_pflash_dev;
 #endif /* CONFIG_BCMA_DRIVER_MIPS */
 
 /* driver_chipcommon_b.c */
@@ -61,6 +58,21 @@ void bcma_pmu_early_init(struct bcma_drv_cc *cc);
 void bcma_pmu_init(struct bcma_drv_cc *cc);
 u32 bcma_pmu_get_alp_clock(struct bcma_drv_cc *cc);
 u32 bcma_pmu_get_cpu_clock(struct bcma_drv_cc *cc);
+
+/**************************************************
+ * driver_chipcommon_sflash.c
+ **************************************************/
+
+#ifdef CONFIG_BCMA_PFLASH
+extern struct platform_device bcma_pflash_dev;
+int bcma_pflash_init(struct bcma_drv_cc *cc);
+#else
+static inline int bcma_pflash_init(struct bcma_drv_cc *cc)
+{
+	bcma_err(cc->core->bus, "Parallel flash not supported\n");
+	return 0;
+}
+#endif /* CONFIG_BCMA_PFLASH */
 
 #ifdef CONFIG_BCMA_SFLASH
 /* driver_chipcommon_sflash.c */

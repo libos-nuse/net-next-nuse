@@ -1,9 +1,30 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/module.h>
 #include <linux/gfp.h>
 #include <linux/slab.h>
 #include <linux/pagemap.h>
 #include <linux/highmem.h>
 #include <linux/ceph/pagelist.h>
+
+struct ceph_pagelist *ceph_pagelist_alloc(gfp_t gfp_flags)
+{
+	struct ceph_pagelist *pl;
+
+	pl = kmalloc(sizeof(*pl), gfp_flags);
+	if (!pl)
+		return NULL;
+
+	INIT_LIST_HEAD(&pl->head);
+	pl->mapped_tail = NULL;
+	pl->length = 0;
+	pl->room = 0;
+	INIT_LIST_HEAD(&pl->free_list);
+	pl->num_pages_free = 0;
+	refcount_set(&pl->refcnt, 1);
+
+	return pl;
+}
+EXPORT_SYMBOL(ceph_pagelist_alloc);
 
 static void ceph_pagelist_unmap_tail(struct ceph_pagelist *pl)
 {
@@ -16,7 +37,7 @@ static void ceph_pagelist_unmap_tail(struct ceph_pagelist *pl)
 
 void ceph_pagelist_release(struct ceph_pagelist *pl)
 {
-	if (!atomic_dec_and_test(&pl->refcnt))
+	if (!refcount_dec_and_test(&pl->refcnt))
 		return;
 	ceph_pagelist_unmap_tail(pl);
 	while (!list_empty(&pl->head)) {
@@ -56,7 +77,7 @@ int ceph_pagelist_append(struct ceph_pagelist *pl, const void *buf, size_t len)
 		size_t bit = pl->room;
 		int ret;
 
-		memcpy(pl->mapped_tail + (pl->length & ~PAGE_CACHE_MASK),
+		memcpy(pl->mapped_tail + (pl->length & ~PAGE_MASK),
 		       buf, bit);
 		pl->length += bit;
 		pl->room -= bit;
@@ -67,7 +88,7 @@ int ceph_pagelist_append(struct ceph_pagelist *pl, const void *buf, size_t len)
 			return ret;
 	}
 
-	memcpy(pl->mapped_tail + (pl->length & ~PAGE_CACHE_MASK), buf, len);
+	memcpy(pl->mapped_tail + (pl->length & ~PAGE_MASK), buf, len);
 	pl->length += len;
 	pl->room -= len;
 	return 0;

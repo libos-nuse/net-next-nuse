@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * C293PCIE Board Setup
  *
  * Copyright 2013 Freescale Semiconductor Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/stddef.h>
@@ -54,9 +50,7 @@ machine_arch_initcall(c293_pcie, mpc85xx_common_publish_devices);
  */
 static int __init c293_pcie_probe(void)
 {
-	unsigned long root = of_get_flat_dt_root();
-
-	if (of_flat_dt_is_compatible(root, "fsl,C293PCIE"))
+	if (of_machine_is_compatible("fsl,C293PCIE"))
 		return 1;
 	return 0;
 }
@@ -67,7 +61,6 @@ define_machine(c293_pcie) {
 	.setup_arch		= c293_pcie_setup_arch,
 	.init_IRQ		= c293_pcie_pic_init,
 	.get_irq		= mpic_get_irq,
-	.restart		= fsl_rstcr_restart,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 };

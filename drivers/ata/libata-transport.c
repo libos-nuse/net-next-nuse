@@ -1,6 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Copyright 2008 ioogle, Inc.  All rights reserved.
- *	Released under GPL v2.
  *
  * Libata transport class.
  *
@@ -208,7 +208,7 @@ show_ata_port_##name(struct device *dev,				\
 {									\
 	struct ata_port *ap = transport_class_to_port(dev);		\
 									\
-	return snprintf(buf, 20, format_string, cast ap->field);	\
+	return scnprintf(buf, 20, format_string, cast ap->field);	\
 }
 
 #define ata_port_simple_attr(field, name, format_string, type)		\
@@ -224,7 +224,8 @@ static DECLARE_TRANSPORT_CLASS(ata_port_class,
 
 static void ata_tport_release(struct device *dev)
 {
-	put_device(dev->parent);
+	struct ata_port *ap = tdev_to_port(dev);
+	ata_host_put(ap->host);
 }
 
 /**
@@ -284,7 +285,8 @@ int ata_tport_add(struct device *parent,
 	device_initialize(dev);
 	dev->type = &ata_port_type;
 
-	dev->parent = get_device(parent);
+	dev->parent = parent;
+	ata_host_get(ap->host);
 	dev->release = ata_tport_release;
 	dev_set_name(dev, "ata%d", ap->print_id);
 	transport_setup_device(dev);
@@ -315,6 +317,7 @@ int ata_tport_add(struct device *parent,
  tport_err:
 	transport_destroy_device(dev);
 	put_device(dev);
+	ata_host_put(ap->host);
 	return error;
 }
 
@@ -348,7 +351,6 @@ static DECLARE_TRANSPORT_CLASS(ata_link_class,
 
 static void ata_tlink_release(struct device *dev)
 {
-	put_device(dev->parent);
 }
 
 /**
@@ -410,7 +412,7 @@ int ata_tlink_add(struct ata_link *link)
 	int error;
 
 	device_initialize(dev);
-	dev->parent = get_device(&ap->tdev);
+	dev->parent = &ap->tdev;
 	dev->release = ata_tlink_release;
 	if (ata_is_host_link(link))
 		dev_set_name(dev, "link%d", ap->print_id);
@@ -477,7 +479,7 @@ show_ata_dev_##field(struct device *dev,				\
 {									\
 	struct ata_device *ata_dev = transport_class_to_dev(dev);	\
 									\
-	return snprintf(buf, 20, format_string, cast ata_dev->field);	\
+	return scnprintf(buf, 20, format_string, cast ata_dev->field);	\
 }
 
 #define ata_dev_simple_attr(field, format_string, type)	\
@@ -495,12 +497,13 @@ struct ata_show_ering_arg {
 static int ata_show_ering(struct ata_ering_entry *ent, void *void_arg)
 {
 	struct ata_show_ering_arg* arg = void_arg;
-	struct timespec time;
+	u64 seconds;
+	u32 rem;
 
-	jiffies_to_timespec(ent->timestamp,&time);
+	seconds = div_u64_rem(ent->timestamp, HZ, &rem);
 	arg->written += sprintf(arg->buf + arg->written,
-			       "[%5lu.%06lu]",
-			       time.tv_sec, time.tv_nsec);
+			        "[%5llu.%09lu]", seconds,
+				rem * NSEC_PER_SEC / HZ);
 	arg->written += get_ata_err_names(ent->err_mask,
 					  arg->buf + arg->written);
 	return 0;
@@ -530,7 +533,7 @@ show_ata_dev_id(struct device *dev,
 	if (ata_dev->class == ATA_DEV_PMP)
 		return 0;
 	for(i=0;i<ATA_ID_WORDS;i++)  {
-		written += snprintf(buf+written, 20, "%04x%c",
+		written += scnprintf(buf+written, 20, "%04x%c",
 				    ata_dev->id[i],
 				    ((i+1) & 7) ? ' ' : '\n');
 	}
@@ -549,7 +552,7 @@ show_ata_dev_gscr(struct device *dev,
 	if (ata_dev->class != ATA_DEV_PMP)
 		return 0;
 	for(i=0;i<SATA_PMP_GSCR_DWORDS;i++)  {
-		written += snprintf(buf+written, 20, "%08x%c",
+		written += scnprintf(buf+written, 20, "%08x%c",
 				    ata_dev->gscr[i],
 				    ((i+1) & 3) ? ' ' : '\n');
 	}
@@ -578,7 +581,7 @@ show_ata_dev_trim(struct device *dev,
 	else
 		mode = "unqueued";
 
-	return snprintf(buf, 20, "%s\n", mode);
+	return scnprintf(buf, 20, "%s\n", mode);
 }
 
 static DEVICE_ATTR(trim, S_IRUGO, show_ata_dev_trim, NULL);
@@ -588,7 +591,6 @@ static DECLARE_TRANSPORT_CLASS(ata_dev_class,
 
 static void ata_tdev_release(struct device *dev)
 {
-	put_device(dev->parent);
 }
 
 /**
@@ -661,7 +663,7 @@ static int ata_tdev_add(struct ata_device *ata_dev)
 	int error;
 
 	device_initialize(dev);
-	dev->parent = get_device(&link->tdev);
+	dev->parent = &link->tdev;
 	dev->release = ata_tdev_release;
 	if (ata_is_host_link(link))
 		dev_set_name(dev, "dev%d.%d", ap->print_id,ata_dev->devno);
@@ -715,7 +717,6 @@ struct scsi_transport_template *ata_attach_transport(void)
 		return NULL;
 
 	i->t.eh_strategy_handler	= ata_scsi_error;
-	i->t.eh_timed_out		= ata_scsi_timed_out;
 	i->t.user_scan			= ata_scsi_user_scan;
 
 	i->t.host_attrs.ac.attrs = &i->port_attrs[0];

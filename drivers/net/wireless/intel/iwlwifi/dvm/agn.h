@@ -16,16 +16,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110,
- * USA
- *
  * The full GNU General Public License is included in this distribution
  * in the file called COPYING.
  *
  * Contact Information:
- *  Intel Linux Wireless <ilw@linux.intel.com>
+ *  Intel Linux Wireless <linuxwifi@intel.com>
  * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
  *
  * BSD LICENSE
@@ -158,7 +153,7 @@ void iwl_set_rxon_channel(struct iwl_priv *priv, struct ieee80211_channel *ch,
 			 struct iwl_rxon_context *ctx);
 void iwl_set_flags_for_band(struct iwl_priv *priv,
 			    struct iwl_rxon_context *ctx,
-			    enum ieee80211_band band,
+			    enum nl80211_band band,
 			    struct ieee80211_vif *vif);
 
 /* uCode */
@@ -186,7 +181,7 @@ int iwl_send_statistics_request(struct iwl_priv *priv,
 				u8 flags, bool clear);
 
 static inline const struct ieee80211_supported_band *iwl_get_hw_mode(
-			struct iwl_priv *priv, enum ieee80211_band band)
+			struct iwl_priv *priv, enum nl80211_band band)
 {
 	return priv->hw->wiphy->bands[band];
 }
@@ -198,7 +193,7 @@ int iwlagn_suspend(struct iwl_priv *priv, struct cfg80211_wowlan *wowlan);
 #endif
 
 /* rx */
-int iwlagn_hwrate_to_mac80211_idx(u32 rate_n_flags, enum ieee80211_band band);
+int iwlagn_hwrate_to_mac80211_idx(u32 rate_n_flags, enum nl80211_band band);
 void iwl_setup_rx_handlers(struct iwl_priv *priv);
 void iwl_chswitch_done(struct iwl_priv *priv, bool is_success);
 
@@ -258,7 +253,7 @@ void iwl_cancel_scan_deferred_work(struct iwl_priv *priv);
 int __must_check iwl_scan_initiate(struct iwl_priv *priv,
 				   struct ieee80211_vif *vif,
 				   enum iwl_scan_type scan_type,
-				   enum ieee80211_band band);
+				   enum nl80211_band band);
 
 /* For faster active scanning, scan will move to the next channel if fewer than
  * PLCP_QUIET_THRESH packets are heard on this channel within
@@ -444,13 +439,10 @@ static inline void iwl_dvm_set_pmi(struct iwl_priv *priv, bool state)
 }
 
 #ifdef CONFIG_IWLWIFI_DEBUGFS
-int iwl_dbgfs_register(struct iwl_priv *priv, struct dentry *dbgfs_dir);
+void iwl_dbgfs_register(struct iwl_priv *priv, struct dentry *dbgfs_dir);
 #else
-static inline int iwl_dbgfs_register(struct iwl_priv *priv,
-				     struct dentry *dbgfs_dir)
-{
-	return 0;
-}
+static inline void iwl_dbgfs_register(struct iwl_priv *priv,
+				      struct dentry *dbgfs_dir) { }
 #endif /* CONFIG_IWLWIFI_DEBUGFS */
 
 #ifdef CONFIG_IWLWIFI_DEBUG
@@ -473,13 +465,4 @@ do {									\
 } while (0)
 #endif				/* CONFIG_IWLWIFI_DEBUG */
 
-extern const char *const iwl_dvm_cmd_strings[REPLY_MAX + 1];
-
-static inline const char *iwl_dvm_get_cmd_string(u8 cmd)
-{
-	const char *s = iwl_dvm_cmd_strings[cmd];
-	if (s)
-		return s;
-	return "UNKNOWN";
-}
 #endif /* __iwl_agn_h__ */

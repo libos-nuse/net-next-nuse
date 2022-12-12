@@ -1,26 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Marvell 88SE64xx/88SE94xx main function head file
  *
  * Copyright 2007 Red Hat, Inc.
  * Copyright 2008 Marvell. <kewei@marvell.com>
  * Copyright 2009-2011 Marvell. <yuxiangl@marvell.com>
- *
- * This file is licensed under GPLv2.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; version 2 of the
- * License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
- * USA
 */
 
 #ifndef _MV_SAS_H_
@@ -66,9 +50,6 @@ extern struct mvs_info *tgt_mvi;
 extern const struct mvs_dispatch mvs_64xx_dispatch;
 extern const struct mvs_dispatch mvs_94xx_dispatch;
 
-#define DEV_IS_EXPANDER(type)	\
-	((type == SAS_EDGE_EXPANDER_DEVICE) || (type == SAS_FANOUT_EXPANDER_DEVICE))
-
 #define bit(n) ((u64)1 << n)
 
 #define for_each_phy(__lseq_mask, __mc, __lseq)			\
@@ -103,6 +84,7 @@ enum dev_reset {
 };
 
 struct mvs_info;
+struct mvs_prv_info;
 
 struct mvs_dispatch {
 	char *name;
@@ -172,6 +154,8 @@ struct mvs_dispatch {
 				int buf_len, int from, void *prd);
 	void (*tune_interrupt)(struct mvs_info *mvi, u32 time);
 	void (*non_spec_ncq_error)(struct mvs_info *mvi);
+	int (*gpio_write)(struct mvs_prv_info *mvs_prv, u8 reg_type,
+			u8 reg_index, u8 reg_count, u8 *write_data);
 
 };
 
@@ -244,7 +228,6 @@ struct mvs_device {
 	enum sas_device_type dev_type;
 	struct mvs_info *mvi_info;
 	struct domain_device *sas_device;
-	struct timer_list timer;
 	u32 attached_phy;
 	u32 device_id;
 	u32 running_req;
@@ -411,7 +394,7 @@ struct mvs_info {
 	dma_addr_t bulk_buffer_dma1;
 #define TRASH_BUCKET_SIZE    	0x20000
 	void *dma_pool;
-	struct mvs_slot_info slot_info[0];
+	struct mvs_slot_info slot_info[];
 };
 
 struct mvs_prv_info{
@@ -476,5 +459,7 @@ void mvs_int_port(struct mvs_info *mvi, int phy_no, u32 events);
 void mvs_update_phyinfo(struct mvs_info *mvi, int i, int get_st);
 int mvs_int_rx(struct mvs_info *mvi, bool self_clear);
 struct mvs_device *mvs_find_dev_by_reg_set(struct mvs_info *mvi, u8 reg_set);
+int mvs_gpio_write(struct sas_ha_struct *, u8 reg_type, u8 reg_index,
+			u8 reg_count, u8 *write_data);
 #endif
 

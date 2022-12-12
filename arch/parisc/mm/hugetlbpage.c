@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * PARISC64 Huge TLB page support.
  *
@@ -8,12 +9,12 @@
 
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/sched/mm.h>
 #include <linux/hugetlb.h>
 #include <linux/pagemap.h>
 #include <linux/sysctl.h>
 
 #include <asm/mman.h>
-#include <asm/pgalloc.h>
 #include <asm/tlb.h>
 #include <asm/tlbflush.h>
 #include <asm/cacheflush.h>
@@ -47,6 +48,7 @@ pte_t *huge_pte_alloc(struct mm_struct *mm,
 			unsigned long addr, unsigned long sz)
 {
 	pgd_t *pgd;
+	p4d_t *p4d;
 	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte = NULL;
@@ -59,18 +61,21 @@ pte_t *huge_pte_alloc(struct mm_struct *mm,
 	addr &= HPAGE_MASK;
 
 	pgd = pgd_offset(mm, addr);
-	pud = pud_alloc(mm, pgd, addr);
+	p4d = p4d_offset(pgd, addr);
+	pud = pud_alloc(mm, p4d, addr);
 	if (pud) {
 		pmd = pmd_alloc(mm, pud, addr);
 		if (pmd)
-			pte = pte_alloc_map(mm, NULL, pmd, addr);
+			pte = pte_alloc_map(mm, pmd, addr);
 	}
 	return pte;
 }
 
-pte_t *huge_pte_offset(struct mm_struct *mm, unsigned long addr)
+pte_t *huge_pte_offset(struct mm_struct *mm,
+		       unsigned long addr, unsigned long sz)
 {
 	pgd_t *pgd;
+	p4d_t *p4d;
 	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte = NULL;
@@ -79,11 +84,14 @@ pte_t *huge_pte_offset(struct mm_struct *mm, unsigned long addr)
 
 	pgd = pgd_offset(mm, addr);
 	if (!pgd_none(*pgd)) {
-		pud = pud_offset(pgd, addr);
-		if (!pud_none(*pud)) {
-			pmd = pmd_offset(pud, addr);
-			if (!pmd_none(*pmd))
-				pte = pte_offset_map(pmd, addr);
+		p4d = p4d_offset(pgd, addr);
+		if (!p4d_none(*p4d)) {
+			pud = pud_offset(p4d, addr);
+			if (!pud_none(*pud)) {
+				pmd = pmd_offset(pud, addr);
+				if (!pmd_none(*pmd))
+					pte = pte_offset_map(pmd, addr);
+			}
 		}
 	}
 	return pte;
@@ -105,15 +113,13 @@ static inline void purge_tlb_entries_huge(struct mm_struct *mm, unsigned long ad
 	addr |= _HUGE_PAGE_SIZE_ENCODING_DEFAULT;
 
 	for (i = 0; i < (1 << (HPAGE_SHIFT-REAL_HPAGE_SHIFT)); i++) {
-		mtsp(mm->context, 1);
-		pdtlb(addr);
-		if (unlikely(split_tlb))
-			pitlb(addr);
+		purge_tlb_entries(mm, addr);
 		addr += (1UL << REAL_HPAGE_SHIFT);
 	}
 }
 
-void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
+/* __set_huge_pte_at() must be called holding the pa_tlb_lock. */
+static void __set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
 		     pte_t *ptep, pte_t entry)
 {
 	unsigned long addr_start;
@@ -123,13 +129,8 @@ void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
 	addr_start = addr;
 
 	for (i = 0; i < (1 << HUGETLB_PAGE_ORDER); i++) {
-		/* Directly write pte entry.  We could call set_pte_at(mm, addr, ptep, entry)
-		 * instead, but then we get double locking on pa_tlb_lock. */
-		*ptep = entry;
+		set_pte(ptep, entry);
 		ptep++;
-
-		/* Drop the PAGE_SIZE/non-huge tlb entry */
-		purge_tlb_entries(mm, addr);
 
 		addr += PAGE_SIZE;
 		pte_val(entry) += PAGE_SIZE;
@@ -138,17 +139,61 @@ void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
 	purge_tlb_entries_huge(mm, addr_start);
 }
 
+void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
+		     pte_t *ptep, pte_t entry)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(pgd_spinlock((mm)->pgd), flags);
+	__set_huge_pte_at(mm, addr, ptep, entry);
+	spin_unlock_irqrestore(pgd_spinlock((mm)->pgd), flags);
+}
+
 
 pte_t huge_ptep_get_and_clear(struct mm_struct *mm, unsigned long addr,
 			      pte_t *ptep)
 {
+	unsigned long flags;
 	pte_t entry;
 
+	spin_lock_irqsave(pgd_spinlock((mm)->pgd), flags);
 	entry = *ptep;
-	set_huge_pte_at(mm, addr, ptep, __pte(0));
+	__set_huge_pte_at(mm, addr, ptep, __pte(0));
+	spin_unlock_irqrestore(pgd_spinlock((mm)->pgd), flags);
 
 	return entry;
 }
+
+
+void huge_ptep_set_wrprotect(struct mm_struct *mm,
+				unsigned long addr, pte_t *ptep)
+{
+	unsigned long flags;
+	pte_t old_pte;
+
+	spin_lock_irqsave(pgd_spinlock((mm)->pgd), flags);
+	old_pte = *ptep;
+	__set_huge_pte_at(mm, addr, ptep, pte_wrprotect(old_pte));
+	spin_unlock_irqrestore(pgd_spinlock((mm)->pgd), flags);
+}
+
+int huge_ptep_set_access_flags(struct vm_area_struct *vma,
+				unsigned long addr, pte_t *ptep,
+				pte_t pte, int dirty)
+{
+	unsigned long flags;
+	int changed;
+	struct mm_struct *mm = vma->vm_mm;
+
+	spin_lock_irqsave(pgd_spinlock((mm)->pgd), flags);
+	changed = !pte_same(*ptep, pte);
+	if (changed) {
+		__set_huge_pte_at(mm, addr, ptep, pte);
+	}
+	spin_unlock_irqrestore(pgd_spinlock((mm)->pgd), flags);
+	return changed;
+}
+
 
 int pmd_huge(pmd_t pmd)
 {

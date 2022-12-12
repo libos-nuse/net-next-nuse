@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * GE IMP3A Board Setup
  *
  * Author Martyn Welch <martyn.welch@ge.com>
  *
  * Copyright 2010 GE Intelligent Platforms Embedded Systems, Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  *
  * Based on: mpc85xx_ds.c (MPC85xx DS Board Setup)
  * Copyright 2007 Freescale Semiconductor Inc.
@@ -47,9 +43,8 @@ void __init ge_imp3a_pic_init(void)
 	struct mpic *mpic;
 	struct device_node *np;
 	struct device_node *cascade_node = NULL;
-	unsigned long root = of_get_flat_dt_root();
 
-	if (of_flat_dt_is_compatible(root, "fsl,MPC8572DS-CAMP")) {
+	if (of_machine_is_compatible("fsl,MPC8572DS-CAMP")) {
 		mpic = mpic_alloc(NULL, 0,
 			MPIC_NO_RESET |
 			MPIC_BIG_ENDIAN |
@@ -198,14 +193,10 @@ static void ge_imp3a_show_cpuinfo(struct seq_file *m)
  */
 static int __init ge_imp3a_probe(void)
 {
-	unsigned long root = of_get_flat_dt_root();
-
-	return of_flat_dt_is_compatible(root, "ge,IMP3A");
+	return of_machine_is_compatible("ge,IMP3A");
 }
 
 machine_arch_initcall(ge_imp3a, mpc85xx_common_publish_devices);
-
-machine_arch_initcall(ge_imp3a, swiotlb_setup_bus_notifier);
 
 define_machine(ge_imp3a) {
 	.name			= "GE_IMP3A",
@@ -218,7 +209,6 @@ define_machine(ge_imp3a) {
 	.pcibios_fixup_phb      = fsl_pcibios_fixup_phb,
 #endif
 	.get_irq		= mpic_get_irq,
-	.restart		= fsl_rstcr_restart,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 };

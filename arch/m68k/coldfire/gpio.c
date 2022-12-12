@@ -1,22 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Coldfire generic GPIO support.
  *
  * (C) Copyright 2009, Steven King <sfking@fdwdc.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/device.h>
+#include <linux/gpio/driver.h>
 
 #include <linux/io.h>
 #include <asm/coldfire.h>
@@ -121,7 +114,7 @@ static int mcfgpio_direction_input(struct gpio_chip *chip, unsigned offset)
 
 static int mcfgpio_get_value(struct gpio_chip *chip, unsigned offset)
 {
-	return __mcfgpio_get_value(offset);
+	return !!__mcfgpio_get_value(offset);
 }
 
 static int mcfgpio_direction_output(struct gpio_chip *chip, unsigned offset,
@@ -158,11 +151,6 @@ static int mcfgpio_to_irq(struct gpio_chip *chip, unsigned offset)
 		return -EINVAL;
 }
 
-static struct bus_type mcfgpio_subsys = {
-	.name		= "gpio",
-	.dev_name	= "gpio",
-};
-
 static struct gpio_chip mcfgpio_chip = {
 	.label			= "mcfgpio",
 	.request		= mcfgpio_request,
@@ -178,8 +166,7 @@ static struct gpio_chip mcfgpio_chip = {
 
 static int __init mcfgpio_sysinit(void)
 {
-	gpiochip_add(&mcfgpio_chip);
-	return subsys_system_register(&mcfgpio_subsys, NULL);
+	return gpiochip_add_data(&mcfgpio_chip, NULL);
 }
 
 core_initcall(mcfgpio_sysinit);

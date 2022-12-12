@@ -1,19 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) International Business Machines Corp., 2006
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
- * the GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  *
  * Author: Artem Bityutskiy (Битюцкий Артём)
  */
@@ -152,4 +139,53 @@ int ubi_check_pattern(const void *buf, uint8_t patt, int size)
 		if (((const uint8_t *)buf)[i] != patt)
 			return 0;
 	return 1;
+}
+
+/* Normal UBI messages */
+void ubi_msg(const struct ubi_device *ubi, const char *fmt, ...)
+{
+	struct va_format vaf;
+	va_list args;
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	pr_notice(UBI_NAME_STR "%d: %pV\n", ubi->ubi_num, &vaf);
+
+	va_end(args);
+}
+
+/* UBI warning messages */
+void ubi_warn(const struct ubi_device *ubi, const char *fmt, ...)
+{
+	struct va_format vaf;
+	va_list args;
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	pr_warn(UBI_NAME_STR "%d warning: %ps: %pV\n",
+		ubi->ubi_num, __builtin_return_address(0), &vaf);
+
+	va_end(args);
+}
+
+/* UBI error messages */
+void ubi_err(const struct ubi_device *ubi, const char *fmt, ...)
+{
+	struct va_format vaf;
+	va_list args;
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	pr_err(UBI_NAME_STR "%d error: %ps: %pV\n",
+	       ubi->ubi_num, __builtin_return_address(0), &vaf);
+	va_end(args);
 }

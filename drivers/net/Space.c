@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -21,11 +22,6 @@
  *		Paul Gortmaker (06/98):
  *		 - sort probes in a sane way, make sure all (safe) probes
  *		   get run once & failed autoprobes don't autoprobe again.
- *
- *		This program is free software; you can redistribute it and/or
- *		modify it under the terms of the GNU General Public License
- *		as published by the Free Software Foundation; either version
- *		2 of the License, or (at your option) any later version.
  */
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -35,8 +31,8 @@
 #include <net/Space.h>
 
 /* A unified ethernet device probe.  This is the easiest way to have every
-   ethernet adaptor have the name "eth[0123...]".
-   */
+ * ethernet adaptor have the name "eth[0123...]".
+ */
 
 struct devprobe2 {
 	struct net_device *(*probe)(int unit);
@@ -46,6 +42,7 @@ struct devprobe2 {
 static int __init probe_list2(int unit, struct devprobe2 *p, int autoprobe)
 {
 	struct net_device *dev;
+
 	for (; p->probe; p++) {
 		if (autoprobe && p->status)
 			continue;
@@ -58,8 +55,7 @@ static int __init probe_list2(int unit, struct devprobe2 *p, int autoprobe)
 	return -ENODEV;
 }
 
-/*
- * ISA probes that touch addresses < 0x400 (including those that also
+/* ISA probes that touch addresses < 0x400 (including those that also
  * look for EISA/PCI cards in addition to ISA cards).
  */
 static struct devprobe2 isa_probes[] __initdata = {
@@ -86,11 +82,11 @@ static struct devprobe2 isa_probes[] __initdata = {
 #endif
 #ifdef CONFIG_CS89x0
 #ifndef CONFIG_CS89x0_PLATFORM
- 	{cs89x0_probe, 0},
+	{cs89x0_probe, 0},
 #endif
 #endif
-#if defined(CONFIG_MVME16x_NET) || defined(CONFIG_BVME6000_NET)	/* Intel I82596 */
-	{i82596_probe, 0},
+#if defined(CONFIG_MVME16x_NET) || defined(CONFIG_BVME6000_NET)	/* Intel */
+	{i82596_probe, 0},					/* I82596 */
 #endif
 #ifdef CONFIG_NI65
 	{ni65_probe, 0},
@@ -114,17 +110,10 @@ static struct devprobe2 m68k_probes[] __initdata = {
 #ifdef CONFIG_MVME147_NET	/* MVME147 internal Ethernet */
 	{mvme147lance_probe, 0},
 #endif
-#ifdef CONFIG_MAC8390           /* NuBus NS8390-based cards */
-	{mac8390_probe, 0},
-#endif
-#ifdef CONFIG_MAC89x0
- 	{mac89x0_probe, 0},
-#endif
 	{NULL, 0},
 };
 
-/*
- * Unified ethernet device probe, segmented per architecture and
+/* Unified ethernet device probe, segmented per architecture and
  * per bus interface. This drives the legacy devices only for now.
  */
 
@@ -135,7 +124,7 @@ static void __init ethif_probe2(int unit)
 	if (base_addr == 1)
 		return;
 
-	(void)(	probe_list2(unit, m68k_probes, base_addr == 0) &&
+	(void)(probe_list2(unit, m68k_probes, base_addr == 0) &&
 		probe_list2(unit, isa_probes, base_addr == 0));
 }
 

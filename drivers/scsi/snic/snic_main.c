@@ -98,11 +98,18 @@ snic_slave_configure(struct scsi_device *sdev)
 static int
 snic_change_queue_depth(struct scsi_device *sdev, int qdepth)
 {
+	struct snic *snic = shost_priv(sdev->host);
 	int qsz = 0;
 
 	qsz = min_t(u32, qdepth, SNIC_MAX_QUEUE_DEPTH);
+	if (qsz < sdev->queue_depth)
+		atomic64_inc(&snic->s_stats.misc.qsz_rampdown);
+	else if (qsz > sdev->queue_depth)
+		atomic64_inc(&snic->s_stats.misc.qsz_rampup);
+
+	atomic64_set(&snic->s_stats.misc.last_qsz, sdev->queue_depth);
+
 	scsi_change_queue_depth(sdev, qsz);
-	SNIC_INFO("QDepth Changed to %d\n", sdev->queue_depth);
 
 	return sdev->queue_depth;
 }
@@ -120,7 +127,6 @@ static struct scsi_host_template snic_host_template = {
 	.this_id = -1,
 	.cmd_per_lun = SNIC_DFLT_QUEUE_DEPTH,
 	.can_queue = SNIC_MAX_IO_REQ,
-	.use_clustering = ENABLE_CLUSTERING,
 	.sg_tablesize = SNIC_MAX_SG_DESC_CNT,
 	.max_sectors = 0x800,
 	.shost_attrs = snic_attrs,
@@ -391,12 +397,7 @@ snic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		       PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
 #ifdef CONFIG_SCSI_SNIC_DEBUG_FS
 	/* Per snic debugfs init */
-	ret = snic_stats_debugfs_init(snic);
-	if (ret) {
-		SNIC_HOST_ERR(snic->shost,
-			      "Failed to initialize debugfs stats\n");
-		snic_stats_debugfs_remove(snic);
-	}
+	snic_stats_debugfs_init(snic);
 #endif
 
 	/* Setup PCI Resources */
@@ -428,36 +429,16 @@ snic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * limitation for the device. Try 43-bit first, and
 	 * fail to 32-bit.
 	 */
-	ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(43));
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(43));
 	if (ret) {
-		ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 		if (ret) {
 			SNIC_HOST_ERR(shost,
 				      "No Usable DMA Configuration, aborting %d\n",
 				      ret);
-
-			goto err_rel_regions;
-		}
-
-		ret = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
-		if (ret) {
-			SNIC_HOST_ERR(shost,
-				      "Unable to obtain 32-bit DMA for consistent allocations, aborting: %d\n",
-				      ret);
-
-			goto err_rel_regions;
-		}
-	} else {
-		ret = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(43));
-		if (ret) {
-			SNIC_HOST_ERR(shost,
-				      "Unable to obtain 43-bit DMA for consistent allocations. aborting: %d\n",
-				      ret);
-
 			goto err_rel_regions;
 		}
 	}
-
 
 	/* Map vNIC resources from BAR0 */
 	if (!(pci_resource_flags(pdev, 0) & IORESOURCE_MEM)) {
@@ -584,6 +565,7 @@ snic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (!pool) {
 		SNIC_HOST_ERR(shost, "dflt sgl pool creation failed\n");
 
+		ret = -ENOMEM;
 		goto err_free_res;
 	}
 
@@ -594,6 +576,7 @@ snic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (!pool) {
 		SNIC_HOST_ERR(shost, "max sgl pool creation failed\n");
 
+		ret = -ENOMEM;
 		goto err_free_dflt_sgl_pool;
 	}
 
@@ -604,6 +587,7 @@ snic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (!pool) {
 		SNIC_HOST_ERR(shost, "snic tmreq info pool creation failed.\n");
 
+		ret = -ENOMEM;
 		goto err_free_max_sgl_pool;
 	}
 
@@ -622,19 +606,6 @@ snic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			      ret);
 
 		goto err_free_tmreq_pool;
-	}
-
-	/*
-	 * Initialization done with PCI system, hardware, firmware.
-	 * Add shost to SCSI
-	 */
-	ret = snic_add_host(shost, pdev);
-	if (ret) {
-		SNIC_HOST_ERR(shost,
-			      "Adding scsi host Failed ... exiting. %d\n",
-			      ret);
-
-		goto err_notify_unset;
 	}
 
 	spin_lock_irqsave(&snic_glob->snic_list_lock, flags);
@@ -669,8 +640,6 @@ snic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	for (i = 0; i < snic->intr_count; i++)
 		svnic_intr_unmask(&snic->intr[i]);
 
-	snic_set_state(snic, SNIC_ONLINE);
-
 	/* Get snic params */
 	ret = snic_get_conf(snic);
 	if (ret) {
@@ -680,6 +649,21 @@ snic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 		goto err_get_conf;
 	}
+
+	/*
+	 * Initialization done with PCI system, hardware, firmware.
+	 * Add shost to SCSI
+	 */
+	ret = snic_add_host(shost, pdev);
+	if (ret) {
+		SNIC_HOST_ERR(shost,
+			      "Adding scsi host Failed ... exiting. %d\n",
+			      ret);
+
+		goto err_get_conf;
+	}
+
+	snic_set_state(snic, SNIC_ONLINE);
 
 	ret = snic_disc_start(snic);
 	if (ret) {
@@ -705,6 +689,8 @@ err_req_intr:
 	svnic_dev_disable(snic->vdev);
 
 err_vdev_enable:
+	svnic_dev_notify_unset(snic->vdev);
+
 	for (i = 0; i < snic->wq_count; i++) {
 		int rc = 0;
 
@@ -717,9 +703,6 @@ err_vdev_enable:
 		}
 	}
 	snic_del_host(snic->shost);
-
-err_notify_unset:
-	svnic_dev_notify_unset(snic->vdev);
 
 err_free_tmreq_pool:
 	mempool_destroy(snic->req_pool[SNIC_REQ_TM_CACHE]);
@@ -862,12 +845,7 @@ snic_global_data_init(void)
 #ifdef CONFIG_SCSI_SNIC_DEBUG_FS
 	/* Debugfs related Initialization */
 	/* Create debugfs entries for snic */
-	ret = snic_debugfs_init();
-	if (ret < 0) {
-		SNIC_ERR("Failed to create sysfs dir for tracing and stats.\n");
-		snic_debugfs_term();
-		/* continue even if it fails */
-	}
+	snic_debugfs_init();
 
 	/* Trace related Initialization */
 	/* Allocate memory for trace buffer */

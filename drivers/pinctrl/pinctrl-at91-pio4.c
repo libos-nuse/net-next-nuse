@@ -1,24 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for the Atmel PIO4 controller
  *
  * Copyright (C) 2015 Atmel,
  *               2015 Ludovic Desroches <ludovic.desroches@atmel.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
+#include <dt-bindings/pinctrl/at91.h>
 #include <linux/clk.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pinctrl/pinconf.h>
@@ -47,6 +40,8 @@
 #define		ATMEL_PIO_IFSCEN_MASK		BIT(13)
 #define		ATMEL_PIO_OPD_MASK		BIT(14)
 #define		ATMEL_PIO_SCHMITT_MASK		BIT(15)
+#define		ATMEL_PIO_DRVSTR_MASK		GENMASK(17, 16)
+#define		ATMEL_PIO_DRVSTR_OFFSET		16
 #define		ATMEL_PIO_CFGR_EVTSEL_MASK	GENMASK(26, 24)
 #define		ATMEL_PIO_CFGR_EVTSEL_FALLING	(0 << 24)
 #define		ATMEL_PIO_CFGR_EVTSEL_RISING	(1 << 24)
@@ -72,6 +67,9 @@
 #define ATMEL_GET_PIN_NO(pinfunc)	((pinfunc) & 0xff)
 #define ATMEL_GET_PIN_FUNC(pinfunc)	((pinfunc >> 16) & 0xf)
 #define ATMEL_GET_PIN_IOSET(pinfunc)	((pinfunc >> 20) & 0xf)
+
+/* Custom pinconf parameters */
+#define ATMEL_PIN_CONFIG_DRIVE_STRENGTH	(PIN_CONFIG_END + 1)
 
 struct atmel_pioctrl_data {
 	unsigned nbanks;
@@ -108,6 +106,8 @@ struct atmel_pin {
  * @irq_domain: irq domain for the gpio controller.
  * @irqs: table containing the hw irq number of the bank. The index of the
  *     table is the bank id.
+ * @pm_wakeup_sources: bitmap of wakeup sources (lines)
+ * @pm_suspend_backup: backup/restore register values on suspend/resume
  * @dev: device entry for the Atmel PIO controller.
  * @node: node of the Atmel PIO controller.
  */
@@ -124,13 +124,21 @@ struct atmel_pioctrl {
 	struct irq_domain	*irq_domain;
 	int			*irqs;
 	unsigned		*pm_wakeup_sources;
-	unsigned		*pm_suspend_backup;
+	struct {
+		u32		imr;
+		u32		odsr;
+		u32		cfgr[ATMEL_PIO_NPINS_PER_BANK];
+	} *pm_suspend_backup;
 	struct device		*dev;
 	struct device_node	*node;
 };
 
 static const char * const atmel_functions[] = {
 	"GPIO", "A", "B", "C", "D", "E", "F", "G"
+};
+
+static const struct pinconf_generic_params atmel_custom_bindings[] = {
+	{"atmel,drive-strength", ATMEL_PIN_CONFIG_DRIVE_STRENGTH, 0},
 };
 
 /* --- GPIO --- */
@@ -248,6 +256,13 @@ static struct irq_chip atmel_gpio_irq_chip = {
 	.irq_set_wake	= atmel_gpio_irq_set_wake,
 };
 
+static int atmel_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
+{
+	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
+
+	return irq_find_mapping(atmel_pioctrl->irq_domain, offset);
+}
+
 static void atmel_gpio_irq_handler(struct irq_desc *desc)
 {
 	unsigned int irq = irq_desc_get_irq(desc);
@@ -281,8 +296,9 @@ static void atmel_gpio_irq_handler(struct irq_desc *desc)
 			break;
 
 		for_each_set_bit(n, &isr, BITS_PER_LONG)
-			generic_handle_irq(gpio_to_irq(bank *
-					ATMEL_PIO_NPINS_PER_BANK + n));
+			generic_handle_irq(atmel_gpio_to_irq(
+					atmel_pioctrl->gpio_chip,
+					bank * ATMEL_PIO_NPINS_PER_BANK + n));
 	}
 
 	chained_irq_exit(chip, desc);
@@ -290,7 +306,7 @@ static void atmel_gpio_irq_handler(struct irq_desc *desc)
 
 static int atmel_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
-	struct atmel_pioctrl *atmel_pioctrl = dev_get_drvdata(chip->dev);
+	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
 	struct atmel_pin *pin = atmel_pioctrl->pins[offset];
 	unsigned reg;
 
@@ -305,7 +321,7 @@ static int atmel_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 
 static int atmel_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct atmel_pioctrl *atmel_pioctrl = dev_get_drvdata(chip->dev);
+	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
 	struct atmel_pin *pin = atmel_pioctrl->pins[offset];
 	unsigned reg;
 
@@ -314,10 +330,37 @@ static int atmel_gpio_get(struct gpio_chip *chip, unsigned offset)
 	return !!(reg & BIT(pin->line));
 }
 
+static int atmel_gpio_get_multiple(struct gpio_chip *chip, unsigned long *mask,
+				   unsigned long *bits)
+{
+	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
+	unsigned int bank;
+
+	bitmap_zero(bits, atmel_pioctrl->npins);
+
+	for (bank = 0; bank < atmel_pioctrl->nbanks; bank++) {
+		unsigned int word = bank;
+		unsigned int offset = 0;
+		unsigned int reg;
+
+#if ATMEL_PIO_NPINS_PER_BANK != BITS_PER_LONG
+		word = BIT_WORD(bank * ATMEL_PIO_NPINS_PER_BANK);
+		offset = bank * ATMEL_PIO_NPINS_PER_BANK % BITS_PER_LONG;
+#endif
+		if (!mask[word])
+			continue;
+
+		reg = atmel_gpio_read(atmel_pioctrl, bank, ATMEL_PIO_PDSR);
+		bits[word] |= mask[word] & (reg << offset);
+	}
+
+	return 0;
+}
+
 static int atmel_gpio_direction_output(struct gpio_chip *chip, unsigned offset,
 				       int value)
 {
-	struct atmel_pioctrl *atmel_pioctrl = dev_get_drvdata(chip->dev);
+	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
 	struct atmel_pin *pin = atmel_pioctrl->pins[offset];
 	unsigned reg;
 
@@ -336,7 +379,7 @@ static int atmel_gpio_direction_output(struct gpio_chip *chip, unsigned offset,
 
 static void atmel_gpio_set(struct gpio_chip *chip, unsigned offset, int val)
 {
-	struct atmel_pioctrl *atmel_pioctrl = dev_get_drvdata(chip->dev);
+	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
 	struct atmel_pin *pin = atmel_pioctrl->pins[offset];
 
 	atmel_gpio_write(atmel_pioctrl, pin->bank,
@@ -344,18 +387,46 @@ static void atmel_gpio_set(struct gpio_chip *chip, unsigned offset, int val)
 			 BIT(pin->line));
 }
 
-static int atmel_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
+static void atmel_gpio_set_multiple(struct gpio_chip *chip, unsigned long *mask,
+				    unsigned long *bits)
 {
-	struct atmel_pioctrl *atmel_pioctrl = dev_get_drvdata(chip->dev);
+	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
+	unsigned int bank;
 
-	return irq_find_mapping(atmel_pioctrl->irq_domain, offset);
+	for (bank = 0; bank < atmel_pioctrl->nbanks; bank++) {
+		unsigned int bitmask;
+		unsigned int word = bank;
+
+/*
+ * On a 64-bit platform, BITS_PER_LONG is 64 so it is necessary to iterate over
+ * two 32bit words to handle the whole  bitmask
+ */
+#if ATMEL_PIO_NPINS_PER_BANK != BITS_PER_LONG
+		word = BIT_WORD(bank * ATMEL_PIO_NPINS_PER_BANK);
+#endif
+		if (!mask[word])
+			continue;
+
+		bitmask = mask[word] & bits[word];
+		atmel_gpio_write(atmel_pioctrl, bank, ATMEL_PIO_SODR, bitmask);
+
+		bitmask = mask[word] & ~bits[word];
+		atmel_gpio_write(atmel_pioctrl, bank, ATMEL_PIO_CODR, bitmask);
+
+#if ATMEL_PIO_NPINS_PER_BANK != BITS_PER_LONG
+		mask[word] >>= ATMEL_PIO_NPINS_PER_BANK;
+		bits[word] >>= ATMEL_PIO_NPINS_PER_BANK;
+#endif
+	}
 }
 
 static struct gpio_chip atmel_gpio_chip = {
 	.direction_input        = atmel_gpio_direction_input,
 	.get                    = atmel_gpio_get,
+	.get_multiple           = atmel_gpio_get_multiple,
 	.direction_output       = atmel_gpio_direction_output,
 	.set                    = atmel_gpio_set,
+	.set_multiple           = atmel_gpio_set_multiple,
 	.to_irq                 = atmel_gpio_to_irq,
 	.base                   = 0,
 };
@@ -419,8 +490,8 @@ static int atmel_pctl_get_group_pins(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-struct atmel_group *atmel_pctl_find_group_by_pin(struct pinctrl_dev *pctldev,
-						 unsigned pin)
+static struct atmel_group *
+atmel_pctl_find_group_by_pin(struct pinctrl_dev *pctldev, unsigned pin)
 {
 	struct atmel_pioctrl *atmel_pioctrl = pinctrl_dev_get_drvdata(pctldev);
 	int i;
@@ -477,7 +548,6 @@ static int atmel_pctl_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 	unsigned num_pins, num_configs, reserve;
 	unsigned long *configs;
 	struct property	*pins;
-	bool has_config;
 	u32 pinfunc;
 	int ret, i;
 
@@ -488,19 +558,16 @@ static int atmel_pctl_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 	ret = pinconf_generic_parse_dt_config(np, pctldev, &configs,
 					      &num_configs);
 	if (ret < 0) {
-		dev_err(pctldev->dev, "%s: could not parse node property\n",
-			of_node_full_name(np));
+		dev_err(pctldev->dev, "%pOF: could not parse node property\n",
+			np);
 		return ret;
 	}
 
-	if (num_configs)
-		has_config = true;
-
 	num_pins = pins->length / sizeof(u32);
 	if (!num_pins) {
-		dev_err(pctldev->dev, "no pins found in node %s\n",
-			of_node_full_name(np));
-		return -EINVAL;
+		dev_err(pctldev->dev, "no pins found in node %pOF\n", np);
+		ret = -EINVAL;
+		goto exit;
 	}
 
 	/*
@@ -508,40 +575,42 @@ static int atmel_pctl_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 	 * map for each pin.
 	 */
 	reserve = 1;
-	if (has_config && num_pins >= 1)
+	if (num_configs)
 		reserve++;
 	reserve *= num_pins;
 	ret = pinctrl_utils_reserve_map(pctldev, map, reserved_maps, num_maps,
 					reserve);
 	if (ret < 0)
-		return ret;
+		goto exit;
 
 	for (i = 0; i < num_pins; i++) {
 		const char *group, *func;
 
 		ret = of_property_read_u32_index(np, "pinmux", i, &pinfunc);
 		if (ret)
-			return ret;
+			goto exit;
 
 		ret = atmel_pctl_xlate_pinfunc(pctldev, np, pinfunc, &group,
 					       &func);
 		if (ret)
-			return ret;
+			goto exit;
 
 		pinctrl_utils_add_map_mux(pctldev, map, reserved_maps, num_maps,
 					  group, func);
 
-		if (has_config) {
+		if (num_configs) {
 			ret = pinctrl_utils_add_map_configs(pctldev, map,
 					reserved_maps, num_maps, group,
 					configs, num_configs,
 					PIN_MAP_TYPE_CONFIGS_GROUP);
 			if (ret < 0)
-				return ret;
+				goto exit;
 		}
 	}
 
-	return 0;
+exit:
+	kfree(configs);
+	return ret;
 }
 
 static int atmel_pctl_dt_node_to_map(struct pinctrl_dev *pctldev,
@@ -568,15 +637,17 @@ static int atmel_pctl_dt_node_to_map(struct pinctrl_dev *pctldev,
 		for_each_child_of_node(np_config, np) {
 			ret = atmel_pctl_dt_subnode_to_map(pctldev, np, map,
 						    &reserved_maps, num_maps);
-			if (ret < 0)
+			if (ret < 0) {
+				of_node_put(np);
 				break;
+			}
 		}
 	}
 
 	if (ret < 0) {
-		pinctrl_utils_dt_free_map(pctldev, *map, *num_maps);
-		dev_err(pctldev->dev, "can't create maps for node %s\n",
-			np_config->full_name);
+		pinctrl_utils_free_map(pctldev, *map, *num_maps);
+		dev_err(pctldev->dev, "can't create maps for node %pOF\n",
+			np_config);
 	}
 
 	return ret;
@@ -587,7 +658,7 @@ static const struct pinctrl_ops atmel_pctlops = {
 	.get_group_name		= atmel_pctl_get_group_name,
 	.get_group_pins		= atmel_pctl_get_group_pins,
 	.dt_node_to_map		= atmel_pctl_dt_node_to_map,
-	.dt_free_map		= pinctrl_utils_dt_free_map,
+	.dt_free_map		= pinctrl_utils_free_map,
 };
 
 static int atmel_pmx_get_functions_count(struct pinctrl_dev *pctldev)
@@ -682,6 +753,11 @@ static int atmel_conf_pin_config_group_get(struct pinctrl_dev *pctldev,
 			return -EINVAL;
 		arg = 1;
 		break;
+	case ATMEL_PIN_CONFIG_DRIVE_STRENGTH:
+		if (!(res & ATMEL_PIO_DRVSTR_MASK))
+			return -EINVAL;
+		arg = (res & ATMEL_PIO_DRVSTR_MASK) >> ATMEL_PIO_DRVSTR_OFFSET;
+		break;
 	default:
 		return -ENOTSUPP;
 	}
@@ -717,9 +793,11 @@ static int atmel_conf_pin_config_group_set(struct pinctrl_dev *pctldev,
 			break;
 		case PIN_CONFIG_BIAS_PULL_UP:
 			conf |= ATMEL_PIO_PUEN_MASK;
+			conf &= (~ATMEL_PIO_PDEN_MASK);
 			break;
 		case PIN_CONFIG_BIAS_PULL_DOWN:
 			conf |= ATMEL_PIO_PDEN_MASK;
+			conf &= (~ATMEL_PIO_PUEN_MASK);
 			break;
 		case PIN_CONFIG_DRIVE_OPEN_DRAIN:
 			if (arg == 0)
@@ -765,6 +843,18 @@ static int atmel_conf_pin_config_group_set(struct pinctrl_dev *pctldev,
 					ATMEL_PIO_SODR);
 			}
 			break;
+		case ATMEL_PIN_CONFIG_DRIVE_STRENGTH:
+			switch (arg) {
+			case ATMEL_PIO_DRVSTR_LO:
+			case ATMEL_PIO_DRVSTR_ME:
+			case ATMEL_PIO_DRVSTR_HI:
+				conf &= (~ATMEL_PIO_DRVSTR_MASK);
+				conf |= arg << ATMEL_PIO_DRVSTR_OFFSET;
+				break;
+			default:
+				dev_warn(pctldev->dev, "drive strength not updated (incorrect value)\n");
+			}
+			break;
 		default:
 			dev_warn(pctldev->dev,
 				 "unsupported configuration parameter: %u\n",
@@ -804,6 +894,19 @@ static void atmel_conf_pin_config_dbg_show(struct pinctrl_dev *pctldev,
 		seq_printf(s, "%s ", "open-drain");
 	if (conf & ATMEL_PIO_SCHMITT_MASK)
 		seq_printf(s, "%s ", "schmitt");
+	if (conf & ATMEL_PIO_DRVSTR_MASK) {
+		switch ((conf & ATMEL_PIO_DRVSTR_MASK) >> ATMEL_PIO_DRVSTR_OFFSET) {
+		case ATMEL_PIO_DRVSTR_ME:
+			seq_printf(s, "%s ", "medium-drive");
+			break;
+		case ATMEL_PIO_DRVSTR_HI:
+			seq_printf(s, "%s ", "high-drive");
+			break;
+		/* ATMEL_PIO_DRVSTR_LO and 0 which is the default value at reset */
+		default:
+			seq_printf(s, "%s ", "low-drive");
+		}
+	}
 }
 
 static const struct pinconf_ops atmel_confops = {
@@ -819,35 +922,51 @@ static struct pinctrl_desc atmel_pinctrl_desc = {
 	.pmxops		= &atmel_pmxops,
 };
 
-static int atmel_pctrl_suspend(struct device *dev)
+static int __maybe_unused atmel_pctrl_suspend(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct atmel_pioctrl *atmel_pioctrl = platform_get_drvdata(pdev);
-	int i;
+	struct atmel_pioctrl *atmel_pioctrl = dev_get_drvdata(dev);
+	int i, j;
 
 	/*
 	 * For each bank, save IMR to restore it later and disable all GPIO
 	 * interrupts excepting the ones marked as wakeup sources.
 	 */
 	for (i = 0; i < atmel_pioctrl->nbanks; i++) {
-		atmel_pioctrl->pm_suspend_backup[i] =
+		atmel_pioctrl->pm_suspend_backup[i].imr =
 			atmel_gpio_read(atmel_pioctrl, i, ATMEL_PIO_IMR);
 		atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_IDR,
 				 ~atmel_pioctrl->pm_wakeup_sources[i]);
+		atmel_pioctrl->pm_suspend_backup[i].odsr =
+			atmel_gpio_read(atmel_pioctrl, i, ATMEL_PIO_ODSR);
+		for (j = 0; j < ATMEL_PIO_NPINS_PER_BANK; j++) {
+			atmel_gpio_write(atmel_pioctrl, i,
+					 ATMEL_PIO_MSKR, BIT(j));
+			atmel_pioctrl->pm_suspend_backup[i].cfgr[j] =
+				atmel_gpio_read(atmel_pioctrl, i,
+						ATMEL_PIO_CFGR);
+		}
 	}
 
 	return 0;
 }
 
-static int atmel_pctrl_resume(struct device *dev)
+static int __maybe_unused atmel_pctrl_resume(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct atmel_pioctrl *atmel_pioctrl = platform_get_drvdata(pdev);
-	int i;
+	struct atmel_pioctrl *atmel_pioctrl = dev_get_drvdata(dev);
+	int i, j;
 
-	for (i = 0; i < atmel_pioctrl->nbanks; i++)
+	for (i = 0; i < atmel_pioctrl->nbanks; i++) {
 		atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_IER,
-				 atmel_pioctrl->pm_suspend_backup[i]);
+				 atmel_pioctrl->pm_suspend_backup[i].imr);
+		atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_SODR,
+				 atmel_pioctrl->pm_suspend_backup[i].odsr);
+		for (j = 0; j < ATMEL_PIO_NPINS_PER_BANK; j++) {
+			atmel_gpio_write(atmel_pioctrl, i,
+					 ATMEL_PIO_MSKR, BIT(j));
+			atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_CFGR,
+					 atmel_pioctrl->pm_suspend_backup[i].cfgr[j]);
+		}
+	}
 
 	return 0;
 }
@@ -864,15 +983,21 @@ static const struct atmel_pioctrl_data atmel_sama5d2_pioctrl_data = {
 	.nbanks		= 4,
 };
 
+static const struct atmel_pioctrl_data microchip_sama7g5_pioctrl_data = {
+	.nbanks		= 5,
+};
+
 static const struct of_device_id atmel_pctrl_of_match[] = {
 	{
 		.compatible = "atmel,sama5d2-pinctrl",
 		.data = &atmel_sama5d2_pioctrl_data,
 	}, {
+		.compatible = "microchip,sama7g5-pinctrl",
+		.data = &microchip_sama7g5_pioctrl_data,
+	}, {
 		/* sentinel */
 	}
 };
-MODULE_DEVICE_TABLE(of, atmel_pctrl_of_match);
 
 static int atmel_pinctrl_probe(struct platform_device *pdev)
 {
@@ -883,7 +1008,7 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 	int i, ret;
 	struct resource	*res;
 	struct atmel_pioctrl *atmel_pioctrl;
-	struct atmel_pioctrl_data *atmel_pioctrl_data;
+	const struct atmel_pioctrl_data *atmel_pioctrl_data;
 
 	atmel_pioctrl = devm_kzalloc(dev, sizeof(*atmel_pioctrl), GFP_KERNEL);
 	if (!atmel_pioctrl)
@@ -897,18 +1022,13 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 		dev_err(dev, "unknown compatible string\n");
 		return -ENODEV;
 	}
-	atmel_pioctrl_data = (struct atmel_pioctrl_data *)match->data;
+	atmel_pioctrl_data = match->data;
 	atmel_pioctrl->nbanks = atmel_pioctrl_data->nbanks;
 	atmel_pioctrl->npins = atmel_pioctrl->nbanks * ATMEL_PIO_NPINS_PER_BANK;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(dev, "unable to get atmel pinctrl resource\n");
-		return -EINVAL;
-	}
-	atmel_pioctrl->reg_base = devm_ioremap_resource(dev, res);
+	atmel_pioctrl->reg_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(atmel_pioctrl->reg_base))
-		return -EINVAL;
+		return PTR_ERR(atmel_pioctrl->reg_base);
 
 	atmel_pioctrl->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(atmel_pioctrl->clk)) {
@@ -916,27 +1036,32 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 		return PTR_ERR(atmel_pioctrl->clk);
 	}
 
-	atmel_pioctrl->pins = devm_kzalloc(dev, sizeof(*atmel_pioctrl->pins)
-			* atmel_pioctrl->npins, GFP_KERNEL);
+	atmel_pioctrl->pins = devm_kcalloc(dev,
+					   atmel_pioctrl->npins,
+					   sizeof(*atmel_pioctrl->pins),
+					   GFP_KERNEL);
 	if (!atmel_pioctrl->pins)
 		return -ENOMEM;
 
-	pin_desc = devm_kzalloc(dev, sizeof(*pin_desc)
-			* atmel_pioctrl->npins, GFP_KERNEL);
+	pin_desc = devm_kcalloc(dev, atmel_pioctrl->npins, sizeof(*pin_desc),
+				GFP_KERNEL);
 	if (!pin_desc)
 		return -ENOMEM;
 	atmel_pinctrl_desc.pins = pin_desc;
 	atmel_pinctrl_desc.npins = atmel_pioctrl->npins;
+	atmel_pinctrl_desc.num_custom_params = ARRAY_SIZE(atmel_custom_bindings);
+	atmel_pinctrl_desc.custom_params = atmel_custom_bindings;
 
 	/* One pin is one group since a pin can achieve all functions. */
-	group_names = devm_kzalloc(dev, sizeof(*group_names)
-			* atmel_pioctrl->npins, GFP_KERNEL);
+	group_names = devm_kcalloc(dev,
+				   atmel_pioctrl->npins, sizeof(*group_names),
+				   GFP_KERNEL);
 	if (!group_names)
 		return -ENOMEM;
 	atmel_pioctrl->group_names = group_names;
 
-	atmel_pioctrl->groups = devm_kzalloc(&pdev->dev,
-			sizeof(*atmel_pioctrl->groups) * atmel_pioctrl->npins,
+	atmel_pioctrl->groups = devm_kcalloc(&pdev->dev,
+			atmel_pioctrl->npins, sizeof(*atmel_pioctrl->groups),
 			GFP_KERNEL);
 	if (!atmel_pioctrl->groups)
 		return -ENOMEM;
@@ -969,23 +1094,27 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 	atmel_pioctrl->gpio_chip->of_node = dev->of_node;
 	atmel_pioctrl->gpio_chip->ngpio = atmel_pioctrl->npins;
 	atmel_pioctrl->gpio_chip->label = dev_name(dev);
-	atmel_pioctrl->gpio_chip->dev = dev;
+	atmel_pioctrl->gpio_chip->parent = dev;
 	atmel_pioctrl->gpio_chip->names = atmel_pioctrl->group_names;
 
-	atmel_pioctrl->pm_wakeup_sources = devm_kzalloc(dev,
-			sizeof(*atmel_pioctrl->pm_wakeup_sources)
-			* atmel_pioctrl->nbanks, GFP_KERNEL);
+	atmel_pioctrl->pm_wakeup_sources = devm_kcalloc(dev,
+			atmel_pioctrl->nbanks,
+			sizeof(*atmel_pioctrl->pm_wakeup_sources),
+			GFP_KERNEL);
 	if (!atmel_pioctrl->pm_wakeup_sources)
 		return -ENOMEM;
 
-	atmel_pioctrl->pm_suspend_backup = devm_kzalloc(dev,
-			sizeof(*atmel_pioctrl->pm_suspend_backup)
-			* atmel_pioctrl->nbanks, GFP_KERNEL);
+	atmel_pioctrl->pm_suspend_backup = devm_kcalloc(dev,
+			atmel_pioctrl->nbanks,
+			sizeof(*atmel_pioctrl->pm_suspend_backup),
+			GFP_KERNEL);
 	if (!atmel_pioctrl->pm_suspend_backup)
 		return -ENOMEM;
 
-	atmel_pioctrl->irqs = devm_kzalloc(dev, sizeof(*atmel_pioctrl->irqs)
-			* atmel_pioctrl->nbanks, GFP_KERNEL);
+	atmel_pioctrl->irqs = devm_kcalloc(dev,
+					   atmel_pioctrl->nbanks,
+					   sizeof(*atmel_pioctrl->irqs),
+					   GFP_KERNEL);
 	if (!atmel_pioctrl->irqs)
 		return -ENOMEM;
 
@@ -1000,7 +1129,7 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 		atmel_pioctrl->irqs[i] = res->start;
 		irq_set_chained_handler(res->start, atmel_gpio_irq_handler);
 		irq_set_handler_data(res->start, atmel_pioctrl);
-		dev_dbg(dev, "bank %i: hwirq=%u\n", i, res->start);
+		dev_dbg(dev, "bank %i: irq=%pr\n", i, res);
 	}
 
 	atmel_pioctrl->irq_domain = irq_domain_add_linear(dev->of_node,
@@ -1029,18 +1158,19 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 		goto clk_prepare_enable_error;
 	}
 
-	atmel_pioctrl->pinctrl_dev = pinctrl_register(&atmel_pinctrl_desc,
-						      &pdev->dev,
-						      atmel_pioctrl);
-	if (!atmel_pioctrl->pinctrl_dev) {
+	atmel_pioctrl->pinctrl_dev = devm_pinctrl_register(&pdev->dev,
+							   &atmel_pinctrl_desc,
+							   atmel_pioctrl);
+	if (IS_ERR(atmel_pioctrl->pinctrl_dev)) {
+		ret = PTR_ERR(atmel_pioctrl->pinctrl_dev);
 		dev_err(dev, "pinctrl registration failed\n");
-		goto pinctrl_register_error;
+		goto clk_unprep;
 	}
 
-	ret = gpiochip_add(atmel_pioctrl->gpio_chip);
+	ret = gpiochip_add_data(atmel_pioctrl->gpio_chip, atmel_pioctrl);
 	if (ret) {
 		dev_err(dev, "failed to add gpiochip\n");
-		goto gpiochip_add_error;
+		goto clk_unprep;
 	}
 
 	ret = gpiochip_add_pin_range(atmel_pioctrl->gpio_chip, dev_name(dev),
@@ -1054,28 +1184,16 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 
 	return 0;
 
-clk_prepare_enable_error:
-	irq_domain_remove(atmel_pioctrl->irq_domain);
-pinctrl_register_error:
-	clk_disable_unprepare(atmel_pioctrl->clk);
-gpiochip_add_error:
-	pinctrl_unregister(atmel_pioctrl->pinctrl_dev);
 gpiochip_add_pin_range_error:
 	gpiochip_remove(atmel_pioctrl->gpio_chip);
 
-	return ret;
-}
-
-int atmel_pinctrl_remove(struct platform_device *pdev)
-{
-	struct atmel_pioctrl *atmel_pioctrl = platform_get_drvdata(pdev);
-
-	irq_domain_remove(atmel_pioctrl->irq_domain);
+clk_unprep:
 	clk_disable_unprepare(atmel_pioctrl->clk);
-	pinctrl_unregister(atmel_pioctrl->pinctrl_dev);
-	gpiochip_remove(atmel_pioctrl->gpio_chip);
 
-	return 0;
+clk_prepare_enable_error:
+	irq_domain_remove(atmel_pioctrl->irq_domain);
+
+	return ret;
 }
 
 static struct platform_driver atmel_pinctrl_driver = {
@@ -1083,12 +1201,8 @@ static struct platform_driver atmel_pinctrl_driver = {
 		.name = "pinctrl-at91-pio4",
 		.of_match_table = atmel_pctrl_of_match,
 		.pm = &atmel_pctrl_pm_ops,
+		.suppress_bind_attrs = true,
 	},
 	.probe = atmel_pinctrl_probe,
-	.remove = atmel_pinctrl_remove,
 };
-module_platform_driver(atmel_pinctrl_driver);
-
-MODULE_AUTHOR(Ludovic Desroches <ludovic.desroches@atmel.com>);
-MODULE_DESCRIPTION("Atmel PIO4 pinctrl driver");
-MODULE_LICENSE("GPL v2");
+builtin_platform_driver(atmel_pinctrl_driver);

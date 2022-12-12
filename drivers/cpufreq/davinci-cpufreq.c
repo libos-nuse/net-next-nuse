@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * CPU frequency scaling for DaVinci
  *
- * Copyright (C) 2009 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2009 Texas Instruments Incorporated - https://www.ti.com/
  *
  * Based on linux/arch/arm/plat-omap/cpu-omap.c. Original Copyright follows:
  *
@@ -13,22 +14,15 @@
  * Copyright (C) 2007-2008 Texas Instruments, Inc.
  * Updated to support OMAP3
  * Rajendra Nayak <rnayak@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/types.h>
 #include <linux/cpufreq.h>
 #include <linux/init.h>
 #include <linux/err.h>
 #include <linux/clk.h>
+#include <linux/platform_data/davinci-cpufreq.h>
 #include <linux/platform_device.h>
 #include <linux/export.h>
-
-#include <mach/hardware.h>
-#include <mach/cpufreq.h>
-#include <mach/common.h>
 
 struct davinci_cpufreq {
 	struct device *dev;
@@ -37,26 +31,6 @@ struct davinci_cpufreq {
 	unsigned long asyncrate;
 };
 static struct davinci_cpufreq cpufreq;
-
-static int davinci_verify_speed(struct cpufreq_policy *policy)
-{
-	struct davinci_cpufreq_config *pdata = cpufreq.dev->platform_data;
-	struct cpufreq_frequency_table *freq_table = pdata->freq_table;
-	struct clk *armclk = cpufreq.armclk;
-
-	if (freq_table)
-		return cpufreq_frequency_table_verify(policy, freq_table);
-
-	if (policy->cpu)
-		return -EINVAL;
-
-	cpufreq_verify_within_cpu_limits(policy);
-	policy->min = clk_round_rate(armclk, policy->min * 1000) / 1000;
-	policy->max = clk_round_rate(armclk, policy->max * 1000) / 1000;
-	cpufreq_verify_within_limits(policy, policy->cpuinfo.min_freq,
-						policy->cpuinfo.max_freq);
-	return 0;
-}
 
 static int davinci_target(struct cpufreq_policy *policy, unsigned int idx)
 {
@@ -75,7 +49,7 @@ static int davinci_target(struct cpufreq_policy *policy, unsigned int idx)
 			return ret;
 	}
 
-	ret = clk_set_rate(armclk, idx);
+	ret = clk_set_rate(armclk, new_freq * 1000);
 	if (ret)
 		return ret;
 
@@ -116,12 +90,13 @@ static int davinci_cpu_init(struct cpufreq_policy *policy)
 	 * Setting the latency to 2000 us to accommodate addition of drivers
 	 * to pre/post change notification list.
 	 */
-	return cpufreq_generic_init(policy, freq_table, 2000 * 1000);
+	cpufreq_generic_init(policy, freq_table, 2000 * 1000);
+	return 0;
 }
 
 static struct cpufreq_driver davinci_driver = {
 	.flags		= CPUFREQ_STICKY | CPUFREQ_NEED_INITIAL_FREQ_CHECK,
-	.verify		= davinci_verify_speed,
+	.verify		= cpufreq_generic_frequency_table_verify,
 	.target_index	= davinci_target,
 	.get		= cpufreq_generic_get,
 	.init		= davinci_cpu_init,

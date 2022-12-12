@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * Copyright (c) 2011, Microsoft Corporation.
@@ -118,8 +119,8 @@ enum hv_fcopy_op {
 
 struct hv_fcopy_hdr {
 	__u32 operation;
-	uuid_le service_id0; /* currently unused */
-	uuid_le service_id1; /* currently unused */
+	__u8 service_id0[16]; /* currently unused */
+	__u8 service_id1[16]; /* currently unused */
 } __attribute__((packed));
 
 #define OVER_WRITE	0x1
@@ -218,7 +219,7 @@ struct hv_do_fcopy {
  * kernel and user-level daemon communicate using a connector channel.
  *
  * The user mode component first registers with the
- * the kernel component. Subsequently, the kernel component requests, data
+ * kernel component. Subsequently, the kernel component requests, data
  * for the specified keys. In response to this message the user mode component
  * fills in the value corresponding to the specified key. We overload the
  * sequence field in the cn_msg header to define our KVP message types.
@@ -313,6 +314,7 @@ enum hv_kvp_exchg_pool {
 #define HV_INVALIDARG			0x80070057
 #define HV_GUID_NOTFOUND		0x80041002
 #define HV_ERROR_ALREADY_EXISTS		0x80070050
+#define HV_ERROR_DISK_FULL		0x80070070
 
 #define ADDR_FAMILY_NONE	0x00
 #define ADDR_FAMILY_IPV4	0x01

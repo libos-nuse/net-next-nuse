@@ -1,7 +1,7 @@
 /*******************************************************************************
  *
  * Intel Ethernet Controller XL710 Family Linux Virtual Function Driver
- * Copyright(c) 2013 - 2015 Intel Corporation.
+ * Copyright(c) 2013 - 2016 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -363,63 +363,6 @@ static int i40evf_set_coalesce(struct net_device *netdev,
 }
 
 /**
- * i40e_get_rss_hash_opts - Get RSS hash Input Set for each flow type
- * @adapter: board private structure
- * @cmd: ethtool rxnfc command
- *
- * Returns Success if the flow is supported, else Invalid Input.
- **/
-static int i40evf_get_rss_hash_opts(struct i40evf_adapter *adapter,
-				    struct ethtool_rxnfc *cmd)
-{
-	struct i40e_hw *hw = &adapter->hw;
-	u64 hena = (u64)rd32(hw, I40E_VFQF_HENA(0)) |
-		   ((u64)rd32(hw, I40E_VFQF_HENA(1)) << 32);
-
-	/* We always hash on IP src and dest addresses */
-	cmd->data = RXH_IP_SRC | RXH_IP_DST;
-
-	switch (cmd->flow_type) {
-	case TCP_V4_FLOW:
-		if (hena & BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV4_TCP))
-			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		break;
-	case UDP_V4_FLOW:
-		if (hena & BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV4_UDP))
-			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		break;
-
-	case SCTP_V4_FLOW:
-	case AH_ESP_V4_FLOW:
-	case AH_V4_FLOW:
-	case ESP_V4_FLOW:
-	case IPV4_FLOW:
-		break;
-
-	case TCP_V6_FLOW:
-		if (hena & BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV6_TCP))
-			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		break;
-	case UDP_V6_FLOW:
-		if (hena & BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV6_UDP))
-			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		break;
-
-	case SCTP_V6_FLOW:
-	case AH_ESP_V6_FLOW:
-	case AH_V6_FLOW:
-	case ESP_V6_FLOW:
-	case IPV6_FLOW:
-		break;
-	default:
-		cmd->data = 0;
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-/**
  * i40evf_get_rxnfc - command to get RX flow classification rules
  * @netdev: network interface device structure
  * @cmd: ethtool rxnfc command
@@ -439,7 +382,8 @@ static int i40evf_get_rxnfc(struct net_device *netdev,
 		ret = 0;
 		break;
 	case ETHTOOL_GRXFH:
-		ret = i40evf_get_rss_hash_opts(adapter, cmd);
+		netdev_info(netdev,
+			    "RSS hash info is not available to vf, use pf.\n");
 		break;
 	default:
 		break;
@@ -447,148 +391,6 @@ static int i40evf_get_rxnfc(struct net_device *netdev,
 
 	return ret;
 }
-
-/**
- * i40evf_set_rss_hash_opt - Enable/Disable flow types for RSS hash
- * @adapter: board private structure
- * @cmd: ethtool rxnfc command
- *
- * Returns Success if the flow input set is supported.
- **/
-static int i40evf_set_rss_hash_opt(struct i40evf_adapter *adapter,
-				   struct ethtool_rxnfc *nfc)
-{
-	struct i40e_hw *hw = &adapter->hw;
-
-	u64 hena = (u64)rd32(hw, I40E_VFQF_HENA(0)) |
-		   ((u64)rd32(hw, I40E_VFQF_HENA(1)) << 32);
-
-	/* RSS does not support anything other than hashing
-	 * to queues on src and dst IPs and ports
-	 */
-	if (nfc->data & ~(RXH_IP_SRC | RXH_IP_DST |
-			  RXH_L4_B_0_1 | RXH_L4_B_2_3))
-		return -EINVAL;
-
-	/* We need at least the IP SRC and DEST fields for hashing */
-	if (!(nfc->data & RXH_IP_SRC) ||
-	    !(nfc->data & RXH_IP_DST))
-		return -EINVAL;
-
-	switch (nfc->flow_type) {
-	case TCP_V4_FLOW:
-		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
-		case 0:
-			hena &= ~BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV4_TCP);
-			break;
-		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
-			hena |= BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV4_TCP);
-			break;
-		default:
-			return -EINVAL;
-		}
-		break;
-	case TCP_V6_FLOW:
-		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
-		case 0:
-			hena &= ~BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV6_TCP);
-			break;
-		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
-			hena |= BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV6_TCP);
-			break;
-		default:
-			return -EINVAL;
-		}
-		break;
-	case UDP_V4_FLOW:
-		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
-		case 0:
-			hena &= ~(BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV4_UDP) |
-				  BIT_ULL(I40E_FILTER_PCTYPE_FRAG_IPV4));
-			break;
-		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
-			hena |= (BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV4_UDP) |
-				 BIT_ULL(I40E_FILTER_PCTYPE_FRAG_IPV4));
-			break;
-		default:
-			return -EINVAL;
-		}
-		break;
-	case UDP_V6_FLOW:
-		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
-		case 0:
-			hena &= ~(BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV6_UDP) |
-				  BIT_ULL(I40E_FILTER_PCTYPE_FRAG_IPV6));
-			break;
-		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
-			hena |= (BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV6_UDP) |
-				 BIT_ULL(I40E_FILTER_PCTYPE_FRAG_IPV6));
-			break;
-		default:
-			return -EINVAL;
-		}
-		break;
-	case AH_ESP_V4_FLOW:
-	case AH_V4_FLOW:
-	case ESP_V4_FLOW:
-	case SCTP_V4_FLOW:
-		if ((nfc->data & RXH_L4_B_0_1) ||
-		    (nfc->data & RXH_L4_B_2_3))
-			return -EINVAL;
-		hena |= BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV4_OTHER);
-		break;
-	case AH_ESP_V6_FLOW:
-	case AH_V6_FLOW:
-	case ESP_V6_FLOW:
-	case SCTP_V6_FLOW:
-		if ((nfc->data & RXH_L4_B_0_1) ||
-		    (nfc->data & RXH_L4_B_2_3))
-			return -EINVAL;
-		hena |= BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV6_OTHER);
-		break;
-	case IPV4_FLOW:
-		hena |= (BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV4_OTHER) |
-			 BIT_ULL(I40E_FILTER_PCTYPE_FRAG_IPV4));
-		break;
-	case IPV6_FLOW:
-		hena |= (BIT_ULL(I40E_FILTER_PCTYPE_NONF_IPV6_OTHER) |
-			 BIT_ULL(I40E_FILTER_PCTYPE_FRAG_IPV6));
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	wr32(hw, I40E_VFQF_HENA(0), (u32)hena);
-	wr32(hw, I40E_VFQF_HENA(1), (u32)(hena >> 32));
-	i40e_flush(hw);
-
-	return 0;
-}
-
-/**
- * i40evf_set_rxnfc - command to set RX flow classification rules
- * @netdev: network interface device structure
- * @cmd: ethtool rxnfc command
- *
- * Returns Success if the command is supported.
- **/
-static int i40evf_set_rxnfc(struct net_device *netdev,
-			    struct ethtool_rxnfc *cmd)
-{
-	struct i40evf_adapter *adapter = netdev_priv(netdev);
-	int ret = -EOPNOTSUPP;
-
-	switch (cmd->cmd) {
-	case ETHTOOL_SRXFH:
-		ret = i40evf_set_rss_hash_opt(adapter, cmd);
-		break;
-	default:
-		break;
-	}
-
-	return ret;
-}
-
 /**
  * i40evf_get_channels: get the number of channels supported by the device
  * @netdev: network interface device structure
@@ -612,6 +414,19 @@ static void i40evf_get_channels(struct net_device *netdev,
 }
 
 /**
+ * i40evf_get_rxfh_key_size - get the RSS hash key size
+ * @netdev: network interface device structure
+ *
+ * Returns the table size.
+ **/
+static u32 i40evf_get_rxfh_key_size(struct net_device *netdev)
+{
+	struct i40evf_adapter *adapter = netdev_priv(netdev);
+
+	return adapter->rss_key_size;
+}
+
+/**
  * i40evf_get_rxfh_indir_size - get the rx flow hash indirection table size
  * @netdev: network interface device structure
  *
@@ -619,7 +434,9 @@ static void i40evf_get_channels(struct net_device *netdev,
  **/
 static u32 i40evf_get_rxfh_indir_size(struct net_device *netdev)
 {
-	return (I40E_VFQF_HLUT_MAX_INDEX + 1) * 4;
+	struct i40evf_adapter *adapter = netdev_priv(netdev);
+
+	return adapter->rss_lut_size;
 }
 
 /**
@@ -634,9 +451,6 @@ static int i40evf_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key,
 			   u8 *hfunc)
 {
 	struct i40evf_adapter *adapter = netdev_priv(netdev);
-	struct i40e_vsi *vsi = &adapter->vsi;
-	u8 *seed = NULL, *lut;
-	int ret;
 	u16 i;
 
 	if (hfunc)
@@ -644,24 +458,13 @@ static int i40evf_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key,
 	if (!indir)
 		return 0;
 
-	seed = key;
-
-	lut = kzalloc(I40EVF_HLUT_ARRAY_SIZE, GFP_KERNEL);
-	if (!lut)
-		return -ENOMEM;
-
-	ret = i40evf_get_rss(vsi, seed, lut, I40EVF_HLUT_ARRAY_SIZE);
-	if (ret)
-		goto out;
+	memcpy(key, adapter->rss_key, adapter->rss_key_size);
 
 	/* Each 32 bits pointed by 'indir' is stored with a lut entry */
-	for (i = 0; i < I40EVF_HLUT_ARRAY_SIZE; i++)
-		indir[i] = (u32)lut[i];
+	for (i = 0; i < adapter->rss_lut_size; i++)
+		indir[i] = (u32)adapter->rss_lut[i];
 
-out:
-	kfree(lut);
-
-	return ret;
+	return 0;
 }
 
 /**
@@ -677,8 +480,6 @@ static int i40evf_set_rxfh(struct net_device *netdev, const u32 *indir,
 			   const u8 *key, const u8 hfunc)
 {
 	struct i40evf_adapter *adapter = netdev_priv(netdev);
-	struct i40e_vsi *vsi = &adapter->vsi;
-	u8 *seed = NULL;
 	u16 i;
 
 	/* We do not allow change in unsupported parameters */
@@ -689,28 +490,14 @@ static int i40evf_set_rxfh(struct net_device *netdev, const u32 *indir,
 		return 0;
 
 	if (key) {
-		if (!vsi->rss_hkey_user) {
-			vsi->rss_hkey_user = kzalloc(I40EVF_HKEY_ARRAY_SIZE,
-						     GFP_KERNEL);
-			if (!vsi->rss_hkey_user)
-				return -ENOMEM;
-		}
-		memcpy(vsi->rss_hkey_user, key, I40EVF_HKEY_ARRAY_SIZE);
-		seed = vsi->rss_hkey_user;
-	}
-	if (!vsi->rss_lut_user) {
-		vsi->rss_lut_user = kzalloc(I40EVF_HLUT_ARRAY_SIZE,
-					    GFP_KERNEL);
-		if (!vsi->rss_lut_user)
-			return -ENOMEM;
+		memcpy(adapter->rss_key, key, adapter->rss_key_size);
 	}
 
 	/* Each 32 bits pointed by 'indir' is stored with a lut entry */
-	for (i = 0; i < I40EVF_HLUT_ARRAY_SIZE; i++)
-		vsi->rss_lut_user[i] = (u8)(indir[i]);
+	for (i = 0; i < adapter->rss_lut_size; i++)
+		adapter->rss_lut[i] = (u8)(indir[i]);
 
-	return i40evf_config_rss(vsi, seed, vsi->rss_lut_user,
-				 I40EVF_HLUT_ARRAY_SIZE);
+	return i40evf_config_rss(adapter);
 }
 
 static const struct ethtool_ops i40evf_ethtool_ops = {
@@ -727,11 +514,11 @@ static const struct ethtool_ops i40evf_ethtool_ops = {
 	.get_coalesce		= i40evf_get_coalesce,
 	.set_coalesce		= i40evf_set_coalesce,
 	.get_rxnfc		= i40evf_get_rxnfc,
-	.set_rxnfc		= i40evf_set_rxnfc,
 	.get_rxfh_indir_size	= i40evf_get_rxfh_indir_size,
 	.get_rxfh		= i40evf_get_rxfh,
 	.set_rxfh		= i40evf_set_rxfh,
 	.get_channels		= i40evf_get_channels,
+	.get_rxfh_key_size	= i40evf_get_rxfh_key_size,
 };
 
 /**

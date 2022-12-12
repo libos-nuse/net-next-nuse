@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * libata-trace.c - trace functions for libata
  *
  * Copyright 2015 Hannes Reinecke
  * Copyright 2015 SUSE Linux GmbH
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2, or (at your option)
- *  any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>
@@ -144,6 +131,78 @@ libata_trace_parse_qc_flags(struct trace_seq *p, unsigned int qc_flags)
 		if (qc_flags & ATA_QCFLAG_EH_SCHEDULED)
 			trace_seq_printf(p, "EH_SCHEDULED ");
 		trace_seq_putc(p, '}');
+	}
+	trace_seq_putc(p, 0);
+
+	return ret;
+}
+
+const char *
+libata_trace_parse_subcmd(struct trace_seq *p, unsigned char cmd,
+			  unsigned char feature, unsigned char hob_nsect)
+{
+	const char *ret = trace_seq_buffer_ptr(p);
+
+	switch (cmd) {
+	case ATA_CMD_FPDMA_RECV:
+		switch (hob_nsect & 0x5f) {
+		case ATA_SUBCMD_FPDMA_RECV_RD_LOG_DMA_EXT:
+			trace_seq_printf(p, " READ_LOG_DMA_EXT");
+			break;
+		case ATA_SUBCMD_FPDMA_RECV_ZAC_MGMT_IN:
+			trace_seq_printf(p, " ZAC_MGMT_IN");
+			break;
+		}
+		break;
+	case ATA_CMD_FPDMA_SEND:
+		switch (hob_nsect & 0x5f) {
+		case ATA_SUBCMD_FPDMA_SEND_WR_LOG_DMA_EXT:
+			trace_seq_printf(p, " WRITE_LOG_DMA_EXT");
+			break;
+		case ATA_SUBCMD_FPDMA_SEND_DSM:
+			trace_seq_printf(p, " DATASET_MANAGEMENT");
+			break;
+		}
+		break;
+	case ATA_CMD_NCQ_NON_DATA:
+		switch (feature) {
+		case ATA_SUBCMD_NCQ_NON_DATA_ABORT_QUEUE:
+			trace_seq_printf(p, " ABORT_QUEUE");
+			break;
+		case ATA_SUBCMD_NCQ_NON_DATA_SET_FEATURES:
+			trace_seq_printf(p, " SET_FEATURES");
+			break;
+		case ATA_SUBCMD_NCQ_NON_DATA_ZERO_EXT:
+			trace_seq_printf(p, " ZERO_EXT");
+			break;
+		case ATA_SUBCMD_NCQ_NON_DATA_ZAC_MGMT_OUT:
+			trace_seq_printf(p, " ZAC_MGMT_OUT");
+			break;
+		}
+		break;
+	case ATA_CMD_ZAC_MGMT_IN:
+		switch (feature) {
+		case ATA_SUBCMD_ZAC_MGMT_IN_REPORT_ZONES:
+			trace_seq_printf(p, " REPORT_ZONES");
+			break;
+		}
+		break;
+	case ATA_CMD_ZAC_MGMT_OUT:
+		switch (feature) {
+		case ATA_SUBCMD_ZAC_MGMT_OUT_CLOSE_ZONE:
+			trace_seq_printf(p, " CLOSE_ZONE");
+			break;
+		case ATA_SUBCMD_ZAC_MGMT_OUT_FINISH_ZONE:
+			trace_seq_printf(p, " FINISH_ZONE");
+			break;
+		case ATA_SUBCMD_ZAC_MGMT_OUT_OPEN_ZONE:
+			trace_seq_printf(p, " OPEN_ZONE");
+			break;
+		case ATA_SUBCMD_ZAC_MGMT_OUT_RESET_WRITE_POINTER:
+			trace_seq_printf(p, " RESET_WRITE_POINTER");
+			break;
+		}
+		break;
 	}
 	trace_seq_putc(p, 0);
 

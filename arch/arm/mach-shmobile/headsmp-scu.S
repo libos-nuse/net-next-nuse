@@ -1,17 +1,8 @@
-/*
+/* SPDX-License-Identifier: GPL-2.0+
+ *
  * Shared SCU setup for mach-shmobile
  *
  * Copyright (C) 2012 Bastian Hecht
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR /PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/linkage.h>
@@ -27,7 +18,7 @@
  */
 ENTRY(shmobile_boot_scu)
 					@ r0 = SCU base address
-	mrc     p15, 0, r1, c0, c0, 5	@ read MIPDR
+	mrc     p15, 0, r1, c0, c0, 5	@ read MPIDR
 	and	r1, r1, #3		@ mask out cpu ID
 	lsl	r1, r1, #3		@ we will shift by cpu_id * 8 bits
 	ldr	r2, [r0, #8]		@ SCU Power Status Register
@@ -38,9 +29,3 @@ ENTRY(shmobile_boot_scu)
 
 	b	secondary_startup
 ENDPROC(shmobile_boot_scu)
-
-	.text
-	.align	2
-	.globl	shmobile_scu_base
-shmobile_scu_base:
-	.space	4

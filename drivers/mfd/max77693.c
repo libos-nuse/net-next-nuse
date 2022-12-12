@@ -1,27 +1,13 @@
-/*
- * max77693.c - mfd core driver for the MAX 77693
- *
- * Copyright (C) 2012 Samsung Electronics
- * SangYoung Son <hello.son@smasung.com>
- *
- * This program is not provided / owned by Maxim Integrated Products.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * This driver is based on max8997.c
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// max77693.c - mfd core driver for the MAX 77693
+//
+// Copyright (C) 2012 Samsung Electronics
+// SangYoung Son <hello.son@samsung.com>
+//
+// This program is not provided / owned by Maxim Integrated Products.
+//
+// This driver is based on max8997.c
 
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -48,7 +34,10 @@ static const struct mfd_cell max77693_devs[] = {
 		.name = "max77693-charger",
 		.of_compatible = "maxim,max77693-charger",
 	},
-	{ .name = "max77693-muic", },
+	{
+		.name = "max77693-muic",
+		.of_compatible = "maxim,max77693-muic",
+	},
 	{
 		.name = "max77693-haptic",
 		.of_compatible = "maxim,max77693-haptic",
@@ -194,17 +183,17 @@ static int max77693_i2c_probe(struct i2c_client *i2c,
 	} else
 		dev_info(max77693->dev, "device ID: 0x%x\n", reg_data);
 
-	max77693->i2c_muic = i2c_new_dummy(i2c->adapter, I2C_ADDR_MUIC);
-	if (!max77693->i2c_muic) {
+	max77693->i2c_muic = i2c_new_dummy_device(i2c->adapter, I2C_ADDR_MUIC);
+	if (IS_ERR(max77693->i2c_muic)) {
 		dev_err(max77693->dev, "Failed to allocate I2C device for MUIC\n");
-		return -ENODEV;
+		return PTR_ERR(max77693->i2c_muic);
 	}
 	i2c_set_clientdata(max77693->i2c_muic, max77693);
 
-	max77693->i2c_haptic = i2c_new_dummy(i2c->adapter, I2C_ADDR_HAPTIC);
-	if (!max77693->i2c_haptic) {
+	max77693->i2c_haptic = i2c_new_dummy_device(i2c->adapter, I2C_ADDR_HAPTIC);
+	if (IS_ERR(max77693->i2c_haptic)) {
 		dev_err(max77693->dev, "Failed to allocate I2C device for Haptic\n");
-		ret = -ENODEV;
+		ret = PTR_ERR(max77693->i2c_haptic);
 		goto err_i2c_haptic;
 	}
 	i2c_set_clientdata(max77693->i2c_haptic, max77693);
@@ -334,7 +323,7 @@ MODULE_DEVICE_TABLE(i2c, max77693_i2c_id);
 
 static int max77693_suspend(struct device *dev)
 {
-	struct i2c_client *i2c = container_of(dev, struct i2c_client, dev);
+	struct i2c_client *i2c = to_i2c_client(dev);
 	struct max77693_dev *max77693 = i2c_get_clientdata(i2c);
 
 	if (device_may_wakeup(dev)) {
@@ -347,7 +336,7 @@ static int max77693_suspend(struct device *dev)
 
 static int max77693_resume(struct device *dev)
 {
-	struct i2c_client *i2c = container_of(dev, struct i2c_client, dev);
+	struct i2c_client *i2c = to_i2c_client(dev);
 	struct max77693_dev *max77693 = i2c_get_clientdata(i2c);
 
 	if (device_may_wakeup(dev)) {
@@ -368,6 +357,7 @@ static const struct of_device_id max77693_dt_match[] = {
 	{ .compatible = "maxim,max77693" },
 	{},
 };
+MODULE_DEVICE_TABLE(of, max77693_dt_match);
 #endif
 
 static struct i2c_driver max77693_i2c_driver = {
@@ -381,18 +371,7 @@ static struct i2c_driver max77693_i2c_driver = {
 	.id_table = max77693_i2c_id,
 };
 
-static int __init max77693_i2c_init(void)
-{
-	return i2c_add_driver(&max77693_i2c_driver);
-}
-/* init early so consumer devices can complete system boot */
-subsys_initcall(max77693_i2c_init);
-
-static void __exit max77693_i2c_exit(void)
-{
-	i2c_del_driver(&max77693_i2c_driver);
-}
-module_exit(max77693_i2c_exit);
+module_i2c_driver(max77693_i2c_driver);
 
 MODULE_DESCRIPTION("MAXIM 77693 multi-function core driver");
 MODULE_AUTHOR("SangYoung, Son <hello.son@samsung.com>");

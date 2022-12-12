@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/kernel/pj4-cp0.c
  *
  * PJ4 iWMMXt coprocessor context switching and handling
  *
  * Copyright (c) 2010 Marvell International Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/types.h>
@@ -66,9 +63,13 @@ static void __init pj4_cp_access_write(u32 value)
 
 	__asm__ __volatile__ (
 		"mcr	p15, 0, %1, c1, c0, 2\n\t"
+#ifdef CONFIG_THUMB2_KERNEL
+		"isb\n\t"
+#else
 		"mrc	p15, 0, %0, c1, c0, 2\n\t"
 		"mov	%0, %0\n\t"
 		"sub	pc, pc, #4\n\t"
+#endif
 		: "=r" (temp) : "r" (value));
 }
 

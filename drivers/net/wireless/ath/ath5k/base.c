@@ -73,16 +73,16 @@
 #include "trace.h"
 
 bool ath5k_modparam_nohwcrypt;
-module_param_named(nohwcrypt, ath5k_modparam_nohwcrypt, bool, S_IRUGO);
+module_param_named(nohwcrypt, ath5k_modparam_nohwcrypt, bool, 0444);
 MODULE_PARM_DESC(nohwcrypt, "Disable hardware encryption.");
 
 static bool modparam_fastchanswitch;
-module_param_named(fastchanswitch, modparam_fastchanswitch, bool, S_IRUGO);
+module_param_named(fastchanswitch, modparam_fastchanswitch, bool, 0444);
 MODULE_PARM_DESC(fastchanswitch, "Enable fast channel switching for AR2413/AR5413 radios.");
 
 static bool ath5k_modparam_no_hw_rfkill_switch;
 module_param_named(no_hw_rfkill_switch, ath5k_modparam_no_hw_rfkill_switch,
-								bool, S_IRUGO);
+		   bool, 0444);
 MODULE_PARM_DESC(no_hw_rfkill_switch, "Ignore the GPIO RFKill switch state");
 
 
@@ -268,15 +268,15 @@ static void ath5k_reg_notifier(struct wiphy *wiphy,
  * Returns true for the channel numbers used.
  */
 #ifdef CONFIG_ATH5K_TEST_CHANNELS
-static bool ath5k_is_standard_channel(short chan, enum ieee80211_band band)
+static bool ath5k_is_standard_channel(short chan, enum nl80211_band band)
 {
 	return true;
 }
 
 #else
-static bool ath5k_is_standard_channel(short chan, enum ieee80211_band band)
+static bool ath5k_is_standard_channel(short chan, enum nl80211_band band)
 {
-	if (band == IEEE80211_BAND_2GHZ && chan <= 14)
+	if (band == NL80211_BAND_2GHZ && chan <= 14)
 		return true;
 
 	return	/* UNII 1,2 */
@@ -297,18 +297,18 @@ ath5k_setup_channels(struct ath5k_hw *ah, struct ieee80211_channel *channels,
 		unsigned int mode, unsigned int max)
 {
 	unsigned int count, size, freq, ch;
-	enum ieee80211_band band;
+	enum nl80211_band band;
 
 	switch (mode) {
 	case AR5K_MODE_11A:
 		/* 1..220, but 2GHz frequencies are filtered by check_channel */
 		size = 220;
-		band = IEEE80211_BAND_5GHZ;
+		band = NL80211_BAND_5GHZ;
 		break;
 	case AR5K_MODE_11B:
 	case AR5K_MODE_11G:
 		size = 26;
-		band = IEEE80211_BAND_2GHZ;
+		band = NL80211_BAND_2GHZ;
 		break;
 	default:
 		ATH5K_WARN(ah, "bad mode, not copying channels\n");
@@ -363,13 +363,13 @@ ath5k_setup_bands(struct ieee80211_hw *hw)
 	int max_c, count_c = 0;
 	int i;
 
-	BUILD_BUG_ON(ARRAY_SIZE(ah->sbands) < IEEE80211_NUM_BANDS);
+	BUILD_BUG_ON(ARRAY_SIZE(ah->sbands) < NUM_NL80211_BANDS);
 	max_c = ARRAY_SIZE(ah->channels);
 
 	/* 2GHz band */
-	sband = &ah->sbands[IEEE80211_BAND_2GHZ];
-	sband->band = IEEE80211_BAND_2GHZ;
-	sband->bitrates = &ah->rates[IEEE80211_BAND_2GHZ][0];
+	sband = &ah->sbands[NL80211_BAND_2GHZ];
+	sband->band = NL80211_BAND_2GHZ;
+	sband->bitrates = &ah->rates[NL80211_BAND_2GHZ][0];
 
 	if (test_bit(AR5K_MODE_11G, ah->ah_capabilities.cap_mode)) {
 		/* G mode */
@@ -381,7 +381,7 @@ ath5k_setup_bands(struct ieee80211_hw *hw)
 		sband->n_channels = ath5k_setup_channels(ah, sband->channels,
 					AR5K_MODE_11G, max_c);
 
-		hw->wiphy->bands[IEEE80211_BAND_2GHZ] = sband;
+		hw->wiphy->bands[NL80211_BAND_2GHZ] = sband;
 		count_c = sband->n_channels;
 		max_c -= count_c;
 	} else if (test_bit(AR5K_MODE_11B, ah->ah_capabilities.cap_mode)) {
@@ -407,7 +407,7 @@ ath5k_setup_bands(struct ieee80211_hw *hw)
 		sband->n_channels = ath5k_setup_channels(ah, sband->channels,
 					AR5K_MODE_11B, max_c);
 
-		hw->wiphy->bands[IEEE80211_BAND_2GHZ] = sband;
+		hw->wiphy->bands[NL80211_BAND_2GHZ] = sband;
 		count_c = sband->n_channels;
 		max_c -= count_c;
 	}
@@ -415,9 +415,9 @@ ath5k_setup_bands(struct ieee80211_hw *hw)
 
 	/* 5GHz band, A mode */
 	if (test_bit(AR5K_MODE_11A, ah->ah_capabilities.cap_mode)) {
-		sband = &ah->sbands[IEEE80211_BAND_5GHZ];
-		sband->band = IEEE80211_BAND_5GHZ;
-		sband->bitrates = &ah->rates[IEEE80211_BAND_5GHZ][0];
+		sband = &ah->sbands[NL80211_BAND_5GHZ];
+		sband->band = NL80211_BAND_5GHZ;
+		sband->bitrates = &ah->rates[NL80211_BAND_5GHZ][0];
 
 		memcpy(sband->bitrates, &ath5k_rates[4],
 		       sizeof(struct ieee80211_rate) * 8);
@@ -427,7 +427,7 @@ ath5k_setup_bands(struct ieee80211_hw *hw)
 		sband->n_channels = ath5k_setup_channels(ah, sband->channels,
 					AR5K_MODE_11A, max_c);
 
-		hw->wiphy->bands[IEEE80211_BAND_5GHZ] = sband;
+		hw->wiphy->bands[NL80211_BAND_5GHZ] = sband;
 	}
 	ath5k_setup_rate_idx(ah, sband);
 
@@ -767,7 +767,7 @@ ath5k_txbuf_setup(struct ath5k_hw *ah, struct ath5k_buf *bf,
 	if (info->flags & IEEE80211_TX_CTL_NO_ACK)
 		flags |= AR5K_TXDESC_NOACK;
 
-	rc_flags = info->control.rates[0].flags;
+	rc_flags = bf->rates[0].flags;
 
 	hw_rate = ath5k_get_rate_hw_value(ah->hw, info, bf, 0);
 
@@ -837,7 +837,6 @@ ath5k_txbuf_setup(struct ath5k_hw *ah, struct ath5k_buf *bf,
 
 	txq->link = &ds->ds_link;
 	ath5k_hw_start_tx_dma(ah, txq->qnum);
-	mmiowb();
 	spin_unlock_bh(&txq->lock);
 
 	return 0;
@@ -1099,7 +1098,7 @@ err:
 /**
  * ath5k_drain_tx_buffs - Empty tx buffers
  *
- * @ah The &struct ath5k_hw
+ * @ah: The &struct ath5k_hw
  *
  * Empty tx buffers from all queues in preparation
  * of a reset or during shutdown.
@@ -1414,10 +1413,10 @@ ath5k_receive_frame(struct ath5k_hw *ah, struct sk_buff *skb,
 	rxs->flag |= ath5k_rx_decrypted(ah, skb, rs);
 	switch (ah->ah_bwmode) {
 	case AR5K_BWMODE_5MHZ:
-		rxs->flag |= RX_FLAG_5MHZ;
+		rxs->bw = RATE_INFO_BW_5;
 		break;
 	case AR5K_BWMODE_10MHZ:
-		rxs->flag |= RX_FLAG_10MHZ;
+		rxs->bw = RATE_INFO_BW_10;
 		break;
 	default:
 		break;
@@ -1425,7 +1424,7 @@ ath5k_receive_frame(struct ath5k_hw *ah, struct sk_buff *skb,
 
 	if (rs->rs_rate ==
 	    ah->sbands[ah->curchan->band].bitrates[rxs->rate_idx].hw_value_short)
-		rxs->flag |= RX_FLAG_SHORTPRE;
+		rxs->enc_flags |= RX_ENC_FLAG_SHORTPRE;
 
 	trace_ath5k_rx(ah, skb);
 
@@ -1537,12 +1536,12 @@ ath5k_set_current_imask(struct ath5k_hw *ah)
 }
 
 static void
-ath5k_tasklet_rx(unsigned long data)
+ath5k_tasklet_rx(struct tasklet_struct *t)
 {
 	struct ath5k_rx_status rs = {};
 	struct sk_buff *skb, *next_skb;
 	dma_addr_t next_skb_addr;
-	struct ath5k_hw *ah = (void *)data;
+	struct ath5k_hw *ah = from_tasklet(ah, t, rxtq);
 	struct ath_common *common = ath5k_hw_common(ah);
 	struct ath5k_buf *bf;
 	struct ath5k_desc *ds;
@@ -1785,10 +1784,10 @@ ath5k_tx_processq(struct ath5k_hw *ah, struct ath5k_txq *txq)
 }
 
 static void
-ath5k_tasklet_tx(unsigned long data)
+ath5k_tasklet_tx(struct tasklet_struct *t)
 {
 	int i;
-	struct ath5k_hw *ah = (void *)data;
+	struct ath5k_hw *ah = from_tasklet(ah, t, txtq);
 
 	for (i = 0; i < AR5K_NUM_TX_QUEUES; i++)
 		if (ah->txqs[i].setup && (ah->ah_txq_isr_txok_all & BIT(i)))
@@ -2174,13 +2173,12 @@ ath5k_beacon_config(struct ath5k_hw *ah)
 	}
 
 	ath5k_hw_set_imr(ah, ah->imask);
-	mmiowb();
 	spin_unlock_bh(&ah->block);
 }
 
-static void ath5k_tasklet_beacon(unsigned long data)
+static void ath5k_tasklet_beacon(struct tasklet_struct *t)
 {
-	struct ath5k_hw *ah = (struct ath5k_hw *) data;
+	struct ath5k_hw *ah = from_tasklet(ah, t, beacontq);
 
 	/*
 	 * Software beacon alert--time to send a beacon.
@@ -2449,9 +2447,9 @@ ath5k_calibrate_work(struct work_struct *work)
 
 
 static void
-ath5k_tasklet_ani(unsigned long data)
+ath5k_tasklet_ani(struct tasklet_struct *t)
 {
-	struct ath5k_hw *ah = (void *)data;
+	struct ath5k_hw *ah = from_tasklet(ah, t, ani_tasklet);
 
 	ah->ah_cal_mask |= AR5K_CALIBRATION_ANI;
 	ath5k_ani_calibration(ah);
@@ -2563,6 +2561,8 @@ ath5k_init_ah(struct ath5k_hw *ah, const struct ath_bus_ops *bus_ops)
 	hw->wiphy->available_antennas_rx = 0x3;
 
 	hw->extra_tx_headroom = 2;
+
+	wiphy_ext_feature_set(hw->wiphy, NL80211_EXT_FEATURE_CQM_RSSI_LIST);
 
 	/*
 	 * Mark the device as detached to avoid processing
@@ -2777,7 +2777,6 @@ int ath5k_start(struct ieee80211_hw *hw)
 
 	ret = 0;
 done:
-	mmiowb();
 	mutex_unlock(&ah->lock);
 
 	set_bit(ATH_STAT_STARTED, ah->status);
@@ -2837,7 +2836,6 @@ void ath5k_stop(struct ieee80211_hw *hw)
 				"putting device to sleep\n");
 	}
 
-	mmiowb();
 	mutex_unlock(&ah->lock);
 
 	ath5k_stop_tasklets(ah);
@@ -3071,10 +3069,10 @@ ath5k_init(struct ieee80211_hw *hw)
 		hw->queues = 1;
 	}
 
-	tasklet_init(&ah->rxtq, ath5k_tasklet_rx, (unsigned long)ah);
-	tasklet_init(&ah->txtq, ath5k_tasklet_tx, (unsigned long)ah);
-	tasklet_init(&ah->beacontq, ath5k_tasklet_beacon, (unsigned long)ah);
-	tasklet_init(&ah->ani_tasklet, ath5k_tasklet_ani, (unsigned long)ah);
+	tasklet_setup(&ah->rxtq, ath5k_tasklet_rx);
+	tasklet_setup(&ah->txtq, ath5k_tasklet_tx);
+	tasklet_setup(&ah->beacontq, ath5k_tasklet_beacon);
+	tasklet_setup(&ah->ani_tasklet, ath5k_tasklet_ani);
 
 	INIT_WORK(&ah->reset_work, ath5k_reset_work);
 	INIT_WORK(&ah->calib_work, ath5k_calibrate_work);

@@ -1,14 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * CPU idle for DaVinci SoCs
  *
- * Copyright (C) 2009 Texas Instruments Incorporated. http://www.ti.com/
+ * Copyright (C) 2009 Texas Instruments Incorporated. https://www.ti.com/
  *
  * Derived from Marvell Kirkwood CPU idle code
  * (arch/arm/mach-kirkwood/cpuidle.c)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -19,8 +16,8 @@
 #include <linux/export.h>
 #include <asm/cpuidle.h>
 
-#include <mach/cpuidle.h>
-#include <mach/ddr2.h>
+#include "cpuidle.h"
+#include "ddr2.h"
 
 #define DAVINCI_CPUIDLE_MAX_STATES	2
 

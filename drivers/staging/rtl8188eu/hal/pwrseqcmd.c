@@ -1,19 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /******************************************************************************
  *
  * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
  *
  ******************************************************************************/
 
@@ -23,10 +11,10 @@
 /* This routine deals with the Power Configuration CMDs parsing
  * for RTL8723/RTL8188E Series IC.
  */
-u8 rtl88eu_pwrseqcmdparsing(struct adapter *padapter, u8 cut_vers, u8 fab_vers,
-			    u8 ifacetype, struct wl_pwr_cfg pwrseqcmd[])
+u8 rtl88eu_pwrseqcmdparsing(struct adapter *padapter, u8 cut_vers,
+			    struct wl_pwr_cfg pwrseqcmd[])
 {
-	struct wl_pwr_cfg pwrcfgcmd = {0};
+	struct wl_pwr_cfg pwrcfgcmd;
 	u8 poll_bit = false;
 	u32 aryidx = 0;
 	u8 value = 0;
@@ -38,30 +26,26 @@ u8 rtl88eu_pwrseqcmdparsing(struct adapter *padapter, u8 cut_vers, u8 fab_vers,
 		pwrcfgcmd = pwrseqcmd[aryidx];
 
 		RT_TRACE(_module_hal_init_c_, _drv_info_,
-			 ("rtl88eu_pwrseqcmdparsing: offset(%#x) cut_msk(%#x)"
-			  "fab_msk(%#x) interface_msk(%#x) base(%#x) cmd(%#x)"
+			 ("%s: offset(%#x) cut_msk(%#x)"
+			  " cmd(%#x)"
 			  "msk(%#x) value(%#x)\n",
-			 GET_PWR_CFG_OFFSET(pwrcfgcmd),
-			 GET_PWR_CFG_CUT_MASK(pwrcfgcmd),
-			 GET_PWR_CFG_FAB_MASK(pwrcfgcmd),
-			 GET_PWR_CFG_INTF_MASK(pwrcfgcmd),
-			 GET_PWR_CFG_BASE(pwrcfgcmd),
-			 GET_PWR_CFG_CMD(pwrcfgcmd),
-			 GET_PWR_CFG_MASK(pwrcfgcmd),
-			 GET_PWR_CFG_VALUE(pwrcfgcmd)));
+			  __func__,
+			  GET_PWR_CFG_OFFSET(pwrcfgcmd),
+			  GET_PWR_CFG_CUT_MASK(pwrcfgcmd),
+			  GET_PWR_CFG_CMD(pwrcfgcmd),
+			  GET_PWR_CFG_MASK(pwrcfgcmd),
+			  GET_PWR_CFG_VALUE(pwrcfgcmd)));
 
-		/* Only Handle the command whose FAB, CUT, and Interface are matched */
-		if ((GET_PWR_CFG_FAB_MASK(pwrcfgcmd) & fab_vers) &&
-		    (GET_PWR_CFG_CUT_MASK(pwrcfgcmd) & cut_vers) &&
-		    (GET_PWR_CFG_INTF_MASK(pwrcfgcmd) & ifacetype)) {
+		/* Only Handle the command whose CUT is matched */
+		if (GET_PWR_CFG_CUT_MASK(pwrcfgcmd) & cut_vers) {
 			switch (GET_PWR_CFG_CMD(pwrcfgcmd)) {
 			case PWR_CMD_READ:
 				RT_TRACE(_module_hal_init_c_, _drv_info_,
-					 ("rtl88eu_pwrseqcmdparsing: PWR_CMD_READ\n"));
+					 ("%s: PWR_CMD_READ\n", __func__));
 				break;
 			case PWR_CMD_WRITE:
 				RT_TRACE(_module_hal_init_c_, _drv_info_,
-					 ("rtl88eu_pwrseqcmdparsing: PWR_CMD_WRITE\n"));
+					 ("%s: PWR_CMD_WRITE\n", __func__));
 				offset = GET_PWR_CFG_OFFSET(pwrcfgcmd);
 
 				/*  Read the value from system register */
@@ -76,7 +60,7 @@ u8 rtl88eu_pwrseqcmdparsing(struct adapter *padapter, u8 cut_vers, u8 fab_vers,
 				break;
 			case PWR_CMD_POLLING:
 				RT_TRACE(_module_hal_init_c_, _drv_info_,
-					 ("rtl88eu_pwrseqcmdparsing: PWR_CMD_POLLING\n"));
+					 ("%s: PWR_CMD_POLLING\n", __func__));
 
 				poll_bit = false;
 				offset = GET_PWR_CFG_OFFSET(pwrcfgcmd);
@@ -98,20 +82,20 @@ u8 rtl88eu_pwrseqcmdparsing(struct adapter *padapter, u8 cut_vers, u8 fab_vers,
 				break;
 			case PWR_CMD_DELAY:
 				RT_TRACE(_module_hal_init_c_, _drv_info_,
-					 ("rtl88eu_pwrseqcmdparsing: PWR_CMD_DELAY\n"));
+					 ("%s: PWR_CMD_DELAY\n", __func__));
 				if (GET_PWR_CFG_VALUE(pwrcfgcmd) == PWRSEQ_DELAY_US)
 					udelay(GET_PWR_CFG_OFFSET(pwrcfgcmd));
 				else
-					udelay(GET_PWR_CFG_OFFSET(pwrcfgcmd)*1000);
+					udelay(GET_PWR_CFG_OFFSET(pwrcfgcmd) * 1000);
 				break;
 			case PWR_CMD_END:
 				/* When this command is parsed, end the process */
 				RT_TRACE(_module_hal_init_c_, _drv_info_,
-					 ("rtl88eu_pwrseqcmdparsing: PWR_CMD_END\n"));
+					 ("%s: PWR_CMD_END\n", __func__));
 				return true;
 			default:
 				RT_TRACE(_module_hal_init_c_, _drv_err_,
-					 ("rtl88eu_pwrseqcmdparsing: Unknown CMD!!\n"));
+					 ("%s: Unknown CMD!!\n", __func__));
 				break;
 			}
 		}

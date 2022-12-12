@@ -1,5 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _NFT_REJECT_H_
 #define _NFT_REJECT_H_
+
+#include <linux/types.h>
+#include <net/netlink.h>
+#include <net/netfilter/nf_tables.h>
+#include <uapi/linux/netfilter/nf_tables.h>
 
 struct nft_reject {
 	enum nft_reject_types	type:8;
@@ -7,6 +13,10 @@ struct nft_reject {
 };
 
 extern const struct nla_policy nft_reject_policy[];
+
+int nft_reject_validate(const struct nft_ctx *ctx,
+			const struct nft_expr *expr,
+			const struct nft_data **data);
 
 int nft_reject_init(const struct nft_ctx *ctx,
 		    const struct nft_expr *expr,

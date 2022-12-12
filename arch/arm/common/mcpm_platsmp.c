@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-vexpress/mcpm_platsmp.c
  *
  * Created by:  Nicolas Pitre, November 2012
  * Copyright:   (C) 2012-2013  Linaro Limited
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Code to handle secondary CPU bringup and hotplug for the cluster power API.
  */
@@ -83,7 +80,7 @@ static void mcpm_cpu_die(unsigned int cpu)
 
 #endif
 
-static struct smp_operations __initdata mcpm_smp_ops = {
+static const struct smp_operations mcpm_smp_ops __initconst = {
 	.smp_boot_secondary	= mcpm_boot_secondary,
 	.smp_secondary_init	= mcpm_secondary_init,
 #ifdef CONFIG_HOTPLUG_CPU

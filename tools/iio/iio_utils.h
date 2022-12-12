@@ -1,19 +1,16 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef _IIO_UTILS_H_
 #define _IIO_UTILS_H_
 
 /* IIO - useful set of util functionality
  *
  * Copyright (c) 2008 Jonathan Cameron
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  */
 
 #include <stdint.h>
 
 /* Made up value to limit allocation sizes */
-#define IIO_MAX_NAME_LENGTH 30
+#define IIO_MAX_NAME_LENGTH 64
 
 #define FORMAT_SCAN_ELEMENTS_DIR "%s/scan_elements"
 #define FORMAT_TYPE_FILE "%s_type"
@@ -51,6 +48,13 @@ struct iio_channel_info {
 	unsigned is_signed;
 	unsigned location;
 };
+
+static inline int iioutils_check_suffix(const char *str, const char *suffix)
+{
+	return strlen(str) >= strlen(suffix) &&
+		strncmp(str+strlen(str)-strlen(suffix),
+			suffix, strlen(suffix)) == 0;
+}
 
 int iioutils_break_up_name(const char *full_name, char **generic_name);
 int iioutils_get_type(unsigned *is_signed, unsigned *bytes, unsigned *bits_used,

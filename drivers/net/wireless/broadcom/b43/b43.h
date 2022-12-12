@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef B43_H_
 #define B43_H_
 
@@ -908,7 +909,7 @@ struct b43_wl {
 
 	/* Set this if we call ieee80211_register_hw() and check if we call
 	 * ieee80211_unregister_hw(). */
-	bool hw_registred;
+	bool hw_registered;
 
 	/* We can only have one operating interface (802.11 core)
 	 * at a time. General information about this interface follows.
@@ -992,9 +993,9 @@ static inline int b43_is_mode(struct b43_wl *wl, int type)
 
 /**
  * b43_current_band - Returns the currently used band.
- * Returns one of IEEE80211_BAND_2GHZ and IEEE80211_BAND_5GHZ.
+ * Returns one of NL80211_BAND_2GHZ and NL80211_BAND_5GHZ.
  */
-static inline enum ieee80211_band b43_current_band(struct b43_wl *wl)
+static inline enum nl80211_band b43_current_band(struct b43_wl *wl)
 {
 	return wl->hw->conf.chandef.chan->band;
 }

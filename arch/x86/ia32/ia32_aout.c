@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  a.out loader for x86-64
  *
@@ -26,9 +27,9 @@
 #include <linux/init.h>
 #include <linux/jiffies.h>
 #include <linux/perf_event.h>
+#include <linux/sched/task_stack.h>
 
-#include <asm/uaccess.h>
-#include <asm/pgalloc.h>
+#include <linux/uaccess.h>
 #include <asm/cacheflush.h>
 #include <asm/user32.h>
 #include <asm/ia32.h>
@@ -38,178 +39,21 @@
 static int load_aout_binary(struct linux_binprm *);
 static int load_aout_library(struct file *);
 
-#ifdef CONFIG_COREDUMP
-static int aout_core_dump(struct coredump_params *);
-
-static unsigned long get_dr(int n)
-{
-	struct perf_event *bp = current->thread.ptrace_bps[n];
-	return bp ? bp->hw.info.address : 0;
-}
-
-/*
- * fill in the user structure for a core dump..
- */
-static void dump_thread32(struct pt_regs *regs, struct user32 *dump)
-{
-	u32 fs, gs;
-	memset(dump, 0, sizeof(*dump));
-
-/* changed the size calculations - should hopefully work better. lbt */
-	dump->magic = CMAGIC;
-	dump->start_code = 0;
-	dump->start_stack = regs->sp & ~(PAGE_SIZE - 1);
-	dump->u_tsize = ((unsigned long) current->mm->end_code) >> PAGE_SHIFT;
-	dump->u_dsize = ((unsigned long)
-			 (current->mm->brk + (PAGE_SIZE-1))) >> PAGE_SHIFT;
-	dump->u_dsize -= dump->u_tsize;
-	dump->u_debugreg[0] = get_dr(0);
-	dump->u_debugreg[1] = get_dr(1);
-	dump->u_debugreg[2] = get_dr(2);
-	dump->u_debugreg[3] = get_dr(3);
-	dump->u_debugreg[6] = current->thread.debugreg6;
-	dump->u_debugreg[7] = current->thread.ptrace_dr7;
-
-	if (dump->start_stack < 0xc0000000) {
-		unsigned long tmp;
-
-		tmp = (unsigned long) (0xc0000000 - dump->start_stack);
-		dump->u_ssize = tmp >> PAGE_SHIFT;
-	}
-
-	dump->regs.ebx = regs->bx;
-	dump->regs.ecx = regs->cx;
-	dump->regs.edx = regs->dx;
-	dump->regs.esi = regs->si;
-	dump->regs.edi = regs->di;
-	dump->regs.ebp = regs->bp;
-	dump->regs.eax = regs->ax;
-	dump->regs.ds = current->thread.ds;
-	dump->regs.es = current->thread.es;
-	savesegment(fs, fs);
-	dump->regs.fs = fs;
-	savesegment(gs, gs);
-	dump->regs.gs = gs;
-	dump->regs.orig_eax = regs->orig_ax;
-	dump->regs.eip = regs->ip;
-	dump->regs.cs = regs->cs;
-	dump->regs.eflags = regs->flags;
-	dump->regs.esp = regs->sp;
-	dump->regs.ss = regs->ss;
-
-#if 1 /* FIXME */
-	dump->u_fpvalid = 0;
-#else
-	dump->u_fpvalid = dump_fpu(regs, &dump->i387);
-#endif
-}
-
-#endif
-
 static struct linux_binfmt aout_format = {
 	.module		= THIS_MODULE,
 	.load_binary	= load_aout_binary,
 	.load_shlib	= load_aout_library,
-#ifdef CONFIG_COREDUMP
-	.core_dump	= aout_core_dump,
-#endif
-	.min_coredump	= PAGE_SIZE
 };
 
-static void set_brk(unsigned long start, unsigned long end)
+static int set_brk(unsigned long start, unsigned long end)
 {
 	start = PAGE_ALIGN(start);
 	end = PAGE_ALIGN(end);
 	if (end <= start)
-		return;
-	vm_brk(start, end - start);
+		return 0;
+	return vm_brk(start, end - start);
 }
 
-#ifdef CONFIG_COREDUMP
-/*
- * These are the only things you should do on a core-file: use only these
- * macros to write out all the necessary info.
- */
-
-#include <linux/coredump.h>
-
-#define START_DATA(u)	(u.u_tsize << PAGE_SHIFT)
-#define START_STACK(u)	(u.start_stack)
-
-/*
- * Routine writes a core dump image in the current directory.
- * Currently only a stub-function.
- *
- * Note that setuid/setgid files won't make a core-dump if the uid/gid
- * changed due to the set[u|g]id. It's enforced by the "current->mm->dumpable"
- * field, which also makes sure the core-dumps won't be recursive if the
- * dumping of the process results in another error..
- */
-
-static int aout_core_dump(struct coredump_params *cprm)
-{
-	mm_segment_t fs;
-	int has_dumped = 0;
-	unsigned long dump_start, dump_size;
-	struct user32 dump;
-
-	fs = get_fs();
-	set_fs(KERNEL_DS);
-	has_dumped = 1;
-	strncpy(dump.u_comm, current->comm, sizeof(current->comm));
-	dump.u_ar0 = offsetof(struct user32, regs);
-	dump.signal = cprm->siginfo->si_signo;
-	dump_thread32(cprm->regs, &dump);
-
-	/*
-	 * If the size of the dump file exceeds the rlimit, then see
-	 * what would happen if we wrote the stack, but not the data
-	 * area.
-	 */
-	if ((dump.u_dsize + dump.u_ssize + 1) * PAGE_SIZE > cprm->limit)
-		dump.u_dsize = 0;
-
-	/* Make sure we have enough room to write the stack and data areas. */
-	if ((dump.u_ssize + 1) * PAGE_SIZE > cprm->limit)
-		dump.u_ssize = 0;
-
-	/* make sure we actually have a data and stack area to dump */
-	set_fs(USER_DS);
-	if (!access_ok(VERIFY_READ, (void *) (unsigned long)START_DATA(dump),
-		       dump.u_dsize << PAGE_SHIFT))
-		dump.u_dsize = 0;
-	if (!access_ok(VERIFY_READ, (void *) (unsigned long)START_STACK(dump),
-		       dump.u_ssize << PAGE_SHIFT))
-		dump.u_ssize = 0;
-
-	set_fs(KERNEL_DS);
-	/* struct user */
-	if (!dump_emit(cprm, &dump, sizeof(dump)))
-		goto end_coredump;
-	/* Now dump all of the user data.  Include malloced stuff as well */
-	if (!dump_skip(cprm, PAGE_SIZE - sizeof(dump)))
-		goto end_coredump;
-	/* now we start writing out the user space info */
-	set_fs(USER_DS);
-	/* Dump the data area */
-	if (dump.u_dsize != 0) {
-		dump_start = START_DATA(dump);
-		dump_size = dump.u_dsize << PAGE_SHIFT;
-		if (!dump_emit(cprm, (void *)dump_start, dump_size))
-			goto end_coredump;
-	}
-	/* Now prepare to dump the stack area */
-	if (dump.u_ssize != 0) {
-		dump_start = START_STACK(dump);
-		dump_size = dump.u_ssize << PAGE_SHIFT;
-		if (!dump_emit(cprm, (void *)dump_start, dump_size))
-			goto end_coredump;
-	}
-end_coredump:
-	set_fs(fs);
-	return has_dumped;
-}
-#endif
 
 /*
  * create_aout_tables() parses the env- and arg-strings in new user
@@ -286,7 +130,7 @@ static int load_aout_binary(struct linux_binprm *bprm)
 		return -ENOMEM;
 
 	/* Flush all traces of the currently running executable */
-	retval = flush_old_exec(bprm);
+	retval = begin_new_exec(bprm);
 	if (retval)
 		return retval;
 
@@ -311,8 +155,6 @@ static int load_aout_binary(struct linux_binprm *bprm)
 	if (retval < 0)
 		return retval;
 
-	install_exec_creds(bprm);
-
 	if (N_MAGIC(ex) == OMAGIC) {
 		unsigned long text_addr, map_size;
 
@@ -321,7 +163,7 @@ static int load_aout_binary(struct linux_binprm *bprm)
 
 		error = vm_brk(text_addr & PAGE_MASK, map_size);
 
-		if (error != (text_addr & PAGE_MASK))
+		if (error)
 			return error;
 
 		error = read_code(bprm->file, text_addr, 32,
@@ -349,7 +191,10 @@ static int load_aout_binary(struct linux_binprm *bprm)
 #endif
 
 		if (!bprm->file->f_op->mmap || (fd_offset & ~PAGE_MASK) != 0) {
-			vm_brk(N_TXTADDR(ex), ex.a_text+ex.a_data);
+			error = vm_brk(N_TXTADDR(ex), ex.a_text+ex.a_data);
+			if (error)
+				return error;
+
 			read_code(bprm->file, N_TXTADDR(ex), fd_offset,
 					ex.a_text+ex.a_data);
 			goto beyond_if;
@@ -372,10 +217,13 @@ static int load_aout_binary(struct linux_binprm *bprm)
 		if (error != N_DATADDR(ex))
 			return error;
 	}
-beyond_if:
-	set_binfmt(&aout_format);
 
-	set_brk(current->mm->start_brk, current->mm->brk);
+beyond_if:
+	error = set_brk(current->mm->start_brk, current->mm->brk);
+	if (error)
+		return error;
+
+	set_binfmt(&aout_format);
 
 	current->mm->start_stack =
 		(unsigned long)create_aout_tables((char __user *)bprm->p, bprm);
@@ -391,7 +239,6 @@ beyond_if:
 	(regs)->ss = __USER32_DS;
 	regs->r8 = regs->r9 = regs->r10 = regs->r11 =
 	regs->r12 = regs->r13 = regs->r14 = regs->r15 = 0;
-	set_fs(USER_DS);
 	return 0;
 }
 
@@ -400,10 +247,10 @@ static int load_aout_library(struct file *file)
 	unsigned long bss, start_addr, len, error;
 	int retval;
 	struct exec ex;
-
+	loff_t pos = 0;
 
 	retval = -ENOEXEC;
-	error = kernel_read(file, 0, (char *) &ex, sizeof(ex));
+	error = kernel_read(file, &ex, sizeof(ex), &pos);
 	if (error != sizeof(ex))
 		goto out;
 
@@ -434,7 +281,9 @@ static int load_aout_library(struct file *file)
 			error_time = jiffies;
 		}
 #endif
-		vm_brk(start_addr, ex.a_text + ex.a_data + ex.a_bss);
+		retval = vm_brk(start_addr, ex.a_text + ex.a_data + ex.a_bss);
+		if (retval)
+			goto out;
 
 		read_code(file, start_addr, N_TXTOFF(ex),
 			  ex.a_text + ex.a_data);
@@ -453,9 +302,8 @@ static int load_aout_library(struct file *file)
 	len = PAGE_ALIGN(ex.a_text + ex.a_data);
 	bss = ex.a_text + ex.a_data + ex.a_bss;
 	if (bss > len) {
-		error = vm_brk(start_addr + len, bss - len);
-		retval = error;
-		if (error != start_addr + len)
+		retval = vm_brk(start_addr + len, bss - len);
+		if (retval)
 			goto out;
 	}
 	retval = 0;

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 config CARL9170
 	tristate "Linux Community AR9170 802.11n USB support"
 	depends on USB && MAC80211
@@ -5,13 +6,11 @@ config CARL9170
 	select FW_LOADER
 	select CRC32
 	help
-	  This is another driver for the Atheros "otus" 802.11n USB devices.
+	  This is the mainline driver for the Atheros "otus" 802.11n USB devices.
 
-	  This driver provides more features than the original,
-	  but it needs a special firmware (carl9170-1.fw) to do that.
-
-	  The firmware can be downloaded from our wiki here:
-	  <http://wireless.kernel.org/en/users/Drivers/carl9170>
+	  It needs a special firmware (carl9170-1.fw), which can be downloaded
+	  from our wiki here:
+	  <https://wireless.wiki.kernel.org/en/users/Drivers/carl9170>
 
 	  If you choose to build a module, it'll be called carl9170.
 
@@ -42,9 +41,9 @@ config CARL9170_WPC
 	default y
 
 config CARL9170_HWRNG
-        bool "Random number generator"
-        depends on CARL9170 && (HW_RANDOM = y || HW_RANDOM = CARL9170)
-        default n
+	bool "Random number generator"
+	depends on CARL9170 && (HW_RANDOM = y || HW_RANDOM = CARL9170)
+	default n
 	help
 	  Provides a hardware random number generator to the kernel.
 

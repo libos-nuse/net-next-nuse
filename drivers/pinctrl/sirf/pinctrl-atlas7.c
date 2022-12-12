@@ -1,13 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * pinctrl pads, groups, functions for CSR SiRFatlasVII
  *
  * Copyright (c) 2011 - 2014 Cambridge Silicon Radio Limited, a CSR plc group
  * company.
- *
- * Licensed under GPLv2 or later.
  */
 
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/bitops.h>
@@ -19,14 +18,13 @@
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
 #include <linux/of_irq.h>
-#include <linux/of_gpio.h>
 #include <linux/pinctrl/machine.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinmux.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/pinctrl/pinconf-generic.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 
 /* Definition of Pad&Mux Properties */
 #define N 0
@@ -161,6 +159,9 @@ enum altas7_pad_type {
 #define IN_DISABLE_VAL_1_REG_SET	0x0A88
 #define IN_DISABLE_VAL_1_REG_CLR	0x0A8C
 
+/* Offset of the SDIO9SEL*/
+#define SYS2PCI_SDIO9SEL 0x14
+
 struct dt_params {
 	const char *property;
 	int value;
@@ -168,7 +169,7 @@ struct dt_params {
 
 /**
  * struct atlas7_pad_conf - Atlas7 Pad Configuration
- * @id			The ID of this Pad.
+ * @id:			The ID of this Pad.
  * @type:		The type of this Pad.
  * @mux_reg:		The mux register offset.
  *			This register contains the mux.
@@ -209,7 +210,7 @@ struct atlas7_pad_config {
 		.ad_ctrl_bit = adb,				\
 	}
 
-/**
+/*
  * struct atlas7_pad_status - Atlas7 Pad status
  */
 struct atlas7_pad_status {
@@ -335,7 +336,6 @@ struct atlas7_pinctrl_data {
 #define ATLAS7_GPIO_CTL_DATAIN_MASK		BIT(7)
 
 struct atlas7_gpio_bank {
-	struct pinctrl_dev *pctldev;
 	int id;
 	int irq;
 	void __iomem *base;
@@ -350,26 +350,18 @@ struct atlas7_gpio_chip {
 	void __iomem *reg;
 	struct clk *clk;
 	int nbank;
-	spinlock_t lock;
+	raw_spinlock_t lock;
 	struct gpio_chip chip;
-	struct atlas7_gpio_bank banks[0];
+	struct atlas7_gpio_bank banks[];
 };
 
-static inline struct atlas7_gpio_chip *to_atlas7_gpio(struct gpio_chip *gc)
-{
-	return container_of(gc, struct atlas7_gpio_chip, chip);
-}
-
-/**
- * @dev: a pointer back to containing device
- * @virtbase: the offset to the controller in virtual memory
- */
 struct atlas7_pmx {
 	struct device *dev;
 	struct pinctrl_dev *pctl;
 	struct pinctrl_desc pctl_desc;
 	struct atlas7_pinctrl_data *pctl_data;
 	void __iomem *regs[ATLAS7_PINCTRL_REG_BANKS];
+	void __iomem *sys2pci_base;
 	u32 status_ds[NUM_OF_IN_DISABLE_REG];
 	u32 status_dsv[NUM_OF_IN_DISABLE_REG];
 	struct atlas7_pad_status sleep_data[ATLAS7_PINCTRL_TOTAL_PINS];
@@ -380,7 +372,7 @@ struct atlas7_pmx {
  * refer to A7DA IO Summary - CS-314158-DD-4E.xls
  */
 
-/*Pads in IOC RTC & TOP */
+/* Pads in IOC RTC & TOP */
 static const struct pinctrl_pin_desc atlas7_ioc_pads[] = {
 	/* RTC PADs */
 	PINCTRL_PIN(0, "rtc_gpio_0"),
@@ -551,7 +543,7 @@ static const struct pinctrl_pin_desc atlas7_ioc_pads[] = {
 	PINCTRL_PIN(163, "jtag_trstn"),
 };
 
-struct atlas7_pad_config atlas7_ioc_pad_confs[] = {
+static struct atlas7_pad_config atlas7_ioc_pad_confs[] = {
 	/* The Configuration of IOC_RTC Pads */
 	PADCONF(0, 3, 0x0, 0x100, 0x200, -1, 0, 0, 0, 0),
 	PADCONF(1, 3, 0x0, 0x100, 0x200, -1, 4, 2, 2, 0),
@@ -885,11 +877,12 @@ static const unsigned int lr_lcdrom_pins[] = { 73, 54, 57, 58, 59, 60, 61,
 		62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 56, 53, 55, };
 static const unsigned int lvds_analog_pins[] = { 149, 150, 151, 152, 153, 154,
 		155, 156, 157, 158, };
-static const unsigned int nd_df_pins[] = { 44, 43, 42, 41, 40, 39, 38, 37,
-		47, 46, 52, 51, 45, 49, 50, 48, 124, };
-static const unsigned int nd_df_nowp_pins[] = { 44, 43, 42, 41, 40, 39, 38,
-		37, 47, 46, 52, 51, 45, 49, 50, 48, };
+static const unsigned int nd_df_basic_pins[] = { 44, 43, 42, 41, 40, 39, 38,
+		37, 47, 46, 52, 45, 49, 50, 48, };
+static const unsigned int nd_df_wp_pins[] = { 124, };
+static const unsigned int nd_df_cs_pins[] = { 51, };
 static const unsigned int ps_pins[] = { 120, 119, 121, };
+static const unsigned int ps_no_dir_pins[] = { 119, };
 static const unsigned int pwc_core_on_pins[] = { 8, };
 static const unsigned int pwc_ext_on_pins[] = { 6, };
 static const unsigned int pwc_gpio3_clk_pins[] = { 3, };
@@ -944,7 +937,7 @@ static const unsigned int sd2_cdb_pins0[] = { 124, };
 static const unsigned int sd2_cdb_pins1[] = { 161, };
 static const unsigned int sd2_wpb_pins0[] = { 123, };
 static const unsigned int sd2_wpb_pins1[] = { 163, };
-static const unsigned int sd3_pins[] = { 85, 86, 87, 88, 89, 90, };
+static const unsigned int sd3_9_pins[] = { 85, 86, 87, 88, 89, 90, };
 static const unsigned int sd5_pins[] = { 91, 92, 93, 94, 95, 96, };
 static const unsigned int sd6_pins0[] = { 79, 78, 74, 75, 76, 77, };
 static const unsigned int sd6_pins1[] = { 101, 99, 100, 110, 109, 111, };
@@ -998,12 +991,12 @@ static const unsigned int vi_vip1_ext_pins[] = { 74, 75, 76, 77, 78, 79, 80,
 		81, 82, 83, 84, 108, 103, 104, 105, 106, 107, 102, 97, 98,
 		99, 100, };
 static const unsigned int vi_vip1_low8bit_pins[] = { 74, 75, 76, 77, 78, 79,
-		80, 81, };
-static const unsigned int vi_vip1_high8bit_pins[] = { 82, 83, 84, 108, 103,
-		104, 105, 106, };
+		80, 81, 82, 83, 84, };
+static const unsigned int vi_vip1_high8bit_pins[] = { 82, 83, 84, 103, 104,
+		105, 106, 107, 102, 97, 98, };
 
 /* definition of pin group table */
-struct atlas7_pin_group altas7_pin_groups[] = {
+static struct atlas7_pin_group altas7_pin_groups[] = {
 	GROUP("gnss_gpio_grp", gnss_gpio_pins),
 	GROUP("lcd_vip_gpio_grp", lcd_vip_gpio_pins),
 	GROUP("sdio_i2s_gpio_grp", sdio_i2s_gpio_pins),
@@ -1142,9 +1135,11 @@ struct atlas7_pin_group altas7_pin_groups[] = {
 	GROUP("ld_ldd_lck_grp", ld_ldd_lck_pins),
 	GROUP("lr_lcdrom_grp", lr_lcdrom_pins),
 	GROUP("lvds_analog_grp", lvds_analog_pins),
-	GROUP("nd_df_grp", nd_df_pins),
-	GROUP("nd_df_nowp_grp", nd_df_nowp_pins),
+	GROUP("nd_df_basic_grp", nd_df_basic_pins),
+	GROUP("nd_df_wp_grp", nd_df_wp_pins),
+	GROUP("nd_df_cs_grp", nd_df_cs_pins),
 	GROUP("ps_grp", ps_pins),
+	GROUP("ps_no_dir_grp", ps_no_dir_pins),
 	GROUP("pwc_core_on_grp", pwc_core_on_pins),
 	GROUP("pwc_ext_on_grp", pwc_ext_on_pins),
 	GROUP("pwc_gpio3_clk_grp", pwc_gpio3_clk_pins),
@@ -1196,7 +1191,7 @@ struct atlas7_pin_group altas7_pin_groups[] = {
 	GROUP("sd2_cdb_grp1", sd2_cdb_pins1),
 	GROUP("sd2_wpb_grp0", sd2_wpb_pins0),
 	GROUP("sd2_wpb_grp1", sd2_wpb_pins1),
-	GROUP("sd3_grp", sd3_pins),
+	GROUP("sd3_9_grp", sd3_9_pins),
 	GROUP("sd5_grp", sd5_pins),
 	GROUP("sd6_grp0", sd6_pins0),
 	GROUP("sd6_grp1", sd6_pins1),
@@ -1421,9 +1416,11 @@ static const char * const ld_ldd_fck_grp[] = { "ld_ldd_fck_grp", };
 static const char * const ld_ldd_lck_grp[] = { "ld_ldd_lck_grp", };
 static const char * const lr_lcdrom_grp[] = { "lr_lcdrom_grp", };
 static const char * const lvds_analog_grp[] = { "lvds_analog_grp", };
-static const char * const nd_df_grp[] = { "nd_df_grp", };
-static const char * const nd_df_nowp_grp[] = { "nd_df_nowp_grp", };
+static const char * const nd_df_basic_grp[] = { "nd_df_basic_grp", };
+static const char * const nd_df_wp_grp[] = { "nd_df_wp_grp", };
+static const char * const nd_df_cs_grp[] = { "nd_df_cs_grp", };
 static const char * const ps_grp[] = { "ps_grp", };
+static const char * const ps_no_dir_grp[] = { "ps_no_dir_grp", };
 static const char * const pwc_core_on_grp[] = { "pwc_core_on_grp", };
 static const char * const pwc_ext_on_grp[] = { "pwc_ext_on_grp", };
 static const char * const pwc_gpio3_clk_grp[] = { "pwc_gpio3_clk_grp", };
@@ -1478,7 +1475,7 @@ static const char * const sd2_cdb_grp0[] = { "sd2_cdb_grp0", };
 static const char * const sd2_cdb_grp1[] = { "sd2_cdb_grp1", };
 static const char * const sd2_wpb_grp0[] = { "sd2_wpb_grp0", };
 static const char * const sd2_wpb_grp1[] = { "sd2_wpb_grp1", };
-static const char * const sd3_grp[] = { "sd3_grp", };
+static const char * const sd3_9_grp[] = { "sd3_9_grp", };
 static const char * const sd5_grp[] = { "sd5_grp", };
 static const char * const sd6_grp0[] = { "sd6_grp0", };
 static const char * const sd6_grp1[] = { "sd6_grp1", };
@@ -3174,7 +3171,7 @@ static struct atlas7_grp_mux lvds_analog_grp_mux = {
 	.pad_mux_list = lvds_analog_grp_pad_mux,
 };
 
-static struct atlas7_pad_mux nd_df_grp_pad_mux[] = {
+static struct atlas7_pad_mux nd_df_basic_grp_pad_mux[] = {
 	MUX(1, 44, 1, N, N, N, N),
 	MUX(1, 43, 1, N, N, N, N),
 	MUX(1, 42, 1, N, N, N, N),
@@ -3186,41 +3183,33 @@ static struct atlas7_pad_mux nd_df_grp_pad_mux[] = {
 	MUX(1, 47, 1, N, N, N, N),
 	MUX(1, 46, 1, N, N, N, N),
 	MUX(1, 52, 1, N, N, N, N),
-	MUX(1, 51, 1, N, N, N, N),
 	MUX(1, 45, 1, N, N, N, N),
 	MUX(1, 49, 1, N, N, N, N),
 	MUX(1, 50, 1, N, N, N, N),
 	MUX(1, 48, 1, N, N, N, N),
+};
+
+static struct atlas7_grp_mux nd_df_basic_grp_mux = {
+	.pad_mux_count = ARRAY_SIZE(nd_df_basic_grp_pad_mux),
+	.pad_mux_list = nd_df_basic_grp_pad_mux,
+};
+
+static struct atlas7_pad_mux nd_df_wp_grp_pad_mux[] = {
 	MUX(1, 124, 4, N, N, N, N),
 };
 
-static struct atlas7_grp_mux nd_df_grp_mux = {
-	.pad_mux_count = ARRAY_SIZE(nd_df_grp_pad_mux),
-	.pad_mux_list = nd_df_grp_pad_mux,
+static struct atlas7_grp_mux nd_df_wp_grp_mux = {
+	.pad_mux_count = ARRAY_SIZE(nd_df_wp_grp_pad_mux),
+	.pad_mux_list = nd_df_wp_grp_pad_mux,
 };
 
-static struct atlas7_pad_mux nd_df_nowp_grp_pad_mux[] = {
-	MUX(1, 44, 1, N, N, N, N),
-	MUX(1, 43, 1, N, N, N, N),
-	MUX(1, 42, 1, N, N, N, N),
-	MUX(1, 41, 1, N, N, N, N),
-	MUX(1, 40, 1, N, N, N, N),
-	MUX(1, 39, 1, N, N, N, N),
-	MUX(1, 38, 1, N, N, N, N),
-	MUX(1, 37, 1, N, N, N, N),
-	MUX(1, 47, 1, N, N, N, N),
-	MUX(1, 46, 1, N, N, N, N),
-	MUX(1, 52, 1, N, N, N, N),
+static struct atlas7_pad_mux nd_df_cs_grp_pad_mux[] = {
 	MUX(1, 51, 1, N, N, N, N),
-	MUX(1, 45, 1, N, N, N, N),
-	MUX(1, 49, 1, N, N, N, N),
-	MUX(1, 50, 1, N, N, N, N),
-	MUX(1, 48, 1, N, N, N, N),
 };
 
-static struct atlas7_grp_mux nd_df_nowp_grp_mux = {
-	.pad_mux_count = ARRAY_SIZE(nd_df_nowp_grp_pad_mux),
-	.pad_mux_list = nd_df_nowp_grp_pad_mux,
+static struct atlas7_grp_mux nd_df_cs_grp_mux = {
+	.pad_mux_count = ARRAY_SIZE(nd_df_cs_grp_pad_mux),
+	.pad_mux_list = nd_df_cs_grp_pad_mux,
 };
 
 static struct atlas7_pad_mux ps_grp_pad_mux[] = {
@@ -3232,6 +3221,15 @@ static struct atlas7_pad_mux ps_grp_pad_mux[] = {
 static struct atlas7_grp_mux ps_grp_mux = {
 	.pad_mux_count = ARRAY_SIZE(ps_grp_pad_mux),
 	.pad_mux_list = ps_grp_pad_mux,
+};
+
+static struct atlas7_pad_mux ps_no_dir_grp_pad_mux[] = {
+	MUX(1, 119, 2, N, N, N, N),
+};
+
+static struct atlas7_grp_mux ps_no_dir_grp_mux = {
+	.pad_mux_count = ARRAY_SIZE(ps_no_dir_grp_pad_mux),
+	.pad_mux_list = ps_no_dir_grp_pad_mux,
 };
 
 static struct atlas7_pad_mux pwc_core_on_grp_pad_mux[] = {
@@ -3743,7 +3741,7 @@ static struct atlas7_grp_mux sd2_wpb_grp1_mux = {
 	.pad_mux_list = sd2_wpb_grp1_pad_mux,
 };
 
-static struct atlas7_pad_mux sd3_grp_pad_mux[] = {
+static struct atlas7_pad_mux sd3_9_grp_pad_mux[] = {
 	MUX(1, 85, 1, N, N, N, N),
 	MUX(1, 86, 1, N, N, N, N),
 	MUX(1, 87, 1, N, N, N, N),
@@ -3752,9 +3750,9 @@ static struct atlas7_pad_mux sd3_grp_pad_mux[] = {
 	MUX(1, 90, 1, N, N, N, N),
 };
 
-static struct atlas7_grp_mux sd3_grp_mux = {
-	.pad_mux_count = ARRAY_SIZE(sd3_grp_pad_mux),
-	.pad_mux_list = sd3_grp_pad_mux,
+static struct atlas7_grp_mux sd3_9_grp_mux = {
+	.pad_mux_count = ARRAY_SIZE(sd3_9_grp_pad_mux),
+	.pad_mux_list = sd3_9_grp_pad_mux,
 };
 
 static struct atlas7_pad_mux sd5_grp_pad_mux[] = {
@@ -4296,6 +4294,9 @@ static struct atlas7_pad_mux vi_vip1_low8bit_grp_pad_mux[] = {
 	MUX(1, 79, 1, N, N, N, N),
 	MUX(1, 80, 1, N, N, N, N),
 	MUX(1, 81, 1, N, N, N, N),
+	MUX(1, 82, 1, N, N, N, N),
+	MUX(1, 83, 1, N, N, N, N),
+	MUX(1, 84, 1, N, N, N, N),
 };
 
 static struct atlas7_grp_mux vi_vip1_low8bit_grp_mux = {
@@ -4307,11 +4308,14 @@ static struct atlas7_pad_mux vi_vip1_high8bit_grp_pad_mux[] = {
 	MUX(1, 82, 1, N, N, N, N),
 	MUX(1, 83, 1, N, N, N, N),
 	MUX(1, 84, 1, N, N, N, N),
-	MUX(1, 108, 2, N, N, N, N),
 	MUX(1, 103, 2, N, N, N, N),
 	MUX(1, 104, 2, N, N, N, N),
 	MUX(1, 105, 2, N, N, N, N),
 	MUX(1, 106, 2, N, N, N, N),
+	MUX(1, 107, 2, N, N, N, N),
+	MUX(1, 102, 2, N, N, N, N),
+	MUX(1, 97, 2, N, N, N, N),
+	MUX(1, 98, 2, N, N, N, N),
 };
 
 static struct atlas7_grp_mux vi_vip1_high8bit_grp_mux = {
@@ -4598,9 +4602,11 @@ static struct atlas7_pmx_func atlas7_pmx_functions[] = {
 	FUNCTION("ld_ldd_lck", ld_ldd_lck_grp, &ld_ldd_lck_grp_mux),
 	FUNCTION("lr_lcdrom", lr_lcdrom_grp, &lr_lcdrom_grp_mux),
 	FUNCTION("lvds_analog", lvds_analog_grp, &lvds_analog_grp_mux),
-	FUNCTION("nd_df", nd_df_grp, &nd_df_grp_mux),
-	FUNCTION("nd_df_nowp", nd_df_nowp_grp, &nd_df_nowp_grp_mux),
+	FUNCTION("nd_df_basic", nd_df_basic_grp, &nd_df_basic_grp_mux),
+	FUNCTION("nd_df_wp", nd_df_wp_grp, &nd_df_wp_grp_mux),
+	FUNCTION("nd_df_cs", nd_df_cs_grp, &nd_df_cs_grp_mux),
 	FUNCTION("ps", ps_grp, &ps_grp_mux),
+	FUNCTION("ps_no_dir", ps_no_dir_grp, &ps_no_dir_grp_mux),
 	FUNCTION("pwc_core_on", pwc_core_on_grp, &pwc_core_on_grp_mux),
 	FUNCTION("pwc_ext_on", pwc_ext_on_grp, &pwc_ext_on_grp_mux),
 	FUNCTION("pwc_gpio3_clk", pwc_gpio3_clk_grp, &pwc_gpio3_clk_grp_mux),
@@ -4686,10 +4692,11 @@ static struct atlas7_pmx_func atlas7_pmx_functions[] = {
 	FUNCTION("sd2_cdb_m1", sd2_cdb_grp1, &sd2_cdb_grp1_mux),
 	FUNCTION("sd2_wpb_m0", sd2_wpb_grp0, &sd2_wpb_grp0_mux),
 	FUNCTION("sd2_wpb_m1", sd2_wpb_grp1, &sd2_wpb_grp1_mux),
-	FUNCTION("sd3", sd3_grp, &sd3_grp_mux),
+	FUNCTION("sd3", sd3_9_grp, &sd3_9_grp_mux),
 	FUNCTION("sd5", sd5_grp, &sd5_grp_mux),
 	FUNCTION("sd6_m0", sd6_grp0, &sd6_grp0_mux),
 	FUNCTION("sd6_m1", sd6_grp1, &sd6_grp1_mux),
+	FUNCTION("sd9", sd3_9_grp, &sd3_9_grp_mux),
 	FUNCTION("sp0_ext_ldo_on",
 			sp0_ext_ldo_on_grp,
 			&sp0_ext_ldo_on_grp_mux),
@@ -4751,7 +4758,7 @@ static struct atlas7_pmx_func atlas7_pmx_functions[] = {
 			&vi_vip1_high8bit_grp_mux),
 };
 
-struct atlas7_pinctrl_data atlas7_ioc_data = {
+static struct atlas7_pinctrl_data atlas7_ioc_data = {
 	.pads = (struct pinctrl_pin_desc *)atlas7_ioc_pads,
 	.pads_cnt = ARRAY_SIZE(atlas7_ioc_pads),
 	.grps = (struct atlas7_pin_group *)altas7_pin_groups,
@@ -4770,10 +4777,10 @@ struct map_data {
 
 /**
  * struct atlas7_pull_info - Atlas7 Pad pull info
- * @type:The type of this Pad.
- * @mask:The mas value of this pin's pull bits.
- * @v2s: The map of pull register value to pull status.
- * @s2v: The map of pull status to pull register value.
+ * @pad_type:	The type of this Pad.
+ * @mask:	The mas value of this pin's pull bits.
+ * @v2s:	The map of pull register value to pull status.
+ * @s2v:	The map of pull status to pull register value.
  */
 struct atlas7_pull_info {
 	u8 pad_type;
@@ -4897,6 +4904,7 @@ static const struct atlas7_ds_ma_info atlas7_ma2ds_map[] = {
  * @type:		The type of this Pad.
  * @mask:		The mask value of this pin's pull bits.
  * @imval:		The immediate value of drives trength register.
+ * @reserved:		Reserved space
  */
 struct atlas7_ds_info {
 	u8 type;
@@ -5097,6 +5105,14 @@ static int atlas7_pmx_set_mux(struct pinctrl_dev *pctldev,
 	pr_debug("PMX DUMP ### Function:[%s] Group:[%s] #### START >>>\n",
 			pmx_func->name, pin_grp->name);
 
+	/* the sd3 and sd9 pin select by SYS2PCI_SDIO9SEL register */
+	if (pin_grp->pins == (unsigned int *)&sd3_9_pins) {
+		if (!strcmp(pmx_func->name, "sd9"))
+			writel(1, pmx->sys2pci_base + SYS2PCI_SDIO9SEL);
+		else
+			writel(0, pmx->sys2pci_base + SYS2PCI_SDIO9SEL);
+	}
+
 	grp_mux = pmx_func->grpmux;
 
 	for (idx = 0; idx < grp_mux->pad_mux_count; idx++) {
@@ -5240,7 +5256,7 @@ static int atlas7_pmx_gpio_request_enable(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-static struct pinmux_ops atlas7_pinmux_ops = {
+static const struct pinmux_ops atlas7_pinmux_ops = {
 	.get_functions_count = atlas7_pmx_get_funcs_count,
 	.get_function_name = atlas7_pmx_get_func_name,
 	.get_function_groups = atlas7_pmx_get_func_groups,
@@ -5301,7 +5317,8 @@ static int atlas7_pin_config_set(struct pinctrl_dev *pctldev,
 				unsigned pin, unsigned long *configs,
 				unsigned num_configs)
 {
-	u16 param, arg;
+	u16 param;
+	u32 arg;
 	int idx, err;
 
 	for (idx = 0; idx < num_configs; idx++) {
@@ -5385,10 +5402,28 @@ static int atlas7_pinmux_probe(struct platform_device *pdev)
 	struct atlas7_pmx *pmx;
 	struct device_node *np = pdev->dev.of_node;
 	u32 banks = ATLAS7_PINCTRL_REG_BANKS;
+	struct device_node *sys2pci_np;
+	struct resource res;
 
 	/* Create state holders etc for this driver */
 	pmx = devm_kzalloc(&pdev->dev, sizeof(*pmx), GFP_KERNEL);
 	if (!pmx)
+		return -ENOMEM;
+
+	/* The sd3 and sd9 shared all pins, and the function select by
+	 * SYS2PCI_SDIO9SEL register
+	 */
+	sys2pci_np = of_find_node_by_name(NULL, "sys2pci");
+	if (!sys2pci_np)
+		return -EINVAL;
+
+	ret = of_address_to_resource(sys2pci_np, 0, &res);
+	of_node_put(sys2pci_np);
+	if (ret)
+		return ret;
+
+	pmx->sys2pci_base = devm_ioremap_resource(&pdev->dev, &res);
+	if (IS_ERR(pmx->sys2pci_base))
 		return -ENOMEM;
 
 	pmx->dev = &pdev->dev;
@@ -5405,7 +5440,7 @@ static int atlas7_pinmux_probe(struct platform_device *pdev)
 		pmx->regs[idx] = of_iomap(np, idx);
 		if (!pmx->regs[idx]) {
 			dev_err(&pdev->dev,
-			"can't map ioc bank#%d registers\n", idx);
+				"can't map ioc bank#%d registers\n", idx);
 			ret = -ENOMEM;
 			goto unmap_io;
 		}
@@ -5500,14 +5535,10 @@ static int atlas7_pinmux_resume_noirq(struct device *dev)
 {
 	struct atlas7_pmx *pmx = dev_get_drvdata(dev);
 	struct atlas7_pad_status *status;
-	struct atlas7_pad_config *conf;
 	int idx;
-	u32 bank;
 
 	for (idx = 0; idx < pmx->pctl_desc.npins; idx++) {
 		/* Get this Pad's descriptor from PINCTRL */
-		conf = &pmx->pctl_data->confs[idx];
-		bank = atlas7_pin_to_bank(idx);
 		status = &pmx->sleep_data[idx];
 
 		/* Restore Function selector */
@@ -5575,7 +5606,7 @@ static int __init atlas7_pinmux_init(void)
 arch_initcall(atlas7_pinmux_init);
 
 
-/**
+/*
  * The Following is GPIO Code
  */
 static inline struct
@@ -5600,7 +5631,7 @@ static int __atlas7_gpio_to_pin(struct atlas7_gpio_chip *a7gc, u32 gpio)
 static void atlas7_gpio_irq_ack(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(gc);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(gc);
 	struct atlas7_gpio_bank *bank;
 	void __iomem *ctrl_reg;
 	u32 val, pin_in_bank;
@@ -5610,13 +5641,13 @@ static void atlas7_gpio_irq_ack(struct irq_data *d)
 	pin_in_bank = d->hwirq - bank->gpio_offset;
 	ctrl_reg = ATLAS7_GPIO_CTRL(bank, pin_in_bank);
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	val = readl(ctrl_reg);
 	/* clear interrupt status */
 	writel(val, ctrl_reg);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 }
 
 static void __atlas7_gpio_irq_mask(struct atlas7_gpio_chip *a7gc, int idx)
@@ -5638,20 +5669,20 @@ static void __atlas7_gpio_irq_mask(struct atlas7_gpio_chip *a7gc, int idx)
 static void atlas7_gpio_irq_mask(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(gc);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(gc);
 	unsigned long flags;
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	__atlas7_gpio_irq_mask(a7gc, d->hwirq);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 }
 
 static void atlas7_gpio_irq_unmask(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(gc);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(gc);
 	struct atlas7_gpio_bank *bank;
 	void __iomem *ctrl_reg;
 	u32 val, pin_in_bank;
@@ -5661,21 +5692,21 @@ static void atlas7_gpio_irq_unmask(struct irq_data *d)
 	pin_in_bank = d->hwirq - bank->gpio_offset;
 	ctrl_reg = ATLAS7_GPIO_CTRL(bank, pin_in_bank);
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	val = readl(ctrl_reg);
 	val &= ~ATLAS7_GPIO_CTL_INTR_STATUS_MASK;
 	val |= ATLAS7_GPIO_CTL_INTR_EN_MASK;
 	writel(val, ctrl_reg);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 }
 
 static int atlas7_gpio_irq_type(struct irq_data *d,
 				unsigned int type)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(gc);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(gc);
 	struct atlas7_gpio_bank *bank;
 	void __iomem *ctrl_reg;
 	u32 val, pin_in_bank;
@@ -5685,7 +5716,7 @@ static int atlas7_gpio_irq_type(struct irq_data *d,
 	pin_in_bank = d->hwirq - bank->gpio_offset;
 	ctrl_reg = ATLAS7_GPIO_CTRL(bank, pin_in_bank);
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	val = readl(ctrl_reg);
 	val &= ~(ATLAS7_GPIO_CTL_INTR_STATUS_MASK |
@@ -5728,7 +5759,7 @@ static int atlas7_gpio_irq_type(struct irq_data *d,
 
 	writel(val, ctrl_reg);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 
 	return 0;
 }
@@ -5744,7 +5775,7 @@ static struct irq_chip atlas7_gpio_irq_chip = {
 static void atlas7_gpio_handle_irq(struct irq_desc *desc)
 {
 	struct gpio_chip *gc = irq_desc_get_handler_data(desc);
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(gc);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(gc);
 	struct atlas7_gpio_bank *bank = NULL;
 	u32 status, ctrl;
 	int pin_in_bank = 0, idx;
@@ -5762,7 +5793,7 @@ static void atlas7_gpio_handle_irq(struct irq_desc *desc)
 
 	status = readl(ATLAS7_GPIO_INT_STATUS(bank));
 	if (!status) {
-		pr_warn("%s: gpio [%s] status %#x no interrupt is flaged\n",
+		pr_warn("%s: gpio [%s] status %#x no interrupt is flagged\n",
 			__func__, gc->label, status);
 		handle_bad_irq(desc);
 		return;
@@ -5780,7 +5811,7 @@ static void atlas7_gpio_handle_irq(struct irq_desc *desc)
 				__func__, gc->label,
 				bank->gpio_offset + pin_in_bank);
 			generic_handle_irq(
-				irq_find_mapping(gc->irqdomain,
+				irq_find_mapping(gc->irq.domain,
 					bank->gpio_offset + pin_in_bank));
 		}
 
@@ -5812,7 +5843,7 @@ static void __atlas7_gpio_set_input(struct atlas7_gpio_chip *a7gc,
 static int atlas7_gpio_request(struct gpio_chip *chip,
 				unsigned int gpio)
 {
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(chip);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(chip);
 	int ret;
 	unsigned long flags;
 
@@ -5820,10 +5851,10 @@ static int atlas7_gpio_request(struct gpio_chip *chip,
 	if (ret < 0)
 		return ret;
 
-	if (pinctrl_request_gpio(chip->base + gpio))
+	if (pinctrl_gpio_request(chip->base + gpio))
 		return -ENODEV;
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	/*
 	 * default status:
@@ -5832,7 +5863,7 @@ static int atlas7_gpio_request(struct gpio_chip *chip,
 	__atlas7_gpio_set_input(a7gc, gpio);
 	__atlas7_gpio_irq_mask(a7gc, gpio);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 
 	return 0;
 }
@@ -5840,30 +5871,30 @@ static int atlas7_gpio_request(struct gpio_chip *chip,
 static void atlas7_gpio_free(struct gpio_chip *chip,
 				unsigned int gpio)
 {
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(chip);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(chip);
 	unsigned long flags;
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	__atlas7_gpio_irq_mask(a7gc, gpio);
 	__atlas7_gpio_set_input(a7gc, gpio);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 
-	pinctrl_free_gpio(chip->base + gpio);
+	pinctrl_gpio_free(chip->base + gpio);
 }
 
 static int atlas7_gpio_direction_input(struct gpio_chip *chip,
 					unsigned int gpio)
 {
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(chip);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(chip);
 	unsigned long flags;
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	__atlas7_gpio_set_input(a7gc, gpio);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 
 	return 0;
 }
@@ -5893,14 +5924,14 @@ static void __atlas7_gpio_set_output(struct atlas7_gpio_chip *a7gc,
 static int atlas7_gpio_direction_output(struct gpio_chip *chip,
 				unsigned int gpio, int value)
 {
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(chip);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(chip);
 	unsigned long flags;
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	__atlas7_gpio_set_output(a7gc, gpio, value);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 
 	return 0;
 }
@@ -5908,7 +5939,7 @@ static int atlas7_gpio_direction_output(struct gpio_chip *chip,
 static int atlas7_gpio_get_value(struct gpio_chip *chip,
 					unsigned int gpio)
 {
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(chip);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(chip);
 	struct atlas7_gpio_bank *bank;
 	u32 val, pin_in_bank;
 	unsigned long flags;
@@ -5916,11 +5947,11 @@ static int atlas7_gpio_get_value(struct gpio_chip *chip,
 	bank = atlas7_gpio_to_bank(a7gc, gpio);
 	pin_in_bank = gpio - bank->gpio_offset;
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	val = readl(ATLAS7_GPIO_CTRL(bank, pin_in_bank));
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 
 	return !!(val & ATLAS7_GPIO_CTL_DATAIN_MASK);
 }
@@ -5928,7 +5959,7 @@ static int atlas7_gpio_get_value(struct gpio_chip *chip,
 static void atlas7_gpio_set_value(struct gpio_chip *chip,
 				unsigned int gpio, int value)
 {
-	struct atlas7_gpio_chip *a7gc = to_atlas7_gpio(chip);
+	struct atlas7_gpio_chip *a7gc = gpiochip_get_data(chip);
 	struct atlas7_gpio_bank *bank;
 	void __iomem *ctrl_reg;
 	u32 ctrl, pin_in_bank;
@@ -5938,7 +5969,7 @@ static void atlas7_gpio_set_value(struct gpio_chip *chip,
 	pin_in_bank = gpio - bank->gpio_offset;
 	ctrl_reg = ATLAS7_GPIO_CTRL(bank, pin_in_bank);
 
-	spin_lock_irqsave(&a7gc->lock, flags);
+	raw_spin_lock_irqsave(&a7gc->lock, flags);
 
 	ctrl = readl(ctrl_reg);
 	if (value)
@@ -5947,7 +5978,7 @@ static void atlas7_gpio_set_value(struct gpio_chip *chip,
 		ctrl &= ~ATLAS7_GPIO_CTL_DATAOUT_MASK;
 	writel(ctrl, ctrl_reg);
 
-	spin_unlock_irqrestore(&a7gc->lock, flags);
+	raw_spin_unlock_irqrestore(&a7gc->lock, flags);
 }
 
 static const struct of_device_id atlas7_gpio_ids[] = {
@@ -5962,6 +5993,7 @@ static int atlas7_gpio_probe(struct platform_device *pdev)
 	struct gpio_chip *chip;
 	u32 nbank;
 	int ret, idx;
+	struct gpio_irq_chip *girq;
 
 	ret = of_property_read_u32(np, "gpio-banks", &nbank);
 	if (ret) {
@@ -5972,8 +6004,8 @@ static int atlas7_gpio_probe(struct platform_device *pdev)
 	}
 
 	/* retrieve gpio descriptor data */
-	a7gc = devm_kzalloc(&pdev->dev, sizeof(*a7gc) +
-			sizeof(struct atlas7_gpio_bank) * nbank, GFP_KERNEL);
+	a7gc = devm_kzalloc(&pdev->dev, struct_size(a7gc, banks, nbank),
+			    GFP_KERNEL);
 	if (!a7gc)
 		return -ENOMEM;
 
@@ -5996,7 +6028,7 @@ static int atlas7_gpio_probe(struct platform_device *pdev)
 	}
 
 	a7gc->nbank = nbank;
-	spin_lock_init(&a7gc->lock);
+	raw_spin_lock_init(&a7gc->lock);
 
 	/* Setup GPIO Chip */
 	chip = &a7gc->chip;
@@ -6012,61 +6044,47 @@ static int atlas7_gpio_probe(struct platform_device *pdev)
 	chip->label = kstrdup(np->name, GFP_KERNEL);
 	chip->of_node = np;
 	chip->of_gpio_n_cells = 2;
-	chip->dev = &pdev->dev;
+	chip->parent = &pdev->dev;
 
-	/* Add gpio chip to system */
-	ret = gpiochip_add(chip);
-	if (ret) {
-		dev_err(&pdev->dev,
-		"%s: error in probe function with status %d\n",
-		np->name, ret);
-		goto failed;
-	}
-
-	/* Add gpio chip to irq subsystem */
-	ret =  gpiochip_irqchip_add(chip, &atlas7_gpio_irq_chip,
-			0, handle_level_irq, IRQ_TYPE_NONE);
-	if (ret) {
-		dev_err(&pdev->dev,
-			"could not connect irqchip to gpiochip\n");
-		goto failed;
-	}
-
+	girq = &chip->irq;
+	girq->chip = &atlas7_gpio_irq_chip;
+	girq->parent_handler = atlas7_gpio_handle_irq;
+	girq->num_parents = nbank;
+	girq->parents = devm_kcalloc(&pdev->dev, nbank,
+				     sizeof(*girq->parents),
+				     GFP_KERNEL);
+	if (!girq->parents)
+		return -ENOMEM;
 	for (idx = 0; idx < nbank; idx++) {
-		struct gpio_pin_range *pin_range;
 		struct atlas7_gpio_bank *bank;
 
 		bank = &a7gc->banks[idx];
 		/* Set ctrl registers' base of this bank */
 		bank->base = ATLAS7_GPIO_BASE(a7gc, idx);
+		bank->gpio_offset = idx * NGPIO_OF_BANK;
 
 		/* Get interrupt number from DTS */
 		ret = of_irq_get(np, idx);
-		if (ret == -EPROBE_DEFER) {
+		if (ret <= 0) {
 			dev_err(&pdev->dev,
 				"Unable to find IRQ number. ret=%d\n", ret);
+			if (!ret)
+				ret = -ENXIO;
 			goto failed;
 		}
 		bank->irq = ret;
+		girq->parents[idx] = ret;
+	}
+	girq->default_type = IRQ_TYPE_NONE;
+	girq->handler = handle_level_irq;
 
-		gpiochip_set_chained_irqchip(chip, &atlas7_gpio_irq_chip,
-					bank->irq, atlas7_gpio_handle_irq);
-
-		/* Records gpio_pin_range to a7gc */
-		list_for_each_entry(pin_range, &chip->pin_ranges, node) {
-			struct pinctrl_gpio_range *range;
-
-			range = &pin_range->range;
-			if (range->id == NGPIO_OF_BANK * idx) {
-				bank->gpio_offset = range->id;
-				bank->ngpio = range->npins;
-				bank->gpio_pins = range->pins;
-				bank->pctldev = pin_range->pctldev;
-				break;
-			}
-		}
-
-		BUG_ON(!bank->pctldev);
+	/* Add gpio chip to system */
+	ret = gpiochip_add_data(chip, a7gc);
+	if (ret) {
+		dev_err(&pdev->dev,
+			"%pOF: error in probe function with status %d\n",
+			np, ret);
+		goto failed;
 	}
 
 	platform_set_drvdata(pdev, a7gc);
@@ -6137,6 +6155,3 @@ static int __init atlas7_gpio_init(void)
 	return platform_driver_register(&atlas7_gpio_driver);
 }
 subsys_initcall(atlas7_gpio_init);
-
-MODULE_DESCRIPTION("SIRFSOC Atlas7 pin control driver");
-MODULE_LICENSE("GPL");

@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (c) 2014 Zhang, Keguang <keguang.zhang@gmail.com>
  *
  * Loongson 1 PWM Register Definitions.
- *
- * This program is free software; you can redistribute	it and/or modify it
- * under  the terms of	the GNU General	 Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #ifndef __ASM_MACH_LOONGSON32_REGS_PWM_H
@@ -19,11 +15,11 @@
 #define PWM_CTRL		0xc
 
 /* PWM Control Register Bits */
-#define CNT_RST			(0x1 << 7)
-#define INT_SR			(0x1 << 6)
-#define INT_EN			(0x1 << 5)
-#define PWM_SINGLE		(0x1 << 4)
-#define PWM_OE			(0x1 << 3)
-#define CNT_EN			0x1
+#define CNT_RST			BIT(7)
+#define INT_SR			BIT(6)
+#define INT_EN			BIT(5)
+#define PWM_SINGLE		BIT(4)
+#define PWM_OE			BIT(3)
+#define CNT_EN			BIT(0)
 
 #endif /* __ASM_MACH_LOONGSON32_REGS_PWM_H */

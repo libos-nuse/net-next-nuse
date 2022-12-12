@@ -1,11 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015 Intel Corporation
  *
  * Driver for TXC PA12203001 Proximity and Ambient Light Sensor.
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  * To do: Interrupt support.
  */
 
@@ -306,7 +304,6 @@ static int pa12203001_write_raw(struct iio_dev *indio_dev,
 }
 
 static const struct iio_info pa12203001_info = {
-	.driver_module	= THIS_MODULE,
 	.read_raw = pa12203001_read_raw,
 	.write_raw = pa12203001_write_raw,
 	.attrs = &pa12203001_attr_group,
@@ -365,7 +362,6 @@ static int pa12203001_probe(struct i2c_client *client,
 
 	mutex_init(&data->lock);
 
-	indio_dev->dev.parent = &client->dev;
 	indio_dev->info = &pa12203001_info;
 	indio_dev->name = PA12203001_DRIVER_NAME;
 	indio_dev->channels = pa12203001_channels;
@@ -381,17 +377,23 @@ static int pa12203001_probe(struct i2c_client *client,
 		return ret;
 
 	ret = pm_runtime_set_active(&client->dev);
-	if (ret < 0) {
-		pa12203001_power_chip(indio_dev, PA12203001_CHIP_DISABLE);
-		return ret;
-	}
+	if (ret < 0)
+		goto out_err;
 
 	pm_runtime_enable(&client->dev);
 	pm_runtime_set_autosuspend_delay(&client->dev,
 					 PA12203001_SLEEP_DELAY_MS);
 	pm_runtime_use_autosuspend(&client->dev);
 
-	return iio_device_register(indio_dev);
+	ret = iio_device_register(indio_dev);
+	if (ret < 0)
+		goto out_err;
+
+	return 0;
+
+out_err:
+	pa12203001_power_chip(indio_dev, PA12203001_CHIP_DISABLE);
+	return ret;
 }
 
 static int pa12203001_remove(struct i2c_client *client)

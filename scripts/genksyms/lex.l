@@ -1,25 +1,13 @@
-/* Lexical analysis for genksyms.
-   Copyright 1996, 1997 Linux International.
-
-   New implementation contributed by Richard Henderson <rth@tamu.edu>
-   Based on original work by Bjorn Ekwall <bj0rn@blox.se>
-
-   Taken from Linux modutils 2.4.22.
-
-   This program is free software; you can redistribute it and/or modify it
-   under the terms of the GNU General Public License as published by the
-   Free Software Foundation; either version 2 of the License, or (at your
-   option) any later version.
-
-   This program is distributed in the hope that it will be useful, but
-   WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-   General Public License for more details.
-
-   You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software Foundation,
-   Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
-
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Lexical analysis for genksyms.
+ * Copyright 1996, 1997 Linux International.
+ *
+ * New implementation contributed by Richard Henderson <rth@tamu.edu>
+ * Based on original work by Bjorn Ekwall <bj0rn@blox.se>
+ *
+ * Taken from Linux modutils 2.4.22.
+ */
 
 %{
 
@@ -94,7 +82,7 @@ MC_TOKEN		([~%^&*+=|<>/-]=)|(&&)|("||")|(->)|(<<)|(>>)
 
 /* Bring in the keyword recognizer.  */
 
-#include "keywords.hash.c"
+#include "keywords.c"
 
 
 /* Macros to append to our phrase collection list.  */
@@ -186,10 +174,10 @@ repeat:
 	case IDENT:
 	  APP;
 	  {
-	    const struct resword *r = is_reserved_word(yytext, yyleng);
-	    if (r)
+	    int r = is_reserved_word(yytext, yyleng);
+	    if (r >= 0)
 	      {
-		switch (token = r->token)
+		switch (token = r)
 		  {
 		  case ATTRIBUTE_KEYW:
 		    lexstate = ST_ATTRIBUTE;
@@ -289,6 +277,23 @@ repeat:
 	}
       break;
 
+    case ST_TYPEOF_1:
+      if (token == IDENT)
+	{
+	  if (is_reserved_word(yytext, yyleng) >= 0
+	      || find_symbol(yytext, SYM_TYPEDEF, 1))
+	    {
+	      yyless(0);
+	      unput('(');
+	      lexstate = ST_NORMAL;
+	      token = TYPEOF_KEYW;
+	      break;
+	    }
+	  _APP("(", 1);
+	}
+	lexstate = ST_TYPEOF;
+	/* FALLTHRU */
+
     case ST_TYPEOF:
       switch (token)
 	{
@@ -312,24 +317,6 @@ repeat:
 	  goto repeat;
 	}
       break;
-
-    case ST_TYPEOF_1:
-      if (token == IDENT)
-	{
-	  if (is_reserved_word(yytext, yyleng)
-	      || find_symbol(yytext, SYM_TYPEDEF, 1))
-	    {
-	      yyless(0);
-	      unput('(');
-	      lexstate = ST_NORMAL;
-	      token = TYPEOF_KEYW;
-	      break;
-	    }
-	  _APP("(", 1);
-	}
-	APP;
-	lexstate = ST_TYPEOF;
-	goto repeat;
 
     case ST_BRACKET:
       APP;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Copyright (C) 1995-1996  Linus Torvalds & authors (see below)
  */
@@ -695,7 +696,7 @@ static const struct ide_port_info cmd640_port_info __initconst = {
 	.pio_mask		= ATA_PIO5,
 };
 
-static int cmd640x_init_one(unsigned long base, unsigned long ctl)
+static int __init cmd640x_init_one(unsigned long base, unsigned long ctl)
 {
 	if (!request_region(base, 8, DRV_NAME)) {
 		printk(KERN_ERR "%s: I/O resource 0x%lX-0x%lX not free.\n",

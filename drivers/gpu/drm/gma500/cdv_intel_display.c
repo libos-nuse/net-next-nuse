@@ -1,33 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright © 2006-2011 Intel Corporation
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  *
  * Authors:
  *	Eric Anholt <eric@anholt.net>
  */
 
+#include <linux/delay.h>
 #include <linux/i2c.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_crtc.h>
+
+#include "cdv_device.h"
 #include "framebuffer.h"
+#include "gma_display.h"
+#include "power.h"
 #include "psb_drv.h"
 #include "psb_intel_drv.h"
 #include "psb_intel_reg.h"
-#include "gma_display.h"
-#include "power.h"
-#include "cdv_device.h"
 
 static bool cdv_intel_find_dp_pll(const struct gma_limit_t *limit,
 				  struct drm_crtc *crtc, int target,
@@ -116,7 +106,7 @@ static const struct gma_limit_t cdv_intel_limits[] = {
 	 .p1 = {.min = 1, .max = 10},
 	 .p2 = {.dot_limit = 225000, .p2_slow = 10, .p2_fast = 10},
 	 .find_pll = cdv_intel_find_dp_pll,
-	 }	
+	}
 };
 
 #define _wait_for(COND, MS, W) ({ \
@@ -245,7 +235,7 @@ cdv_dpll_set_clock_cdv(struct drm_device *dev, struct drm_crtc *crtc,
 	/* We don't know what the other fields of these regs are, so
 	 * leave them in place.
 	 */
-	/* 
+	/*
 	 * The BIT 14:13 of 0x8010/0x8030 is used to select the ref clk
 	 * for the pipe A/B. Display spec 1.06 has wrong definition.
 	 * Correct definition is like below:
@@ -256,7 +246,7 @@ cdv_dpll_set_clock_cdv(struct drm_device *dev, struct drm_crtc *crtc,
 	 *
 	 * if DPLLA sets 01 and DPLLB sets 02, both use clk from DPLLA
 	 *
-	 */  
+	 */
 	ret = cdv_sb_read(dev, ref_sfr, &ref_value);
 	if (ret)
 		return ret;
@@ -414,6 +404,8 @@ static bool cdv_intel_find_dp_pll(const struct gma_limit_t *limit,
 {
 	struct gma_crtc *gma_crtc = to_gma_crtc(crtc);
 	struct gma_clock_t clock;
+
+	memset(&clock, 0, sizeof(clock));
 
 	switch (refclk) {
 	case 27000:
@@ -590,8 +582,8 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 	struct gma_clock_t clock;
 	u32 dpll = 0, dspcntr, pipeconf;
 	bool ok;
-	bool is_crt = false, is_lvds = false, is_tv = false;
-	bool is_hdmi = false, is_dp = false;
+	bool is_lvds = false, is_tv = false;
+	bool is_dp = false;
 	struct drm_mode_config *mode_config = &dev->mode_config;
 	struct drm_connector *connector;
 	const struct gma_limit_t *limit;
@@ -615,10 +607,7 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 			is_tv = true;
 			break;
 		case INTEL_OUTPUT_ANALOG:
-			is_crt = true;
-			break;
 		case INTEL_OUTPUT_HDMI:
-			is_hdmi = true;
 			break;
 		case INTEL_OUTPUT_DISPLAYPORT:
 			is_dp = true;
@@ -646,7 +635,7 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 		 * for DP/eDP. When using SSC clock, the ref clk is 100MHz.Otherwise
 		 * it will be 27MHz. From the VBIOS code it seems that the pipe A choose
 		 * 27MHz for DP/eDP while the Pipe B chooses the 100MHz.
-		 */ 
+		 */
 		if (pipe == 0)
 			refclk = 27000;
 		else
@@ -659,7 +648,7 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 	}
 
 	drm_mode_debug_printmodeline(adjusted_mode);
-	
+
 	limit = gma_crtc->clock_funcs->limit(crtc, refclk);
 
 	ok = limit->find_pll(limit, crtc, adjusted_mode->clock, refclk,
@@ -721,7 +710,7 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 			pipeconf |= PIPE_6BPC;
 	} else
 		pipeconf |= PIPE_8BPC;
-			
+
 	/* Set up the display plane register */
 	dspcntr = DISPPLANE_GAMMA_ENABLE;
 
@@ -974,7 +963,6 @@ struct drm_display_mode *cdv_intel_crtc_mode_get(struct drm_device *dev,
 
 const struct drm_crtc_helper_funcs cdv_intel_helper_funcs = {
 	.dpms = gma_crtc_dpms,
-	.mode_fixup = gma_crtc_mode_fixup,
 	.mode_set = cdv_intel_crtc_mode_set,
 	.mode_set_base = gma_pipe_set_base,
 	.prepare = gma_crtc_prepare,
@@ -983,13 +971,15 @@ const struct drm_crtc_helper_funcs cdv_intel_helper_funcs = {
 };
 
 const struct drm_crtc_funcs cdv_intel_crtc_funcs = {
-	.save = gma_crtc_save,
-	.restore = gma_crtc_restore,
 	.cursor_set = gma_crtc_cursor_set,
 	.cursor_move = gma_crtc_cursor_move,
 	.gamma_set = gma_crtc_gamma_set,
 	.set_config = gma_crtc_set_config,
 	.destroy = gma_crtc_destroy,
+	.page_flip = gma_crtc_page_flip,
+	.enable_vblank = psb_enable_vblank,
+	.disable_vblank = psb_disable_vblank,
+	.get_vblank_counter = psb_get_vblank_counter,
 };
 
 const struct gma_clock_funcs cdv_clock_funcs = {

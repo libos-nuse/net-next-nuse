@@ -14,11 +14,11 @@ config LIB
 
 config ARCH
 	string
-	option env="ARCH"
+	default $(ARCH)
 
 config KERNELVERSION
 	string
-	option env="KERNELVERSION"
+	default $(KERNELVERSION)
 
 config MODULES
 	def_bool y
@@ -122,3 +122,25 @@ source "lib/Kconfig"
 
 config SLIB
        def_bool y
+
+config BPF
+       def_bool y
+
+config GENERIC_STRNCPY_FROM_USER
+       def_bool y
+
+config FS
+       def_bool y
+
+config KERNFS
+       def_bool y
+
+config SECURITY
+       def_bool y
+
+config LSM
+       string
+       default "yama,loadpin,safesetid,integrity"
+
+config BUILD_SALT
+	string "Build ID Salt-LibOs"

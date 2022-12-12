@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *
  *  Bluetooth virtual HCI driver
@@ -5,22 +6,6 @@
  *  Copyright (C) 2000-2001  Qualcomm Incorporated
  *  Copyright (C) 2002-2003  Maxim Krasnyansky <maxk@qualcomm.com>
  *  Copyright (C) 2004-2006  Marcel Holtmann <marcel@holtmann.org>
- *
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
  */
 
 #include <linux/module.h>
@@ -50,6 +35,7 @@ struct vhci_data {
 	wait_queue_head_t read_wait;
 	struct sk_buff_head readq;
 
+	struct mutex open_mutex;
 	struct delayed_work open_timeout;
 };
 
@@ -87,16 +73,19 @@ static int vhci_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 	return 0;
 }
 
-static int vhci_create_device(struct vhci_data *data, __u8 opcode)
+static int __vhci_create_device(struct vhci_data *data, __u8 opcode)
 {
 	struct hci_dev *hdev;
 	struct sk_buff *skb;
 	__u8 dev_type;
 
-	/* bits 0-1 are dev_type (BR/EDR or AMP) */
+	if (data->hdev)
+		return -EBADFD;
+
+	/* bits 0-1 are dev_type (Primary or AMP) */
 	dev_type = opcode & 0x03;
 
-	if (dev_type != HCI_BREDR && dev_type != HCI_AMP)
+	if (dev_type != HCI_PRIMARY && dev_type != HCI_AMP)
 		return -EINVAL;
 
 	/* bits 2-5 are reserved (must be zero) */
@@ -142,13 +131,24 @@ static int vhci_create_device(struct vhci_data *data, __u8 opcode)
 
 	hci_skb_pkt_type(skb) = HCI_VENDOR_PKT;
 
-	*skb_put(skb, 1) = 0xff;
-	*skb_put(skb, 1) = opcode;
+	skb_put_u8(skb, 0xff);
+	skb_put_u8(skb, opcode);
 	put_unaligned_le16(hdev->id, skb_put(skb, 2));
 	skb_queue_tail(&data->readq, skb);
 
 	wake_up_interruptible(&data->read_wait);
 	return 0;
+}
+
+static int vhci_create_device(struct vhci_data *data, __u8 opcode)
+{
+	int err;
+
+	mutex_lock(&data->open_mutex);
+	err = __vhci_create_device(data, opcode);
+	mutex_unlock(&data->open_mutex);
+
+	return err;
 }
 
 static inline ssize_t vhci_get_user(struct vhci_data *data,
@@ -166,7 +166,7 @@ static inline ssize_t vhci_get_user(struct vhci_data *data,
 	if (!skb)
 		return -ENOMEM;
 
-	if (copy_from_iter(skb_put(skb, len), len, from) != len) {
+	if (!copy_from_iter_full(skb_put(skb, len), len, from)) {
 		kfree_skb(skb);
 		return -EFAULT;
 	}
@@ -178,6 +178,7 @@ static inline ssize_t vhci_get_user(struct vhci_data *data,
 	case HCI_EVENT_PKT:
 	case HCI_ACLDATA_PKT:
 	case HCI_SCODATA_PKT:
+	case HCI_ISODATA_PKT:
 		if (!data->hdev) {
 			kfree_skb(skb);
 			return -ENODEV;
@@ -189,11 +190,6 @@ static inline ssize_t vhci_get_user(struct vhci_data *data,
 		break;
 
 	case HCI_VENDOR_PKT:
-		if (data->hdev) {
-			kfree_skb(skb);
-			return -EBADFD;
-		}
-
 		cancel_delayed_work_sync(&data->open_timeout);
 
 		opcode = *((__u8 *) skb->data);
@@ -289,16 +285,16 @@ static ssize_t vhci_write(struct kiocb *iocb, struct iov_iter *from)
 	return vhci_get_user(data, from);
 }
 
-static unsigned int vhci_poll(struct file *file, poll_table *wait)
+static __poll_t vhci_poll(struct file *file, poll_table *wait)
 {
 	struct vhci_data *data = file->private_data;
 
 	poll_wait(file, &data->read_wait, wait);
 
 	if (!skb_queue_empty(&data->readq))
-		return POLLIN | POLLRDNORM;
+		return EPOLLIN | EPOLLRDNORM;
 
-	return POLLOUT | POLLWRNORM;
+	return EPOLLOUT | EPOLLWRNORM;
 }
 
 static void vhci_open_timeout(struct work_struct *work)
@@ -306,7 +302,7 @@ static void vhci_open_timeout(struct work_struct *work)
 	struct vhci_data *data = container_of(work, struct vhci_data,
 					      open_timeout.work);
 
-	vhci_create_device(data, amp ? HCI_AMP : HCI_BREDR);
+	vhci_create_device(data, amp ? HCI_AMP : HCI_PRIMARY);
 }
 
 static int vhci_open(struct inode *inode, struct file *file)
@@ -320,6 +316,7 @@ static int vhci_open(struct inode *inode, struct file *file)
 	skb_queue_head_init(&data->readq);
 	init_waitqueue_head(&data->read_wait);
 
+	mutex_init(&data->open_mutex);
 	INIT_DELAYED_WORK(&data->open_timeout, vhci_open_timeout);
 
 	file->private_data = data;
@@ -333,15 +330,18 @@ static int vhci_open(struct inode *inode, struct file *file)
 static int vhci_release(struct inode *inode, struct file *file)
 {
 	struct vhci_data *data = file->private_data;
-	struct hci_dev *hdev = data->hdev;
+	struct hci_dev *hdev;
 
 	cancel_delayed_work_sync(&data->open_timeout);
+
+	hdev = data->hdev;
 
 	if (hdev) {
 		hci_unregister_dev(hdev);
 		hci_free_dev(hdev);
 	}
 
+	skb_queue_purge(&data->readq);
 	file->private_data = NULL;
 	kfree(data);
 
@@ -363,21 +363,7 @@ static struct miscdevice vhci_miscdev = {
 	.fops	= &vhci_fops,
 	.minor	= VHCI_MINOR,
 };
-
-static int __init vhci_init(void)
-{
-	BT_INFO("Virtual HCI driver ver %s", VERSION);
-
-	return misc_register(&vhci_miscdev);
-}
-
-static void __exit vhci_exit(void)
-{
-	misc_deregister(&vhci_miscdev);
-}
-
-module_init(vhci_init);
-module_exit(vhci_exit);
+module_misc_device(vhci_miscdev);
 
 module_param(amp, bool, 0644);
 MODULE_PARM_DESC(amp, "Create AMP controller device");

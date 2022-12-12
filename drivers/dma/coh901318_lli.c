@@ -1,8 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * driver/dma/coh901318_lli.c
  *
  * Copyright (C) 2007-2009 ST-Ericsson
- * License terms: GNU General Public License (GPL) version 2
  * Support functions for handling lli for dma
  * Author: Per Friden <per.friden@stericsson.com>
  */
@@ -75,7 +75,7 @@ coh901318_lli_alloc(struct coh901318_pool *pool, unsigned int len)
 	lli = head;
 	lli->phy_this = phy;
 	lli->link_addr = 0x00000000;
-	lli->virt_link_addr = 0x00000000U;
+	lli->virt_link_addr = NULL;
 
 	for (i = 1; i < len; i++) {
 		lli_prev = lli;
@@ -88,7 +88,7 @@ coh901318_lli_alloc(struct coh901318_pool *pool, unsigned int len)
 		DEBUGFS_POOL_COUNTER_ADD(pool, 1);
 		lli->phy_this = phy;
 		lli->link_addr = 0x00000000;
-		lli->virt_link_addr = 0x00000000U;
+		lli->virt_link_addr = NULL;
 
 		lli_prev->link_addr = phy;
 		lli_prev->virt_link_addr = lli;

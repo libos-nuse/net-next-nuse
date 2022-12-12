@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef LINUX_B43_PHY_COMMON_H_
 #define LINUX_B43_PHY_COMMON_H_
 
@@ -5,13 +6,6 @@
 #include <linux/nl80211.h>
 
 struct b43_wldev;
-
-/* Complex number using 2 32-bit signed integers */
-struct b43_c32 { s32 i, q; };
-
-#define CORDIC_CONVERT(value)	(((value) >= 0) ? \
-				 ((((value) >> 15) + 1) >> 1) : \
-				 -((((-(value)) >> 15) + 1) >> 1))
 
 /* PHY register routing bits */
 #define B43_PHYROUTE			0x0C00 /* PHY register routing bits mask */
@@ -190,7 +184,6 @@ struct b43_phy_operations {
 	void (*pwork_60sec)(struct b43_wldev *dev);
 };
 
-struct b43_phy_a;
 struct b43_phy_g;
 struct b43_phy_n;
 struct b43_phy_lp;
@@ -210,8 +203,6 @@ struct b43_phy {
 #else
 	union {
 #endif
-		/* A-PHY specific information */
-		struct b43_phy_a *a;
 		/* G-PHY specific information */
 		struct b43_phy_g *g;
 		/* N-PHY specific information */
@@ -451,7 +442,5 @@ void b43_phyop_switch_analog_generic(struct b43_wldev *dev, bool on);
 bool b43_is_40mhz(struct b43_wldev *dev);
 
 void b43_phy_force_clock(struct b43_wldev *dev, bool force);
-
-struct b43_c32 b43_cordic(int theta);
 
 #endif /* LINUX_B43_PHY_COMMON_H_ */

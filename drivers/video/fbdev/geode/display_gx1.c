@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * drivers/video/geode/display_gx1.c
  *   -- Geode GX1 display controller
@@ -6,11 +7,6 @@
  *
  * Based on AMD's original 2.4 driver:
  *   Copyright (C) 2004 Advanced Micro Devices, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 #include <linux/spinlock.h>
 #include <linux/fb.h>
@@ -208,7 +204,7 @@ static void gx1_set_hw_palette_reg(struct fb_info *info, unsigned regno,
 	writel(val, par->dc_regs + DC_PAL_DATA);
 }
 
-struct geode_dc_ops gx1_dc_ops = {
+const struct geode_dc_ops gx1_dc_ops = {
 	.set_mode	 = gx1_set_mode,
 	.set_palette_reg = gx1_set_hw_palette_reg,
 };

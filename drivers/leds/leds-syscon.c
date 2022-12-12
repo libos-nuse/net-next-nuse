@@ -1,26 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Generic Syscon LEDs Driver
  *
  * Copyright (c) 2014, Linaro Limited
  * Author: Linus Walleij <linus.walleij@linaro.org>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
  */
 #include <linux/io.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/of_device.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
@@ -69,8 +55,9 @@ static void syscon_led_set(struct led_classdev *led_cdev,
 
 static int syscon_led_probe(struct platform_device *pdev)
 {
+	struct led_init_data init_data = {};
 	struct device *dev = &pdev->dev;
-	struct device_node *np = dev->of_node;
+	struct device_node *np = dev_of_node(dev);
 	struct device *parent;
 	struct regmap *map;
 	struct syscon_led *sled;
@@ -82,7 +69,7 @@ static int syscon_led_probe(struct platform_device *pdev)
 		dev_err(dev, "no parent for syscon LED\n");
 		return -ENODEV;
 	}
-	map = syscon_node_to_regmap(parent->of_node);
+	map = syscon_node_to_regmap(dev_of_node(parent));
 	if (IS_ERR(map)) {
 		dev_err(dev, "no regmap for syscon LED parent\n");
 		return PTR_ERR(map);
@@ -98,10 +85,6 @@ static int syscon_led_probe(struct platform_device *pdev)
 		return -EINVAL;
 	if (of_property_read_u32(np, "mask", &sled->mask))
 		return -EINVAL;
-	sled->cdev.name =
-		of_get_property(np, "label", NULL) ? : np->name;
-	sled->cdev.default_trigger =
-		of_get_property(np, "linux,default-trigger", NULL);
 
 	state = of_get_property(np, "default-state", NULL);
 	if (state) {
@@ -129,7 +112,9 @@ static int syscon_led_probe(struct platform_device *pdev)
 	}
 	sled->cdev.brightness_set = syscon_led_set;
 
-	ret = led_classdev_register(dev, &sled->cdev);
+	init_data.fwnode = of_fwnode_handle(np);
+
+	ret = devm_led_classdev_register_ext(dev, &sled->cdev, &init_data);
 	if (ret < 0)
 		return ret;
 
@@ -139,29 +124,17 @@ static int syscon_led_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int syscon_led_remove(struct platform_device *pdev)
-{
-	struct syscon_led *sled = platform_get_drvdata(pdev);
-
-	led_classdev_unregister(&sled->cdev);
-	/* Turn it off */
-	regmap_update_bits(sled->map, sled->offset, sled->mask, 0);
-	return 0;
-}
-
 static const struct of_device_id of_syscon_leds_match[] = {
 	{ .compatible = "register-bit-led", },
 	{},
 };
 
-MODULE_DEVICE_TABLE(of, of_syscon_leds_match);
-
 static struct platform_driver syscon_led_driver = {
 	.probe		= syscon_led_probe,
-	.remove		= syscon_led_remove,
 	.driver		= {
 		.name	= "leds-syscon",
 		.of_match_table = of_syscon_leds_match,
+		.suppress_bind_attrs = true,
 	},
 };
-module_platform_driver(syscon_led_driver);
+builtin_platform_driver(syscon_led_driver);

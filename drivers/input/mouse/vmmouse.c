@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Virtual PS/2 Mouse on VMware and QEMU hypervisors.
  *
  * Copyright (C) 2014, VMware, Inc. All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  *
  * Twin device code is hugely inspired by the ALPS driver.
  * Authors:
@@ -19,12 +16,12 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <asm/hypervisor.h>
+#include <asm/vmware.h>
 
 #include "psmouse.h"
 #include "vmmouse.h"
 
 #define VMMOUSE_PROTO_MAGIC			0x564D5868U
-#define VMMOUSE_PROTO_PORT			0x5658
 
 /*
  * Main commands supported by the vmmouse hypervisor port.
@@ -87,7 +84,7 @@ struct vmmouse_data {
 #define VMMOUSE_CMD(cmd, in1, out1, out2, out3, out4)	\
 ({							\
 	unsigned long __dummy1, __dummy2;		\
-	__asm__ __volatile__ ("inl %%dx" :		\
+	__asm__ __volatile__ (VMWARE_HYPERCALL :	\
 		"=a"(out1),				\
 		"=b"(out2),				\
 		"=c"(out3),				\
@@ -97,7 +94,7 @@ struct vmmouse_data {
 		"a"(VMMOUSE_PROTO_MAGIC),		\
 		"b"(in1),				\
 		"c"(VMMOUSE_PROTO_CMD_##cmd),		\
-		"d"(VMMOUSE_PROTO_PORT) :		\
+		"d"(0) :			        \
 		"memory");		                \
 })
 
@@ -316,11 +313,9 @@ static int vmmouse_enable(struct psmouse *psmouse)
 /*
  * Array of supported hypervisors.
  */
-static const struct hypervisor_x86 *vmmouse_supported_hypervisors[] = {
-	&x86_hyper_vmware,
-#ifdef CONFIG_KVM_GUEST
-	&x86_hyper_kvm,
-#endif
+static enum x86_hypervisor_type vmmouse_supported_hypervisors[] = {
+	X86_HYPER_VMWARE,
+	X86_HYPER_KVM,
 };
 
 /**
@@ -331,7 +326,7 @@ static bool vmmouse_check_hypervisor(void)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(vmmouse_supported_hypervisors); i++)
-		if (vmmouse_supported_hypervisors[i] == x86_hyper)
+		if (vmmouse_supported_hypervisors[i] == x86_hyper_type)
 			return true;
 
 	return false;
@@ -355,26 +350,17 @@ int vmmouse_detect(struct psmouse *psmouse, bool set_properties)
 		return -ENXIO;
 	}
 
-	if (!request_region(VMMOUSE_PROTO_PORT, 4, "vmmouse")) {
-		psmouse_dbg(psmouse, "VMMouse port in use.\n");
-		return -EBUSY;
-	}
-
 	/* Check if the device is present */
 	response = ~VMMOUSE_PROTO_MAGIC;
 	VMMOUSE_CMD(GETVERSION, 0, version, response, dummy1, dummy2);
-	if (response != VMMOUSE_PROTO_MAGIC || version == 0xffffffffU) {
-		release_region(VMMOUSE_PROTO_PORT, 4);
+	if (response != VMMOUSE_PROTO_MAGIC || version == 0xffffffffU)
 		return -ENXIO;
-	}
 
 	if (set_properties) {
 		psmouse->vendor = VMMOUSE_VENDOR;
 		psmouse->name = VMMOUSE_NAME;
 		psmouse->model = version;
 	}
-
-	release_region(VMMOUSE_PROTO_PORT, 4);
 
 	return 0;
 }
@@ -394,7 +380,6 @@ static void vmmouse_disconnect(struct psmouse *psmouse)
 	psmouse_reset(psmouse);
 	input_unregister_device(priv->abs_dev);
 	kfree(priv);
-	release_region(VMMOUSE_PROTO_PORT, 4);
 }
 
 /**
@@ -438,15 +423,10 @@ int vmmouse_init(struct psmouse *psmouse)
 	struct input_dev *rel_dev = psmouse->dev, *abs_dev;
 	int error;
 
-	if (!request_region(VMMOUSE_PROTO_PORT, 4, "vmmouse")) {
-		psmouse_dbg(psmouse, "VMMouse port in use.\n");
-		return -EBUSY;
-	}
-
 	psmouse_reset(psmouse);
 	error = vmmouse_enable(psmouse);
 	if (error)
-		goto release_region;
+		return error;
 
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	abs_dev = input_allocate_device();
@@ -457,8 +437,6 @@ int vmmouse_init(struct psmouse *psmouse)
 
 	priv->abs_dev = abs_dev;
 	psmouse->private = priv;
-
-	input_set_capability(rel_dev, EV_REL, REL_WHEEL);
 
 	/* Set up and register absolute device */
 	snprintf(priv->phys, sizeof(priv->phys), "%s/input1",
@@ -475,10 +453,6 @@ int vmmouse_init(struct psmouse *psmouse)
 	abs_dev->id.version = psmouse->model;
 	abs_dev->dev.parent = &psmouse->ps2dev.serio->dev;
 
-	error = input_register_device(priv->abs_dev);
-	if (error)
-		goto init_fail;
-
 	/* Set absolute device capabilities */
 	input_set_capability(abs_dev, EV_KEY, BTN_LEFT);
 	input_set_capability(abs_dev, EV_KEY, BTN_RIGHT);
@@ -487,6 +461,13 @@ int vmmouse_init(struct psmouse *psmouse)
 	input_set_capability(abs_dev, EV_ABS, ABS_Y);
 	input_set_abs_params(abs_dev, ABS_X, 0, VMMOUSE_MAX_X, 0, 0);
 	input_set_abs_params(abs_dev, ABS_Y, 0, VMMOUSE_MAX_Y, 0, 0);
+
+	error = input_register_device(priv->abs_dev);
+	if (error)
+		goto init_fail;
+
+	/* Add wheel capability to the relative device */
+	input_set_capability(rel_dev, EV_REL, REL_WHEEL);
 
 	psmouse->protocol_handler = vmmouse_process_byte;
 	psmouse->disconnect = vmmouse_disconnect;
@@ -500,9 +481,6 @@ init_fail:
 	input_free_device(abs_dev);
 	kfree(priv);
 	psmouse->private = NULL;
-
-release_region:
-	release_region(VMMOUSE_PROTO_PORT, 4);
 
 	return error;
 }

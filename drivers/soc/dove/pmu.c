@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Marvell Dove PMU support
  */
@@ -87,7 +88,7 @@ static int pmu_reset_deassert(struct reset_controller_dev *rc, unsigned long id)
 	return 0;
 }
 
-static struct reset_control_ops pmu_reset_ops = {
+static const struct reset_control_ops pmu_reset_ops = {
 	.reset = pmu_reset_reset,
 	.assert = pmu_reset_assert,
 	.deassert = pmu_reset_deassert,
@@ -305,6 +306,49 @@ static int __init dove_init_pmu_irq(struct pmu_data *pmu, int irq)
 	return 0;
 }
 
+int __init dove_init_pmu_legacy(const struct dove_pmu_initdata *initdata)
+{
+	const struct dove_pmu_domain_initdata *domain_initdata;
+	struct pmu_data *pmu;
+	int ret;
+
+	pmu = kzalloc(sizeof(*pmu), GFP_KERNEL);
+	if (!pmu)
+		return -ENOMEM;
+
+	spin_lock_init(&pmu->lock);
+	pmu->pmc_base = initdata->pmc_base;
+	pmu->pmu_base = initdata->pmu_base;
+
+	pmu_reset_init(pmu);
+	for (domain_initdata = initdata->domains; domain_initdata->name;
+	     domain_initdata++) {
+		struct pmu_domain *domain;
+
+		domain = kzalloc(sizeof(*domain), GFP_KERNEL);
+		if (domain) {
+			domain->pmu = pmu;
+			domain->pwr_mask = domain_initdata->pwr_mask;
+			domain->rst_mask = domain_initdata->rst_mask;
+			domain->iso_mask = domain_initdata->iso_mask;
+			domain->base.name = domain_initdata->name;
+
+			__pmu_domain_register(domain, NULL);
+		}
+	}
+
+	ret = dove_init_pmu_irq(pmu, initdata->irq);
+	if (ret)
+		pr_err("dove_init_pmu_irq() failed: %d\n", ret);
+
+	if (pmu->irq_domain)
+		irq_domain_associate_many(pmu->irq_domain,
+					  initdata->irq_domain_start,
+					  0, NR_PMU_IRQS);
+
+	return 0;
+}
+
 /*
  * pmu: power-manager@d0000 {
  *	compatible = "marvell,dove-pmu";
@@ -339,7 +383,7 @@ int __init dove_init_pmu(void)
 
 	domains_node = of_get_child_by_name(np_pmu, "domains");
 	if (!domains_node) {
-		pr_err("%s: failed to find domains sub-node\n", np_pmu->name);
+		pr_err("%pOFn: failed to find domains sub-node\n", np_pmu);
 		return 0;
 	}
 
@@ -352,7 +396,7 @@ int __init dove_init_pmu(void)
 	pmu->pmc_base = of_iomap(pmu->of_node, 0);
 	pmu->pmu_base = of_iomap(pmu->of_node, 1);
 	if (!pmu->pmc_base || !pmu->pmu_base) {
-		pr_err("%s: failed to map PMU\n", np_pmu->name);
+		pr_err("%pOFn: failed to map PMU\n", np_pmu);
 		iounmap(pmu->pmu_base);
 		iounmap(pmu->pmc_base);
 		kfree(pmu);
@@ -370,7 +414,7 @@ int __init dove_init_pmu(void)
 			break;
 
 		domain->pmu = pmu;
-		domain->base.name = kstrdup(np->name, GFP_KERNEL);
+		domain->base.name = kasprintf(GFP_KERNEL, "%pOFn", np);
 		if (!domain->base.name) {
 			kfree(domain);
 			break;
@@ -400,7 +444,7 @@ int __init dove_init_pmu(void)
 	/* Loss of the interrupt controller is not a fatal error. */
 	parent_irq = irq_of_parse_and_map(pmu->of_node, 0);
 	if (!parent_irq) {
-		pr_err("%s: no interrupt specified\n", np_pmu->name);
+		pr_err("%pOFn: no interrupt specified\n", np_pmu);
 	} else {
 		ret = dove_init_pmu_irq(pmu, parent_irq);
 		if (ret)

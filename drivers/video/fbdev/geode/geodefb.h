@@ -1,13 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * drivers/video/geode/geodefb.h
  *   -- Geode framebuffer driver
  *
  * Copyright (C) 2005 Arcom Control Systems Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 #ifndef __GEODEFB_H__
 #define __GEODEFB_H__
@@ -31,8 +27,8 @@ struct geodefb_par {
 	int panel_y;
 	void __iomem *dc_regs;
 	void __iomem *vid_regs;
-	struct geode_dc_ops  *dc_ops;
-	struct geode_vid_ops *vid_ops;
+	const struct geode_dc_ops  *dc_ops;
+	const struct geode_vid_ops *vid_ops;
 };
 
 #endif /* !__GEODEFB_H__ */

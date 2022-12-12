@@ -1,19 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * RapidIO driver support
  *
  * Copyright 2005 MontaVista Software, Inc.
  * Matt Porter <mporter@kernel.crashing.org>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/rio.h>
 #include <linux/rio_ids.h>
+#include <linux/rio_drv.h>
 
 #include "rio.h"
 
@@ -131,6 +128,17 @@ static int rio_device_remove(struct device *dev)
 	return 0;
 }
 
+static void rio_device_shutdown(struct device *dev)
+{
+	struct rio_dev *rdev = to_rio_dev(dev);
+	struct rio_driver *rdrv = rdev->driver;
+
+	dev_dbg(dev, "RIO: %s\n", __func__);
+
+	if (rdrv && rdrv->shutdown)
+		rdrv->shutdown(rdev);
+}
+
 /**
  *  rio_register_driver - register a new RIO driver
  *  @rdrv: the RIO driver structure to register
@@ -229,6 +237,7 @@ struct bus_type rio_bus_type = {
 	.bus_groups = rio_bus_groups,
 	.probe = rio_device_probe,
 	.remove = rio_device_remove,
+	.shutdown = rio_device_shutdown,
 	.uevent	= rio_uevent,
 };
 

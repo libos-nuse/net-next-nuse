@@ -1,9 +1,7 @@
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause) */
 /* QLogic qed NIC Driver
- * Copyright (c) 2015 QLogic Corporation
- *
- * This software is available under the terms of the GNU General Public License
- * (GPL) Version 2, available from the file COPYING in the main directory of
- * this source tree.
+ * Copyright (c) 2015-2017  QLogic Corporation
+ * Copyright (c) 2019-2020 Marvell International Ltd.
  */
 
 #ifndef _QED_HW_H
@@ -221,6 +219,28 @@ void qed_port_unpretend(struct qed_hwfn *p_hwfn,
 			struct qed_ptt *p_ptt);
 
 /**
+ * @brief qed_port_fid_pretend - pretend to another port and another function
+ *        when accessing the ptt window
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ * @param port_id - the port to pretend to
+ * @param fid - fid field of pxp_pretend structure. Can contain either pf / vf.
+ */
+void qed_port_fid_pretend(struct qed_hwfn *p_hwfn,
+			  struct qed_ptt *p_ptt, u8 port_id, u16 fid);
+
+/**
+ * @brief qed_vfid_to_concrete - build a concrete FID for a
+ *        given VF ID
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ * @param vfid
+ */
+u32 qed_vfid_to_concrete(struct qed_hwfn *p_hwfn, u8 vfid);
+
+/**
  * @brief qed_dmae_idx_to_go_cmd - map the idx to dmae cmd
  * this is declared here since other files will require it.
  * @param idx
@@ -244,6 +264,10 @@ void qed_dmae_info_free(struct qed_hwfn *p_hwfn);
 
 union qed_qm_pq_params {
 	struct {
+		u8 q_idx;
+	} iscsi;
+
+	struct {
 		u8 tc;
 	}	core;
 
@@ -252,12 +276,33 @@ union qed_qm_pq_params {
 		u8	vf_id;
 		u8	tc;
 	}	eth;
-};
 
-u16 qed_get_qm_pq(struct qed_hwfn *p_hwfn,
-		  enum protocol_type proto,
-		  union qed_qm_pq_params *params);
+	struct {
+		u8 dcqcn;
+		u8 qpid;	/* roce relative */
+	} roce;
+};
 
 int qed_init_fw_data(struct qed_dev *cdev,
 		     const u8 *fw_data);
+
+int qed_dmae_sanity(struct qed_hwfn *p_hwfn,
+		    struct qed_ptt *p_ptt, const char *phase);
+
+#define QED_HW_ERR_MAX_STR_SIZE 256
+
+/**
+ * @brief qed_hw_err_notify - Notify upper layer driver and management FW
+ *	about a HW error.
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ * @param err_type
+ * @param fmt - debug data buffer to send to the MFW
+ * @param ... - buffer format args
+ */
+void __printf(4, 5) __cold qed_hw_err_notify(struct qed_hwfn *p_hwfn,
+					     struct qed_ptt *p_ptt,
+					     enum qed_hw_err_type err_type,
+					     const char *fmt, ...);
 #endif

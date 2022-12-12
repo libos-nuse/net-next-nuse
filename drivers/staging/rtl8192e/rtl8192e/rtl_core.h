@@ -1,24 +1,12 @@
-/******************************************************************************
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
  * Copyright(c) 2008 - 2010 Realtek Corporation. All rights reserved.
  *
  * Based on the r8180 driver, which is:
  * Copyright 2004-2005 Andrea Merello <andrea.merello@gmail.com>, et al.
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * The full GNU General Public License is included in this distribution in the
- * file called LICENSE.
- *
- * Contact Information:
- * wlanfae <wlanfae@realtek.com>
-******************************************************************************/
-
+ * Contact Information: wlanfae <wlanfae@realtek.com>
+ */
 #ifndef _RTL_CORE_H
 #define _RTL_CORE_H
 
@@ -101,8 +89,6 @@
 #define DEFAULT_RETRY_DATA	7
 
 #define	PHY_RSSI_SLID_WIN_MAX			100
-
-#define RTL_IOCTL_WPA_SUPPLICANT		(SIOCIWFIRSTPRIV + 30)
 
 #define TxBBGainTableLength			37
 #define CCKTxBBGainTableLength			23
@@ -338,8 +324,6 @@ struct r8192_priv {
 	struct delayed_work		rfpath_check_wq;
 	struct delayed_work		gpio_change_rf_wq;
 
-	struct workqueue_struct		*priv_wq;
-
 	struct channel_access_setting ChannelAccessSetting;
 
 	struct rtl819x_ops			*ops;
@@ -377,8 +361,8 @@ struct r8192_priv {
 	struct tasklet_struct		irq_tx_tasklet;
 	struct tasklet_struct		irq_prepare_beacon_tasklet;
 
-	struct semaphore			wx_sem;
-	struct semaphore			rf_sem;
+	struct mutex				wx_mutex;
+	struct mutex				rf_mutex;
 	struct mutex				mutex;
 
 	struct rt_stats stats;
@@ -505,8 +489,8 @@ struct r8192_priv {
 	u32 Pwr_Track;
 	u8 CCKPresentAttentuation_20Mdefault;
 	u8 CCKPresentAttentuation_40Mdefault;
-	char CCKPresentAttentuation_difference;
-	char CCKPresentAttentuation;
+	s8 CCKPresentAttentuation_difference;
+	s8 CCKPresentAttentuation;
 	long undecorated_smoothed_pwdb;
 
 	u32 MCSTxPowerLevelOriginalOffset[6];
@@ -591,7 +575,7 @@ void rtl92e_tx_enable(struct net_device *);
 void rtl92e_hw_sleep_wq(void *data);
 void rtl92e_commit(struct net_device *dev);
 
-void rtl92e_check_rfctrl_gpio_timer(unsigned long data);
+void rtl92e_check_rfctrl_gpio_timer(struct timer_list *t);
 
 void rtl92e_hw_wakeup_wq(void *data);
 
@@ -606,8 +590,8 @@ void rtl92e_update_rx_pkt_timestamp(struct net_device *dev,
 long rtl92e_translate_to_dbm(struct r8192_priv *priv, u8 signal_strength_index);
 void rtl92e_update_rx_statistics(struct r8192_priv *priv,
 				 struct rtllib_rx_stats *pprevious_stats);
-u8 rtl92e_evm_db_to_percent(char value);
-u8 rtl92e_rx_db_to_percent(char antpower);
+u8 rtl92e_evm_db_to_percent(s8 value);
+u8 rtl92e_rx_db_to_percent(s8 antpower);
 void rtl92e_copy_mpdu_stats(struct rtllib_rx_stats *psrc_stats,
 			    struct rtllib_rx_stats *ptarget_stats);
 bool rtl92e_enable_nic(struct net_device *dev);

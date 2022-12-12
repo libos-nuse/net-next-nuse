@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/mach-mmp/jasper.c
  *
  *  Support for the Marvell Jasper Development Platform.
  *
  *  Copyright (C) 2009-2010 Marvell International Ltd.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  publishhed by the Free Software Foundation.
  */
 
 #include <linux/init.h>
@@ -20,12 +17,12 @@
 #include <linux/mfd/max8925.h>
 #include <linux/interrupt.h>
 
-#include <mach/irqs.h>
+#include "irqs.h"
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
-#include <mach/addr-map.h>
-#include <mach/mfp-mmp2.h>
-#include <mach/mmp2.h>
+#include "addr-map.h"
+#include "mfp-mmp2.h"
+#include "mmp2.h"
 
 #include "common.h"
 

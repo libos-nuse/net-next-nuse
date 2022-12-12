@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Generic routines and proc interface for ELD(EDID Like Data) information
  *
@@ -6,27 +7,14 @@
  *
  * Authors:
  * 		Wu Fengguang <wfg@linux.intel.com>
- *
- *  This driver is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This driver is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <sound/core.h>
 #include <asm/unaligned.h>
-#include "hda_codec.h"
+#include <sound/hda_chmap.h>
+#include <sound/hda_codec.h>
 #include "hda_local.h"
 
 enum eld_versions {
@@ -40,20 +28,6 @@ enum cea_edid_versions {
 	CEA_EDID_VER_CEA861A	= 2,
 	CEA_EDID_VER_CEA861BCD	= 3,
 	CEA_EDID_VER_RESERVED	= 4,
-};
-
-static const char * const cea_speaker_allocation_names[] = {
-	/*  0 */ "FL/FR",
-	/*  1 */ "LFE",
-	/*  2 */ "FC",
-	/*  3 */ "RL/RR",
-	/*  4 */ "RC",
-	/*  5 */ "FLC/FRC",
-	/*  6 */ "RLC/RRC",
-	/*  7 */ "FLW/FRW",
-	/*  8 */ "FLH/FRH",
-	/*  9 */ "TC",
-	/* 10 */ "FCH",
 };
 
 static const char * const eld_connection_type_names[4] = {
@@ -124,7 +98,7 @@ static const char * const cea_audio_coding_type_names[] = {
 /*
  * SS1:SS0 index => sample size
  */
-static int cea_sample_sizes[4] = {
+static const int cea_sample_sizes[4] = {
 	0,	 		/* 0: Refer to Stream Header */
 	AC_SUPPCM_BITS_16,	/* 1: 16 bits */
 	AC_SUPPCM_BITS_20,	/* 2: 20 bits */
@@ -134,7 +108,7 @@ static int cea_sample_sizes[4] = {
 /*
  * SF2:SF1:SF0 index => sampling frequency
  */
-static int cea_sampling_frequencies[8] = {
+static const int cea_sampling_frequencies[8] = {
 	0,			/* 0: Refer to Stream Header */
 	SNDRV_PCM_RATE_32000,	/* 1:  32000Hz */
 	SNDRV_PCM_RATE_44100,	/* 2:  44100Hz */
@@ -253,6 +227,7 @@ int snd_hdmi_parse_eld(struct hda_codec *codec, struct parsed_hdmi_eld *e,
 	int mnl;
 	int i;
 
+	memset(e, 0, sizeof(*e));
 	e->eld_ver = GRAB_BITS(buf, 0, 3, 5);
 	if (e->eld_ver != ELD_VER_CEA_861D &&
 	    e->eld_ver != ELD_VER_PARTIAL) {
@@ -377,7 +352,7 @@ error:
  */
 static void hdmi_print_pcm_rates(int pcm, char *buf, int buflen)
 {
-	static unsigned int alsa_rates[] = {
+	static const unsigned int alsa_rates[] = {
 		5512, 8000, 11025, 16000, 22050, 32000, 44100, 48000, 64000,
 		88200, 96000, 176400, 192000, 384000
 	};
@@ -385,7 +360,7 @@ static void hdmi_print_pcm_rates(int pcm, char *buf, int buflen)
 
 	for (i = 0, j = 0; i < ARRAY_SIZE(alsa_rates); i++)
 		if (pcm & (1 << i))
-			j += snprintf(buf + j, buflen - j,  " %d",
+			j += scnprintf(buf + j, buflen - j,  " %d",
 				alsa_rates[i]);
 
 	buf[j] = '\0'; /* necessary when j == 0 */
@@ -418,18 +393,6 @@ static void hdmi_show_short_audio_desc(struct hda_codec *codec,
 		  a->channels, buf, buf2);
 }
 
-void snd_print_channel_allocation(int spk_alloc, char *buf, int buflen)
-{
-	int i, j;
-
-	for (i = 0, j = 0; i < ARRAY_SIZE(cea_speaker_allocation_names); i++) {
-		if (spk_alloc & (1 << i))
-			j += snprintf(buf + j, buflen - j,  " %s",
-					cea_speaker_allocation_names[i]);
-	}
-	buf[j] = '\0';	/* necessary when j == 0 */
-}
-
 void snd_hdmi_show_eld(struct hda_codec *codec, struct parsed_hdmi_eld *e)
 {
 	int i;
@@ -440,7 +403,7 @@ void snd_hdmi_show_eld(struct hda_codec *codec, struct parsed_hdmi_eld *e)
 
 	if (e->spk_alloc) {
 		char buf[SND_PRINT_CHANNEL_ALLOCATION_ADVISED_BUFSIZE];
-		snd_print_channel_allocation(e->spk_alloc, buf, sizeof(buf));
+		snd_hdac_print_channel_allocation(e->spk_alloc, buf, sizeof(buf));
 		codec_dbg(codec, "HDMI: available speakers:%s\n", buf);
 	}
 
@@ -515,7 +478,7 @@ void snd_hdmi_print_eld_info(struct hdmi_eld *eld,
 	snd_iprintf(buffer, "support_ai\t\t%d\n", e->support_ai);
 	snd_iprintf(buffer, "audio_sync_delay\t%d\n", e->aud_synch_delay);
 
-	snd_print_channel_allocation(e->spk_alloc, buf, sizeof(buf));
+	snd_hdac_print_channel_allocation(e->spk_alloc, buf, sizeof(buf));
 	snd_iprintf(buffer, "speakers\t\t[0x%x]%s\n", e->spk_alloc, buf);
 
 	snd_iprintf(buffer, "sad_count\t\t%d\n", e->sad_count);
