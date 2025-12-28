@@ -1752,7 +1752,7 @@ static struct nlattr *reserve_sfa_size(struct sw_flow_actions **sfa,
 	new_acts_size = ksize(*sfa) * 2;
 
 	if (new_acts_size > MAX_ACTIONS_BUFSIZE) {
-		if ((MAX_ACTIONS_BUFSIZE - next_offset) < req_size)
+		if ((next_offset + req_size) > MAX_ACTIONS_BUFSIZE) {
 			return ERR_PTR(-EMSGSIZE);
 		new_acts_size = MAX_ACTIONS_BUFSIZE;
 	}
